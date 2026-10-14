@@ -217,6 +217,10 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   where a host will, render a deep-mounted dialog inside a representative ancestor, and revisit the
   contract when a consumer is widened.
 
+- Render a surface that loads on open inside `<StrictMode>` and assert the loaded content appears,
+  because the app runs under it and a plain `render()` mounts once: a "fetch once" ref beside a cancel
+  flag deadlocks only on the remount. The cancel flag is the one guard.
+
 - Assert the behavior, not the copy (a refusal by its status and the untouched row), because matching
   the sentence turns every wording edit into a red run.
 

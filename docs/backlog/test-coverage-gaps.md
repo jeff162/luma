@@ -167,8 +167,7 @@ tests (`// @vitest-environment jsdom` + `@testing-library/react`).
       (search / create / select); near-copy of that test.
 - [ ] **TransactionRow / TransactionListTable** — the core row: inline edits,
       embedded category/tag pickers, selection. Used by many pages.
-- [ ] **UnifiedDuplicatesDialog** — the dedupe-review modal (the reference
-      modal per `docs/collaboration-notes.md`).
+- [ ] **UnifiedDuplicatesDialog** — the dedupe-review modal.
 
 ---
 

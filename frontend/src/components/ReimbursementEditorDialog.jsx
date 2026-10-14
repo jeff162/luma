@@ -727,7 +727,9 @@ function MemberRow({ member, isThisRow, onRemove }) {
       }
     >
       {/* The role is derived from the direction of the money, never stated by the user — so it is shown
-          as a reading of the row rather than as something editable. */}
+          as a reading of the row rather than as something editable. An expense reads "Owed", not the
+          app's usual "Spent": the label names what the row is waiting on, money spent that is still to
+          be paid back. The totals below keep "Spent". */}
       <span style={{ color: 'var(--muted)' }}>{member.role === 'expense' ? 'Owed' : 'Received'}</span>
       <span style={{ color: 'var(--muted)' }}>{member.date}</span>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

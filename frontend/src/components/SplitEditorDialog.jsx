@@ -46,7 +46,7 @@ const CENT = 0.005
 //
 // Column order follows the ledger's: what it was, then how it is classified, then how much. A split
 // row is the same object a transaction row is, and the app's own rule is that an object should read
-// the same way wherever it appears (collaboration-notes.md → UI And Interaction Preferences). Category
+// the same way wherever it appears (ui-patterns.md → Consistency and reuse). Category
 // is fixed width because its picker is a compact badge and slack there is dead space; description
 // takes what is left, being the one field whose content has no natural length.
 const GRID = 'minmax(0, 1fr) 150px 96px 24px'

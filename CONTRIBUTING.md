@@ -106,7 +106,7 @@ turns them from context into a step.
   prefers to work — and once there is anything in it, an assistant that was never told to consult it
   will not.
 - **`docs/`** holds the *why*. [docs/collaboration-notes.md](docs/collaboration-notes.md) covers
-  decision principles and working habits, and [docs/agent-profile.md](docs/agent-profile.md) collects
+  decision principles, and [docs/agent-profile.md](docs/agent-profile.md) collects
   the operational footguns that recur across sessions. These live in the repo rather than in any one
   developer's assistant memory, so every contributor and every agent starts from the same guidance.
 
@@ -275,21 +275,21 @@ One spec in the a11y sweep clears the demo data so it can drive the import scree
 enabled; that wipe is harmless alone and fatal beside the dozen specs that read the demo ledger. The
 two therefore have to be *ordered*, not merely told apart — and a command-line filter cannot do the
 telling, because Playwright does not apply `--grep` to a dependency project, so a lane excluded on
-the command line runs anyway as somebody's dependency. The config's projects sequence it instead:
+the command line runs anyway as somebody's dependency. The `projects` list in `playwright.config.js`
+sequences it instead, and is the record of the phases and their order.
 
-    app  →  demo-cleared  →  import  →  a11y
+`app` comes first and holds everything that reads the demo ledger. `demo-cleared` is one setup spec
+that clears it once, at a point where nothing else is in flight. Every phase after it wants the empty
+tenant that leaves behind, and runs as a single chain ending in `a11y`. The npm scripts select
+projects with `--project`; which lanes the routine `ui:test` runs is in `package.json`.
 
-`app` holds everything that reads the demo ledger; `demo-cleared` is one setup spec that clears it
-once, at a point where nothing else is in flight; `import` and `a11y` both want the empty tenant that
-leaves behind. The npm scripts select projects (`--project app --project import` for the routine
-lane), which is why they no longer pass `--grep-invert`.
-
-The chain is deliberately a chain rather than a fan-out: **no two phases run at once.** `import` and
-`a11y` each clear the saved data sources to reach a known-empty manager, so run side by side they
+The chain is deliberately a chain rather than a fan-out: **no two phases run at once.** The empty-tenant
+phases clear or populate the same saved data sources and import batches, so run side by side they
 delete each other's — and the resulting failure is a spec that passes alone and fails in company,
 which is the expensive kind to diagnose.
 
-A new spec belongs in `app` unless it needs an empty tenant. Within a phase specs still run in
+A new spec belongs in `app` unless it needs an empty tenant; one that does gets its own project at the
+end of the chain, or joins a phase whose specs it cannot disturb. Within a phase specs still run in
 parallel, so anything reading the demo baseline should leave it as it found it, and anything that
 must mutate should restore it (see `categorize.spec.js`).
 

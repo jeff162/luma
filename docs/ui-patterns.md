@@ -64,8 +64,19 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   management screen.
 - **Layouts are compact.** No large empty regions, oversized cards, or controls heavier than the data
   they edit. Advanced and less-common settings sit below everyday ones.
-- **A label names the effect the user sees**, not the mechanism behind it. A page's primary create
-  action is `+ New` where the page heading already supplies the noun.
+- **A label names the effect the user sees**, not the mechanism behind it, and does not repeat what the
+  surrounding text already says. A page's primary create action is `+ New` where the page heading
+  already supplies the noun.
+- **Money words are the app's own.** Money out is **Spent** and money in is **Received**, as the
+  manual-entry direction selector names them, so one quantity reads the same on every screen.
+- **Prefer the verb or the adjective to the abstract noun.** An expense is *reimbursable*; the noun is
+  for where a record is genuinely being named, and reads as jargon elsewhere.
+- **A control whose job is already done goes.** If it is kept "just in case", or a picker offers every
+  choice the data model permits rather than the ones someone would make, drop it and say what that
+  costs. A surface earns density by need.
+- **A capability that is kept is explained, not made inert.** A control that stands for something
+  openable and does nothing reads as broken, so give it a label, marker or tooltip rather than
+  withholding it.
 - **Working view state is remembered.** Column layout, panel geometry and similar preferences go through
   `useUserPreference`, not page-local persistence.
 
@@ -116,6 +127,7 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - **Click the value to edit it.** No separate Edit button for a simple text change. Row height is the
   same in display and edit states. A new row is created inside the list, not in a panel above it.
+- **A failed save the user can fix keeps the screen open** and says what needs to change.
 - **Renaming a saved value commits on blur.** Enter commits and Escape reverts. `useTransientTextEdit`
   and `TransientTextInput` provide this by default.
 - **Creating something, or a multi-field form, uses an explicit submit** and does not commit on blur
@@ -237,8 +249,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - **No browser `confirm()`, `alert()` or `prompt()`.** Use the shared `AppDialog` primitives.
 - **A dialog that needs an explicit choice does not close on a backdrop click.**
-- **Red is for what cannot be undone.** See *Calibrate destructive styling to reversibility* in
-  [`collaboration-notes.md`](collaboration-notes.md).
+- **Red is for what cannot be undone.** An action reversible with effort (re-linking a bank, re-syncing
+  history) is not `danger` even when it deletes rows; its red goes on the confirm button. How alarming
+  the name sounds is not the signal. Spending red on recoverable actions leaves nothing to mark the
+  permanent ones.
 - **A dismissed item leaves a way back**: an `UndoToast` for the mis-press, and a durable "N dismissed"
   list for the one noticed later.
 

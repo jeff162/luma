@@ -33,14 +33,11 @@ index in [`backlog/README.md`](backlog/README.md).
 ### [Collaboration Notes](collaboration-notes.md)
 
 - [Decision-Making Principles](collaboration-notes.md#decision-making-principles)
-- [UI And Interaction Preferences](collaboration-notes.md#ui-and-interaction-preferences)
-- [Import / Export Preferences](collaboration-notes.md#import--export-preferences)
-- [Agent Working Habits](collaboration-notes.md#agent-working-habits)
-- [Testing](collaboration-notes.md#testing)
+- [Working on the Code](collaboration-notes.md#working-on-the-code)
 - [Code Structure Preferences](collaboration-notes.md#code-structure-preferences)
+- [Testing](collaboration-notes.md#testing)
 - [Naming And Brand Hygiene](collaboration-notes.md#naming-and-brand-hygiene)
-- [Error Handling Preferences](collaboration-notes.md#error-handling-preferences)
-- [Documentation Expectations](collaboration-notes.md#documentation-expectations)
+- [What belongs here](collaboration-notes.md#what-belongs-here)
 
 ## Changing the code
 

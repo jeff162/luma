@@ -31,7 +31,7 @@ model from source wastes time and misses the *why*. Use source reading and DB qu
 *verify* the docs (and fix them if stale) and to answer live-data questions the docs can't,
 not as the first resort.
 
-**Quality bar.** Before any non-trivial change, the working habits and decision principles in
+**Quality bar.** Before any non-trivial change, the decision principles in
 `docs/collaboration-notes.md` apply — the standard is first-class code conforming to accepted
 best practice, not just something that works. When doing it right reveals a needed refactor or
 a real tradeoff, surface it for a decision rather than silently working around it or silently
@@ -45,8 +45,8 @@ branch state from the injected snapshot.
 **Where things live:**
 
 - `AGENTS.md` — conventions, commenting style, doc-consistency rules
-- `docs/collaboration-notes.md` — decision principles & agent working habits (get it right
-  the first time; reuse shared components; reference implementations)
+- `docs/collaboration-notes.md` — the decision principles behind implementation choices (get it
+  right the first time; the design pass; what earns a test; naming hygiene)
 - `docs/agent-profile.md` — distilled cross-session agent habits & operational footguns
   (the shared replacement for private agent memory: collaboration defaults, investigation,
   verification)

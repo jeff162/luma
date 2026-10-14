@@ -1,6 +1,6 @@
 // Resolving a CSV account-column value to an existing account drives the import account-mapping UI.
-// The core invariant (collaboration-notes "Import / Export"): suggest only when there's exactly one
-// strong match, otherwise leave it to the user — never silently guess. These pin the judgment-heavy
+// The core invariant (collaboration-notes.md → Decision-Making Principles): suggest only when there's
+// exactly one strong match, otherwise leave it to the user — never silently guess. These pin the judgment-heavy
 // parts: the masked-suffix stem normalizer, the single-vs-ambiguous match rule, the generic-token
 // guard that stops "Savings (...4455)" matching every savings account, and the snapshot builder that
 // flattens the mapping UI into the persisted account_map / skip_accounts / account_new payload.

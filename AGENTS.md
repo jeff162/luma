@@ -14,7 +14,7 @@ authorization to implement.
 
 Follow the commenting style defined in `docs/code-commenting-style.md`.
 
-Before any non-trivial change, read `docs/collaboration-notes.md` for project decision-making preferences and working habits. The bar is first-class code conforming to accepted best practice, not just something that works; when getting it right reveals a needed refactor or a real tradeoff, surface it for a decision rather than silently working around it or expanding scope.
+Before any non-trivial change, read `docs/collaboration-notes.md` for the project's decision principles. The bar is first-class code conforming to accepted best practice, not just something that works; when getting it right reveals a needed refactor or a real tradeoff, surface it for a decision rather than silently working around it or expanding scope.
 
 For workflow changes that touch generated state, persisted review state, imports, rules, categorization, or undo/return paths, follow the design-pass guidance in `docs/collaboration-notes.md` before implementation: map affected surfaces and lifecycle states first, then code.
 
@@ -130,6 +130,9 @@ When working on the codebase:
 - Document the **why** (the design decision and the constraints it's responding to) and the **how at a high level** (the shape of the solution and the contracts it depends on). Do **not** record the alternatives that were turned down or the bug that led to a rule, and do **not** narrate the change itself — phrases like "we now do X", "added Y", "changed Z to W" belong in commit messages and PR descriptions, not in `docs/`. A reader picking up the file a year from now should see the system as it is, not as a sequence of edits.
 
 - After any substantive piece of work — including investigations that produce conclusions — pause and ask: *did this shape the design, settle an open question, or reveal an invariant that wasn't written down?* If yes, update the docs. The check is "did the model shift," not "did the diff touch a particular file."
+
+- `CLAUDE.md` is loaded into every session, so it stays a routing map: the read-first trigger and one
+  line per doc naming its scope. Rules and their reasons live here and in `docs/`, never copied into it.
 
 - Skip doc updates for trivial or localized changes that don't move the high-level model (bug fixes confined to one function, renames, dependency bumps, etc.).
 
