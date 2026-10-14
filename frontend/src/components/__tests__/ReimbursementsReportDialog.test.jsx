@@ -36,16 +36,6 @@ vi.mock('../TransactionDetail.jsx', () => ({
   default: ({ txn }) => <div data-testid="txn-panel">{txn.id}</div>,
 }))
 
-const OPEN = {
-  id: 'link-1',
-  counterparty: 'Ticket friends',
-  owed: 375,
-  repaid: -350,
-  residual: 25,
-  completed: false,
-  members: [{ txn_id: 't1' }],
-}
-
 const LOOSE = {
   txn_id: 't9',
   date: '2026-08-14',
