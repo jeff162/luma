@@ -8,8 +8,9 @@ data, and the Playwright E2E suite, which needs a populated, past-onboarding bas
 entirely invented (generic well-known vendors only, fictional owners/accounts — no PII), and shaped to
 exercise the features worth showing: multiple owners and account types, per-account import batches
 (provenance), custom categories and rules, category-level tags that *inherit* onto transactions, a few
-months of recurring + one-off activity, a standing two-legged inter-account transfer, a refund, and a cross-account
-duplicate that the real post-import sweep flags for review.
+months of recurring + one-off activity, a standing two-legged inter-account transfer, card payments, a
+refund, an Amazon order history reconciled against the card, and a cross-account duplicate that the real
+post-import sweep flags for review.
 
 Amount sign follows the stored convention (categorizer `_amount_side_matches`): debits/spending are
 **positive**, credits/income are **negative**. `content_hash` mirrors the importer's `make_hash` so a
@@ -134,6 +135,68 @@ def _seed_demo_preferences(conn, scope_id: str) -> None:
         )
 
 
+# The card number Amazon's order history names. The demo card carries no mask, as an imported ledger
+# usually does not, so it is the funding-source map that says which account this number charges.
+_AMAZON_CARD_LAST4 = "4417"
+
+# What was in each order, keyed by the index of the card's Amazon charge it accounts for. The newest
+# charge is index 0. Index 7, the oldest, has no order — the export was taken from a week after it — so
+# the reconciliation report has one Amazon charge that no order accounts for, the bucket that asks the
+# user whether an earlier history covers it.
+_AMAZON_ORDER_ITEMS = {
+    0: [("USB-C charging cable, 2-pack", 1, 21.99)],
+    1: [("Cordless stick vacuum", 1, 109.99)],
+    2: [("Paperback novel", 1, 13.10)],
+    3: [("Orthopedic dog bed, medium", 1, 39.99), ("Rope chew toys", 3, 4.20)],
+    4: [("Printer paper, 500 sheets", 2, 9.49), ("Gel pens, 12-pack", 1, 9.99)],
+    5: [("Trail running shoes", 1, 59.99), ("Phone tripod", 1, 13.50)],   # split per item afterwards
+    6: [("Phone case", 1, 18.49)],
+}
+
+
+def _import_amazon_orders(conn, amazon_account_id: str, card_account_id: str, charges, d) -> None:
+    """Import an Amazon order history through the marketplace importer, as the Amazon form would.
+
+    The card shows only "Amazon" and an amount; the order history says what was bought. Importing it
+    puts each order on the Amazon account as the spending, itemized, and moves the card charge it
+    accounts for to the excluded Amazon Funding leaf, so the money counts once and the reconciliation
+    report has matched orders to show. One order was paid from a gift-card balance, which no tracked
+    account ever charged: it is recorded without a charge, the other case the report distinguishes.
+    """
+    from backend.routers.import_export.amazon import read_amazon_exports, run_amazon_import
+    from backend.services.amazon_funding import upsert_funding_source
+    from backend.services.amazon_import import merge
+
+    upsert_funding_source(conn, last4=_AMAZON_CARD_LAST4, network="Visa", funding_account_id=card_account_id)
+
+    orders, items = [], []
+
+    def order(order_id, days_ago, contents, payments, total):
+        ordered = d(days_ago)
+        orders.append((order_id, "", "; ".join(desc for desc, _, _ in contents) + "; ", "Jordan Lee",
+                       ordered, f"{total:.2f}", "0", "", "", f"{round(total * 0.07, 2):.2f}", "", payments))
+        for desc, quantity, price in contents:
+            items.append((order_id, "", ordered, quantity, desc, "", f"${price:.2f}", "0", "", ""))
+
+    for index, contents in _AMAZON_ORDER_ITEMS.items():
+        charged_days_ago, amount = charges[index]
+        # Amazon charges when an order ships, so the order is placed a day or two before its charge.
+        order(f"113-{4100000 + index:07d}-{2600000 + index * 7:07d}", charged_days_ago + 1 + index % 2,
+              contents, f"Visa ending in {_AMAZON_CARD_LAST4}: {d(charged_days_ago)}: ${amount:.2f}; ", amount)
+    order("113-4100099-2600099", 34, [("Strategy board game", 1, 27.50)], "Gift Card Balance; ", 29.43)
+
+    orders_text = _render_csv(
+        ["order id", "order url", "items", "to", "date", "total", "shipping", "shipping_refund", "gift",
+         "tax", "refund", "payments"], orders)
+    items_text = _render_csv(
+        ["order id", "order url", "order date", "quantity", "description", "item url", "price",
+         "subscribe & save", "ASIN", "category"], items)
+    parsed, items_by_order, names, _unrecognized, _already, file_hashes = read_amazon_exports(
+        [("amazon-orders.csv", orders_text), ("amazon-items.csv", items_text)])
+    run_amazon_import(conn, merge(parsed, items_by_order), account_id=amazon_account_id,
+                      filename=", ".join(names), file_hashes=file_hashes)
+
+
 def load_demo_data(conn, scope_id: str | None = None) -> dict:
     """Populate an empty tenant with the demo dataset. No-op (returns skipped=True) on a non-empty DB.
     When `scope_id` (the local preference-profile id) is given, also seed UI preferences so the demo
@@ -170,6 +233,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "savings": (str(uuid.uuid4()), "Rainy Day Savings", "savings", SHARED_OWNER_ID),
         "card": (str(uuid.uuid4()), "Rewards Card", "credit", owners["Jordan"][0]),
         "brokerage": (str(uuid.uuid4()), "Brokerage", "investment", owners["Jordan"][0]),
+        "amazon": (str(uuid.uuid4()), "Amazon", "amazon", owners["Jordan"][0]),
     }
     for aid, name, acct_type, owner_id in accounts.values():
         conn.execute(
@@ -240,6 +304,24 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         bank(m * 30 + 5, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
     bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
 
+    # Paying off the card: the other movement every household with a credit card makes, and the one a
+    # ledger most often counts twice — once as the purchases on the card, again as the payment leaving
+    # checking. Both legs file under Credit Card Payment, which sits in the excluded Transfers group, so
+    # the purchases count and the payment does not. The amount follows the statement rather than a fixed
+    # figure, and the card side posts a day later, because pairing is by exact amount within a window and
+    # a demo with identical amounts on identical dates would not show that either is tolerated. The
+    # card-side rows are in the card source below; a rule files them.
+    card_payments = [612.48, 845.10, 733.92, 698.15, 910.37, 787.60]
+    for m, amount in enumerate(card_payments):
+        bank(m * 30 + 15, "Rewards Card Autopay", "Credit Card Payment", amount, "checking")
+
+    # A sofa paid for in two instalments: a deposit when ordered, the balance on delivery. Each payment is
+    # real money on its own date and is already counted correctly, so what the multi-payment purchase
+    # built afterwards adds is only the relationship — and the expected total that shows nothing is still
+    # owed. "Furniture" is not a starter leaf, so it also lands in the imported-categories workspace.
+    bank(70, "Oakline Furniture", "Furniture", 450.00, "checking")
+    bank(16, "Oakline Furniture", "Furniture", 1149.00, "checking")
+
     # The money coming back. Each is claimed by one of the reimbursements built after the import; until
     # then they are ordinary inflows, which is exactly what they look like to someone who has not
     # recorded the debt.
@@ -248,6 +330,12 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     bank(26, "Priya Raman — lunch", "Reimbursed Expenses", -24.00, "checking")
     bank(26, "Dana Whitfield — lunch", "Reimbursed Expenses", -24.00, "checking")
     bank(22, "Sam Okafor — concert ticket", "Reimbursed Expenses", -35.00, "checking")
+    # Receivables still being worked on; demo_examples files and tracks them.
+    bank(52, "Brightwater Physical Therapy", "Medical Services", 180.00, "checking")
+    bank(19, "Summit Health Plan claim", "Reimbursed Expenses", -144.00, "checking")
+    bank(95, "Pinecrest Cabins", "Hotel", 480.00, "checking")
+    bank(9, "Print & Copy Depot", "Home Office", 42.80, "checking")
+    bank(3, "Acme Corp Expense Reimb", "Reimbursed Expenses", -42.80, "checking")
     # "Pet Care" isn't a starter leaf, so importing it here creates the leaf (under Unassigned).
     bank(20, "Petco", "Pet Care", 46.20, "checking")
     bank(48, "Chewy", "Pet Care", 61.85, "checking")
@@ -280,7 +368,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for m in range(6):
         base = m * 30
         card(base + 8, "Netflix", 15.99 if m else 18.99)   # rule → Streaming Services
-        card(base + 9, "FitClub", 40.00)                   # no rule → uncategorized
+        card(base + 9, "FitClub", 40.00)                   # recurring rule → Gym Membership
     grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
     grocery_amts = [182.40, 64.10, 121.75, 88.30]
     for i in range(12):
@@ -294,8 +382,10 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for i in range(6):
         card(4 + i * 11, "Shell" if i % 2 else "Chevron", 42.00 + i * 3)   # Shell → rule
     online_amts = [23.99, 119.40, 14.25, 56.80, 31.10, 78.65, 19.99, 44.50]
+    amazon_charges = []   # (days_ago, amount), for the order history imported against them below
     for i in range(8):
         card(5 + i * 8, "Amazon", online_amts[i])                # Amazon → rule
+        amazon_charges.append((5 + i * 8, online_amts[i]))
     card(15, "Amazon Refund", -45.00)                            # refund (income); "amazon" → rule
 
     # Rows the worked examples further down build on. They import as ordinary transactions; what makes
@@ -307,6 +397,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     card(30, "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
     card(45, "Quarterly Dividend", -52.40, "brokerage")          # uncategorized income
     card(26, "Annual Membership", 96.00)                         # cross-account duplicate, leg B
+    for m, amount in enumerate(card_payments):
+        card(m * 30 + 14, "Payment Received - Thank You", -amount)   # the card side of each autopay
 
     bank_cols = {"date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "account": "Account"}
     card_cols = {"date": "Transaction Date", "description": "Payee", "amount": "Amount", "account": "Account"}
@@ -348,6 +440,14 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         ("amazon", "Online Shopping"),
         ("petco", "Pet Care"),
         ("chewy", "Pet Care"),
+        # The card side of the autopay; the bank side arrives already categorized.
+        ("payment received", "Credit Card Payment"),
+        # Item names from the Amazon order history. "Amazon" says nothing about what was bought; the
+        # order does, so rules can file a marketplace order by its contents. The rest stay for the user.
+        ("dog bed", "Pet Care"),
+        ("vacuum", "Household Supplies"),
+        ("running shoes", "Clothing"),
+        ("charging cable", "Electronics"),
     ]:
         if leaf_name in leaves and not conn.execute(
             "SELECT 1 FROM category_rule WHERE LOWER(keyword) = ?", (keyword,)
@@ -356,6 +456,15 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
                 "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, ?)",
                 (str(uuid.uuid4()), leaves[leaf_name], keyword),
             )
+    # A rule that also owns a recurring series: the gym membership is recurring because the rule says so,
+    # not because detection guessed it, so the Recurring page shows it as rule-backed. Its series is
+    # created once the card import has brought the charges it claims.
+    gym_rule_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO category_rule (id, category_id, keyword, clean_name, is_recurring)
+           VALUES (?, ?, 'fitclub', 'FitClub', 1)""",
+        (gym_rule_id, leaves["Gym Membership"]),
+    )
 
     # Import the raw source (no categories). The core's post-import sweep flags the cross-account
     # "Annual Membership" duplicate against the checking row from the first import.
@@ -364,6 +473,11 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         profile_id=card_profile_id, column_map=card_cols, account_keys=("card", "brokerage"),
         use_imported_categories=False, filename="rewards-card.csv",
     )
+
+    from backend.routers.rules import ensure_rule_series
+    ensure_rule_series(conn, gym_rule_id, "monthly")
+
+    _import_amazon_orders(conn, accounts["amazon"][0], accounts["card"][0], amazon_charges, d)
 
     # --- Category-level tags (transactions inherit them through their category/group) ---
     groups, leaves = _category_lookup(conn)
@@ -423,7 +537,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "skipped": False,
         "owners": len(owners),
         "accounts": len(accounts),
-        "batches": 2,
+        "batches": conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0],
         "transactions": txn_count,
         "suspects_flagged": suspects_flagged,
         "tags": [ESSENTIAL_TAG, DISCRETIONARY_TAG],

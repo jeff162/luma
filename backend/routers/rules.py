@@ -55,7 +55,7 @@ def _drop_recurring_series_for_rule(conn, rule_id: str) -> None:
         conn.execute("DELETE FROM recurring_series WHERE id = ?", (s["id"],))
 
 
-def _ensure_recurring_series(conn, rule_id: str, cadence: str | None) -> str:
+def ensure_rule_series(conn, rule_id: str, cadence: str | None) -> str:
     """Create (or refresh) the recurring series a rule with is_recurring=1 owns. The series is source='rule'
     and user-owned (confirmed), so scans preserve it; its membership is the rule's matches, filled right
     away via link_series_members so the card shows its charges immediately. `cadence` sets the initial
@@ -769,7 +769,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
             )
             if body.is_recurring:
                 conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id = ?", (existing["id"],))
-                _ensure_recurring_series(conn, existing["id"], body.cadence)
+                ensure_rule_series(conn, existing["id"], body.cadence)
             return {"id": existing["id"], "status": "merged", "relation": relation}
         return {
             "id": existing["id"],
@@ -793,7 +793,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
             (rid, tag_id),
         )
     if body.is_recurring:
-        _ensure_recurring_series(conn, rid, body.cadence)
+        ensure_rule_series(conn, rid, body.cadence)
     return {"id": rid, "status": "created", **body.model_dump()}
 
 
@@ -994,7 +994,7 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     # and drop it when the flag was turned off. Skipped entirely when the edit never touched recurring
     # and the rule isn't recurring, so ordinary rule edits pay nothing.
     if post and post["is_recurring"]:
-        _ensure_recurring_series(conn, rule_id, body.cadence)
+        ensure_rule_series(conn, rule_id, body.cadence)
     elif body.is_recurring is False:
         _drop_recurring_series_for_rule(conn, rule_id)
     # Opt-in reconcile: re-evaluate the rows the pre-edit rule owned. Rows still matching the edited
@@ -1098,7 +1098,7 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
         conn.execute(f"UPDATE category_rule SET {column} = ? WHERE id = ?", (new_bound, rule_id))
         # What `update_rule` does for any edit to a recurring rule, since the range decides its membership.
         if current["is_recurring"]:
-            _ensure_recurring_series(conn, rule_id, None)
+            ensure_rule_series(conn, rule_id, None)
         affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=True, skipped_splits=skipped_splits, capture_prior_keys=prior_keys,
         )
@@ -1188,7 +1188,7 @@ def _restore_rule_snapshot(conn, snapshot: dict) -> Optional[str]:
     for tag_id in snapshot.get("tag_ids") or []:
         conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule_id, tag_id))
     if rule.get("is_recurring"):
-        _ensure_recurring_series(conn, rule_id, "monthly")
+        ensure_rule_series(conn, rule_id, "monthly")
     else:
         _drop_recurring_series_for_rule(conn, rule_id)
     return rule_id
@@ -1290,7 +1290,7 @@ def _restore_trashed_rule(conn, rule_id: str) -> None:
     if rule["is_recurring"]:
         # The rule-backed series was dropped on trash; re-create it. The exact cadence isn't preserved
         # across a trash/restore (a minor edge) — it resets to monthly and the user can adjust.
-        _ensure_recurring_series(conn, rule_id, "monthly")
+        ensure_rule_series(conn, rule_id, "monthly")
 
 
 @router.delete("/{rule_id}/purge")

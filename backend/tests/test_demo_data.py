@@ -73,10 +73,10 @@ class DemoDataTests(unittest.TestCase):
             ).fetchone()[0]
             self.assertEqual(owners, 2)
 
-            # Four accounts spanning four distinct types.
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM account").fetchone()[0], 4)
+            # Five accounts, each of a distinct type.
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM account").fetchone()[0], 5)
             types = {r[0] for r in conn.execute("SELECT type FROM account")}
-            self.assertEqual(types, {"depository", "savings", "credit", "investment"})
+            self.assertEqual(types, {"depository", "savings", "credit", "investment", "amazon"})
 
             n_txn = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
             self.assertGreater(n_txn, 60)
@@ -121,9 +121,10 @@ class DemoDataTests(unittest.TestCase):
             self.assertTrue(per_date)
             self.assertEqual(set(per_date.values()), {2})
 
-            # Two import files (one per data source), produced through the real import pipeline — so every
-            # row has provenance, both files land under a saved data source, and the cards get coverage.
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 2)
+            # Two CSV files (one per data source) and an Amazon order history, produced through the real
+            # import pipelines — so every row has provenance, both CSV files land under a saved data
+            # source, and the CSV cards get coverage.
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 3)
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM txn WHERE import_batch_id IS NULL").fetchone()[0], 0
             )
@@ -277,20 +278,27 @@ class DemoWorkedExampleTests(unittest.TestCase):
                 total = conn.execute("SELECT amount FROM txn WHERE id = ?", (row["id"],)).fetchone()[0]
                 self.assertAlmostEqual(sum(p["amount"] for p in parts), total, places=2)
 
-    def test_the_reimbursements_cover_open_and_closed(self):
-        """One still owed and the rest settled. Both states have to be present: an all-closed set leaves
-        the outstanding report empty, and an all-open one never shows what finishing looks like."""
-        from backend.services.reimbursements import outstanding
+    def test_the_reimbursements_cover_open_closed_due_and_loose(self):
+        """Settled records and work still to do. An all-closed set leaves the outstanding report empty and
+        Tasks silent; an all-open one never shows what finishing looks like. Among the open ones, one has
+        been repaid short, one is past its reminder, and some receivable money is not tracked at all."""
+        from backend.services.reimbursements import due_reminders, outstanding
 
         with self._conn() as conn:
             report = outstanding(conn)
-            total_links = conn.execute(
-                "SELECT COUNT(*) FROM txn_link WHERE kind = 'reimbursement'"
+            due = due_reminders(conn)
+            completed = conn.execute(
+                "SELECT COUNT(*) FROM txn_link WHERE kind = 'reimbursement' "
+                "AND json_extract(metadata_json, '$.completion') IS NOT NULL"
             ).fetchone()[0]
 
-        self.assertGreaterEqual(total_links, 3)
-        self.assertEqual(len(report["reimbursements"]), 1, "exactly one should still be outstanding")
+        self.assertGreaterEqual(completed, 2)
         self.assertGreater(report["total"], 0)
+        part_repaid = [r for r in report["reimbursements"]
+                       if any(m["claim"] < 0 for m in r["members"]) and r["residual"] > 0]
+        self.assertTrue(part_repaid, "no open record has been repaid short")
+        self.assertTrue(report["loose"], "no untracked receivable money")
+        self.assertGreater(due["total"], 0, "no reimbursement reminder has come due")
 
     def test_one_charge_carries_two_independent_debts(self):
         """The concert tickets. A claim is per *portion*, so one transaction can owe two different
@@ -313,6 +321,73 @@ class DemoWorkedExampleTests(unittest.TestCase):
         for source in ("pdf_text", "html_text", "verbatim"):
             self.assertIn(source, by_source, f"no document extracted as {source}")
             self.assertTrue((by_source[source] or "").strip(), f"{source} produced no text")
+
+    def test_card_payments_pair_as_one_uncounted_movement(self):
+        """Paying the card is money movement: both legs are excluded from totals, and detection folds
+        them into one series spanning checking and the card rather than two."""
+        with self._conn() as conn:
+            legs = conn.execute(
+                """SELECT t.account_id, t.amount, c.exclude_from_totals AS leaf_ex, g.exclude_from_totals AS group_ex
+                   FROM txn t JOIN category c ON c.id = t.category_id JOIN category g ON g.id = c.parent_id
+                   WHERE c.name = 'Credit Card Payment'"""
+            ).fetchall()
+            series = conn.execute(
+                """SELECT occurrence_count FROM recurring_series
+                   WHERE counterpart_account_id = (SELECT id FROM account WHERE type = 'credit')"""
+            ).fetchall()
+        self.assertEqual(len({r["account_id"] for r in legs}), 2)
+        self.assertEqual(round(sum(r["amount"] for r in legs), 2), 0.0)
+        self.assertTrue(all(r["leaf_ex"] or r["group_ex"] for r in legs))
+        self.assertEqual([s["occurrence_count"] for s in series], [len(legs)])
+
+    def test_a_rule_owns_a_recurring_series(self):
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT s.occurrence_count FROM recurring_series s
+                   JOIN category_rule r ON r.id = s.rule_id WHERE s.source = 'rule'"""
+            ).fetchone()
+        self.assertIsNotNone(row, "no rule-backed series")
+        self.assertGreaterEqual(row["occurrence_count"], 3)
+
+    def test_the_amazon_import_reconciles_against_the_card(self):
+        """The report has to show both outcomes worth meeting: orders matched to their card charges, and
+        a charge no order accounts for. A non-cash order is in the history as well."""
+        from backend.routers.import_export.amazon import amazon_reconciliation
+
+        with self._conn() as conn:
+            batch_id = conn.execute(
+                "SELECT id FROM import_batch WHERE source_kind = 'marketplace:amazon'"
+            ).fetchone()["id"]
+            report = amazon_reconciliation(conn, batch_id)
+            itemized = conn.execute(
+                """SELECT COUNT(*) FROM txn t JOIN account a ON a.id = t.account_id
+                   WHERE a.type = 'amazon' AND t.category_id IS NOT NULL AND t.amount > 0"""
+            ).fetchone()[0]
+        self.assertGreaterEqual(len(report["matched"]), 5)
+        self.assertEqual(len(report["payment_unmatched"]), 1)
+        self.assertGreater(itemized, 0, "no order was filed by a rule matching its contents")
+
+    def test_a_multi_payment_purchase_is_fully_paid(self):
+        from backend.services.purchase_links import get_purchase
+
+        with self._conn() as conn:
+            link = conn.execute("SELECT id FROM txn_link WHERE kind = 'purchase'").fetchone()
+            self.assertIsNotNone(link, "no multi-payment purchase")
+            purchase = get_purchase(conn, link["id"])
+        self.assertGreaterEqual(len(purchase["payments"]), 2)
+        self.assertEqual(purchase["unaccounted"], 0)
+
+    def test_an_amazon_order_is_split_per_item(self):
+        """Each part is one item of the order, in that item's own category."""
+        with self._conn() as conn:
+            parts = conn.execute(
+                """SELECT s.label, s.category_id FROM txn_split s
+                   JOIN txn t ON t.id = s.txn_id JOIN account a ON a.id = t.account_id
+                   WHERE a.type = 'amazon'"""
+            ).fetchall()
+        self.assertGreaterEqual(len(parts), 2)
+        self.assertEqual(len({p["category_id"] for p in parts}), len(parts))
+        self.assertTrue(all(p["label"] for p in parts))
 
     def test_the_ledger_spans_more_than_a_year(self):
         """Year-over-year comparison is on the feature list, and with a single season of data there is

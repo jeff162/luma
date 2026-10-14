@@ -3,10 +3,11 @@
 
 """Worked examples layered onto the imported demo transactions.
 
-`demo_data` builds a ledger the way a user would — two CSV imports through the real pipeline. What it
+`demo_data` builds a ledger the way a user would — two CSV imports and an Amazon order import through
+the real pipelines. What it
 cannot express that way is anything that is *done to* a transaction afterwards: a split, a receivable
-and its repayment, an attached receipt, a rule carrying an amount range. Those arrive here, against
-rows the imports already created.
+and its repayment, an attached receipt, a rule carrying an amount range, payments grouped into one
+purchase. Those arrive here, against rows the imports already created.
 
 **These are examples rather than fixtures.** Someone exploring the demo is reading them to find out what
 a feature is *for*, so each one is a situation with a recognizable shape — a warehouse run that was
@@ -23,8 +24,9 @@ import uuid
 
 from backend.services.documents import attach_document, prepare_document
 from backend.services.excluded_categories import find_reimbursable_group_id
+from backend.services.purchase_links import create_purchase
 from backend.services.reimbursements import add_claims, complete, create_reimbursement, update_reimbursement
-from backend.services.txn_splits import save_split
+from backend.services.txn_splits import save_split, suggest_split
 
 
 def _txn(conn, description_fragment: str) -> dict | None:
@@ -163,6 +165,80 @@ def seed_reimbursements(conn, leaves: dict) -> None:
                              remind_on=_months_ahead(conn, tickets["date"], 7))
 
 
+def seed_open_reimbursements(conn, leaves: dict) -> None:
+    """Receivables with work still to do, so the report and Tasks have something to act on.
+
+    The examples above end settled or deliberately not yet due. These are the three states someone
+    actually comes back to: a repayment that fell **short** and needs its shortfall booked, a debt whose
+    reminder has **come due** with nothing paid, and money filed as receivable but **not yet tracked** —
+    an expense and its repayment both sitting loose, waiting to be paired and completed.
+    """
+    # 1. An insurance claim paid at 80%. The record is open with $36 left, and only completing it says
+    #    whether that is a shortfall to book as medical spending or a second payment still to come.
+    therapy = _txn(conn, "Brightwater Physical Therapy")
+    claim = _txn(conn, "Summit Health Plan claim")
+    if therapy and claim:
+        claims_leaf = _receivable_leaf(conn, "Insurance claims")
+        _categorize(conn, therapy["id"], claims_leaf)
+        _categorize(conn, claim["id"], claims_leaf)
+        record = create_reimbursement(
+            conn,
+            [{"txn_id": therapy["id"], "amount": therapy["amount"], "label": "Physical therapy visit"}],
+            counterparty="Summit Health Plan",
+        )
+        add_claims(conn, record["id"], [{"txn_id": claim["id"], "amount": claim["amount"]}])
+
+    # 2. A cabin shared with a friend, half owed back and nothing paid. It follows the household default
+    #    reminder, which a stay this old is past, so it is what the Tasks reminder is about.
+    cabin = _txn(conn, "Pinecrest Cabins")
+    if cabin and "Hotel" in leaves:
+        trips_leaf = _receivable_leaf(conn, "Shared trips")
+        half = round(float(cabin["amount"]) / 2, 2)
+        save_split(conn, cabin["id"], [
+            {"category_id": leaves["Hotel"], "amount": half, "label": "My half"},
+            {"category_id": trips_leaf, "amount": half, "label": "Morgan's half"},
+        ])
+        create_reimbursement(
+            conn, [{"txn_id": cabin["id"], "amount": half, "label": "Morgan's half"}],
+            counterparty="Morgan Ellis",
+        )
+
+    # 3. Filed as receivable and left loose: no record yet. Tracking is optional, so both rows already
+    #    report correctly; grouping them is what lets the pair be completed and leave the report.
+    printing = _txn(conn, "Print & Copy Depot")
+    payback = _txn(conn, "Acme Corp Expense Reimb")
+    if printing and payback:
+        work_leaf = _receivable_leaf(conn, "Work expenses")
+        _categorize(conn, printing["id"], work_leaf)
+        _categorize(conn, payback["id"], work_leaf)
+
+
+# --- Marketplace orders ----------------------------------------------------------------------------
+
+def seed_order_split(conn, leaves: dict) -> None:
+    """An Amazon order of two unlike things, split per item.
+
+    Built from the same proposal the split editor pre-fills: each item's share of what was actually
+    paid, weighted by list price, with a category wherever one of the user's rules claims the item. The
+    item no rule claims is filed here the way the user would, which is the half of the proposal that is
+    left to them.
+    """
+    order = conn.execute(
+        """SELECT t.id FROM txn t JOIN account a ON a.id = t.account_id
+           WHERE a.type = 'amazon' AND t.merchant_name LIKE '%Phone tripod%'"""
+    ).fetchone()
+    if not order or "Electronics" not in leaves:
+        return
+    suggestion = suggest_split(conn, order["id"])
+    if not suggestion or not suggestion["available"]:
+        return
+    save_split(conn, order["id"], [
+        {"category_id": part["category_id"] or leaves["Electronics"], "amount": part["amount"],
+         "label": part["label"]}
+        for part in suggestion["parts"]
+    ])
+
+
 def _months_ahead(conn, iso_date: str, months: int) -> str:
     return conn.execute("SELECT date(?, ?)", (iso_date, f"+{months} months")).fetchone()[0]
 
@@ -278,6 +354,24 @@ def seed_rules(conn, leaves: dict) -> None:
     rule("amazon fresh", "Groceries")
 
 
+# --- Multi-payment purchases -----------------------------------------------------------------------
+
+def seed_purchase(conn) -> None:
+    """A sofa paid as a deposit and a balance: two payments, one thing bought.
+
+    The expected total is stated because it is what turns the link from a note into a check — with it,
+    the purchase can say that nothing is still owed, which is the question someone paying in
+    instalments actually has.
+    """
+    payments = conn.execute(
+        "SELECT id FROM txn WHERE raw_name = 'Oakline Furniture' ORDER BY date"
+    ).fetchall()
+    if len(payments) < 2:
+        return
+    create_purchase(conn, [p["id"] for p in payments], label="Sofa", reference="OF-20931",
+                    expected_total=1599.00)
+
+
 def seed_transaction_tags(conn, tag_ids: dict) -> None:
     """A couple of tags applied to single transactions, alongside the category-level ones.
 
@@ -299,11 +393,15 @@ def seed_transaction_tags(conn, tag_ids: dict) -> None:
 def seed_all(conn, leaves: dict, tag_ids: dict) -> dict:
     """Every example, in dependency order: splits before the reimbursements that claim their parts."""
     seed_split(conn, leaves)
+    seed_order_split(conn, leaves)
     seed_reimbursements(conn, leaves)
+    seed_open_reimbursements(conn, leaves)
     seed_documents(conn)
     seed_rules(conn, leaves)
+    seed_purchase(conn)
     seed_transaction_tags(conn, tag_ids)
     return {
+        "purchases": conn.execute("SELECT COUNT(*) FROM txn_link WHERE kind = 'purchase'").fetchone()[0],
         "splits": conn.execute("SELECT COUNT(*) FROM txn WHERE is_split = 1").fetchone()[0],
         "reimbursements": conn.execute(
             "SELECT COUNT(*) FROM txn_link WHERE kind = 'reimbursement'"

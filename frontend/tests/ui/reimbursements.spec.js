@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test'
 
 // Money that went out expecting to come back.
 //
-// The demo carries three shapes of it deliberately — a work trip repaid in full, a lunch settled the
-// same afternoon, and concert tickets where one friend has paid and one has not — and the report is
-// where the difference is supposed to show. What it must get right is *subtraction*: a reimbursement
+// The demo carries several shapes of it deliberately — a work trip repaid in full, a lunch settled the
+// same afternoon, concert tickets where one friend has paid and one has not, and a few still being
+// worked on — and the report is where the difference is supposed to show. What it must get right is *subtraction*: a reimbursement
 // that has been completed drops off, so what is left on screen is work rather than history. That is the
 // assertion here, and it is one no unit test reaches, because it depends on the seeded records, the
 // outstanding query and the board rendering agreeing all at once.

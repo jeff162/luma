@@ -2479,6 +2479,20 @@ async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozense
     so a re-import reports "already imported" instead of producing a confusing all-duplicates batch (the
     file already has its card). ``file_hashes`` carries ``{filename, hash}`` for the files actually taken,
     for the batch to persist; ``names`` likewise lists only the files taken."""
+    named_texts = []
+    for upload in files:
+        content = await upload.read()
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        named_texts.append((upload.filename, text))
+    return read_amazon_exports(named_texts, known_hashes)
+
+
+def read_amazon_exports(named_texts, known_hashes: "set | frozenset" = frozenset()):
+    """The decoding-free half of `_read_amazon_uploads`: `(filename, text)` pairs in, the same six-tuple
+    out. Kept separate so an in-process caller (the demo loader) parses files exactly as an upload is."""
     orders: list[AmazonOrder] = []
     items_by_order: dict[str, list[AmazonItem]] = {}
     names: list[str] = []
@@ -2486,13 +2500,8 @@ async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozense
     already_imported: list[str] = []
     file_hashes: list[dict] = []
     seen_hashes: set = set(known_hashes)
-    for upload in files:
-        content = await upload.read()
-        try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = content.decode("latin-1")
-        filename = upload.filename or "amazon.csv"
+    for raw_filename, text in named_texts:
+        filename = raw_filename or "amazon.csv"
         content_hash = make_import_file_hash(text)
         if content_hash in seen_hashes:
             already_imported.append(filename)
@@ -2513,7 +2522,7 @@ async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozense
                     item.source_file_hash = content_hash
                 items_by_order.setdefault(order_id, []).extend(items)
         else:
-            unrecognized.append(upload.filename or "(unnamed)")
+            unrecognized.append(raw_filename or "(unnamed)")
             continue
         names.append(filename)
         seen_hashes.add(content_hash)

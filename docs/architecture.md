@@ -114,10 +114,11 @@ requirements, because popovers, inline editors and dismissal rules rebuilt per p
   on the dashboard.
 
 - **The demo dataset is built through the real pipeline.** `load_demo_data` generates CSV files and
-  imports them via `run_import_core`, passing its own `conn` so the whole build is one transaction. The
-  result has real batches, coverage, dedupe results and saved data sources. What cannot arrive in a CSV
-  — a split, a receivable and its repayment, an attached receipt, a rule with an amount range — is
-  layered on by `db/demo_examples.py` through the same services the endpoints call. Its tests assert
+  imports them via `run_import_core`, and an Amazon order history via `run_amazon_import`, passing its
+  own `conn` so the whole build is one transaction. The result has real batches, coverage, dedupe
+  results, saved data sources and a reconciliation report. What cannot arrive in a file — a split, a
+  receivable and its repayment, an attached receipt, a rule with an amount range, a multi-payment
+  purchase — is layered on by `db/demo_examples.py` through the same services the endpoints call. Its tests assert
   through the feature (each recurring signal kind fires, a document's text was extracted) rather than by
   row count, because the dataset exists to demonstrate features.
 

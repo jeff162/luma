@@ -40,6 +40,10 @@ import sqlite3
 import uuid
 from typing import Iterable, Optional, Sequence
 
+from backend.json_utils import safe_json_dict
+from backend.services.amazon_import import parse_item_evidence
+from backend.services.categorizer import categorize_transaction, load_categorization_rules
+
 # Provenance value stamped on a split transaction's `category_source`. Automatic categorization skips
 # rows by this value, exactly as it skips 'enrichment'.
 SPLIT_CATEGORY_SOURCE = "split"
@@ -318,6 +322,75 @@ def clear_split(conn: sqlite3.Connection, txn_id: str) -> None:
             "WHERE id = ?",
             (txn_id,),
         )
+
+
+def suggest_split(conn: sqlite3.Connection, txn_id: str) -> Optional[dict]:
+    """A proposed allocation for a transaction whose import captured per-item detail.
+
+    The items carry **list prices** while the transaction carries what was actually paid (net of refunds,
+    inclusive of tax, shipping and any promo), so the two do not agree. The suggestion therefore
+    distributes the real amount across the items by list-price share rather than using the list figures
+    as amounts — which spreads tax and shipping proportionally instead of parking them on one item.
+
+    It is a starting point, never applied on its own: parts arrive without categories for the user to
+    fill in, and an item the export priced at nothing arrives with a null amount rather than a guess.
+    `available` is false when there is nothing to propose — no captured item detail, no cash to
+    distribute (a points- or gift-card-funded order), or no priced items to weight by. None means the
+    transaction does not exist.
+    """
+    txn = conn.execute(
+        "SELECT id, amount, owner_id, account_id, import_evidence_json FROM txn WHERE id = ?",
+        (txn_id,),
+    ).fetchone()
+    if not txn:
+        return None
+    evidence = safe_json_dict(txn["import_evidence_json"])
+    items = parse_item_evidence(evidence)
+    # Weighted by the *extended* list price (unit price × quantity), not the unit price: the export
+    # prices one of a thing, so weighting by it alone gives a line the user bought six of the same
+    # share as a line they bought one of, and pushes the tax/shipping spread onto the single items.
+    amounts = proportional_allocation(float(txn["amount"]), [i["extended_price"] for i in items])
+    if not amounts:
+        return {"available": False, "parts": []}
+    # The list figures ride along with each proposed amount so the editor can *show its working*:
+    # a share is otherwise an unexplained number, and the arithmetic behind it (this item's list
+    # price against the sum of them, applied to what was actually paid) is exactly what makes it
+    # trustworthy or obviously wrong at a glance.
+    # Each item's own description is run through the user's ordinary categorization rules, so an
+    # order of a dozen things arrives mostly classified instead of as a dozen empty pickers. The
+    # rules are the right source precisely because they are the user's — the marketplace's own
+    # taxonomy stays unused, as everywhere else in this importer.
+    #
+    # It stays a *proposal*: a line no rule claims comes back with no category rather than a guess,
+    # and nothing is written until the user saves. The item's own share is what the matcher sees,
+    # since a rule may be scoped by amount or by debit/credit and the line — not the whole order —
+    # is what it would be classifying. An item the export never priced has no share to offer, so it
+    # is left for the user rather than matched against a number that does not exist.
+    rules = load_categorization_rules(conn)
+    proposed = []
+    for item, amount in zip(items, amounts):
+        category_id = None
+        if amount is not None:
+            match = categorize_transaction(
+                item["description"], item["description"], item["description"],
+                amount, conn,
+                owner_id=txn["owner_id"], account_id=txn["account_id"], rules=rules,
+            )
+            category_id = (match or {}).get("category_id")
+        proposed.append({
+            "label": item["description"],
+            "amount": amount,
+            "category_id": category_id,
+            "unit_price": item["price"],
+            "quantity": item["quantity"],
+            "list_price": item["extended_price"],
+        })
+    return {
+        "available": True,
+        "list_total": round(sum(i["extended_price"] or 0 for i in items), 2),
+        "categorized": sum(1 for p in proposed if p["category_id"]),
+        "parts": proposed,
+    }
 
 
 def proportional_allocation(amount: float, weights: Sequence[Optional[float]]) -> list[Optional[float]]:
