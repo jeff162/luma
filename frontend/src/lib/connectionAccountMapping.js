@@ -19,8 +19,8 @@ import {
   guessNewAccountTypeFromName,
 } from './importExport/importAccountMatching.js'
 
-// The row state is the CSV grid's, field for field, so the two stay comparable and the eventual shared
-// extraction is mechanical (see docs/shared-components.md → watchlist). The backend's mapping mode is
+// The row state is the CSV grid's, field for field, so the two stay comparable and a shared row could be
+// extracted mechanically. The backend's mapping mode is
 // *derived* from this at save time rather than being what the user picks.
 export function defaultConnectionMapEntry(sourceLabel) {
   return {

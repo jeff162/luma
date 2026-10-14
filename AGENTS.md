@@ -151,7 +151,7 @@ Two kinds of fact still need a home, and where they go depends on which of two s
 
 **A multi-topic reference doc collects many** (`data-model.md`, `architecture.md`). There, an **obstacle stays inline, beside the subject it is about**, and the doc carries **only an `## Open` section**, because a decision still owed has no natural inline home and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*).
 
-`ui-patterns.md` is neither shape. It holds conventions only: no history and no `## Open` section. Its closing section, *What belongs here*, is the test for adding to it.
+`ui-patterns.md` is neither shape. It holds conventions only: no history and no `## Open` section. Its closing section, *What belongs here*, is the test for adding to it. `shared-components.md` is its sibling, an index: one line per shared component, with the same closing test. How a component works goes in that component's header comment.
 
 The two sections, in a topic doc:
 

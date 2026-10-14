@@ -49,8 +49,7 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-# Deliberately narrow, chosen from a measured first run rather than a preset (the counts and the
-# reasoning are in docs/backlog/lint-and-tooling.md).
+# Deliberately narrow, chosen from a measured first run rather than a preset.
 #
 # `F` is the half that behaves like a compiler for a language that does not have one: an undefined
 # name, a redefinition that silently discards the first definition, a comparison that cannot be true.

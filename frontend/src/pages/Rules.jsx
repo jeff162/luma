@@ -450,7 +450,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
 
       {/* Portalled: `AppDialog` does not portal itself, and mounted here it would stack and position
           against this overlay's own fixed, blurred backdrop rather than the viewport. See
-          docs/shared-components.md. */}
+          the comment on `AppDialog` in `ui.jsx`. */}
       {confirmDelete ? createPortal(
         <AppConfirmDialog
           title="Delete this rule?"

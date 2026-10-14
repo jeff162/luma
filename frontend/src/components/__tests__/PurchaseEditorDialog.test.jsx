@@ -12,8 +12,8 @@
 // the second-to-last payment warns that it ungroups the purchase**, which is the one outcome a person
 // would not predict from the button.
 //
-// Note the assertion style on buttons: the shared `Button` simulates `disabled`, so a gate is asserted
-// by clicking and checking the call never went out (docs/shared-components.md).
+// Note the assertion style on buttons: a gate is asserted by clicking and checking the call never went
+// out, which tests the action rather than the attribute.
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'

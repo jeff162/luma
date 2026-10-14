@@ -480,6 +480,15 @@ export function FloatingPanelHeader({ children, active = true, onMouseDown, styl
   )
 }
 
+// The standard dialog shell. Three things a caller has to know:
+//
+//   - **It renders where it is mounted; it does not portal.** Its fixed overlay is positioned and stacked
+//     against whatever ancestor established a containing block, so a dialog opened from inside a row, a
+//     list or another overlay is wrapped in `createPortal(…, document.body)` by its caller.
+//   - **The body scrolls, with the header and actions pinned.** A direct child of the body uses
+//     `overflow: clip` rather than `overflow: hidden` for rounded corners: the body is a grid, where a
+//     scroll container's minimum height is zero, so such a child is squeezed and cut off with no scrollbar.
+//   - **`actions` is wrapped in `DialogActions` here.** Pass the buttons bare, or in a fragment.
 export function AppDialog({
   title,
   description,

@@ -27,7 +27,7 @@ Deliberately conservative, because suppression must never swallow a genuine inbo
     real money back. The same statement shows a refund's return trip too: the refund lands in the
     balance and a withdrawal carries it straight back to the card or bank, both naming the refunded
     payment. That withdrawal is the refund's leg — money movement, linked to the refund.
-  * **``Type`` is corroborating, not required** (see ``docs/backlog/paypal-amazon-enrichment.md``). PayPal's
+  * **``Type`` is corroborating, not required** (see ``docs/data-model.md`` → *Wallet funding legs*). PayPal's
     ``Type`` ("Bank Deposit to PP Account", "General Card Deposit", …) is captured as evidence and, when
     present, confirms the leg — but the pass still works when it wasn't captured. Its value is recorded on
     the link, and any *unrecognized* type seen on a suppressed leg is reported, so the recognized set (a

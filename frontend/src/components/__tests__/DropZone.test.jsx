@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
-// The shared drop target, extracted once a third surface wanted one (docs/shared-components.md's
-// watchlist trigger). What is worth pinning is the contract its three callers depend on rather than the
+// The shared drop target. What is worth pinning is the contract a caller depends on rather than the
 // styling: both ways in reach `onFiles`, `multiple` actually bounds what is handed over, a disabled
 // zone is inert on every path, and the input resets so the *same* file can be picked twice — the last
 // of which is not cosmetic, since without it a failed upload cannot be retried by choosing the same

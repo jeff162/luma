@@ -35,7 +35,7 @@ import { formatCurrency } from '../lib/utils.js'
 
 // The dialog is opened from a card in a long list, so it portals to the body: a fixed overlay is
 // positioned and stacked against whatever ancestor established a containing block, not the viewport.
-// See `docs/shared-components.md` on AppDialog.
+// See the comment on `AppDialog` in `ui.jsx`.
 export default function RecurringAmountMatchDialog({ series, suggested = null, onClose, onSave }) {
   const observedLow = Math.min(Math.abs(series.amount_min ?? 0), Math.abs(series.amount_max ?? 0))
   const observedHigh = Math.max(Math.abs(series.amount_min ?? 0), Math.abs(series.amount_max ?? 0))

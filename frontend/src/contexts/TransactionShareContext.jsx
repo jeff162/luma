@@ -7,7 +7,7 @@
 // transaction or a list of them — the single-transaction editor, the merchant/category/account/tag/
 // month reports, the Dashboard drills, the Transactions ledger — opens it through this one context, so
 // each surface just drops in a copy button rather than hosting its own dialog. The dialog renders here
-// at the provider (AppDialog portals to a high-z overlay, so it sits over whatever opened it). The
+// at the provider, at the app root, so its overlay sits over whatever opened it. The
 // payload is transient: there is nothing to persist or reconcile — the dialog is read-only.
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'

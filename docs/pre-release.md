@@ -34,7 +34,6 @@ Landed in the working tree, uncommitted at the time of writing:
 - `CHANGELOG.md` reset to start at the first public release.
 - README restructured for one audience — identity, scope, install, pointers — with maintainer content
   moved to `docs/releasing.md` and developer content to `CONTRIBUTING.md`.
-- `TODO.md` aligned with the backlog policy.
 - Git history rewritten so every commit carries one author identity — **pushed 2026-08-21**, both
   branches, safety refs purged. All 256 commits now carry `jeff162@duck.com` alone.
 
@@ -70,8 +69,7 @@ derives file removal from the ledger); the backup half (the `documents` section 
 stored zip member, restored after the ledger commits and swept against it); `restore_state` and the
 resumable documents phase, with the gate that refuses an import, a sync or a second restore while one is
 outstanding; the attach/list/serve/detach endpoints; tier-1 PDF text extraction (`pypdf`); and the FTS5
-index. UI: the shared `DropZone` (extracted on the `shared-components.md` watchlist trigger, with the
-Amazon tab moved onto it), `DocumentsPanel` on the transaction detail panel, the ledger row's document marker,
+index. UI: the shared `DropZone`, `DocumentsPanel` on the transaction detail panel, the ledger row's document marker,
 and `DocumentViewerDialog`. Documents follow their transaction through the trash, and the purge and the
 demo-data clear both reclaim their files.
 
@@ -161,8 +159,7 @@ travel with the series view; Upcoming was promoted out of the findings panel, wh
 "not an anomaly" argument had implied all along. A finding's "Open series" opens the drill-down **in
 place** under the findings — switching to the series view for it was tried and dropped, because it left
 the list being worked through and could land on a filter that excluded the very series being opened. `SegmentedToggle` was extracted
-from `Dashboard.jsx` into `ui.jsx` on the way (second instance = the `shared-components.md` watchlist
-trigger), gaining optional count badges.
+from `Dashboard.jsx` into `ui.jsx` on the way, gaining optional count badges.
 
 **Also from that pass:** the page carried three different left margins — header, cards and drill-down —
 because `maxWidth` sat on the elements that also carried the page padding, which measures the column

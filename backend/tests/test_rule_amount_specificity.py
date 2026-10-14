@@ -11,8 +11,8 @@ VACUUM.
 The fix is to rank by the *span* of the range rather than the number of bounds, which is the same
 argument the keyword rule already makes: `>= 3000` matches a strict subset of `>= 300`, exactly as a
 longer keyword matches a strict subset of a shorter one. These tests pin the containment cases and the
-deterministic tiebreak; ranges that merely overlap have no principled winner and are parked work
-(`docs/backlog/rule-amount-overlaps.md`).
+deterministic tiebreak; ranges that merely overlap have no principled winner and are reported by the Rules
+page's overlap check (`services/rule_overlaps.py`).
 """
 
 from __future__ import annotations

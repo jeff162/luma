@@ -34,6 +34,22 @@ The high-value three shipped (see below). These were deliberately **deferred**, 
   already factors the chrome/paging/range. A full unify has **high divergence risk** (AccountDetail's
   source-account column/filter is genuinely different) → **leave; keep extracting into
   `detailShared.jsx` incrementally instead of a mega-component.**
+- **Reference-data fetch** — `useState(null)` plus a cancelled-flag `getX()` effect for a whole-list
+  lookup (categories, accounts, owners) in `FilterBar`, `Accounts`, `AmazonImportDialog` and several
+  pages. Only tags have a cache (`useTags`) → **add a `useTags`-style hook for an entity when another
+  surface starts refetching it.**
+- **Dismiss + undo toast + a durable "N dismissed" list** — recurring signal dismissal (Recurring) and
+  task dismissal (Tasks). The storage differs by design, so only the presentation would unify →
+  **extract the row/footer/toast trio if a third surface grows one.**
+- **Source-account → local-account mapping grid** — the CSV import's account step (`ImportExport.jsx`)
+  and `ConnectionAccountMapDialog`. They already share the logic (`importAccountMatching.js`,
+  `PossibleAccountMatchChooserDialog`, `AccountMatchSelect`) and the same row-state shape; what is
+  duplicated is the surrounding markup → **extract the row when a third source of accounts needs
+  mapping, or the two grids drift in what a row offers.**
+- **`ContextMenu` vs. `ActionMenu`** — the transaction row's right-click menu (`TransactionRow.jsx`) is
+  a second anchored-menu implementation. It anchors at the cursor and takes named per-action handlers
+  rather than an item list → **widen `ActionMenu` (cursor anchoring) and retire it when `ContextMenu`
+  needs a feature `ActionMenu` already has.**
 
 ### `useTags()` consumers not yet migrated (see below)
 
