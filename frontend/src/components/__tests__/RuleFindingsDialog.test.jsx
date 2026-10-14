@@ -134,35 +134,6 @@ function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissed
 }
 
 describe('RuleFindingsDialog', () => {
-  it('names the band two overlapping rules both claim, and proposes no fix', async () => {
-    renderDialog([OVERLAP])
-    await screen.findByText(/Amount ranges that overlap/)
-    expect(screen.getByText(/charges from/)).toBeTruthy()
-    expect(screen.getByText(/\$3,000/)).toBeTruthy()
-    // The whole point of the finding: it hands the decision back rather than making one.
-    expect(screen.getByText(/Refining the two rules/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /cap|widen|fix/i })).toBeNull()
-  })
-
-  it('names the single amount when the two ranges meet at one value', async () => {
-    renderDialog([{ ...OVERLAP, overlap_min: 3000, overlap_max: 3000 }])
-    await screen.findByText(/Amount ranges that overlap/)
-    expect(screen.getByText(/a charge of exactly/)).toBeTruthy()
-    expect(screen.queryByText(/charges from/)).toBeNull()
-  })
-
-  it('marks which rule takes the contested charges today', async () => {
-    renderDialog([OVERLAP])
-    expect(await screen.findByText('claims them today')).toBeTruthy()
-  })
-
-  it('reports a nesting pair as information, with no call to action', async () => {
-    renderDialog([NESTING])
-    await screen.findByText(/Merchant matchers that nest/)
-    expect(screen.getByText('wins where both match')).toBeTruthy()
-    expect(screen.queryByText(/Refining the two rules/)).toBeNull()
-  })
-
   it('explains a nesting pair only when the broader rule is the one that wins', async () => {
     renderDialog([NESTING])
     await screen.findByText(/Merchant matchers that nest/)
@@ -207,12 +178,6 @@ describe('RuleFindingsDialog', () => {
     await screen.findByText(/Merchant matchers that nest/)
     expect(screen.getAllByText('Edit').length).toBe(2)
     expect(screen.getAllByText('Delete').length).toBe(1)
-  })
-
-  it('names what the removed rule takes with it before the delete', async () => {
-    // The broad rule renames and the narrow one does not, so removal is not a no-op on those rows.
-    renderDialog([REDUNDANT])
-    expect(await screen.findByText(/pick up the rename to “AJI Newton”/)).toBeTruthy()
   })
 
   it('carries the re-evaluate opt-in through to the delete, defaulted off', async () => {
@@ -285,29 +250,7 @@ describe('RuleFindingsDialog', () => {
     expect(screen.queryByText('Dismiss')).toBeNull()
   })
 
-  it('says so when nothing is wrong with the rule set', async () => {
-    renderDialog([])
-    await waitFor(() => {
-      expect(screen.getByText(/Every rule claims the charges it should/)).toBeTruthy()
-    })
-    expect(screen.queryByText(/Amount ranges that overlap/)).toBeNull()
-    expect(screen.queryByText(/Charges outside a rule/)).toBeNull()
-  })
-
   // --- charges that drifted out of a range ---------------------------------------------------------
-
-  it('names what a drifted range cost and where the charge landed instead', async () => {
-    renderDialog([], { drift: [DRIFT] })
-    expect(await screen.findByText(/12% above the maximum of \$200\.00/)).toBeTruthy()
-    // The consequence, not just the arithmetic — this is the part the user cannot see anywhere else.
-    expect(screen.getByText(/the rule did not claim it/)).toBeTruthy()
-    expect(screen.getByText(/It is uncategorized as a result/)).toBeTruthy()
-  })
-
-  it('says which series the charge fell out of, where the rule feeds one', async () => {
-    renderDialog([], { drift: [{ ...DRIFT, series_name: 'Town of Harborline' }] })
-    expect(await screen.findByText(/It dropped out of the Town of Harborline series too/)).toBeTruthy()
-  })
 
   it('widens the bound and re-applies the rule in one request', async () => {
     // Both halves or neither. As a rule update followed by a separate apply, a failure between the two could

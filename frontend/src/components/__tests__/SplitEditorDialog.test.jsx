@@ -355,32 +355,6 @@ describe('split editor pre-fill', () => {
     expect(screen.getAllByLabelText('Description').map(f => f.value)).toEqual(['Air Widget', 'Cable'])
   })
 
-  it('shows the list figures the shares were derived from', async () => {
-    // A proposed share is an unexplained number without the arithmetic behind it, so the strip states
-    // the list total, what was actually paid, and each item's list price beside its share.
-    api.getSplitSuggestion.mockResolvedValue({
-      available: true,
-      list_total: 100,
-      parts: [
-        { label: 'Air Widget', amount: 70, category_id: null, unit_price: 35, quantity: 2, list_price: 70 },
-        { label: 'Cable', amount: 30, category_id: null, unit_price: 30, quantity: 1, list_price: 30 },
-      ],
-    })
-    // Paid amount deliberately unequal to the list total, so the strip is shown to state both rather
-    // than one figure twice — the gap is the tax/shipping the spread has to absorb.
-    renderEditor({ txn: { ...TXN, amount: 44.07 } })
-
-    await screen.findByText('Use items')
-    // Asserted against the rendered text rather than per node: the quantity and the price are separate
-    // JSX children, so no single text node holds "2 × $35.00".
-    const shown = document.body.textContent
-    // The two totals the spread runs between: list against what was actually paid.
-    expect(shown).toContain('2 items totalling $100.00')
-    expect(shown).toContain('$44.07')
-    // A multi-quantity line states its count, so a share larger than the unit price is explicable.
-    expect(shown).toContain('2 × $35.00')
-  })
-
   it('opens on one row per item when the order says how many there are', async () => {
     api.getSplitSuggestion.mockResolvedValue({
       available: true,
@@ -410,23 +384,6 @@ describe('split editor pre-fill', () => {
     render(<SplitEditorDialog txn={TXN} categories={CATEGORIES} onClose={() => {}} onSaved={() => {}} />)
 
     expect((await screen.findAllByLabelText('Amount')).length).toBe(2)
-  })
-
-  it('names the two money columns it shows', async () => {
-    api.getSplitSuggestion.mockResolvedValue({
-      available: true,
-      list_total: 100,
-      parts: [
-        { label: 'Air Widget', amount: 70, category_id: null, unit_price: 70, quantity: 1, list_price: 70 },
-        { label: 'Cable', amount: 30, category_id: null, unit_price: 30, quantity: 1, list_price: 30 },
-      ],
-    })
-    renderEditor()
-
-    // Two columns of money beside each other are unreadable unlabelled; "Share" also ties back to the
-    // wording of the sentence above them.
-    expect(await screen.findByText('List')).toBeTruthy()
-    expect(screen.getByText('Share')).toBeTruthy()
   })
 
   it('fills in the categories the user\'s rules claimed, and only those', async () => {

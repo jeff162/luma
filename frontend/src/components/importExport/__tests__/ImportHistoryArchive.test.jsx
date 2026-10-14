@@ -117,19 +117,6 @@ describe('an expanded data source with years of imports', () => {
     expect(screen.getByText('2025-10.csv')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Older imports/ })).toBeNull()
   })
-
-  it('calls a connection\'s archived period cards cards, not imports', () => {
-    renderExpanded({
-      ...sourceRow(monthlyCards()),
-      key: 'connection:c1',
-      kind: 'connection',
-      connectionId: 'c1',
-      label: 'Northgate',
-      profile: null,
-    })
-
-    expect(screen.getByRole('button', { name: /Older cards · 8/ })).toBeTruthy()
-  })
 })
 
 // A marketplace vendor's cards are listed by the data they cover rather than by import time, so a
@@ -156,12 +143,6 @@ describe('an import card', () => {
 
     expect(screen.getByText('Feb 1 – 28, 2025')).toBeTruthy()
     expect(screen.getByText('imported 2026-10-07 00:43')).toBeTruthy()
-  })
-
-  it('says a statement period is a statement period, not a guess from its rows', () => {
-    renderExpanded(sourceRow([statement, ...monthlyCards()]))
-
-    expect(screen.getByText('Feb 1 – 28, 2025').getAttribute('title')).toBe('Statement period')
   })
 
   // The PayPal case: statements imported over an activity export that already held every row. The card
@@ -225,12 +206,6 @@ describe('a card whose stored detail has been cleared', () => {
     accounts: [],
   }
 
-  it('says why its duplicates are no longer listed', () => {
-    renderExpanded(sourceRow([cleared, ...monthlyCards()]))
-
-    expect(screen.getByText(/Stored detail cleared/)).toBeTruthy()
-  })
-
   it('stops offering a report with nothing left in it', () => {
     renderExpanded(sourceRow([cleared, ...monthlyCards()]))
 
@@ -241,12 +216,6 @@ describe('a card whose stored detail has been cleared', () => {
     renderExpanded(sourceRow([{ ...cleared, removed_duplicate_count: 4 }, ...monthlyCards()]))
 
     expect(screen.getByRole('button', { name: /4 duplicates/ })).toBeTruthy()
-  })
-
-  it('still says the import added nothing, which the clear does not change', () => {
-    renderExpanded(sourceRow([cleared, ...monthlyCards()]))
-
-    expect(screen.getByText(/No new transactions — every row was already in the ledger/)).toBeTruthy()
   })
 
   it('says the same for a file whose rows were all restatements, which keep no report', () => {

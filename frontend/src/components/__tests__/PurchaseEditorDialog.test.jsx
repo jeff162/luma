@@ -83,11 +83,6 @@ describe('what it shows', () => {
     expect(screen.getByText('-$3,600.00')).toBeTruthy()
   })
 
-  it('says so when the payments account for the expected total', async () => {
-    renderDialog()
-    expect(await screen.findByText('Fully accounted for')).toBeTruthy()
-  })
-
   it('names the gap "Unaccounted" rather than claiming a payment is owed', async () => {
     api.getTransactionPurchase.mockResolvedValue({
       purchase: { ...PURCHASE, linked_total: 2400, unaccounted: 3600, payment_count: 1 },

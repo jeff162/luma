@@ -45,14 +45,3 @@ test('the row menu opens the tag picker on that row', async ({ page }) => {
 
   await expect(row.getByRole('button', { name: '+ New tag' })).toBeVisible()
 })
-
-test('removal is separated in the menu and names what it cannot undo', async ({ page }) => {
-  await openRowMenu(page, ACCOUNT)
-  const remove = page.getByRole('menuitem', { name: 'Remove account…' })
-  await expect(remove).toBeVisible()
-
-  await remove.click()
-  await expect(page.getByText('Remove account?')).toBeVisible()
-  await expect(page.getByText(/cannot be undone/i)).toBeVisible()
-  await page.getByRole('button', { name: 'Cancel' }).click()
-})

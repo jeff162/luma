@@ -5,8 +5,8 @@ how it moves* is settled and lives in the topic docs: the payload-version-12 env
 directions, the incremental cipher, referential repair, `restore_state` and the resumable documents phase
 are in [`../data-model.md`](../data-model.md) → *Backups*; restore as a destructive operation — including
 why a restore covers one of the two databases and what that does to the perimeter — is in
-[`../operations.md`](../operations.md); the memory profile and the ledger-vs-documents decomposition are
-in [`../scale-and-limits.md`](../scale-and-limits.md); and secret custody, the coupling between the two
+[`../operations.md`](../operations.md); why a bulk operation must not hold rows as a list and the
+ledger-vs-documents decomposition are in [`../scale-and-limits.md`](../scale-and-limits.md); and secret custody, the coupling between the two
 databases, and what a leaked backup actually exposes are in
 [`../security-model.md`](../security-model.md).
 

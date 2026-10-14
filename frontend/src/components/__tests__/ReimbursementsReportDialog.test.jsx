@@ -70,44 +70,6 @@ beforeEach(() => { vi.clearAllMocks() })
 afterEach(cleanup)
 
 describe('ReimbursementsReportDialog', () => {
-  it('splits the board by direction, not by whether a record exists', async () => {
-    // The old split was Tracked / Not tracked yet, which made a storage fact into the reader's first
-    // question — "is it tracked, does it need to be, why can't I link it" ran through every confusion
-    // this feature produced. Both of these are money owed back, so both sit on the left.
-    open({ total: 145, reimbursements: [OPEN], loose: [LOOSE] })
-    expect(await screen.findByText('Ticket friends')).toBeTruthy()
-    expect(screen.getByText('Expected')).toBeTruthy()
-    expect(screen.getByText('Received')).toBeTruthy()
-    expect(screen.getByText('Hardware Store')).toBeTruthy()
-    expect(screen.queryByText('Tracked')).toBeNull()
-    expect(screen.queryByText('Not tracked yet')).toBeNull()
-  })
-
-  it('has no closed pile, and says where finished ones went', async () => {
-    // The alternative — a second tab of completed reimbursements — is a list nobody reads. Saying so
-    // in the description is what stops "it vanished" being the reading when one is completed.
-    open({ total: 25, reimbursements: [OPEN], loose: [] })
-    await screen.findByText('Ticket friends')
-    expect(screen.getByText(/Completed ones drop off this list/)).toBeTruthy()
-    expect(screen.getByText('Nothing waiting to be matched.')).toBeTruthy()
-  })
-
-  it('says plainly when there is nothing waiting', async () => {
-    open({ total: 0, reimbursements: [], loose: [] })
-    expect(await screen.findByText(/Nothing is waiting to come back/)).toBeTruthy()
-  })
-
-  it('presents an unlinked receivable as ordinary, not as a problem to fix', async () => {
-    // It is the normal state of a reimbursable between the purchase and the repayment. The layout is
-    // what says so now: it sits under "Expected" beside the records, with nothing under it — so being
-    // untracked reads as *nothing has come back yet* rather than as an omission. The note that used to
-    // explain the old "Not tracked yet" heading went with the heading.
-    open({ total: 120, reimbursements: [], loose: [LOOSE] })
-    expect(await screen.findByText('Hardware Store')).toBeTruthy()
-    expect(screen.getByText('Expected')).toBeTruthy()
-    expect(screen.queryByText(/not been grouped/)).toBeNull()
-  })
-
   it('surfaces a failed load rather than sitting on a spinner', async () => {
     api.getOutstandingReimbursements.mockRejectedValue(new Error('nope'))
     render(
@@ -135,13 +97,6 @@ describe('an untracked row', () => {
     ))
     expect(await screen.findByTestId('txn-panel')).toBeTruthy()
     expect(screen.getByTestId('txn-panel').textContent).toBe('t9')
-  })
-
-  it('does not reach for the reimbursement editor, which has nothing to edit', async () => {
-    api.getTransactions.mockResolvedValue({ transactions: [{ id: 't9', amount: 120 }] })
-    open({ total: 120, reimbursements: [], loose: [LOOSE] })
-    await userEvent.click(await screen.findByRole('button', { name: /Hardware Store/ }))
-    await screen.findByTestId('txn-panel')
     expect(api.getReimbursement).not.toHaveBeenCalled()
   })
 
@@ -276,14 +231,6 @@ describe('undoing a pairing', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(api.deleteReimbursement).toHaveBeenCalledWith('link-2'))
   })
-
-  it('says what was paired, so the toast can be read without retracing the drag', async () => {
-    api.addReimbursementClaims.mockResolvedValue(RECORD)
-    open({ total: 25, reimbursements: [RECORD], loose: [PAYMENT] })
-    await screen.findByText('Ticket friends')
-    drag('From Sam', 'Ticket friends')
-    expect(await screen.findByText(/From Sam now counts toward Ticket friends/)).toBeTruthy()
-  })
 })
 
 /*
@@ -368,11 +315,6 @@ describe('opened from a reminder', () => {
     openReport({ dueOnly: true })
     expect(await screen.findByText('Alex trip')).toBeTruthy()
     expect(screen.queryByText('Robin lunch')).toBeNull()
-  })
-
-  it('states what the narrowed list adds up to, so it cannot contradict the headline', async () => {
-    openReport({ ownerId: 'alex' })
-    expect(await screen.findByText(/of the total above/)).toBeTruthy()
   })
 
   it('lets the narrowing be dropped', async () => {

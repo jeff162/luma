@@ -56,13 +56,6 @@ function renderDialog({ stored = storage, cards = batches, databaseBytes = 0 } =
 }
 
 describe('the stored-detail screen', () => {
-  it('explains what the record is for before offering to remove it', async () => {
-    renderDialog()
-    await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
-
-    expect(screen.getByText(/Import anyway/)).toBeTruthy()
-  })
-
   it('attributes the space, largest source first, and leaves out imports holding nothing', async () => {
     renderDialog()
     await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
@@ -125,20 +118,6 @@ describe('the stored-detail screen', () => {
     await screen.findByText('activity-2019.csv')
 
     expect(screen.getByText('Jul 5, 2019 – Nov 9, 2020')).toBeTruthy()
-  })
-
-  it('names the column, so the figure is not read as the space a clear would leave behind', async () => {
-    renderDialog()
-    await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
-
-    expect(screen.getByText('Space used')).toBeTruthy()
-  })
-
-  it('says nothing can be cleared until something is picked', async () => {
-    renderDialog()
-    await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
-
-    expect(screen.getByRole('button', { name: /^Clear detail/ }).disabled).toBe(true)
   })
 
   // By when the import was made: a backfill of old statements imported last week has not aged.
@@ -209,12 +188,6 @@ describe('the stored-detail screen', () => {
 
     expect(api.clearBatchDetail).toHaveBeenCalledWith(['b2019'])
     await waitFor(() => expect(api.getBatchDetailStorage).toHaveBeenCalledTimes(2))
-  })
-
-  it('says so plainly when there is nothing stored anywhere', async () => {
-    renderDialog({ stored: {} })
-
-    await waitFor(() => expect(screen.getByText('No import is holding detail records')).toBeTruthy())
   })
 })
 

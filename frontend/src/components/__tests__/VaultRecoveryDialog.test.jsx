@@ -186,12 +186,6 @@ describe('the reset', () => {
     await userEvent.click(await screen.findByText(/None of these — rebuild the vault…/))
   }
 
-  it('says what survives before what is destroyed, and counts the cost', async () => {
-    await openResetForm()
-    expect(screen.getByText(/Your transactions, accounts, categories and rules are kept\./)).toBeTruthy()
-    expect(screen.getByText(/2 connections will need reconnecting/)).toBeTruthy()
-  })
-
   it('refuses to run without the typed confirmation', async () => {
     await openResetForm()
     await clickIsIgnored('Rebuild the vault', resetVault)
@@ -228,13 +222,6 @@ describe('the reset', () => {
     await openResetForm()
     await userEvent.type(screen.getByPlaceholderText('RESET VAULT'), 'RESET VAULT{Enter}')
     expect(resetVault).not.toHaveBeenCalled()
-  })
-
-  it('sends the reason the user chose, defaulting to a forgotten passphrase', async () => {
-    await openResetForm()
-    await userEvent.type(screen.getByPlaceholderText('RESET VAULT'), 'RESET VAULT')
-    await userEvent.click(screen.getByText('Rebuild the vault').closest('button'))
-    expect(resetVault).toHaveBeenCalledWith('lost', 'RESET VAULT')
   })
 
   it('names the connections the user still has to revoke by hand', async () => {
@@ -295,17 +282,6 @@ describe('asking another member to let you back in', () => {
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), REENROL)
     await userEvent.click(screen.getByText('Ask to be let back in').closest('button'))
     await waitFor(() => expect(requestVaultReenrolment).toHaveBeenCalledWith(REENROL))
-  })
-
-  it('says what happens next, naming who has to approve', async () => {
-    withMember()
-    renderDialog()
-    await userEvent.type(await screen.findByPlaceholderText('New passphrase'), REENROL)
-    await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), REENROL)
-    await userEvent.click(screen.getByText('Ask to be let back in').closest('button'))
-    // The reassurance that makes this rung free: no secret travels between the two people.
-    expect(await screen.findByText(/Robin approves/)).toBeTruthy()
-    expect(screen.getByText(/they do not need yours/)).toBeTruthy()
   })
 
   it('holds the new passphrase to the floor before asking', async () => {

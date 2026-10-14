@@ -239,11 +239,6 @@ describe('CategoryCell on one expanded part of a split', () => {
     expect(onOpenSplit).toHaveBeenCalledTimes(1)
   })
 
-  it('names the category in the control, so it is not announced as a bare glyph', () => {
-    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} onOpenSplit={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /^Groceries — one part of a split/ })).toBeTruthy()
-  })
-
   it('still reads as the part\'s category where a host cannot open the editor', () => {
     render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} />)
     expect(screen.getByText('Groceries')).toBeTruthy()

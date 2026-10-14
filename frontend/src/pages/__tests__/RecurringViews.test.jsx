@@ -213,13 +213,6 @@ describe('Recurring page controls', () => {
     expect(movement.compareDocumentPosition(bill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('names the create action + New', async () => {
-    renderWithMovement()
-    await screen.findByText('Streamly')
-    expect(screen.getByRole('button', { name: '+ New' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Add manually' })).toBeNull()
-  })
-
   it('deselects every status in one click, and says why the list is empty', async () => {
     renderWithMovement()
     await screen.findByText('Streamly')

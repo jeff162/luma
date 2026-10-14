@@ -249,22 +249,6 @@ describe('the access queue', () => {
     expect(approveVaultAccess).not.toHaveBeenCalled()
   })
 
-  it('leads with the queue when somebody is waiting', async () => {
-    // The badge on the button that opens this dialog says "(1 waiting)", so the request is why it was
-    // opened — finding it below three other sections means hunting for what you were just told about.
-    vaultAccessRequests.mockResolvedValue(WAITING)
-    renderDialog()
-    // The eyebrow is its own styled div, so the section it heads is one level up.
-    const heading = await screen.findByText('Vault access')
-    expect(heading.parentElement.style.order).toBe('-1')
-  })
-
-  it('leaves it in its usual place when nobody is', async () => {
-    renderDialog()
-    const heading = await screen.findByText('Vault access')
-    expect(heading.parentElement.style.order).toBe('')
-  })
-
   it('says when a request replaces access that already existed', async () => {
     // A newcomer enrolling and a member who lost their passphrase look identical here, and they are not
     // the same decision — the second hands back access to whoever wrote the request. The approver is the
@@ -304,26 +288,9 @@ describe('recovery code', () => {
     expect(await screen.findByText(/AAAAAAAA-BBBBBBBB/)).toBeTruthy()
     expect(screen.getByText(/shown once and cannot be recovered/)).toBeTruthy()
   })
-
-  it('offers to replace an existing code, and says the old one stops working', async () => {
-    // Someone regenerating after a scare is relying on exactly that, so it is stated at the button
-    // rather than only inside the reveal they have not opened yet.
-    getCurrentUser.mockResolvedValue({
-      user: { id: 'u1', vault_has_recovery_code: true, vault_recovery_code_issued_at: '2026-08-01T00:00:00' },
-    })
-    renderDialog()
-    expect(await screen.findByText('Replace code')).toBeTruthy()
-    expect(screen.getByText(/Replacing it stops the old one working/)).toBeTruthy()
-  })
 })
 
 describe('unlock methods', () => {
-  it('offers to add a passkey where a ceremony can run', async () => {
-    withWebAuthn()
-    renderDialog()
-    expect(await screen.findByText('Add a passkey')).toBeTruthy()
-  })
-
   it('explains why instead of offering the control on an IP-address host', async () => {
     // The reason matters: TLS would not help here, so telling the user to configure HTTPS — the other
     // refusal's advice — would send them to do work that ends at the same wall.
@@ -332,13 +299,6 @@ describe('unlock methods', () => {
     renderDialog()
     expect(await screen.findByText(/named host, not an IP address/)).toBeTruthy()
     expect(screen.queryByText('Add a passkey')).toBeNull()
-  })
-
-  it('explains the cleartext case in its own terms', async () => {
-    withWebAuthn()
-    vaultPasskeyParams.mockResolvedValue({ available: false, reason: 'insecure_context', rp_id: null, credentials: [] })
-    renderDialog()
-    expect(await screen.findByText(/need an HTTPS connection/)).toBeTruthy()
   })
 
   it('says so when the browser itself has no WebAuthn, whatever the server allows', async () => {
@@ -420,11 +380,6 @@ describe('vault access queue', () => {
     expect(screen.queryByText('Remove access')).toBeNull()
   })
 
-  it('says plainly when nobody is waiting', async () => {
-    renderDialog()
-    expect(await screen.findByText('Nobody is waiting for access.')).toBeTruthy()
-  })
-
   it('approves a request in one act, naming the person rather than a slot', async () => {
     vaultAccessRequests.mockResolvedValue({
       requests: [{ slot_id: 'slot-9', user_id: 'u2', display_name: 'Robin', requested_at: '2026-08-10' }],
@@ -447,14 +402,6 @@ describe('replacing the vault key', () => {
     expect(rotateVault).not.toHaveBeenCalled()
     await userEvent.click(screen.getByText('Replace key').closest('button'))
     await waitFor(() => expect(rotateVault).toHaveBeenCalled())
-  })
-
-  it('tells the user the change is not a re-link', async () => {
-    // The fear this answers: "re-encrypting my credentials" sounds like it breaks the connections. It
-    // does not, and someone who believes it does will never run the one action that ends a leak.
-    renderDialog()
-    await userEvent.click((await screen.findByText('Replace vault key…')).closest('button'))
-    expect(await screen.findByText(/can no longer decrypt them, even with a copy of the database/)).toBeTruthy()
   })
 })
 

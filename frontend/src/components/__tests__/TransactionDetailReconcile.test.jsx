@@ -54,9 +54,9 @@ vi.mock('../../contexts/TransactionShareContext.jsx', () => ({
 }))
 
 const TXN = {
-  id: 't1', date: '2026-08-03', amount: -245.84,
-  merchant_name: 'Arbella Insurance Debitpmt', display_name: 'Arbella Insurance Debitpmt',
-  raw_name: 'Arbella Insurance Debitpmt', category_id: null, notes: '', tags: [],
+  id: 't1', date: '2026-08-03', amount: -180.00,
+  merchant_name: 'Harborline Insurance Debitpmt', display_name: 'Harborline Insurance Debitpmt',
+  raw_name: 'Harborline Insurance Debitpmt', category_id: null, notes: '', tags: [],
 }
 
 // The floating panel measures itself; jsdom has no layout and no ResizeObserver.
@@ -82,14 +82,14 @@ describe('TransactionDetail reconciles what it persists', () => {
     // rather than userEvent because the panel's busy wrapper leaves `pointer-events: none` on its
     // subtree under jsdom, which has no layout to clear it — the wiring is what this asserts, not the CSS.
     fireEvent.click(await screen.findByTitle('Edit merchant name'))
-    const field = await screen.findByDisplayValue('Arbella Insurance Debitpmt')
-    fireEvent.change(field, { target: { value: 'Arbella Insurance: Umbrella' } })
+    const field = await screen.findByDisplayValue('Harborline Insurance Debitpmt')
+    fireEvent.change(field, { target: { value: 'Harborline Insurance: Umbrella' } })
     fireEvent.keyDown(field, { key: 'Enter' })
 
-    await waitFor(() => expect(api.updateMerchant).toHaveBeenCalledWith('t1', 'Arbella Insurance: Umbrella'))
+    await waitFor(() => expect(api.updateMerchant).toHaveBeenCalledWith('t1', 'Harborline Insurance: Umbrella'))
     // The write is not the property under test — the host hearing about it is.
     await waitFor(() => {
-      expect(onReconcile).toHaveBeenCalledWith('t1', { display_name: 'Arbella Insurance: Umbrella' })
+      expect(onReconcile).toHaveBeenCalledWith('t1', { display_name: 'Harborline Insurance: Umbrella' })
     })
   })
 })
