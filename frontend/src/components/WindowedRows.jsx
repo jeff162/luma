@@ -25,11 +25,15 @@
 import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
+const UNLOADED_KEY_PREFIX = 'unloaded:'
+const AVERAGE_SAMPLE_ROWS = 50
+
 export default function WindowedRows({
   scrollRef,
   items = [],
   getItemKey,
-  // A first-paint guess only; every mounted row is measured and the estimate corrected.
+  // A first-paint guess only. Every mounted row is measured, and once some are, their average stands in
+  // for the rows not yet drawn (see averageRef).
   estimateSize = 44,
   overscan = 10,
   // Change this whenever something outside the row data alters row heights (the grid template being
@@ -45,21 +49,44 @@ export default function WindowedRows({
   onTopIndexChange = null,
   // Optional: reports `{ startIndex, endIndex }`, the items in the viewport (overscan excluded), whenever
   // that range changes, so a caller holding a partly loaded list can fetch the rows being looked at. In
-  // such a list an item not loaded yet is `undefined`, drawn as a placeholder `estimateSize` high, and an
-  // item that is `null` is drawn as nothing (lib/rowSlots.js); neither reaches `getItemKey` or `renderRow`.
+  // such a list an item not loaded yet is `undefined`, drawn as a placeholder the height of an average row,
+  // and an item that is `null` is drawn as nothing (lib/rowSlots.js); neither reaches `getItemKey` or
+  // `renderRow`.
   onRangeChange = null,
 }) {
+  // The average height of the rows measured so far, which sizes every row not drawn yet. A fixed guess is
+  // only right for the fonts it was tuned against: where rows draw a couple of pixels taller, the list
+  // grows by that much for every row drawn the first time, and a dragged scrollbar thumb falls behind the
+  // pointer until the whole list has been seen. Sampled from the first rows only, because rows in one
+  // list are alike and a recount on every scroll would cost a pass over every row measured.
+  const averageRef = useRef(null)
+  const sampledRef = useRef(0)
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef?.current ?? null,
-    estimateSize: () => estimateSize,
+    estimateSize: () => averageRef.current ?? estimateSize,
+    onChange: instance => {
+      if (sampledRef.current >= AVERAGE_SAMPLE_ROWS) return
+      let sum = 0
+      let count = 0
+      instance.itemSizeCache.forEach((size, key) => {
+        if (String(key).startsWith(UNLOADED_KEY_PREFIX)) return
+        sum += size
+        count += 1
+      })
+      if (count === 0) return
+      sampledRef.current = count
+      averageRef.current = sum / count
+    },
     // Item identity, not list position, so a re-sort or a filter change re-keys the measurement cache
     // instead of reusing whatever row previously sat at that index.
-    getItemKey: index => (items[index] == null ? `unloaded:${index}` : getItemKey(items[index], index)),
+    getItemKey: index => (items[index] == null ? `${UNLOADED_KEY_PREFIX}${index}` : getItemKey(items[index], index)),
     overscan,
   })
 
   useEffect(() => {
+    averageRef.current = null
+    sampledRef.current = 0
     virtualizer.measure()
   }, [measureKey, virtualizer])
 
@@ -109,9 +136,16 @@ export default function WindowedRows({
         transform: `translateY(${virtualRows[0]?.start ?? 0}px)`,
       }}>
         {virtualRows.map(virtualRow => (
-          <div key={virtualRow.key} data-index={virtualRow.index} ref={virtualizer.measureElement}>
+          // An unloaded slot is not measured: it takes the size the virtualizer already gives it, so its
+          // placeholder never changes the list's height when it mounts. (An empty `null` slot is measured,
+          // at zero; neither counts toward the average.)
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={items[virtualRow.index] === undefined ? undefined : virtualizer.measureElement}
+          >
             {items[virtualRow.index] === undefined
-              ? <UnloadedRow height={estimateSize} />
+              ? <UnloadedRow height={virtualRow.size} />
               : items[virtualRow.index] === null ? null : renderRow(items[virtualRow.index], virtualRow.index)}
           </div>
         ))}
