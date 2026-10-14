@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The import mapping table's amounts come from the backend (`POST /import-export/preview/amounts`),
-// which runs the import's own `parse_amount`. The client deliberately owns no amount parsing: it used
-// to, and the two implementations disagreed on `single_unsigned` rows (the direction column was
-// ignored, so every row rendered as a credit), on `DR`/`CR` suffixes, and on blank two-column cells —
-// a preview that was wrong precisely where a preview matters. See `docs/architecture.md` → *Preview contract*.
+// which runs the import's own `parse_amount`. The client owns no amount parsing, so the preview cannot
+// disagree with what the import will store. See `docs/architecture.md` → *Preview contract*.
 //
 // What lives here is the plumbing around that call: build the request from the current mapping, fetch
 // it debounced as the mapping is edited, and merge the answer back onto the rendered rows by position.

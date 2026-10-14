@@ -265,17 +265,15 @@ def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool
     keyword — a longer substring matches a strict subset of the rows a shorter one does.
 
     **Then the narrower amount range**, which is the same idea on the amount axis: `>= 3000` matches a
-    strict subset of `>= 300`, so it must win. Counting how many bounds a rule sets — the previous
-    measure — cannot see that, and scored those two rules identically; the tie then fell to whatever
-    order SQLite happened to return, so a town's property tax could be categorized as its water bill.
-    Comparing the *span* fixes it and never contradicts containment: whenever one range contains
-    another, the contained one has the smaller span. An open upper end takes a sentinel rather than
+    strict subset of `>= 300`, so it must win. The measure is the range's *span*, not how many bounds a
+    rule sets, because both of those rules set one bound. Span never contradicts containment: whenever
+    one range contains another, the contained one has the smaller span. An open upper end takes a sentinel rather than
     being treated as unbounded, so `[3000, inf)` still scores narrower than `[300, inf)`; an open lower
     end takes 0, which is exact rather than approximate, since bounds are compared against |amount|.
 
     Ranges that merely *overlap* — `[300, 4000]` against `[3000, inf)` — have no principled winner, and
-    span picks one only by arithmetic accident. Surfacing such a pair to the user is parked work
-    (`docs/backlog/rule-amount-overlaps.md`); ordering cannot answer it.
+    span picks one only by arithmetic accident. Ordering cannot answer it, so the Rules page's overlap
+    check reports such a pair (`services/rule_overlaps.py`).
 
     The final term is the rule id, so a genuine tie resolves the same way every time rather than by
     query plan — without it the same ledger can categorize differently after a VACUUM.

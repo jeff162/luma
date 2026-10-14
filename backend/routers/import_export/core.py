@@ -571,8 +571,7 @@ def _classify_evidence_column_role(values: list[str]) -> str:
 # PayPal Activity CSV recognition. The export header is stable and distinctive across years — no
 # bank/card/Amazon CSV carries this combination — so a header-only sniff identifies it. A recognized
 # PayPal file force-captures `Type`/`Item Title`/`Transaction ID` (see `_forced_evidence_headers`) and is stamped
-# `source_kind = 'source:paypal'`. See docs/data-model.md -> "PayPal source recognition +
-# `Type`-based money-movement categorization".
+# `source_kind = 'source:paypal'`. See docs/data-model.md -> "PayPal source recognition".
 _PAYPAL_HEADER_MARKERS = frozenset({"timezone", "type", "status", "currency", "receipt id", "transaction id"})
 PAYPAL_SOURCE_KIND = "source:paypal"
 # Fields always worth keeping from a PayPal export regardless of what the user mapped/checked: `Type`
@@ -1951,7 +1950,7 @@ def _assign_rule_suggestion_review_groups(suggestions: list[dict]) -> None:
     """Stamp each suggestion with `review_group_id`, the working set the review renders it in.
 
     The review's merchant containers, their ordering, and the look-back lens all treat one group as a
-    unit (`docs/data-model.md` → *Look-back lens*). Precedence, strongest first:
+    unit (`docs/data-model.md` → *Rule suggestions*). Precedence, strongest first:
 
     - **split root** — a remainder partition and the card it was split from, so neither label cleanup
       differences nor a remainder that regenerates under another scope can separate the chunks of one split;

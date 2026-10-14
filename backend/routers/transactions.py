@@ -1966,9 +1966,9 @@ def clear_override(txn_id: str):
     return {"ok": True, **resolved, "followed_ids": followed_ids}
 
 
-# Soft-delete (trash) mirrors the account-trash pattern in routers/accounts.py: stamp `trashed_at`
-# so every read filters the row out, but the underlying record is preserved until the user empties
-# the trash from Settings. Restoration just clears the timestamp.
+# Soft-delete (trash): stamp `trashed_at` so every read filters the row out, while the underlying
+# record is preserved until the user empties the trash from Settings. Restoration just clears the
+# timestamp.
 @router.delete("/{txn_id}")
 def trash_transaction(txn_id: str):
     with get_db() as conn:

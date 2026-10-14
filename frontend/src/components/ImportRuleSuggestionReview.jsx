@@ -101,7 +101,7 @@ function bulkLinkButtonStyle(disabled) {
 }
 
 // A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
-// saving it re-partitions the review (see `docs/data-model.md` → *Conflict-set matcher refinement*), so the
+// saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
 // card labels its editor for that and routes the save through the refinement endpoint.
 function isRefinedPendingSuggestion(suggestion) {
   return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'

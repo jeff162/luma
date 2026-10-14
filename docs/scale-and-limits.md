@@ -12,8 +12,8 @@ own design, and those places are not repeated here:
 | --- | --- |
 | Database concurrency, and why a write transaction contains only its own work | `architecture.md` → *Database concurrency* |
 | Provider request budgets, pacing and pausing | `building-a-connector.md` → *Request budgets and pausing* |
-| Backup/restore streaming, the NDJSON layout, the incremental cipher | `data-model.md` → *Backups* |
-| The list `limit` contract | `data-model.md` → *Categories* |
+| Backup/restore streaming and the NDJSON layout | `data-model.md` → *Backups* |
+| The list `limit` contract | `data-model.md` → *Totals come from the server* |
 | Windowing rules a list must not break | `ui-patterns.md` |
 
 What has no other home is the part below: **which caps exist on purpose, what each costs, and under

@@ -3,8 +3,7 @@
 **The feature shipped (2026-07-20), and so did the follow-on this file used to track.** PayPal source
 recognition, force-capture of `Type` + `Item Title`, and the user-approved, bidirectional `Type` →
 *Money movement* rules are live and documented as durable behavior — see
-[`../data-model.md`](../data-model.md) → *"PayPal source recognition + `Type`-based money-movement
-categorization"*.
+[`../data-model.md`](../data-model.md) → *PayPal source recognition*.
 
 The rules are **account-type-scoped**, not per-account: migration v13 (2026-07-21) added
 `category_rule.account_type`, consolidated the per-account rules onto one `account_type='paypal'` rule

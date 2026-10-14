@@ -1661,10 +1661,9 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     All-or-nothing on purpose. The restore has many cross-table and self-referential foreign keys, and a
     single correct insert order would be brittle, so the whole wipe+reload runs with foreign-key checks
     DEFERRED to commit: rows go in in any order, dangling references are repaired afterwards, and the
-    fully-populated final state is validated as a whole when the transaction commits. Splitting this into
-    smaller committed chunks was considered and rejected — it would trade the property that a *failed*
-    restore leaves the target untouched for nothing, since an open write transaction spills to the WAL
-    rather than to memory.
+    fully-populated final state is validated as a whole when the transaction commits. One transaction is
+    also what makes a *failed* restore leave the target untouched, and its size costs no memory: an open
+    write transaction spills to the WAL.
 
     Two sections are materialized rather than streamed, both bounded by the size of the chart of accounts
     rather than by the ledger: `accounts`, because its connection links are reconciled against the live

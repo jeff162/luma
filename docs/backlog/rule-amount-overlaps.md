@@ -2,7 +2,7 @@
 
 **Shipped 2026-08-27** as the overlap half of *Rule checkup* on the Rules page (`GET /rules/overlaps`,
 `services/rule_overlaps.py`, `components/RuleOverlapsDialog.jsx`). The mechanism and its rules live in
-`data-model.md` → Category rules; this file keeps only what that section should not carry — the shapes
+`data-model.md` → *Rule checkup*; this file keeps only what that section should not carry — the shapes
 that were rejected, and the one case still deferred.
 
 ## What shipped, in one line each
@@ -61,7 +61,7 @@ if it is ever observed; the pairwise pass would gain a "do any rows match both" 
 
 ## Related
 
-- `data-model.md` → Category rules — the precedence contract and what the check reports.
+- `data-model.md` → *Precedence* and *Rule checkup* — the precedence contract and what the check reports.
 - `recurring-detection.md` → §2 — the rule amount-range *drift* signal, the sibling problem: that one is
   a charge falling **outside** a range it used to match, this one is two ranges fighting over the same
   charge. Both are "the amount bounds need attention", and if the count question is ever reopened they

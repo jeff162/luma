@@ -87,7 +87,7 @@ _EFFECTIVE_TAG_UNION_SQL = f"""
 # with nothing written or deleted either way. Resolving this side would silently reactivate every
 # dormant tag and make detach unable to restore the prior state.
 #
-# Specified in docs/data-model.md → account-level (account_tag); the promote-on-merge prompt on the
+# Specified in docs/data-model.md → Tags; the promote-on-merge prompt on the
 # Accounts page exists because tags going dormant is easy to miss.
 
 # A tag counts for a row only if not hidden on it (`manual_state = -1`). `eff.tag_id` refers to the

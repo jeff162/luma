@@ -98,8 +98,7 @@ scale — rather than by feature.
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount
-  identity with the user-pinned expectation band (2026-09-01, schema v46) — and all of it, including
-  every rejected shape, is in [`../data-model.md`](../data-model.md) → *Recurring series*. What stays:
+  identity with the user-pinned expectation band (2026-09-01, schema v46) — and all of it is in [`../data-model.md`](../data-model.md) → *Recurring series*. What stays:
   the payee filter is applied *after* a full pool load, so a scoped scan costs what a full one does
   (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
@@ -107,7 +106,7 @@ scale — rather than by feature.
 - [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** The overlap half of *Rule checkup*
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
-  winner is not always the one a reader predicts). The mechanism is in `data-model.md` → Category rules;
+  winner is not always the one a reader predicts). The mechanism is in `data-model.md` → *Rule checkup*;
   the file keeps the one deferred case, two equal-length keywords matching one row.
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
@@ -191,7 +190,7 @@ scale — rather than by feature.
 - [dashboard-reporting.md](dashboard-reporting.md) — **reduced 2026-09-02 to what has not started.**
   The cash-flow work shipped 2026-08-25 and its durable half is now in the topic docs: chart behaviour in
   the comments beside the chart code, reporting semantics (including
-  `exclude_from_totals` as the *only* exclusion axis and the three richer schemes rejected in its favour)
+  `exclude_from_totals` as the *only* exclusion axis)
   in [`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*, and the endpoints in
   `architecture.md`. What stays: the **`cash_date`** phase for cash-basis timing, a cash-flow form for
   **Compare** (left open deliberately), and the **Trends-tab double-count audit**, gated on that tab
@@ -233,8 +232,7 @@ scale — rather than by feature.
   reach and needs a Mac in front of somebody — the Dock lifecycle, Gatekeeper, and the log-file redirect.
 - [i18n-display-formatting.md](i18n-display-formatting.md) — **reduced 2026-09-03 to the number/date
   half, unstarted.** Tier-1 **formatting**, not translation. The ledger-currency setting shipped
-  2026-08-08 and its model is in [`../data-model.md`](../data-model.md) — including why currency is
-  tenant-wide while a date format is per-user `ui_preference`. What stays: **Bucket A** (the `en-US`
+  2026-08-08 and its model is in [`../data-model.md`](../data-model.md) → *One ledger currency*. What stays: **Bucket A** (the `en-US`
   formatter, a date-format preference, and the ~9 raw ISO renders the central helpers never reach —
   cosmetic) and **Bucket B**, the only correctness risk: the ledger search parses dates MDY-first and
   amounts with fixed separator roles, and CSV amount parsing carries the same hazard, where `1.234,56`

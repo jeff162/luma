@@ -65,7 +65,7 @@ test('an amount finding can exclude its charge from the series, and Undo puts it
   // Asserted about the one finding, by the key the server identifies it with, rather than about how many
   // findings are left — which does not have to fall. On a series whose price is still climbing, dropping
   // the newest charge makes the charge before it the newest, and *its* step is then reported for the
-  // first time (`data-model.md` → "Exclude from series"); the demo's seasonal gas bill is that series.
+  // first time (`data-model.md` → "Signals"); the demo's seasonal gas bill is that series.
   // Clicking whichever row rendered first therefore tested one of two different behaviors depending on
   // how the two same-day findings happened to sort, and the cleanup below cleared the other one's charge.
   const response = await request.get('/api/recurring/signals')

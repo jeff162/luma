@@ -3,9 +3,8 @@
 **Deferred; the currency half shipped 2026-08-08.** Tier 1 is *formatting* — currency symbol,
 decimal/thousands separators, date order — and explicitly **not** language translation. The shipped
 currency setting and the reasoning behind where it lives are in [`../data-model.md`](../data-model.md)
-→ *the ledger holds one currency at a time* (including why currency is tenant-wide shared state while a
-date format is per-user `ui_preference` — opposite sides of the same dividing line), with the adapter
-contract in [`../building-a-connector.md`](../building-a-connector.md) → *Currency*.
+→ *One ledger currency* (why it is shared state and not a per-user preference is under *Preferences*),
+with the adapter contract in [`../building-a-connector.md`](../building-a-connector.md) → *Currency*.
 
 What remains splits into two buckets that must stay distinct, because only one of them can be wrong
 about a number.

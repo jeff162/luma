@@ -1,2767 +1,2294 @@
 # Data Model
 
-This is the working model Luma is built around.
-
-This document focuses on data semantics and invariants. For how these are exposed through the API and UI, see `architecture.md`.
+What each field and state means, the invariants that hold between them, and the reason for each. How
+they are exposed through the API and the UI is in `architecture.md`.
 
 ## Contents
 
 - [Core hierarchy](#core-hierarchy)
-
 - [Owners](#owners)
-
 - [Accounts](#accounts)
-
 - [Transactions](#transactions)
-
 - [Categories](#categories)
-
 - [Rules](#rules)
-
 - [Recurring series](#recurring-series)
-
 - [Import batches and profiles](#import-batches-and-profiles)
-
 - [Watched import folders](#watched-import-folders)
-
 - [Transaction links and Amazon order import](#transaction-links-and-amazon-order-import)
-
 - [Backups](#backups)
-
 - [Schema evolution](#schema-evolution)
-
 - [Reporting assumptions](#reporting-assumptions)
-
 - [Transaction splits](#transaction-splits)
-
 - [Attached documents](#attached-documents)
-
 - [Multi-payment purchases](#multi-payment-purchases)
-
 - [Reimbursable expenses](#reimbursable-expenses)
-
 - [Open](#open)
 
 ## Core hierarchy
 
-The main relationship chain is:
+`Owner -> Account -> Transaction -> Category (leaf) -> Category group`
 
-`Owner -\> Account -\> Transaction -\> Category (leaf) -\> Category Group`
-
-In practice:
-
-- an **owner** represents a person or household bucket
-
-- an **account** belongs to at most one of the defined owners (a person or a shared bucket)
-
+- an **owner** is a person or a shared household bucket
+- an **account** belongs to at most one owner
 - a **transaction** belongs to one account
-
-- a **transaction** may be assigned to one leaf category — or, when **split**, to a set of allocations
-  that each name a leaf and together sum to its amount
-
+- a transaction is assigned to one leaf category or, when **split**, to a set of allocations that each
+  name a leaf and together sum to its amount
 - a **leaf category** belongs to a top-level category group
 
 ## Owners
 
-Owners represent household members or shared buckets such as:
+Owners are household members or shared buckets (Alice, Bob, Shared). An owner holds accounts, scopes
+some rules, divides dashboard views, and decides whether its new transactions arrive flagged for review
+(`owner.flag_new_for_review`, see [`needs_review`](#needs_review)).
 
-- Alice
-
-- Bob
-
-- Shared
-
-They are used for:
-
-- assigning accounts
-
-- scoping some rules
-
-- splitting dashboard views
-
-- surfacing ownership-related tasks
-
-- choosing whether new transactions arrive flagged for review (`owner.flag_new_for_review` — see `needs_review` below)
-
-Transactions also carry `owner_id`, denormalized from the account to support owner-based filtering in queries.
+`txn.owner_id` is copied from the account when a row is created, so owner filters need no join. It is
+the owner axis every filter and task reads; joining through `account.owner_id` instead would disagree
+with the ledger as soon as one row's owner is corrected.
 
 ## Accounts
 
-Accounts represent bank or credit accounts, typically created by a data-source connection or during CSV import.
+An account is a bank, card, wallet or marketplace account, created by mapping a connection, by a CSV
+import, or by hand. It is a reporting and ownership dimension only: it carries no balance.
 
-Important behavior:
+### Data-source linkage
 
-- each account belongs to at most one of the defined owners
+An account fed by a provider connection carries `external_account_id` (the provider's per-account
+handle, the upsert key on connect and sync, `UNIQUE`), `connection_id` (FK to `connection`,
+`ON DELETE SET NULL`) and `provider` (the provider key, or the `csv` / `manual` sentinels). CSV and
+manual accounts, and any account whose connection was removed, have `connection_id IS NULL`.
 
-- **Data-source linkage.** An account created by a provider connection carries `external_account_id` (the provider's per-account handle, the upsert key on connect/sync), `connection_id` (FK → the backing **`connection`** row, `ON DELETE SET NULL`), and `provider` (origin: the provider key — `plaid`, `simplefin` — or the `csv`/`manual` sentinels). The per-bank credential lives on the `connection` row; the aggregator's **app-level** credential (Plaid `client_id`/`secret`/`env`, one per provider — its `secret` vault-encrypted) lives in **`provider_config`**. See `architecture.md` → "Provider connections" for the provider-agnostic seam and the app-credential resolver. CSV/manual accounts (and any account whose connection was disconnected) have `connection_id IS NULL`. *(A version-7 backup predates these columns and carries `plaid_account_id`/`plaid_item_id` instead; restore translates them to this shape, so that path has to keep working for as long as 7 stays in `RESTORABLE_PAYLOAD_VERSIONS`.)*
+The per-bank credential lives on the `connection` row. The aggregator's app-level credential, one per
+provider, lives in `provider_config` with its secret vault-encrypted. The provider seam and the
+credential resolver are in `architecture.md` → *Provider connections*.
 
-- **`connection_account` is a connection's account mapping — the data-source analog of a CSV import's account step.** Keyed `(connection_id, external_account_id)`, it records what the provider offers (`provider_name` / `provider_official_name` / `provider_type` / `provider_subtype` / `provider_mask`, kept separately so the mapping screen still shows what the *bank* calls an account even when it is mapped onto a locally-renamed one), what the user decided (`mapping_mode`, `account_id`, `target_account_id`), and that account's coverage (`coverage_start_date`, `coverage_through_date`, `terminal_window_days`). Connecting a bank records these rows with `mapping_mode = NULL` and creates **no local accounts**; nothing lands anywhere until the user says what each provider account *is*. The four modes and what each buys duplicate detection:
+### Connection account mapping
 
-  | mode | effect | dedupe consequence |
-  | --- | --- | --- |
-  | `existing` | no new account — the connection linkage is stamped onto the chosen account | strongest: same-account exact-hash **and** coverage apply directly, no alias needed |
-  | `group` | new account with `parent_account_id` = the target's linked-group **root** | gets the group's compare target, so exact-hash matches resolve across the group (as a CSV import's group attachment does); runs the merge sweeps. Deliberately **not** an alias — a sibling is a *different* physical account, and letting coverage span the pair would over-collapse |
-  | `new` | a plain new account (the old behavior) | soft-flag sweep only |
-  | `skip` | no local account, and **remembered** | sync counts the rows `skipped`; "Refresh accounts" stops recreating an account the user rejected |
+`connection_account`, keyed `(connection_id, external_account_id)`, is a connection's account mapping:
+the counterpart of a CSV import's account step. It records
 
-  Mapping is **idempotent and revisitable** — the same call whether it runs after Link or months later
-  from the connection card. That matters beyond convenience: for a metered provider, re-linking to start
-  over may not be available. Two rules keep a revisit from stranding history. A provider handle already
-  held by a local account is adopted as `existing` rather than left unmapped — the handle outlives the
-  mapping row, which a disconnect cascades away, so without this a reconnect would start a second copy of
-  every account. And switching an already-linked account to `group`/`new` **reuses that account** rather
-  than creating a second one.
+- what the provider offers: `provider_name`, `provider_official_name`, `provider_type`,
+  `provider_subtype`, `provider_mask`, `provider_currency`. These are kept apart from the local account
+  so the mapping screen still shows what the bank calls an account after the local one is renamed
+- what the user decided: `mapping_mode`, `account_id`, `target_account_id`
+- that account's coverage: `coverage_start_date`, `coverage_through_date`, `terminal_window_days`,
+  `history_complete`, `history_empty_streak` (see [Coverage has two shapes](#coverage-has-two-shapes))
 
-  **Only `existing` and `group` feed the alias machinery** (`account_duplicate_compare_targets` /
-  `explicit_alias_csv_values`), and only an alias unlocks the **coverage** rules. Two accounts
-  deliberately kept apart therefore do not hard-dedupe on coverage; they get the soft-flag sweep and
-  auto-confirmation of exact in-group matches instead. There is deliberately no mode meaning "the same
-  physical account, kept separate" — `existing` says they are one account and `group` says related but
-  distinct, and a mode between those two states nothing the dedupe rules can act on
-  (`test_connection_account_mapping.py` asserts `compare` stays out of `MAPPING_MODES`).
+Connecting a bank writes these rows with `mapping_mode = NULL` and creates no local account. Nothing
+lands until the user says what each provider account is.
 
-  `connection_account` rides the **data** backup, not the credentials backup: nothing in it is a
-  credential, the account-side half of the mapping is already in the data backup, and — decisively —
-  coverage *must* be wiped by a data restore, since restoring a three-month-old backup removes those
-  months of rows while a surviving coverage claim would hard-reject the very rows a re-sync brings back.
+| mode | effect | what duplicate detection gets |
+| --- | --- | --- |
+| `existing` | the connection linkage is stamped onto the chosen account | same-account exact-hash and coverage rules apply directly |
+| `group` | a new account whose `parent_account_id` is the target's group root | the group's compare target, so exact-hash matches resolve across the group. Not an alias: a sibling is a different physical account, so coverage does not span the pair |
+| `new` | a plain new account | the soft-flag sweep only |
+| `skip` | no local account, and the choice is remembered | sync counts the rows as skipped, and *Refresh accounts* does not recreate the account |
 
-- transactions reference `account_id`
+- **Mapping is idempotent and revisitable**: the same call after Link or months later, because for a
+  metered provider re-linking to start over may not be available.
+- **A provider handle already held by a local account is adopted as `existing`.** The handle outlives
+  the mapping row, which a disconnect cascades away, so a reconnect would otherwise start a second copy
+  of every account.
+- **Switching an already-linked account to `group` or `new` reuses that account.**
+- **Only `existing` and `group` feed the alias machinery** (`account_duplicate_compare_targets`,
+  `explicit_alias_csv_values`), and only an alias unlocks the coverage rules. Two accounts kept apart
+  get the soft-flag sweep and auto-confirmation of exact in-group matches.
+- **The table rides the data backup.** Nothing in it is a credential, and a data restore has to wipe
+  coverage: a restored three-month-old ledger with a surviving coverage claim would hard-reject the rows
+  a re-sync brings back.
 
-- account ownership affects owner-based reporting and tasks
+### Type
 
-- **`type`** classifies the account (`depository`/`credit`/`savings`/`loan`/`investment`/`p2p`/`other`, plus the marketplace `amazon` and the wallet `paypal`). It is user-editable on the Accounts page and, beyond display, is what the **account-type rule scope** matches against (see Rules). A recognized **PayPal** import auto-assigns `type='paypal'` to a **newly-created** target account (only — an existing account keeps its type on import); approving that source's money-movement `Type`s additionally types the source's accounts `paypal` when still generic (`depository`/`other`/`p2p`), since the money-movement rules are account-type scoped and need the account typed to match. A deliberately-set non-generic type is never overwritten. `amazon` carries a `kind: 'marketplace'` UI convention (hidden from the generic importer); `paypal` does not (PayPal uses the generic CSV importer)
+`account.type` is one of `depository`, `credit`, `savings`, `loan`, `investment`, `p2p`, `other`, the
+marketplace `amazon`, or the wallet `paypal`. It is user-editable, and it is what the account-type rule
+scope matches (see [Rules](#rules)).
 
-- `display_name` is the effective label used outside the Accounts page; standalone accounts keep it aligned to `name`, while merged child accounts inherit the parent's display name. **Inside a group the display name therefore names the group, not the member**, so anything that has to tell two members apart labels an account through `_account_label_sql` (display name + masked suffix) rather than the display name alone — a duplicate report that named a sibling's copy by display name said a row duplicated a charge "on" the same account it was already on. Where masks are absent on both sides the two are genuinely indistinguishable by label, and the account's own `name` is the only remaining separator (the merged-sources list on the Accounts page uses exactly that). **Do not reach for it to enrich a duplicate report's label**, obvious as it looks: the incoming side of a hard-reject shows the *source's* own label for the account, which is not ours to restate, so the matched side has to arrive at the same string by its own route — a richer label on one side renders one account as two different-looking ones directly beside itself, which is the failure `_account_label_sql` exists to prevent. A maskless collision is left standing on purpose; the fix, if one is ever wanted, is a mask or a rename on the account, not a second label form in the report
+- A recognized PayPal import sets `type = 'paypal'` on a **newly created** target account only.
+- Approving a PayPal source's money-movement `Type`s also types that source's accounts `paypal` while
+  they are still generic (`depository`, `other`, `p2p`), because the money-movement rules are scoped by
+  account type. A non-generic type the user set is never overwritten.
+- `amazon` is a marketplace kind and is hidden from the generic CSV importer. `paypal` is not; PayPal
+  files use the generic importer.
 
-- `parent_account_id = NULL` means the row is a top-level selectable account; child accounts keep historical account numbers visible on the Accounts page but resolve through the parent for account filtering, import/export display, and other account-facing surfaces
+### Names and labels
 
-- **A stored account id is a reference into a mutable graph, and is resolved at read time — never rewritten at merge time.** Merging is deliberately non-destructive: it sets `parent_account_id` and moves nothing, which is exactly what lets detach reverse it. So an account id persisted in some *other* table can become a child after it was written, while the transactions it was meant to select keep resolving to the group root. Every account comparison therefore has two sides that must resolve the same way — the **row side** (`COALESCE(parent_account_id, account_id)`, the effective account a transaction sits on) and the **stored side**. Comparing a raw stored id against a resolved row side is a silent failure mode, not an error: nothing resolves to a merged child any more, so the reference simply stops selecting rows — a rule stops firing, an Amazon order stops finding its charge — with nothing in the stored row that looks wrong. `backend/services/account_groups.py` is the single home for both forms of the resolution (`effective_account_id_sql` for queries, `effective_account_id` / `account_group_member_ids` for id lists), and the one place repointing *is* correct is `reassign_account_references` (`services/account_references.py`), where the account row is about to be deleted and the merge is no longer reversible. **The tell for where this goes wrong is column-vs-parameter.** Where the stored side is a *column* the codebase has always resolved it — `rule.account_id`, `amazon_funding_map`, a recurring series' scope — because the resolution is right there in the same query. Where the stored side arrives as a *bind parameter* it went unresolved for years, in every such filter at once, because nothing in the expression looks wrong: an id that has since become a child simply matches no row. API-parameter filters resolve their given ids in SQL (`account_membership` in `services/transaction_facets.py` — one definition, reached by every faceted endpoint including the CSV export, which used to inline its own copy), so a child id passed to `account_ids` means *the group it belongs to* — the only reading a caller wants, with "exactly this underlying account" living in `source_account_ids`. Behavior is pinned in `backend/tests/test_merged_account_filters.py`. **One comparison is deliberately asymmetric and must stay that way:** `account_tag` matching (`services/transaction_tags.py`) compares its stored side raw, which is exactly what makes a merged child's own tags go dormant and return on detach — resolving it would reactivate them all and make detach unable to restore the prior state
+`display_name` is the label used outside the Accounts page. A standalone account keeps it equal to
+`name`; a merged child inherits its parent's. Inside a group it therefore names the group, not the
+member, so anything that has to tell two members apart labels an account through `_account_label_sql`
+(display name plus masked suffix).
 
-- the distinction that decides how a given column behaves is whether it names a **matching scope** or a **specific account row**. Scopes resolve: `category_rule.account_id` (which rows a rule governs), `recurring_series.account_id` (which rows a series owns — written as an already-effective id, which a later merge can still demote to a child), `amazon_funding_map.funding_account_id` / `amazon_account_id` (which account a card's charges land on, and which Amazon account an override applies to), and `import_batch_account.account_id` (dedupe coverage, resolved through `duplicate_detection.scope_id_for`). Specific references stay raw, and the merge is *meant* to change what they mean: `account_tag.account_id` attaches a tag to one account row, so a merged child's tags lie dormant until detached; `account_pair_distinct` records assertions about the account rows themselves and a merge deletes the row outright; `connection_account` / `csv_import_profile` name a write target, where a merged child is a legitimate destination because its rows roll up through the row side. `backend/tests/test_account_group_references.py` derives every foreign key into `account(id)` from the schema and fails until a new one is classified — the choice is easy to make and easy to skip, and skipping it is invisible until data goes missing
+A duplicate report labels the matched side with `_account_label_sql` and nothing richer. The incoming
+side of a hard reject shows the source's own label, so a richer label on one side would render one
+account as two different-looking ones.
 
-- regrouping one merged parent onto another top-level account flattens the dragged group's visible members so they all become direct children of the new parent; the old parent remains as one of those children rather than preserving a deeper tree
+### Account groups
 
-- `trashed_at` is **vestigial on `account`**: the account trash it drove was retired (see *Removing an account* below), nothing sets it any more, and migration 64 released whatever was still in it — replayed after a restore, since a backup taken before the retirement carries trashed rows. The column stays because every backup carries it and the read paths still honour it, so a stale value from an old payload keeps meaning "hidden" rather than becoming a live account by surprise
+`parent_account_id IS NULL` marks a top-level, selectable account. A child keeps its own name and mask
+on the Accounts page and resolves through its parent everywhere else. Groups are one level deep:
+regrouping a parent under another top-level account makes every member, the old parent included, a
+direct child of the new one.
 
-- **Removing an account is a question about its transactions, and it has only two answers.** `txn.account_id` is `NOT NULL`, so a transaction without an account does not exist: the rows either move to an account the user names (`DELETE /accounts/{id}?transactions=reassign&target_account_id=…`) or they are deleted with it (`transactions=delete`). The parameter is **required once the account holds any row**, because the implicit answer it replaced was `delete` — removing an account silently destroyed its history with nothing to restore from. An account holding nothing is removed without a question. Deletion here cannot route through the transaction trash, and that is a consequence of the same `NOT NULL` rather than a policy: a trashed row still carries the `account_id` that is about to stop existing
+Merging sets `parent_account_id` and moves nothing, which is what lets a detach reverse it.
 
-- **Both answers are permanent, and that was settled rather than defaulted to.** Reassigning immediately while keeping the account recoverable is not expressible: after the move, nothing distinguishes the rows from those already on the target, so an undo would need a per-row record of what moved — the unbounded accumulation `scale-and-limits.md` forbids. The alternative, an **account trash** holding the account while its disposition waited, existed and was retired: it could only defer the move, and nothing outside the accounts listing filters `account.trashed_at`, so the ledger went on reporting the rows under the old account until someone emptied the trash. The accident is prevented at the point of action instead — removal lives behind the row's ⋯ menu
+### A stored account id is a reference into a mutable graph
 
-- **What follows the transactions is declared, not hand-written.** `services/account_references.py` holds one row per foreign key into `account(id)` with a disposition for each removal path — `FOLLOW` (re-point at the account taking the history), `CLEAR`, `DELETE_ROW`, `CASCADE` (left to the foreign key, recorded so the decision is on file), `CALLER`, `STRUCTURAL` — and both paths derive their statements from it. Deriving rather than restating is what makes a *missing* reference a test failure (`tests/test_account_reference_disposition.py`) instead of a behavior nobody notices, which is what it had been: the reassignment carried five references while the schema had thirteen, and two of the foreign keys left holding the rest decide wrongly. `recurring_series.account_id` is `ON DELETE SET NULL`, and a NULL account scope is not a narrow scope but *no* scope — `recurring_detection.py` skips the account test entirely when it is NULL — so a series pinned to one card silently began claiming rows on every account in the ledger; `amazon_funding_map` is `ON DELETE CASCADE`, so an instrument→account mapping was destroyed rather than following the history it describes. The one reference deliberately **not** moved is a connection's mapping (`connection_account.account_id` / `target_account_id`): `account.external_account_id` is UNIQUE, so one provider handle belongs to one account, and re-pointing it would start feeding an account the user never mapped it to. It is released instead, `mapping_mode` included — a mode left set with no target reads as decided while `apply_account_mapping` skips it, so neither a sync nor *Refresh accounts* can act on it and nothing on screen says why
+Because a merge rewrites nothing, an account id stored in another table can become a child after it was
+written, while the transactions it was meant to select resolve to the group root. Every account
+comparison has two sides that must resolve the same way: the **row side**
+(`COALESCE(parent_account_id, account_id)`, the effective account a transaction sits on) and the
+**stored side**. A raw stored id compared against a resolved row side selects nothing and raises
+nothing.
 
-- **A group root still refuses removal** until its children are ungrouped or trashed, and deliberately: removing one means promoting a member in its place, which moves the group's dedupe scope and reverses the merge's duplicate promotions (`restore_auto_merged_after_detach`). That is a separate decision about which account is the real one, not a question about where these transactions go, and one confirmation performing both would be two unrelated structural changes behind one click
+`backend/services/account_groups.py` holds both forms of the resolution: `effective_account_id_sql` for
+queries, `effective_account_id` / `account_group_member_ids` for id lists. API filters resolve the ids
+they are given in SQL (`account_membership` in `services/transaction_facets.py`), so a child id passed
+as `account_ids` means the group it belongs to. "Exactly this underlying account" is
+`source_account_ids`.
 
-- the sparse table `suspect_pair_distinct` records the user's "these two **rows** are not the same
-  charge" judgements — the row-level counterpart of `account_pair_distinct` below, and what Keep never
-  had. Keep clears its own row's `suspect_duplicate_of` and stamps `suspect_resolved_at`, and **neither
-  says which pair was judged**, so anything re-examining stored rows could not tell one it had never
-  looked at from one the user had already decided: it re-raised the finding, and the re-flag overwrote
-  the stamp that was the only evidence a decision was ever made. `resolve_suspect` therefore records the
-  pair *before* clearing the pointer that names it — that ordering is the whole mechanism. Both sweeps
-  skip a pair present here. Stored canonically (`txn_id_low < txn_id_high`), cascading with either row,
-  and carried in backups because it holds user decisions. It says nothing about the accounts, which is
-  the distinction from the table below and the reason Keep stopped writing that one. Forgettable
-  (`DELETE /accounts/duplicate-pairs/{a}/{b}`): permanent against the system re-asking is not the same as
-  permanent against a misclick — and undoing is **one operation, not two**: the judgement is lifted *and*
-  the finding restored (`POST /accounts/duplicate-pairs/reopen`, which takes a list so a bulk Keep's Undo
-  reverses all of it), because forgetting alone would leave the pair unflagged until some later scan
-  happened to notice it and the Undo would read as having done nothing. The flag is restored from
-  `flagged_txn_id`/`reason` recorded at Keep rather than re-derived, since the matching rules may have
-  moved since and a re-derivation could restore a different finding from the one being undone; a
-  judgement written before those columns existed can only be lifted, and says so. Two surfaces reach it:
-  an `UndoToast` at the moment of the decision, and a **Dismissed duplicate pairs** section in Settings
-  beside its account-level neighbour, for a decision regretted later. **Nothing was backfilled and nothing could be** — judgements made before
-  the table existed record only that a row was resolved, not what against, so the first version-gated
-  re-scan re-raises them once
-- the sparse table `account_pair_distinct` records the user's explicit "these two accounts are different physical accounts" assertions, written automatically when the user clicks Keep on a cross-account soft-flag suspect. Rows are stored canonically with `account_id_low < account_id_high` so each pair has exactly one row. The dedupe sweep consults this table to skip pairs the user has already reviewed, and the management UI on the SuspectDuplicates page can forget an assertion to re-enable detection. Merging two accounts deletes any row between them (the merge contradicts the distinct assertion)
-- its charge-level sibling `amazon_charge_distinct` (canonical `txn_id_low < txn_id_high`) records "these two charges are distinct purchases" assertions from the Amazon reconciliation report's **Not duplicates** action, offered on every duplicate-flavored row. The report consults it everywhere it claims "duplicate": the unaccounted grouping refuses to chain an asserted pair, and the order-anchored `duplicate`/`duplicate_review` buckets are skipped when *every* pair in the group is asserted (partial marking still flags — the ambiguity is unresolved). An order-anchored assertion removes only the duplicate claim: the order falls back to the unmatched path, where the split-suggestion pass prefers a candidate dated on the order itself (surfaced as Matched·review with a reason note) and otherwise leaves it at No charge found for manual linking. The verdict sticks across refreshes; a re-import that adds a new copy forms new unasserted pairs and correctly re-flags
+How a column behaves depends on whether it names a **matching scope** or a **specific account row**.
+
+- **Scopes resolve.** `category_rule.account_id` (which rows a rule governs), `recurring_series.account_id`
+  (which rows a series owns), `amazon_funding_map.funding_account_id` and `amazon_account_id`, and
+  `import_batch_account.account_id` (dedupe coverage, through `duplicate_detection.scope_id_for`).
+- **Specific references stay raw**, and a merge is meant to change what they select.
+  `account_tag.account_id` attaches a tag to one account row, so a merged child's tags lie dormant and
+  return on detach. `account_pair_distinct` asserts something about two account rows, and a merge
+  deletes the row. `connection_account` and `csv_import_profile` name a write target, where a merged
+  child is a legitimate destination because its rows roll up through the row side.
+
+`backend/tests/test_account_group_references.py` derives every foreign key into `account(id)` from the
+schema and fails until a new one is classified. Filter behavior is pinned in
+`backend/tests/test_merged_account_filters.py`.
+
+Repointing a stored id is correct in one place, `reassign_account_references`
+(`services/account_references.py`), where the account row is about to be deleted and the merge can no
+longer be reversed.
+
+### Removing an account
+
+`txn.account_id` is `NOT NULL`, so removing an account has two possible outcomes for its transactions:
+they move to an account the user names (`transactions=reassign&target_account_id=…`) or they are deleted
+with it (`transactions=delete`). The parameter is required once the account holds any row, so history
+is never destroyed implicitly. An empty account is removed without a question.
+
+- **Deletion does not go through the transaction trash**, because a trashed row still carries the
+  `account_id` that is about to stop existing.
+- **Both outcomes are permanent.** After a reassignment nothing distinguishes the moved rows from those
+  already on the target, so an undo would need a per-row record of what moved, the unbounded
+  accumulation `scale-and-limits.md` rules out.
+- **What follows the transactions is declared.** `services/account_references.py` holds one row per
+  foreign key into `account(id)` with a disposition for each removal path: `FOLLOW` (re-point at the
+  account taking the history), `CLEAR`, `DELETE_ROW`, `CASCADE`, `CALLER`, `STRUCTURAL`. Both paths
+  derive their statements from it, so a reference with no disposition is a test failure
+  (`tests/test_account_reference_disposition.py`).
+- **`recurring_series.account_id` follows.** Its foreign key is `ON DELETE SET NULL`, and a NULL account
+  scope means every account, so leaving it to the key would widen a one-card series to the whole ledger.
+- **`amazon_funding_map` follows.** Its foreign key cascades, which would delete the instrument mapping
+  for the history being moved.
+- **A connection's mapping is released, not moved**: `connection_account.account_id`,
+  `target_account_id` and `mapping_mode` are cleared. `account.external_account_id` is `UNIQUE`, so
+  re-pointing would feed an account the user never mapped. The mode is cleared with the target because
+  a mode with no target reads as decided while `apply_account_mapping` skips it.
+- **A group root refuses removal** until its children are removed or ungrouped. Removing a root means
+  promoting a member, which moves the group's dedupe scope and reverses the merge's duplicate
+  promotions; that is a separate decision from where the transactions go.
+
+`account.trashed_at` is vestigial. Nothing sets it; migration 64 cleared it, and that step replays
+after a restore because an older backup can carry trashed accounts. The column stays because every
+backup carries it, and the read paths that filter on it are left in place.
+
+### Distinct-pair assertions
+
+Three sparse tables record that two things the system would pair are different. Each stores its pair
+canonically (`*_low < *_high`), cascades with either side, and rides the data backup.
+
+- **`suspect_pair_distinct`**: "these two rows are not the same charge". Written by *Keep* on a
+  soft-flag suspect. `resolve_suspect` records the pair before clearing the `suspect_duplicate_of`
+  pointer that names it. Both dedupe sweeps skip a recorded pair. It carries `flagged_txn_id` and
+  `reason` so an undo (`POST /accounts/duplicate-pairs/reopen`) restores the original finding instead
+  of re-deriving one under matching rules that may have changed. It says nothing about the accounts.
+- **`account_pair_distinct`**: "these two accounts are different physical accounts". Written only by an
+  explicit answer to the account question (see
+  [Are these two accounts the same account?](#are-these-two-accounts-the-same-account)). The sweep
+  skips every pair of rows across the two accounts. A merge deletes the row, since it contradicts it.
+- **`amazon_charge_distinct`**: "these two charges are distinct purchases", from *Not duplicates* on the
+  Amazon reconciliation report. The unaccounted grouping will not chain an asserted pair, and an
+  order-anchored duplicate bucket is skipped only when every pair in the group is asserted. A re-import
+  that adds a new copy forms new, unasserted pairs.
 
 ## Transactions
 
-Transactions are the central fact table.
+`txn` is the central fact table.
 
-Important conventions:
+### Amount and sign
 
-- `amount \> 0` means money out
+`amount > 0` is money out; `amount < 0` is money in.
 
-- `amount \< 0` means money in
+`parse_amount` is the one parser behind both the import and the mapping preview (`architecture.md` →
+*Preview contract*). A cell carries at most one of two direction signals, and they point opposite ways:
 
-- **How an imported cell reaches that sign** (`parse_amount`, the one parser behind both the import and the mapping preview — see `architecture.md` → "Preview contract"): a cell carries at most one of two direction signals, and they point opposite ways. A **bare sign** is in the *file's* convention (positive = money in), so it is inverted on the way to storage — `-50.00` and `(50.00)` are debits. A **`DR`/`CR` suffix** names the direction outright and is read as written, never inverted; where both appear the suffix wins, and in the two-column convention a suffix likewise overrides the column it sits in (a `CR` in the debit column is a credit). Conflating the two is a live failure mode, not a hypothetical: the suffix was formerly inverted along with everything else, so `50.00 CR` — a credit in the notation's own terms — imported as a debit (fixed 2026-08-13; `backend/tests/test_import_amount_parsing.py` is the record). Otherwise the column supplies the direction and the cell's own sign reverses it, so a negative or parenthesized debit-column cell reads as a refund. A blank/blank two-column row is `0.0`, not unparseable — zero is a real transaction
+- a **bare sign** is in the file's convention (positive is money in) and is inverted for storage, so
+  `-50.00` and `(50.00)` are debits
+- a **`DR` / `CR` suffix** names the direction outright and is read as written. It wins over a sign, and
+  in a two-column file it overrides the column it sits in
 
-- `date` is **when the charge was made** — the transaction date — wherever the source gives one, and the posted date otherwise. It is the date every list, report, and total uses, and the right one for them: the transaction date is the day a charge is looked for on a statement and remembered by, and the month it belongs in, while posting is only the bank processing it (on a credit card, the money actually leaves when the card is paid). Until v59 it was the posted date, on the theory that a second basis for "when did this happen" would make two totals for one period both defensible; that treated a processing date as the more meaningful one, which it is not. `posted_date` is the *other* date: when the charge settled, which for a card transaction typically trails the transaction by one to several days. It is nullable and populated only where the source supplies a posting distinct from an undifferentiated date — a data connection captures it as a locked field — while a CSV normally carries one date column and leaves it NULL, and a pending row has none yet. It exists for **duplicate detection**, not display: two sources routinely date the same charge differently — some exports report the transaction date, others the posted date — so every date test in the ladder asks whether **either** date applies. Without it, a row dated on the other basis falls outside a range that covers the same charge, and coverage never engages. A pending row has no posting, so a provider whose protocol makes the posted timestamp mandatory must put something there, and SimpleFIN puts `0`. Read literally that is a valid instant — before v59, when it supplied `date`, such rows entered the ledger dated 1970-01-01, sorting before everything, inside no report period, beyond the reach of every date test in the duplicate ladder, and (since sync cards key on the transaction's own month) filed on a card labelled "January 1970". A zero is therefore read as *absent*, not as an epoch. When a pending row settles the sync fills in `posted_date` and re-stamps the provider-owned fields. A row with neither date is dropped at the adapter rather than dated from the import time or the window bound, both of which would be indistinguishable from a real date. **A field being required by a protocol is not a promise that it carries a value** — the sentinel is what a mandatory field degrades into, and a numeric sentinel converts without complaint
+Otherwise the column supplies the direction and the cell's own sign reverses it, so a negative
+debit-column cell is a refund. A two-column row blank on both sides is `0.0`, which is a real amount.
 
-- **A transaction can also be entered by hand** (`POST /transactions`), for cash, a cheque, or an account nothing syncs. The data model always allowed for it — `external_transaction_id`, `needs_review` and duplicate detection each name hand-entered rows in their own definitions — so what a manual entry needs is not new columns but the *provenance* that makes it behave like every other row afterwards. Three parts of that are worth stating because none is visible in the row: it carries **no `import_batch_id` and no `external_transaction_id`**, since it belongs to no ingestion event; its `content_hash` is computed by the **importers' own `make_hash`**, which is the entire mechanism by which a later import or sync of the same charge recognizes it as a duplicate (a second hash implementation would digest identical data differently and the match would silently never fire); and an entry left **uncategorized is run through the rules**, exactly as an imported row is, so which door a transaction came through does not decide whether it lands in the uncategorized pile. The owner follows the account, as it does on every import. `needs_review` stays `0`: the row was just typed by the person who would be reviewing it
+### Dates
 
-- **An amount is editable in place only on a hand-entered row** (`PATCH /transactions/{id}/amount`), and only where that row is neither split nor part of a reimbursement. The case it exists for is the figure mistyped and noticed a moment later; correcting any *other* row is still done by trashing it and entering it again, so what is withheld is the shortcut rather than the capability — in exactly the cases where the shortcut points the wrong way. Each of the three conditions has its own reason. **A row from a source** is a record of what that source reported, and two mechanisms make editing one worse than it looks: a synced row's amount is re-stamped from provider data whenever the charge is re-sent as `modified` or settles, so the correction does not reliably survive; and `content_hash` — which any amount edit must restamp, since it digests the amount — is the digest that row's own file reproduces, so restamping makes it stop matching that file on duplicate detection's exact rung. Neither applies to a hand-entered row, where nothing re-sends it and the corrected figure is the one a future source describing the same charge will carry, so the restamp is strictly an improvement. **A split and a reimbursement are refused because both fail silently**: a split's allocations are checked against the transaction's amount only when the split is saved, and a reimbursement's claims against the row's receivable only when the claim is made, and nothing re-checks either afterwards — so an amount moved out from under one leaves a split that no longer sums and an outstanding report whose headline has quietly stopped being true. The edit restamps the hash, re-runs the rules (an amount is a rule condition, so a corrected figure can belong to a different rule than the typo did — and a category set by hand is still protected), and triggers a recurring rescan, since series membership and the expected-amount band are read off the amount
+`date` is when the charge was made, the transaction date, wherever the source gives one, and the posted
+date otherwise. Every list, report and total uses it, because it is the day a charge is remembered by
+and the month it belongs in.
 
-- **`date` is editable through the bulk editor, which restamps the hash for the same reason.** The hash digests the date as well, so a row moved without one goes on describing a date it no longer has. The one exception is a **marketplace** row, whose hash is computed from the *order id* rather than from a description: it cannot be recomputed from the row's own fields, and a digest matching nothing is worse than a stale one, which at least still matches the file that produced it. Neither a date nor an amount edit touches a split or a reimbursement, which is why the bulk date setter needs none of the gating above
+`posted_date` is when the charge settled. It is nullable and set only where the source supplies a
+posting distinct from an undifferentiated date; a CSV with one date column leaves it NULL. It exists for
+duplicate detection: two sources routinely date one charge on different bases, so every date test in
+the ladder asks whether either date applies.
 
-- `category_overridden = 1` means rule reruns must leave the current category alone. It is set for a manual edit and a split, and deliberately **not** for a trusted import's category — a file's categories rank below the rules (see *How an existing transaction's category can change*)
+- A posted timestamp of `0` from a provider is read as absent. SimpleFIN's protocol makes the field
+  mandatory, so a pending row carries `0` there.
+- When a pending row settles, the sync fills `posted_date` and re-stamps the provider-owned fields.
+- A row with neither date is dropped at the adapter. Dating it from the import time or the window bound
+  would be indistinguishable from a real date.
 
-- `category_source` records whether the current category came from a manual edit, an import that used categories present in the data, a rule, or an **enrichment** — a feature (Amazon order import, wallet funding-leg suppression) moving the row into an excluded category as part of a link it can reverse — or is a **refund** following the category of the payment it returns (see [Refunds](#refunds))
+### Hand-entered rows
 
-- `display_name_source` is the same idea for the *name*: `manual` (a deliberate rename), `rule` (a rule's `clean_name` owns it), `import` (the imported/synced name), or `enrichment` (an enrich-on-import fold from a richer source filled it); NULL means unknown/legacy and is treated as non-manual (enrichable). It exists so a name can be attributed and, crucially, so a `manual` rename is protected: automatic name-setting must never overwrite `manual`. The rename writers stamp it (manual single/bulk `set_merchant` → `manual`; the rule-apply derivation `rule_scalar_effects` → `rule` only when a rule actually authored the name; import/sync inserts → `import`/`rule`). It mirrors `category_source`'s protection contract — `recategorize_all` (the automatic pass) leaves a `manual` name alone while still recategorizing the row, and only the explicit full-force rule apply may overwrite a manual name. Because `txn` stores no per-row rule_id, the migration backfill re-derives provenance: a currently-matching rule whose `clean_name` equals `display_name` → `rule`; else a name differing from both `merchant_name` and `raw_name` → `manual`; else `import`
+A transaction can be entered by hand (`POST /transactions`). What makes it behave like every other row
+is its provenance:
 
-- `import_evidence_json` stores a compact subset of the original import row for cross-source duplicate detection, `match_source_text` rules, the ledger search (whose SQL reads the `description.value` and `extra_text_fields[].value` paths directly, so a change to that shape moves it too) and later explanation; this is intentionally narrower than a full raw-row archive (a full archive would roughly double per-transaction footprint for little gain). It keeps the source account/description labels plus up to `MAX_IMPORT_EVIDENCE_TEXT_FIELDS` additional columns whose headers match a curated keyword list of **descriptive free text** — memo/note/narrative/particulars/remittance/statement/reference/payee/counterparty/beneficiary/purpose and similar — the fields that help a user decode a cryptic transaction. Identifier/figure columns (check number, balance, transaction type, status, location) are deliberately excluded: they don't aid recognition and would add noise to the text duplicate-matcher that also consumes these fields. The transaction detail's Origin → "Show more" renders all captured fields. **A data connection writes the same shape but selects differently**, and the divergence is principled: the CSV rule is a *keyword heuristic over unknown headers*, where an identifier column is as likely to be noise as signal, whereas an adapter **declares** its fields by name (`ProviderAdapter.capture_fields()`) — so a connection captures exactly the counterparties, merchant entity id, check number, and authorized date it knows it is getting, with location as an opt-in. The account/description slots carry the provider account label and the provider's original description, which is what lets a synced row serve as a terminal-window candidate at all
+- no `import_batch_id` and no `external_transaction_id`, since it belongs to no ingestion event
+- `content_hash` from the importers' own `make_hash`, which is how a later import or sync of the same
+  charge recognizes it. A second hash implementation would never match
+- an uncategorized entry is run through the rules, as an imported row is
+- the owner follows the account
+- `needs_review = 0`, since the person who would review it just typed it
 
-- **check-number enrichment** is the one exception that *derives* rather than stores: a paper-check row (`merchant_name`/description reads as the whole word "check"/"cheque", not "CHECKCARD") whose file carries a separate check-number column gets that number folded into `merchant_name`/`display_name` as `"Check #<n>"` (only when not already present). It is applied to the merchant/display fields only — `raw_name` (the literal source text) and `content_hash` (dedupe) are left untouched — so a lone "Check" line becomes recognizable without storing the check-number column or perturbing duplicate detection
+### Editing amount and date
 
-- `needs_review = 1` flags a freshly imported or synced row the user hasn't looked over yet — a per-transaction convenience for reviewing newly arrived transactions, surfaced as a subtle amber `R` marker in the row strip plus a "Needs review" filter/toggle on the Transactions page. It is **set on every import/sync insert** (the CSV `_insert_imported_transaction` path and the sync insert in `routers/sync.py`) unless the row's owner has switched flagging off (below); existing and hand-created rows default to `0` and stay out of the review pool. It is **its own axis, independent of categorization** — a rule-categorized row can still need review, and a reviewed row can be deliberately uncategorized. It clears two ways: a **manual category edit** (`override_category`, bulk `set_category`, the rejected-suggestion manual re-point — the same actions that write `category_source = 'manual'`) clears it implicitly, and an explicit **mark reviewed** (the `mark_reviewed` bulk action, the row-menu action or a click on the row's `R` marker, or the per-batch sweep — the last three each offering an undo that sets it back through `set_review_status`, the sweep's for exactly the rows it cleared) clears it for "looked, it's fine as-is." Automatic categorization (rule, import, the conflict-screen `imported-category` recategorize, `cleared`) deliberately does **not** clear it. This is deliberately a column, not a tag: review is workflow lifecycle, not a reporting label, mirroring `suspect_duplicate_*` and the advisory-reject `reviewed_at`. Historical-backfill floods are handled by bulk mark-reviewed (select-all-matching) and a per-CSV-batch "Mark all reviewed" (`POST /import-export/batches/{id}/mark-reviewed`). For an owner whose rows nobody reviews, those sweeps are cleanup with no end, so **arrival flagging is a per-owner choice** (`owner.flag_new_for_review`, read through `services/review_flagging.py`; the switch beside each owner on Accounts → *Owners*, written by `PATCH /api/owners/{id}`; on by default). Per owner rather than per user because the flag is written at ingest, where a sync has no reader to ask but every row already carries the owner its account gave it. **A row with no owner is always flagged** — nobody has opted out for it — and the built-in Shared owner carries its own choice like any other, the one field of it that can be edited. It governs **arrival only**: each import or sync run reads the owners that have it off once, before its insert loop, and tests each row's owner against that set; switching it either way rewrites no stored row — rows already flagged stay flagged, rows that arrived unflagged are not swept in when it comes back on, and re-assigning an account's owner changes nothing already in the ledger. Flagging by hand through `set_review_status` is unaffected. One consequence reaches outside review: the merge-time duplicate scan keeps a reviewed row over an unreviewed one, and a row that arrived unflagged counts as reviewed, so a pair split between a flagging owner and one that is not keeps the latter's copy while the former's is still awaiting review. It began as one ledger-wide setting (Settings → *New transactions*) and moved to the owner so a household where one person reviews and another does not can have both; v74 dropped the old setting without carrying it over. Data-source syncs get the same per-file sweep because a sync's rows now carry an `import_batch_id` — the **`connection_sync` period card** (see "Data-source sync records" below), which the "Mark all reviewed" endpoint treats like any other batch
-- pending transactions are visible in lists but excluded from summary totals — and so from a Dashboard drill-through too: a list asked for with `view` (spending / income / cash flow) is the set behind a figure, and drops pending rows along with excluded-from-totals categories
+An amount is editable in place (`PATCH /transactions/{id}/amount`) only on a hand-entered row that is
+neither split nor part of a reimbursement.
 
-- `trashed_at != NULL` means the row is soft-deleted; every read path (the raw list, the summary endpoints, the dashboard, the import-card counts) filters it out, but the record stays in `txn` until the user empties the transaction trash from Settings, mirroring the account-trash pattern. The Settings → Trash view and the empty-trash operation are the one exception to "all trashed rows": both deliberately exclude confirmed-duplicate rows (`rejection_reason='duplicate_confirmed'` — see below), so the manual Trash only ever surfaces user-deleted transactions and emptying it cannot destroy a dedupe decision's restore path
+- **Not a row from a source.** A synced row's amount is re-stamped whenever the provider revises it,
+  and `content_hash` digests the amount, so an edit would stop the row matching its own file.
+- **Not a split or a reimbursement.** A split's allocations are checked against the amount only when
+  the split is saved, and a claim against the receivable only when it is made.
 
-- `suspect_duplicate_of`, `suspect_duplicate_reason`, and `suspect_resolved_at` together carry the soft-duplicate flag set by the post-import sweep when an imported row matches an existing row on a different account by amount, source text, and date within a ±7-day window (see the matcher note under "Import batches and profiles"); the reason is `cross_account` for an identical text match (punctuation aside — see the matcher note; high confidence, auto-confirmed on merge), `cross_account_fuzzy` for a review-only near-miss, or `cross_account_weak` for a review-only shared-distinctive-token match (neither of the latter two is ever auto-confirmed). The sweep runs unconditionally for every batch row — there is no "brand-new account" precondition — and is gated only by the per-pair-distinct table `account_pair_distinct`. The reason records the account relationship that *created* the flag, which a later merge can retire — so the relationship a report **states** is re-derived at read time from the effective roots in force then (`_IN_ACCOUNT_RULE_KEYS`: `cross_account`/`cross_account_fuzzy`/`cross_account_weak` read as `in_account`/`in_account_fuzzy`/`in_account_weak` once both sides share a root, and the `_confirmed` variants likewise — a pair that was flagged **within** one account simply reads that way from the start). Deriving rather than storing is what makes it hold in both directions — a merge re-describes every existing flag with no backfill, and a detach restores the cross-account reading with no bookkeeping to keep in step — and it is the same synthesis the `_confirmed` suffix already uses. Only the *relationship* is re-derived: the tier is evidence about the two rows, which a merge does not change, so an exact in-group match is still auto-confirmed and a near-miss is still review-only. Without this the report contradicts itself, since a merged pair also prints the same account name on both sides. Flagged rows show a badge in lists and surface in a review report under Tasks until the user resolves each with one of three actions (labeled by outcome in the UI as Keep both / Discard new / Replace existing): **keep** (clears the flag on **that row only** — identically for a same-account and a cross-account pair); **reject** (confirms the incoming row is a real duplicate — trashes the incoming row, keeps the existing one); or **replace** (the inverse survivor — the incoming row is the correct record, so it survives and the *existing* matched row is removed as the confirmed duplicate). `replace` is for fixing an account when one source mislabeled it: the surviving incoming row's categorization follows each file's `use_imported_categories` choice — it keeps its own category only when the incoming file is the sole one with that flag set, otherwise it adopts the existing row's category (existing-only, and the both/neither tie) as a manual override, never copying a NULL category. Like keep, replace records no `account_pair_distinct` row (it asserts the two rows are the *same* transaction). **None of the three says anything about the accounts** — see the account-identity question below. **Resolving a row that is already resolved is a success rather than an error**: rows get resolved out from under a per-row action (asserting a pair distinct clears every flag between it), and a bulk issues one request per selected row. `suspect_resolved_at` is what separates that from the genuine error — a row carrying it *was* flagged and has been dealt with, while a row with neither field was never a suspect and naming an action on it is still a mistake. Reporting the former as a failure made a bulk keep of N rows fail after doing all N rows' work, and (because the client abandoned its reload on the error) leave every count on screen describing the state before it
+The edit restamps the hash, re-runs the rules (a category set by hand stays), and triggers a recurring
+rescan.
 
-- `rejection_reason` discriminates *why* a `trashed_at` row was excluded from the active ledger: `NULL` means user-driven cleanup ("trash"), while `'duplicate_confirmed'` means a soft-flag suspect was accepted as a real duplicate — either by the user via the unified duplicate-detection report or automatically as a side effect of an account merge. Both states hide the row from active reads through the same `trashed_at` filter; the discriminator lets the unified report group confirmed soft-flags alongside the import-time hard-rejects in `import_batch_duplicate` while keeping user trash a separate concern. That separation is enforced, not just conceptual: the Settings → Trash list (`GET /transactions/trash`) and the empty-trash delete (`POST /transactions/trash/empty`) both exclude confirmed-duplicate rows **except the Amazon reconciliation's (`dedupe_resolved_by` in `'amazon_merge'`/`'amazon_discard'`)**, so the unified dedupe flow's rows never appear in the manual Trash and an empty-trash never deletes them. This is deliberate — those rows are not user-deleted items, they belong to the originating file's duplicate report, and keeping them undeletable from here preserves the restore paths (account detach for `auto_merge`, "undo reject" for `user` — see `dedupe_resolved_by`). Amazon-reconciliation removals are the exception: the user removed those copies deliberately, so they stay visible on the Trash page — in their own **Duplicate transactions** section, grouped by the source file each copy came from (direct deletes stay a flat list in the Transactions section, where the import source isn't meaningful) — restore from there (`POST /transactions/{id}/restore` clears the dedupe tags along with the untrash, and the reconciliation grouping simply re-derives — a mistaken merge or discard is fully undoable), and empty with their section (`POST /transactions/trash/empty?scope=deleted|duplicates|all` scopes each section's Empty button to its own rows; the optional `older_than=1m|3m|6m|1y` narrows the purge to rows trashed at least that long ago — the age is measured on `trashed_at`, compared via `julianday()` — so each Empty button opens a timeframe chooser that defaults to erasing everything). The `suspect_duplicate_of` pointer is intentionally kept after a confirmed-duplicate rejection as an audit trail of which existing row was accepted as the canonical copy
+`date` is editable through the bulk editor, which restamps the hash too. A marketplace row is the
+exception: its hash is computed from the order id and cannot be rebuilt from the row's fields, so it
+keeps the stale one, which still matches its file.
 
-- `dedupe_resolved_by` records the provenance of a `rejection_reason='duplicate_confirmed'` resolution: `'user'` means the user explicitly decided it in the dialog (a Reject on the row itself, or a Replace whose surviving row is the *other* one — in the Replace case it is the removed existing row that carries this marker), `'auto_merge'` means `promote_in_group_suspects_to_confirmed` flagged it as a side effect of an account merge, `'amazon_merge'` means an Amazon reconciliation **Merge → keep one** trashed this copy (its `suspect_duplicate_of` points at the kept survivor), `'amazon_discard'` means a per-copy **Discard** on the reconciliation report — a dedupe resolution removing one redundant copy (no kept-copy pointer, since a discard doesn't always know one); the row-level **Trash** on an unaccounted charge is deliberately *not* tagged, because it means "this shouldn't be in my ledger at all" rather than "this is a redundant copy", and so files as an ordinary delete; both Amazon values, unlike `user`/`auto_merge`, stay visible in the manual Trash — see `rejection_reason` above. `'auto_cross_source'` means the same promotion sweep confirmed an **exact** match between two rows on **one** account reported by two different sources — the same automatic, restorable removal, but deliberately not `'auto_merge'`, since that marker means "a merge asserted this and a detach should take it back" and here nothing merged: the rows share one account outright, so no detach can separate them and reversing on one would restore a duplicate for a reason that never applied. `NULL` means either unresolved (active suspect) or legacy data from before the marker existed. This is what lets `detach_account` safely reverse merge-time auto-promotions without trampling deliberate user decisions: detach restores only `'auto_merge'` rows
+### Category provenance
 
-- **Deleting the canonical row restores every copy that deferred to it, whatever the marker says.** A confirmed-duplicate resolution is a statement about a *pair* — "the same transaction is already here" — so when the surviving copy is deleted (a file's Undo, a re-import replacing a batch, or a connection's synced data being removed) the deferring copy comes back to the ledger with its dedupe tags cleared, as an ordinary transaction rather than an active suspect: with no twin left there is nothing to re-judge it against. This is done by `undo_batches` (`import_export/core.py`), the one path all three removals go through, and it is **deliberately unlike detach**, which restores `'auto_merge'` only. The distinction is what the decision still refers to: a detach leaves the canonical row in place, so an explicit user Reject keeps its referent and survives, whereas a deletion takes the referent with it and the decision's premise with it. Ordering makes this work — the restore reads `suspect_duplicate_of` *before* the dangling-pointer sweep that would clear it. The sweep still owns the other half: an **unresolved** soft-flag pointing at a deleted row has nothing to restore, so it just stops claiming a match it can no longer name. The `import_batch_duplicate` direction is **not** covered — a row hard-rejected at import was never inserted, so bringing it back would mean materializing a transaction rather than untrashing one; its card's "Import anyway" stays the (visible, user-driven) path
+- `category_source` records where the current category came from: `manual`, `import` (a category
+  present in the file), `rule`, `cleared`, `enrichment`, `split`, `refund`, or NULL.
+- `category_overridden = 1` means automatic categorization must leave the category alone. It is set for
+  `manual` and `split` only.
 
-These conventions are meant to preserve user intent and keep reporting stable.
-`category_overridden` and `category_source` exist so automated categorization can stay helpful without silently undoing deliberate user choices, and so a category's origin stays visible after the fact.
+What each source allows is in
+[How an existing transaction's category can change](#how-an-existing-transactions-category-can-change).
 
-Name fields:
+### Name fields
 
-- **`raw_name`:** imported or provider-supplied name
+- `raw_name`: the literal imported or provider-supplied text
+- `merchant_name`: the cleaned name, when the source or a rule supplies one
+- `display_name`: the name the row shows
+- `display_name_source`: `manual` (a deliberate rename), `rule` (a rule's `clean_name`), `import`, or
+  `enrichment` (filled from a richer source by enrich-on-import). NULL is treated as not manual
 
-- **`merchant_name`:** cleaned display name when available
+Automatic name-setting never overwrites `manual`; only the explicit full-force rule apply may.
+`recategorize_all` leaves a manual name alone while still recategorizing the row.
+
+A paper-check row whose file carries a separate check-number column gets `"Check #<n>"` folded into
+`merchant_name` and `display_name`. `raw_name` and `content_hash` are untouched, so duplicate detection
+is unaffected.
+
+### import_evidence_json
+
+A compact subset of the original source row. It feeds cross-source duplicate detection,
+`match_source_text` rules, the ledger search, and the transaction detail's Origin block. The ledger
+search's SQL reads `description.value` and `extra_text_fields[].value` directly, so a change of shape
+moves that query too.
+
+- **CSV** keeps the source account and description labels plus up to `MAX_IMPORT_EVIDENCE_TEXT_FIELDS`
+  further columns whose headers match a keyword list of descriptive free text (memo, note, reference,
+  payee, counterparty and similar). Identifier and figure columns are left out because they would add
+  noise to the text matcher that reads the same fields. `column_map.evidence_columns`, when present, is
+  authoritative.
+- **A connection** writes the same shape but selects by declaration (`ProviderAdapter.capture_fields()`):
+  an adapter knows its fields by name, where a CSV header is a guess. The account slot carries the
+  provider account label and the description slot the provider's original description, which is what
+  lets a synced row be a terminal-window candidate.
+- Each `extra_text_fields` entry may carry `role: "categorical"`; see
+  [Evidence field roles](#evidence-field-roles).
+
+### needs_review
+
+`needs_review = 1` marks a freshly imported or synced row nobody has looked over. It is workflow state,
+independent of categorization: a rule-categorized row can need review, and a reviewed row can be
+uncategorized.
+
+- **Set** on every import and sync insert unless the row's owner has flagging off. Hand-entered rows
+  start at `0`.
+- **Cleared** by a manual category edit (the actions that write `category_source = 'manual'`) or by an
+  explicit mark-reviewed. Automatic categorization never clears it.
+- **`owner.flag_new_for_review`** (default on, read through `services/review_flagging.py`) is per owner
+  because the flag is written at ingest, where a sync has no user to ask but every row has an owner. A
+  row with no owner is always flagged.
+- **It governs arrival only.** Each run reads the owners that have it off once, before its insert loop.
+  Changing the switch, or an account's owner, rewrites no stored row.
+- The merge-time duplicate scan keeps a reviewed row over an unreviewed one, and a row that arrived
+  unflagged counts as reviewed.
+
+### Pending rows
+
+A pending transaction appears in lists and is left out of summary totals. A list requested with `view`
+(spending, income, cash flow) is the set behind a figure, so it drops pending rows and
+excluded-from-totals categories too.
+
+### Trash and duplicate resolution
+
+`trashed_at IS NOT NULL` soft-deletes a row. Every read path filters it out; the row stays in `txn`
+until the trash is emptied.
+
+**`suspect_duplicate_of`, `suspect_duplicate_reason`, `suspect_resolved_at`** carry the soft-duplicate
+flag (see [Soft duplicates](#soft-duplicates)).
+
+- The reason is `cross_account` (texts identical, punctuation aside), `cross_account_fuzzy` (a
+  near-miss) or `cross_account_weak` (shared distinctive tokens). The last two are
+  `REVIEW_ONLY_SOFT_FLAG_REASONS` and are never auto-confirmed.
+- The reason records the account relationship that created the flag. The relationship a report states
+  is derived at read time from the effective roots then in force (`_IN_ACCOUNT_RULE_KEYS`), so a merge
+  or a detach re-describes every flag with no backfill. The tier is not re-derived, since a merge does
+  not change the evidence about two rows.
+- A flag is resolved by **keep** (clears the flag on that row), **reject** (trashes the incoming row) or
+  **replace** (the incoming row survives and the matched row is removed). None of the three says
+  anything about the accounts.
+- On **replace** the surviving row keeps its own category only when its file is the sole one with
+  `use_imported_categories` set. Otherwise it takes the existing row's category as a manual override,
+  and never copies a NULL.
+- Resolving a row that already carries `suspect_resolved_at` succeeds, because a bulk action issues one
+  request per row and asserting a pair distinct clears every flag between it. A row with neither field
+  was never a suspect, and an action on it is an error.
+
+**`rejection_reason`** says why a trashed row left the ledger. NULL is ordinary trash.
+`'duplicate_confirmed'` means a soft-flag suspect was accepted as a real duplicate. The pointer in
+`suspect_duplicate_of` is kept as the record of which row was canonical.
+
+**`dedupe_resolved_by`** says who confirmed it:
+
+| value | meaning | undone by |
+| --- | --- | --- |
+| `user` | decided in the duplicate report (a Reject, or the row a Replace removed) | *Undo reject* in the report |
+| `auto_merge` | `promote_in_group_suspects_to_confirmed`, as a side effect of an account merge | detaching the accounts |
+| `auto_cross_source` | the same sweep, for an exact match between two sources on **one** account. Kept apart from `auto_merge` because no detach can separate rows that share an account | the duplicate report, as for `user` (`REPORT_RESTORABLE_RESOLUTIONS`) |
+| `amazon_merge` | Amazon reconciliation *Merge → keep one*; `suspect_duplicate_of` names the survivor | restoring from Trash |
+| `amazon_discard` | a per-copy *Discard* on the reconciliation report; no survivor pointer | restoring from Trash |
+
+- **Settings → Trash and empty-trash exclude confirmed duplicates**, except the two Amazon values. Those
+  rows belong to their file's duplicate report, and deleting them from Trash would remove the restore
+  path. The Amazon removals were deliberate deletions, so they stay in Trash and restore from there
+  (`POST /transactions/{id}/restore` clears the dedupe tags).
+- The row-level *Trash* on an unaccounted Amazon charge is not tagged: it means "not in my ledger at
+  all", which is an ordinary delete.
+- **Clearing a card's duplicate report hands its confirmed duplicates to the Trash.** `rejection_reason`
+  and `dedupe_resolved_by` are cleared in the same write, because the report was where those rows were
+  restorable from. `auto_merge` rows are not released; their undo is a detach.
+- **Deleting the canonical row restores every copy that deferred to it**, whatever the marker says. A
+  confirmed duplicate is a statement about a pair, and the deletion removes its referent. The copy
+  returns as an ordinary transaction with its dedupe tags cleared. `undo_batches`
+  (`import_export/core.py`) does this for a file's Undo, a re-import replace, and the removal of a
+  connection's synced data, and it reads `suspect_duplicate_of` before the sweep that clears dangling
+  pointers. A detach, by contrast, leaves the canonical row in place and restores `auto_merge` only.
+- A row hard-rejected at import (`import_batch_duplicate`) was never inserted, so nothing restores it;
+  *Import anyway* on its card is the path.
 
 ## Categories
 
-Categories are intentionally limited to **two levels**:
+### Two levels
 
-- top-level **groups**
+Categories are **groups** (top level) and **leaf categories** (children), for example the group
+`Food & Drink` with leaves `Groceries` and `Dining Out`.
 
-- child **leaf categories**
+- **A transaction is assigned only to a leaf.** The assignment endpoints reject a group id, imports
+  resolve a file label to a leaf (creating one under `Unassigned` if none matches), and seed rules look
+  up leaves only. A group is a reporting rollup.
+- **The two levels are enforced at the API.** A parent must be an active top-level group, a group that
+  holds categories cannot be placed inside another, and nothing can be placed inside itself. Requiring
+  every parent to be top-level rules out depth and cycles together. A move that would break the shape
+  is refused.
+- **Names are unique within a kind** after trimming and case-folding. A leaf and a group may share a
+  name, because the only path that resolves a bare name to an assignable category looks at leaves.
 
-Examples:
+### What a group carries
 
-- Group: `Food & Drink`
+- **`category_type`**: `expense` or `income`. A leaf's type is its group's: moving a leaf rewrites its
+  type, retyping a group carries every leaf with it (inactive ones included), and a leaf cannot be given
+  its own. A leaf may hold NULL and inherit. This is what keeps a group's total equal to the sum of its
+  slices (see [Reporting assumptions](#reporting-assumptions)).
+- **`exclude_from_totals`**: removes the group and its leaves from charts and totals. It is `NOT NULL`,
+  so a parent always wins `COALESCE(parent.exclude_from_totals, leaf.exclude_from_totals, 0)`.
+- **`sort_order`**: the order shared by the Categories page and the pickers. A new group joins its
+  section alphabetically unless the user has reordered it.
 
-- Leaf: `Groceries`
+Colour is derived in the UI from stable ids and names; none is stored. Categories and groups have no
+`owner_id`. Dimensions such as personal/shared or essential/discretionary are tags, attached to a group,
+a leaf or a transaction through `category_tag` / `txn_tag`.
 
-- Leaf: `Dining Out`
+### System groups
 
-Important invariant:
+- **`Unassigned`** holds categories an import created that the user has not yet placed. It takes part in
+  filters and reports, cannot be renamed or deleted, and may be hidden while empty.
+- **`Transfers`** (`system_key`, excluded) is where the app files money movement of its own: the Amazon
+  importer's matched card charge, wallet funding legs. Its `exclude_from_totals` is the user's to
+  clear, since nothing computes against it.
+- **`Reimbursable`** (`system_key = 'reimbursable'`, excluded) holds money owed back. Its exclusion is
+  locked (see [Reimbursable expenses](#reimbursable-expenses)).
 
-- transactions are only ever assigned to **leaf** categories, never to groups. This is enforced at the API (the category-assignment endpoints reject a group id) and, just as importantly, in every place that turns a *name* back into a category — imports resolve a file label to a leaf (creating one under `Unassigned` if none matches, never adopting a same-named group) and seed rules look up leaves only. A group is a reporting rollup, not an assignable bucket.
-- the two levels are **enforced at the API**, not only drawn that way: creating or moving a category requires its parent to be an active top-level group, a group that still holds categories cannot itself be placed inside one, and nothing can be placed inside itself. Requiring every parent to be top-level rules out depth and cycles together, since a row that has a parent can never be one. A move that would break the shape is refused rather than repaired. (`PATCH /categories/{id}/ungroup`, which could turn a leaf holding transactions into a group, was removed; nothing called it.)
-- names are unique **within a kind** after trimming/case-folding: no two groups may share a name and no two leaves may share a name (so a given leaf belongs to exactly one branch). A leaf and a group **may** share a name, however — e.g. a `Miscellaneous` leaf alongside a `Miscellaneous` group. That is safe specifically because the two kinds are never interchangeable: the only context that resolves a bare name to an assignable category targets leaves, so the shared name can never make a transaction land on the group.
+A keyed group is resolved by key before name, so a rename cannot lose it, and it cannot be deleted or
+moved inside another group. Every lookup requires `parent_id IS NULL`, so a reparented group would make
+the next write create a second one.
 
-The underlying concern is ambiguity in *name → assignable category* resolution. Luma keeps category assignment, rule generation, and import review understandable and reversible by guaranteeing a label resolves to exactly one assignable leaf. Cross-kind name sharing does not reintroduce ambiguity because group and leaf are structurally distinct — a group cannot hold transactions — so the relaxation is limited to that one case while leaf↔leaf and group↔group uniqueness still hold. (Historically the rule was global uniqueness across all names; it was narrowed to per-kind once the resolvers were made leaf-aware.)
+### Seeding
 
-Groups also carry important reporting behavior:
+A new data database is seeded with the group skeleton only: the top-level groups with their type and
+exclusion, plus the system groups. It gets no leaves and no rules. Starter leaves and rules are added on
+request through `POST /categories/generate-starter`, which is idempotent, and by the demo dataset.
 
-- **`category_type`:** typically `expense` or `income`. **A leaf's type is its group's.** Moving a leaf rewrites its type to the new group's, retyping a group carries every one of its categories (inactive ones included) with it, and a leaf cannot be given a type of its own — a leaf may still carry `NULL` and inherit. Without this, dragging a group across the income/expense sections left its leaves on the old side, and a group's total stopped equalling the sum of its slices (see *Reporting assumptions*)
+Groups ship because the import's *Group Imported Categories* workspace needs buckets to drop labels
+into. Leaves and rules do not, so that a user bringing their own categories has no taxonomy and no
+data-mutating rules imposed. The built-in rules target leaves by name, so withholding the leaves
+withholds the rules.
 
-- **`exclude_from_totals`:** removes that group and all descendants from charts and totals
+### Lifecycle flags
 
-- category appearance is derived in the UI from stable ids/names rather than stored as user-managed color metadata
+A category carries `is_active` (default 1), `set_aside` (default 0) and `import_pending` (default 0).
 
-- the system also reserves a protected top-level **`Unassigned`** group for imported categories that are real, usable categories but have not yet been moved into a user-chosen reporting group; this group participates in filters/reporting but cannot be renamed or deleted
-- when `Unassigned` has no child categories, category-management surfaces may hide it until imported categories populate it again
+- **`import_pending = 1`** marks a label waiting in the *Group Imported Categories* workspace, which
+  shows only active `Unassigned` leaves with the flag. Import sets it when it creates a leaf for a
+  label. It is cleared when the category is placed in a group or deleted, and is never set again, so a
+  user-created or recovered category under `Unassigned` does not appear in the workspace.
+- **`set_aside = 1`** parks a pending label out of the "still needs sorting" pool. The category stays
+  active, keeps its transactions, and future imports of the label still categorize to it.
+- **`is_active = 0`** is a soft delete, and the only state that suppresses a label from future imports.
 
-`Unassigned` exists to keep imported categories usable immediately without forcing the user to stop and redesign their reporting tree during import. Protecting the group keeps that temporary landing zone predictable for imports, undo, and later cleanup.
+Deleting a **leaf**:
 
-**Two further groups are protected, and carry a `system_key` rather than being found by name:** the
-seeded, excluded **`Transfers`** — where the app files money movement of its own (the Amazon importer's
-matched card charge, wallet funding-leg suppression) — and **`Reimbursable`**, which holds money owed
-back. The key is their durable identity: each is resolved by key *before* name, so a rename cannot lose
-one, and neither can be deleted or moved inside another group. Every lookup requires `parent_id IS NULL`,
-so an absent or reparented group makes the next write build a **second** one while the existing leaves
-stay behind. Before `Transfers` was keyed (v53 stamps it; the name lookup that follows the key is what
-adopts a group predating it) a rename did exactly that, and silently — both groups are excluded, so no
-total ever looked wrong while the money-movement leaves and their history split in two. The two differ in one
-respect: `Transfers`' `exclude_from_totals` **is** the user's to clear, because filing money movement
-there is a reporting convention that nothing computes against, whereas `Reimbursable`'s is locked
-(see [Reimbursable expenses](#reimbursable-expenses)).
+- rewrites the branch's transactions first. With no replacement they become uncategorized
+  (`category_id`, `category_source` NULL, `category_overridden = 0`) and keep their `imported_category`
+  text; with a replacement they move to it. An inactive category is therefore referenced by no live
+  transaction
+- clears `import_pending` and keeps `parent_id`, which is how reactivation returns it to its group
+- deletes every rule that targets it; the categorizer also skips any rule whose target is inactive
+- removes it from `GET /categories` and `/categories/flat`; it appears in `GET /categories/inactive`
 
-**Seeding model — what a fresh database starts with.** Creating the data database seeds only the **group skeleton**: the top-level reporting groups (with their `category_type` / `exclude_from_totals`) plus the protected `Unassigned` group. It seeds **no leaf categories and no rules**. The built-in starter *leaves* and *rules* are opt-in — added on demand through `POST /categories/generate-starter` (the onboarding "Add starter categories" / "Add starter rules" steps and the equivalent Categories- and Rules-page actions) and seeded directly by the demo dataset. That endpoint is idempotent (it updates/inserts leaves by name and skips existing rule matchers), so the set can be grown later without duplicating anything.
+Deleting a **group** removes the row outright, since a group is a container and not an import label.
+Its leaves are deactivated like any leaf, and their `parent_id` is nulled by the foreign key, so they
+reactivate under `Unassigned`.
 
-The reason groups ship but leaves and rules do not: a user bringing their own categories should not have our taxonomy — and especially not our *data-mutating* rules — imposed on them, yet the import "Group Imported Categories" workspace still needs visible buckets to drop imported labels into, and the small, easily-deleted group skeleton supplies them. Because the built-in rules target leaves by name, withholding the leaves also withholds the rules, so a bring-your-own install has zero starter rules touching its data until it explicitly asks for them. (The leaf seed is kept consistent with its own legacy renames — e.g. the canonical medical leaf is `Medical Services`, never a `Medical` leaf that would collide with the `Medical` group — so re-running the opt-in seed is a no-op rather than a source of forked duplicates.)
+**Reactivation** sets `is_active = 1`, clears `set_aside`, leaves `import_pending = 0`, and restores the
+leaf to its former group when that group is still an active top-level group, else to `Unassigned`. It
+does not recategorize the transactions the deletion cleared.
 
-Categories carry three flags: **`is_active`** (default 1), **`set_aside`** (default 0), and **`import_pending`** (default 0). They model distinct lifecycles that must not be conflated — this distinction is deliberate (see the import-reconciliation playbook):
+**Permanent delete** (`DELETE /categories/{id}/forever`) accepts only an inactive category, which is
+what makes it safe: nothing references one. Afterwards the label is no longer suppressed, so a future
+import creates a fresh pending leaf.
 
-- **`import_pending` = a pending imported label in the Group Imported Categories workspace.** The workspace is a *temporary landing spot* for labels that arrived via import and haven't been decided yet; it shows **only** active Unassigned leaves with `import_pending = 1`. The flag is set when import creates a new Unassigned leaf for a label, and it is **cleared the moment the category leaves the workspace** — by being organized into a real group, or deleted. It is **never re-set** (recover keeps it 0), and **user-created categories default to 0**, so neither a user-created category nor a deleted-then-recovered one ever appears in the workspace, even while sitting under `Unassigned`. (`GET /categories`/`/categories/flat` return the flag so the workspace can filter; a recovered or user-made Unassigned leaf is a permanent system category that shows on the Categories page but not the workspace.) Backfill on upgrade marks existing import-sourced Unassigned leaves as pending.
-- **`set_aside` = parked but still live** (only meaningful while `import_pending = 1`). In the workspace a pending label can be "set aside" to clear it out of the "still needs sorting" pool without committing it to a group — it stays parked in the workspace's Set Aside list indefinitely. This is **not** a deletion: the category stays `is_active = 1`, keeps its transactions, and **future imports of that label still categorize to it**. Endpoints: `POST /categories/{id}/set-aside` and `POST /categories/{id}/restore-to-pool`. The workspace's Apply reconciles this flag from the parked list (and clears it for anything restored to the pool or organized into a group).
-- **`is_active = 0` = deleted (soft, recoverable).** Delete — from the Categories page *or* the workspace's Delete action — is the *default* delete. For a **leaf category** it flips the row (and its descendant branch) to inactive rather than dropping it, so it stays recoverable; this is the only thing that suppresses a label from future imports. (An already-inactive row can be purged for good — see permanent delete below.) A **group** is treated differently — see "deleting a group" — because a group is an organizational container, not an import label. Semantics:
-  - **deletion rewrites the branch's transactions, then hides the rows.** With no replacement the affected transactions become uncategorized (`category_id = NULL`, `category_overridden = 0`, `category_source = NULL`) while their `imported_category` text is preserved; with a replacement they are reassigned to that (active) category as a rule-style move. Either way an inactive category is left referentially empty — no live transaction points at it — so an active-only default read path is safe. Deletion also clears `import_pending` (the category has left the workspace) but **preserves `parent_id`**, which is what lets recovery return it to the group it came from. The undo-import path likewise only removes still-pending leaves it created, never a category that has been promoted into a real group or recovered.
-  - **deleting a group removes the group row outright** rather than parking it in the Inactive list — there is nothing to recover (it's a container, not a label) and nothing to suppress from imports. Its child categories are deactivated like any leaf delete (recoverable, their transactions handled by the same replace/unassigned choice). Removing the group nulls those children's `parent_id` (`ON DELETE SET NULL`), so recovery falls back to `Unassigned`. **Only leaf categories ever appear in the Inactive list**; groups never do. (Databases predating this change may still hold inactive groups; permanent delete purges those as a branch.)
-  - **rules targeting a deleted category are deleted.** A rule must point at an active category; on deactivate every `category_rule` row whose `category_id` is in the branch is dropped, and the categorizer additionally skips any rule whose target is inactive as defense in depth (tag-only rules, `category_id IS NULL`, still apply).
-  - **inactive categories drop out of the active tree** (`GET /categories` and `/categories/flat` filter `is_active = 1`; both also return `set_aside` so the workspace can split pool vs. parked) and surface only in a separate flat recovery list (`GET /categories/inactive`), rendered as the "Inactive" section on the Categories page. Set-aside (active) categories never appear there.
-  - **reactivation** (`POST /categories/{id}/reactivate`) sets `is_active = 1`, clears `set_aside`, leaves `import_pending = 0`, and restores the row to **the group it was deleted from** when that group still exists as an active top-level group, falling back to `Unassigned` otherwise. Because `import_pending` stays 0, a recovered category is a permanent system category that does **not** reappear in the import workspace (pool or set-aside). It does **not** retro-recategorize the transactions deletion previously cleared — only future assignments apply.
-  - **imports respect inactive labels.** An imported label matching an inactive category imports the row uncategorized (label retained), creates no new leaf, and never resurrects the inactive one — see the import-batch section. (A per-label "redirect matching imports to a chosen category instead of unassigned" is a possible future feature; it would be expressed as an import-source + imported-category rule, since the same label can mean different things across sources.)
-  - **permanent delete** (`DELETE /categories/{id}/forever`, the "Delete forever" action next to Recover in the Inactive list) drops the row (and its inactive branch) for good — the irreversible counterpart to reactivate. It only accepts an **inactive** category (an active one is rejected; it must be soft-deleted first), which is what keeps it safe: an inactive branch is already referentially empty, so the delete orphans nothing. `category_rule`/`category_tag` rows go via FK cascade (deleted explicitly too); `txn.imported_category` *text* is left intact. The one behavioral effect: with no inactive row left to match, the label is no longer suppressed, so a future import bearing it creates a fresh pending leaf instead of landing uncategorized.
-  - **empty cleanup** (`GET /categories/empty-cleanup-preview`, `POST /categories/empty-cleanup`; the "Delete empty (N)" button beside the Categories search box, shown only when N > 0) is a one-pass sweep that removes clutter **outright** (not via Inactive). An *empty leaf* is active, non-system, not an import-workspace pending label, and referenced by **nothing the user configured** — no transaction (trashed or not) and no rule targets it (a rule target is configured-but-unused, so it's kept). An *empty group* is a non-system group left with no surviving children after that leaf removal (childless groups included); the Unassigned group is never touched. Implementation reuses the tested paths — each empty leaf is soft-deleted then purged (so import-snapshot refs are scrubbed and rules dropped), then each now-childless group is deleted. The set is recomputed server-side from the DB, never trusted from the client. A confirm dialog lists exactly what will go (empty ≠ unwanted — e.g. unused seeded defaults appear here), which is the review gate that replaces per-item recoverability for this bulk action.
+**Empty cleanup** (`POST /categories/empty-cleanup`) removes, outright, every active non-system leaf
+that is not import-pending and that no transaction (trashed or not) and no rule references, then every
+non-system group left without children. The set is recomputed server-side.
 
-- top-level group `sort_order` is the shared order used by the Categories page and category pickers; unless a user deliberately reorders a section, new groups should join that section in alphabetical order
-
-This is used for things like transfers and credit-card-payment categories.
-
-Categories and groups themselves do **not** have an `owner_id`; the schema does not define that column. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)` with `ON DELETE CASCADE` on both foreign keys, so deleting a tag also drops its `category_tag` rows and deleting a category also drops its attachments. Reporting endpoints (`/summary/by-group`, `/summary/by-category`, `/summary/monthly-trend`, `/summary/monthly-by-group`) no longer *act* on the old `category_owner_ids` parameter; tag-aware filtering via `tag_ids` is the replacement. `/summary/by-group` still declares it and ignores it — a leftover, not parity, since its three siblings do not.
-
-Reporting should not assume every transaction inside an expense or income branch shares the same sign.
-
-- expense categories may still contain credits such as reimbursements or returns
-
-- income categories may still contain debits such as reversals, corrections, or offsets
-
-- summaries and detail reports should include all matching transactions for the selected slice instead of filtering out the "unexpected" side
-
-- **Totals and breakdowns must be aggregated server-side, never by summing a capped transaction fetch on the client.** The `/transactions` list is paginated (a `limit`), so any client that fetches it and then sums/counts to show a total will silently undercount once the result set exceeds the cap. The dashboard's group and category pies go through `/summary/by-*`; the **tag report** does too (`/summary/by-tag-signature`, which buckets by tag *signature* — the set of the report's selected tags a row effectively carries — with the same signed-net aggregation (see "One aggregation sign" below) and spending/income scope as `by-category`, so all three "Spending by" modes reconcile to one total). The ways a total legitimately reaches a client:
-  - the **`/summary/*`** endpoints (a pre-aggregated total/count per bucket) — the pies, and the tag-report slice rows (each carries its bucket `total`/`count`, which `TagDetail`'s header shows verbatim);
-  - **`range.total`/`range.count`** from the monthly-trend aggregation via `computeDetailRange` — `CategoryDetail` and `AccountDetail` window totals;
-  - the list response's **`total` (count) and `sum_amount` (signed net over the whole filtered set)** — for a panel that shows a header total beside a paged list, e.g. `PeriodDetail` (whose list infinite-scrolls via `usePagedTransactions`). `sum_amount` exists precisely so the header need not sum the loaded rows.
-
-  A new surface that needs a total uses one of these, never a client `reduce` over the fetched rows.
-
-  **One aggregation sign, everywhere: signed net (no `ABS`).** Every reporting bucket — the pies (`by-category`, `by-group`, `by-category-in-group`, `by-tag-signature`) and the time-series charts (`monthly-trend`, `monthly-by-group`) — carries the **signed net** per bucket, following the sign convention in `transactions.py` (see `_summary_signed_total_sql` and the `monthly_trend` "Sign convention" note): income-type buckets negate so received income reads positive, while reverses — refunds in an expense bucket, returns in an income bucket — stay **negative**. So a period where a category's refunds outweigh its spend reads as a negative total, and it *reduces* the period total instead of inflating it. This is deliberate: `ABS(SUM(amount))` was removed because it hid a refund by flipping its sign (a net-refunded bucket showed as positive "spending"), which made the Trends "Total per month" bar and the pies disagree with the single-period trend. Note this has always been **net-within-bucket** (`ABS(SUM)`, not `SUM(ABS)`) — refunds inside a bucket already netted; the only case the sign change affects is a *whole* bucket that nets negative. Charts that can't draw a negative magnitude floor the **geometry** at zero client-side — the Trends stacked by-group area chart (`Math.max(net, 0)` per band) and the dashboard pie wedges (`pieValue`) — but every displayed **number** (list rows, header totals, tooltips, the "Total per month"/annual/averages bars) keeps the true signed net; the tooltip shows the signed figure even where the drawn band/wedge is clamped. Do **not** reintroduce `ABS` on any bucket total: a net refund legitimately reduces a period's spending, and all "Spending by" modes plus the trend charts are meant to agree on that net figure.
-
-  **Which side a bucket is on is inherited, and every resolver has to agree.** A leaf may carry no `category_type` of its own — that is the ordinary shape, since the seeded skeleton types the *groups* and most leaves never set one — so "is this income?" is `COALESCE(leaf, parent)` at the category level and `COALESCE(parent, leaf)` at the group level, where the bucket *is* the group. The precedences are opposite on purpose and neither is a fallback for the other. The failure this guards is silent and asymmetric rather than an error: selection and signing are separate expressions, so a resolver that skipped the inheritance still *selected* an untyped income leaf (every filter COALESCEs) and then signed it as an expense — received income rendered as a large negative, and a group's total stopped equalling the sum of its own slices while each figure looked individually plausible. **That reconciliation — a group's total equals the sum of its category slices — is the invariant worth testing**, because it is the one thing no single bucket can look right about on its own (`backend/tests/test_report_sign_filters.py`).
-
-  **The list `limit` contract.** `/transactions` defaults to a **200-row page** (max `1000`); a scoped list that can exceed that must paginate (`usePagedTransactions`) rather than fetch once and render the page as complete. Two guards back this: passing **`limit=0`** is the explicit "no limit — return every matching row" opt-in, for *known-bounded* scopes only (e.g. a series' removed-from-recurring rows) — never for an open-ended ledger, since `txn` has no inherent size bound; and in **dev builds** `api.getTransactions` logs a warning when a caller that omitted `limit` gets a truncated page (`transactions.length < total`), turning a silent truncation into a visible signal. A caller that passes an explicit `limit` has made a conscious choice and is exempt from the warning.
+**Undo of an import** removes only still-pending leaves that import created.
 
 ### Filter exclusion ("is not")
 
-The shared transaction filter (`FilterBar` → the list feed, the bulk "select all matching" resolver,
-every `/transactions/summary/*` endpoint, and CSV export) accepts each facet — account, group,
-category, owner, payee, **and tags** — as both an **include** set and an **exclude** set (`exclude_*`
-params).
+The shared transaction filter accepts each facet (account, group, category, owner, payee, tag,
+attribute) as an include set and an exclude set (`exclude_*` parameters). It feeds the list, the bulk
+"select all matching" resolver, every `/transactions/summary/*` endpoint and the CSV export.
 
-- **Combination:** within one facet, include ids OR together (`IN (...)`); exclude ids AND on; across
-  facets everything ANDs. So `account:Checking` + `exclude category:Dining` reads as "in Checking AND
-  not Dining."
-- **Exclusion is the NULL-safe negation of the *same* membership expression the include path builds.**
-  One membership builder per facet feeds both modes, so they can never drift. The negation is
-  `COALESCE((membership), 0) = 0`, **not** a bare `NOT IN` — the COALESCE is load-bearing: `category_id
-  NOT IN (...)` is SQL-*unknown* (not true) for a NULL category, which would silently drop every
-  uncategorized row from a "not Groceries" result even though a NULL-category row plainly is not
-  Groceries. The invariant: **a row the include set does not match must survive that facet's
-  exclusion**, including rows with a NULL category/owner. Excluding the synthetic *Uncategorized*
-  buckets is the deliberate inverse (`category IS NOT NULL`, or the sign-scoped form for the
-  expense/income buckets); excluding the owner `unassigned` bucket is the one case that *removes*
-  NULL-owner rows, since that is the row set the user named.
-- **Tags are the one facet whose membership is an `EXISTS`, not an `IN`.** "Has tag X" is
-  `effective_tag_match_sql` (`services/transaction_tags.py`) — the *effective*-tag test: direct
-  (visible `txn_tag`) OR inherited from the leaf category, its parent group, or the effective account,
-  block-aware (a tag hidden on the row via `manual_state = -1` does not count). Exclusion negates it
-  with plain `NOT (...)`: `EXISTS` is never NULL, so no COALESCE guard is needed — a row with no
-  matching tag (including a fully untagged row) is exactly the `NOT EXISTS` set. Because inheritance is
-  honored, `≠ Business` drops a row tagged Business *only* through its account/category, not just rows
-  tagged directly. The filter also offers a synthetic **Untagged** bucket (`UNTAGGED_FILTER_ID`,
-  `'__untagged__'`) — rows with **no effective tag at all** (`NOT effective_tag_any_sql`), the complement
-  of "has any tag" and the tag-facet analog of the category *Uncategorized* / owner *unassigned* buckets;
-  so a row that inherits a tag from its account is *not* Untagged, and `≠ Untagged` means "only rows that
-  have some tag." Real ids and the Untagged bucket OR together within the facet (`tag_filter_membership_sql`).
-  **One definition** (that builder) feeds the list, the summaries, and CSV export — the export previously
-  matched direct tags only (a latent bug that silently omitted inherited rows for both include and
-  exclude), now corrected by routing it through the same builder. Separately, the `/transactions` list
-  accepts **`require_all_tag_ids`** — an *AND* constraint ("has **all** of these", `effective_tag_match_all_sql`,
-  count-distinct = n), **independent** of the OR `tag_ids`, so both can apply in one query. It is an
-  internal primitive (not surfaced in the app-wide `FilterBar`, which stays OR): the tag-report drill
-  (`TagDetail`) uses it to scope rows to an *exact* signature — has-all the signature's tags,
-  `exclude_tag_ids` none of the report's others — server-side, while the active filter's own OR `tag_ids`
-  still applies on top. A general "tagged with both X and Y" filter could build on it later.
-- The frontend carries the mode on each selection (`mode: 'include' | 'exclude'`, default include) and
-  **must split selections by both type and mode**; feeding an exclude selection into an include param
-  would invert its meaning. See `ui-patterns.md` → *Pickers and filters*.
+- **Combination.** Within a facet, include ids OR and exclude ids AND; across facets everything ANDs.
+- **Exclusion is the NULL-safe negation of the same membership expression the include path builds**:
+  `COALESCE((membership), 0) = 0`. A bare `NOT IN` is SQL-unknown for a NULL category and would drop
+  every uncategorized row from "not Groceries". The invariant is that a row the include set does not
+  match survives that facet's exclusion.
+- **Excluding a synthetic bucket is the inverse.** Excluding *Uncategorized* is `category IS NOT NULL`
+  (sign-scoped for the expense and income buckets); excluding the owner `unassigned` bucket removes the
+  NULL-owner rows, since that is the set the user named.
+- **The tag facet's membership is an `EXISTS`** (`effective_tag_match_sql` in
+  `services/transaction_tags.py`): the tag is direct, or inherited from the leaf, its group or the
+  effective account, and is not blocked on the row. `EXISTS` is never NULL, so exclusion is a plain
+  `NOT`. A row tagged only through its account is therefore excluded by "not that tag".
+- **Untagged** (`UNTAGGED_FILTER_ID`) is the rows with no effective tag at all. Real ids and the bucket
+  OR within the facet (`tag_filter_membership_sql`).
+- **`require_all_tag_ids`** is a separate AND constraint ("has all of these",
+  `effective_tag_match_all_sql`) that applies alongside the OR `tag_ids`. The tag-report drill uses it
+  to scope rows to an exact signature. The app-wide filter bar does not offer it.
+- The frontend carries `mode: 'include' | 'exclude'` on each selection and splits selections by type and
+  mode (`ui-patterns.md` → *Pickers and filters*).
 
 ### One facet registry, both halves
 
-A facet is declared once and reaches every surface that filters transactions: `services/transaction_facets.py`
-holds one `Facet` row per axis (its membership builder, its two parameter names, its negation and its
-separator), a `TransactionFacets` dependency carrying the query parameters, and one `append_facets` that
-walks the registry; `lib/filterParams.js` is its frontend counterpart, turning the chip row into those
-same parameters. Adding an axis is a row in each.
+`services/transaction_facets.py` declares each facet once: a `Facet` row (membership builder, the two
+parameter names, negation, separator), a `TransactionFacets` dependency carrying the query parameters,
+and `append_facets`, which walks the registry. `lib/filterParams.js` is the frontend counterpart.
+Adding an axis is a row in each.
 
-**A facet may be named in more than one way, and the ways OR.** The payee facet takes whole names
-(`payees`) and fragments of a name (`payee_contains`), declared as a *variant* of the one facet rather
-than as a second facet, because facets AND: "payee is A" beside "payee contains b" as two axes would
-select almost nothing, where the chip row plainly means either. The fragment exists because one merchant
-appears under several names — picking them one at a time leaves out the spelling that first shows up next
-month. It is compared against the name the row shows, not the three name columns the exact form reads,
-so a row never comes back on the strength of a raw descriptor it does not display. The names the Payee tab
-offers come from `GET /transactions/payee-names` — distinct shown names containing the fragment, most
-used first — so the fragment row selects exactly the payees listed beneath it, plus any past the list's
-limit.
+The registry exists because an endpoint that has not learned a facet does not fail; it answers
+unfiltered, and a total stops matching the list it drills into.
 
-**The registry exists because the failure of the hand-written version was silent.** Nine endpoints
-consume these facets — the list feed, seven summary/trend endpoints, and CSV export — and each formerly
-declared its own parameter block and called its own sequence of append helpers, with three separate
-frontend translations feeding them. An endpoint that never learned about a facet does not error; it
-answers unfiltered, so a total stops matching the list it drills into. That had already happened: the
-export hand-rolled its membership SQL and compared the synthetic uncategorized bucket ids as though they
-were rows in `category`, so an Uncategorized chip exported an empty file while the ledger showed rows.
-
-Two derivations keep it honest rather than merely tidy. The bulk endpoint's `_BULK_FILTER_KEYS` is built
-from `FACET_PARAM_NAMES` instead of restating it — a facet missing there does not fail closed, it
-*widens* the set bulk resolves past the count on screen. And because the axes are now enumerable, a guard
-asserts every faceted endpoint accepts every facet (`tests/test_transaction_facets.py`), so an omission
-is a red test rather than a report nobody checks.
-
-The CSV export goes further than sharing the facets: it takes the list feed's **whole** filter, row source
-and order (`transaction_list_filters` and `transaction_list_scope` in `routers/transactions.py`), because
-the Transactions ledger hands over a list too large to copy as that file, which must hold exactly the rows
-on screen. A guard asserts the dependency names every filter the list feed accepts
-(`tests/test_export_matches_ledger.py`).
+- `_BULK_FILTER_KEYS` on the bulk endpoint is built from `FACET_PARAM_NAMES`. A facet missing there
+  would widen the set a bulk action resolves past the count on screen.
+- `tests/test_transaction_facets.py` asserts every faceted endpoint accepts every facet.
+- **A facet may be named in more than one way, and the ways OR.** The payee facet takes whole names
+  (`payees`) and fragments (`payee_contains`) as variants of one facet, because two facets would AND.
+  The fragment is compared against the name the row shows, so a row is never returned for a raw
+  descriptor it does not display. `GET /transactions/payee-names` lists the names a fragment selects.
+- **The CSV export takes the list feed's whole filter, row source and order**
+  (`transaction_list_filters`, `transaction_list_scope` in `routers/transactions.py`), so the file holds
+  the rows on screen. `tests/test_export_matches_ledger.py` asserts the dependency names every filter
+  the list accepts.
 
 ### Attributes — filtering by what a row is
 
-The facets above ask what a transaction is *filed under*. The attribute facet
-(`services/transaction_attributes.py`, parameters `attribute_ids` / `exclude_attribute_ids`) asks what it
-*is*: carries an attachment, belongs to a recurring series, has money owed back on it, has not been
-looked over yet. The vocabulary is deliberately **the row's own marker strip** plus the two states the
-ledger previously had dedicated toggles for, so that reading a row and filtering for it use one set of
-words — with the origin pair below the one deliberate departure from that rule.
+The other facets ask what a transaction is filed under. The attribute facet
+(`services/transaction_attributes.py`, `attribute_ids` / `exclude_attribute_ids`) asks what it is:
+carries an attachment, belongs to a recurring series, has money owed back, needs review. The vocabulary
+is the row's own marker strip, so reading a row and filtering for it use the same words.
 
-- **Labels name the distinction, not the mechanism's category.** `purchase` reads *Multi-payment
-  purchase* rather than "part of a purchase", because nearly every debit is a purchase so that names
-  nothing — and not "multi-part purchase" either, since a split's allocations are the parts, and
-  `mechanism-index.md` records splits-versus-multi-payment-purchases as the one pair that genuinely gets
-  confused. Dividing across **payments** is what separates it, so that word has to survive the shortening.
-- **A relationship is one attribute covering both of its sides.** `reimbursable` holds the expense and
-  the repayment; `refund` (*Refunded*) holds the payment and the money that came back on it. Someone
-  asking for either wants the pair side by side, and one row marker already stands for both. A refund pair
-  shares the purchase's `🔗` on the row but keeps its own attribute, since "paid in several payments" and
-  "money came back" are different questions.
-- **Where a row came from is the one pair not on the marker strip.** `from-connection` (*From a
-  connection*) and `from-file` (*Imported from a file*) are provenance rather than anything the row
-  draws, and they are here because the alternative was expressing a ledger-wide question one import card
-  at a time. The words are still the interface's own — the detail panel's Origin block and the merchant
-  hover card already say which file or connection a row arrived on — so reading and filtering stay in one
-  vocabulary; what the attributes add is asking *across* rows, which neither of those surfaces can do.
-  **The discriminator is `external_transaction_id`, not the batch's `source_kind`**: it is the provider's
-  own id, definitionally present on a synced row (it is what makes a sync idempotent) and never written
-  by a file importer, so both predicates stay on `txn` with no join and NULL-free. A synced row also
-  carries an `import_batch_id` — its per-period sync card — which is why the file predicate excludes the
-  provider id rather than merely asking for a batch. A hand-entered row matches neither, which is the
-  honest answer rather than a third bucket nobody asked for. Together with `date_end` these are what make
-  "everything imported from a file before 2015" a selection the bulk endpoint can resolve; see
-  `backend/tests/test_transaction_origin_attributes.py`, whose last case is that cleanup end to end.
-- **Keys are plain words** (`attachment`, `needs-review`), not the `__sentinel__` shape the category and
-  tag facets use. That shape exists to avoid colliding with real ids in a namespace shared with uuids;
-  this namespace holds nothing else. The same keys serve as the `?only=<key>` deep link.
-- **Every predicate must be NULL-free**, so `negate_membership`'s COALESCE is belt-and-braces rather than
-  load-bearing. "Is not X" has to return every row that is not X, including rows where X is unknown.
-- **An unknown key is ignored; an unknown *parameter* is still a 400.** A key is a value inside a filter,
-  so a stale one from an old link narrows to what it can still express, exactly as a deleted tag id in
-  `tag_ids` matches nothing. Strictness belongs at the parameter name, which is where it stays.
-- **`in_filter_bar` marks the one deliberate omission.** `uncategorized` is in the vocabulary (the
-  ledger's quick filter and `?only=` links need it) but the FilterBar does not offer it as a row, because
-  the Categories tab already owns that bucket and two identical-looking controls in one popover is a
-  question the user should not have to answer.
-- The vocabulary — labels and descriptions included — is served by `GET /transactions/filter-attributes`
-  rather than duplicated in the frontend, so adding an attribute cannot leave a label table behind.
-- **`require_all_attribute_ids` is the AND counterpart**, mirroring `require_all_tag_ids`, and it exists
-  because the ledger's toolbar filter is a *separate control* rather than another tick in the FilterBar's
-  picker. Values within a facet OR, so folding the toolbar's key into `attribute_ids` would OR it with
-  the chips — and a second filter that **widens** the result is the one behaviour a filter must never
-  have. The toolbar therefore sends this parameter; the FilterBar sends the facet. It is not a facet, so
-  it is named by hand in `_BULK_FILTER_KEYS` like the other non-facet filters.
+- **A relationship is one attribute covering both sides.** `reimbursable` holds the expense and the
+  repayment; `refund` holds the payment and the money that came back.
+- **`purchase`** is labelled *Multi-payment purchase*, because splits and multi-payment purchases are
+  the pair `mechanism-index.md` records as confused, and "payments" is the word that separates them.
+- **`from-connection` and `from-file`** are provenance. The discriminator is
+  `external_transaction_id`: it is present on every synced row and never written by a file importer, so
+  both predicates stay on `txn` with no join. The file predicate excludes the provider id instead of
+  asking for a batch, because a synced row has an `import_batch_id` too. A hand-entered row matches
+  neither.
+- **Keys are plain words** (`attachment`, `needs-review`) and double as the `?only=<key>` deep link.
+- **Every predicate is NULL-free**, so "is not X" returns every row that is not X.
+- **An unknown key is ignored; an unknown parameter is a 400.** A stale key from an old link narrows to
+  what it can still express, as a deleted tag id does.
+- **`in_filter_bar`** marks `uncategorized` as absent from the filter bar, because the Categories tab
+  already offers that bucket. The ledger's quick filter and `?only=` links still use it.
+- `GET /transactions/filter-attributes` serves the vocabulary with labels and descriptions, so the
+  frontend holds no copy.
+- **`require_all_attribute_ids`** is the AND counterpart, sent by the ledger's toolbar filter. Values
+  within a facet OR, so folding the toolbar's key into `attribute_ids` would widen the result. It is not
+  a facet and is named by hand in `_BULK_FILTER_KEYS`.
 
-**Recurring used to be a synthetic tag** (`__recurring__` inside `tag_filter_membership_sql`), because
-riding the tag facet bought it every surface the tag filter already reached with no per-endpoint
-plumbing. It is an attribute now. The move became possible once the attribute facet reached those same
-surfaces on its own, and it was necessary because **facets AND with each other while values within one
-facet OR**: as a pseudo-tag, "Business" plus "Recurring" meant *either*, where the combination anyone
-actually wants is *both*. Do not re-add it to the tag facet.
+Recurring is an attribute and not a tag, because facets AND with each other: "Business" and "Recurring"
+together must mean both.
 
 ## Rules
 
-Rules are keyword-based categorization rules (a single keyword, or a small AND of `contains` clauses).
+A rule (`category_rule`) matches transactions by merchant text and optional scopes, and assigns a
+category, a rename (`clean_name`), tags, a recurring series, or any combination.
 
-They can include:
+### The matcher
 
-- merchant matcher — either a single **keyword** (case-insensitive substring) or a **multi-clause**
-  matcher of up to 3 `contains` clauses AND'd together (`category_rule.match_expr`, JSON
-  `{"op":"and","clauses":[{"type":"contains","text":"…"}, …]}`; v1 is AND-only / contains-only). A
-  multi-clause rule matches a row only when *every* clause's text appears in the row's name text (or, for
-  `match_source_text` rules, its source text) — **order-independent**, so `{amazon, flash}` matches
-  "FLASH sale at Amazon". Adding a clause only ever *narrows* what matches (AND is self-limiting). When a
-  `match_expr` is present the stored `keyword` is **derived** from the clause texts (sorted, lowercased,
-  space-joined) so it stays the `keyword LIKE` search target and its `LENGTH` keeps driving specificity
-  ordering (see below). `match_expr` is NULL for an ordinary single-keyword rule, evaluated exactly as
-  before. The `/rules` API accepts a `clauses` list and the backend owns canonicalization + keyword
-  derivation (`build_match_expr`); every match site shares one predicate (`merchant_matcher_matches`).
+- **Merchant text** is either a single `keyword` (case-insensitive substring) or a `match_expr`: up to
+  three `contains` clauses ANDed, stored as `{"op":"and","clauses":[{"type":"contains","text":"…"}]}`.
+  A multi-clause rule matches when every clause appears in the row's name text, in any order.
+- When `match_expr` is set, `keyword` is derived from the clause texts (sorted, lowercased,
+  space-joined), so it stays the search target and its length keeps driving specificity. `match_expr`
+  is NULL for a single-keyword rule. `build_match_expr` owns canonicalization, and every match site
+  uses `merchant_matcher_matches`.
+- **`match_source_text`** (default off) tests the text against the row's captured import free text as
+  well: the `import_evidence_json` description slot and extra fields, not the account label. The
+  per-row evidence parse runs only when the rule set holds at least one such rule. Import and sync both
+  pass the evidence at insert, so the rule applies the same way whichever route a row arrived by.
+- **Amount** conditions compare absolute values. **Direction** (debit or credit) is a separate scope
+  applied through the sign.
+- **Owner** scope, **account** scope (one account, resolved through its group), and **account type**
+  scope (`account_type`), which matches every account whose effective account
+  (`COALESCE(parent, self)`) has that type.
+- The type scope is the account's type and not the batch's `source_kind`, because a type applies to
+  every row on the account, while `source_kind` is stamped only on batches imported after that field
+  existed.
 
-- amount conditions
+### One rule per matcher
 
-- debit/credit direction scope
+A matcher is the keyword, the clause set, owner, account, account type, amount range, direction and the
+`match_source_text` flag. At most one live rule exists per matcher, because duplicates would make
+"which rule wins" depend on row order and leave one copy firing after the other is edited.
 
-- owner scope
+Saving a rule whose matcher exists is classified and reconciled:
 
-- account scope (a single account)
+- **duplicate** (adds nothing): reported, not written
+- **mergeable** (adds a category or rename the existing rule lacks, or new tags): folded into the
+  existing rule
+- **conflict** (a category or rename that disagrees): reported for the user to resolve
 
-- account **type** scope (`account_type`, e.g. `paypal`/`amazon`): the rule matches only rows whose
-  **effective** account (`COALESCE(parent, self)`, so a merged child inherits the parent's type) is of
-  that type — one rule covers *every* account of the type. Parallel to the single-account scope but
-  broader; part of the matcher identity. Precedence is **account_id > account_type > global** (a rule
-  pinned to one account is more specific than one covering a whole type). This is the primitive the PayPal
-  money-movement rules are scoped by — one `account_type='paypal'` rule per `Type` instead of one per
-  (Type, account). The axis is deliberately the account's **type** and not the batch's `source_kind`,
-  which could express "restrict to PayPal" equally well: a type is intrinsic to the account and so
-  applies retroactively to every row on it, whereas `source_kind` is provenance stamped on an
-  `import_batch` — one join away, and only present on batches imported after that field existed — so a
-  `source_kind`-scoped rule would silently miss a wallet's older history. Generalizing the same axis to
-  filtering and search is not built; see Open.
+`create_rule` and `update_rule` take `on_existing = reject` (classify and report, the default) or
+`merge`. When an edit makes a rule collide with a different rule, the merge folds the edited rule into
+the other and deletes the edited one. Tags still union across different matching rules.
 
-- category assignment
+### Precedence
 
-- merchant rename (`clean_name`)
+Priority is computed, not curated. `categorizer.rule_specificity_order_sql` is the one definition, used
+by the engine, by the preview and apply in `routers/rules`, and by the rules list.
 
-- transaction-tag assignment
+1. **Scope**, in this order: an owner-scoped rule, then one pinned to a single account, then one
+   covering an account type, then a global one.
+2. **Text length**: `LENGTH(keyword)`. For a multi-clause rule that is the summed clause length, so a
+   rule whose clauses are a superset of another's is always longer and wins where both match.
+3. **Amount span**: `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)`. A range contained in
+   another has the smaller span, so `>= 3000` beats `>= 300`. Counting bounds cannot distinguish them.
+4. **Rule id**, so a tie is stable across a `VACUUM` or an index change.
 
-- match against captured import source text (opt-in `match_source_text`): when set, the keyword is
-  tested against the row's captured import free text (the `import_evidence_json` description slot plus
-  extra fields like "Original Statement"), not only the merchant/raw/display name. Default off, and the
-  per-row evidence parse is **gated on the rule set holding at least one source-text rule**, so a ledger
-  with none pays nothing for the feature. The source text excludes the account label. A **provider sync
-  captures evidence but does not pass it to the categorizer at insert time**, so a source-text rule
-  reaches synced rows on a later recategorize pass rather than as they arrive.
+Category and rename come from the first matching rule that provides each; direct tags are the union of
+all matching rules. Two ranges that overlap without one containing the other have no principled
+winner; that case is reported, below.
 
-Important behavior:
+### Rule checkup
 
-- rule priority is automatic, not manually curated
+- **Range drift** (`GET /rules/range-drift`, `services/rule_range_drift.py`). An amount range is a
+  matching gate, so a bill that drifts past a bound loses the rule's category and its place in the
+  rule's series with nothing else noticing. The finding is derived on read and shares the recurring
+  signals' dismissal store (`services/signal_dismissals.py`). A row already carrying the rule's
+  category is never reported, and a dismissal does not consume a rule's per-rule cap.
+- **Widening is one transaction** (`POST /rules/{id}/widen`): the bound moves and the rule is applied
+  together.
+- **Overlaps** (`GET /rules/overlaps`, `services/rule_overlaps.py`). An **amount overlap** is two rules
+  the ordering separates only by the span term, whose ranges intersect with neither containing the
+  other. A **matcher nesting** is one matcher inside another. `narrower_is_redundant` is set only when
+  the pair files to the same category under the same scope and direction; a scope or direction
+  difference means the narrow rule categorizes rows the broad one cannot reach. Which rule wins is read
+  from `rule_specificity_order_sql`.
+- Containment is not a finding, since precedence resolves it. Bounds are inclusive, so two rules split
+  at one value overlap on that value. Managed rules, trashed rules and rules targeting an inactive
+  category are left out.
+- **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored state.
+  `rule_overlaps.DISMISSIBLE_KINDS` admits nestings only: a nesting is information, while an amount
+  overlap means nothing decides which rule categorizes the charge. The key carries the pair and the
+  redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
+  dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.
 
-- more specific rules beat more general ones. The text-specificity signal is `LENGTH(keyword)` — and
-  because a multi-clause rule's derived keyword is its clause texts joined, that is effectively the
-  **summed clause length**. This has the right property: a rule whose clauses are a *superset* of
-  another's (`{amazon, prime}` vs `{amazon}`) always has a strictly greater total length, so the
-  narrower rule wins wherever both match. It reduces to exactly the single-keyword behavior for a
-  one-clause rule. Precedence between two *unrelated* matchers is a heuristic (it always was, even for
-  single keywords); summed length is the metric, and scope + the one-rule-per-matcher conflict surfacing
-  remain the explicit levers. This stays a **static, computed-once rule ordering** — no per-row scoring.
+### Rule hygiene columns
 
-- **amount specificity is the *span* of a rule's range, not the number of bounds it sets.** Where two
-  rules match the same row, the one whose amount range is *contained* in the other's wins — `>= 3000`
-  matches a strict subset of the rows `>= 300` does, which is the same argument `LENGTH(keyword)` makes
-  on the text axis. Counting bounds cannot see that (both rules set exactly one), which scored a town's
-  water rule and its property-tax rule identically and let a $3,618 property-tax bill be categorized as
-  water. `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)` never contradicts containment: if one
-  range contains another, the contained one has the smaller span. Amount ranks **below** keyword length —
-  the name stays the stronger discriminator — and ranges that merely *overlap* (`[300, 4000]` vs
-  `[3000, ∞)`) have no principled winner at all, which is a modelling ambiguity for the user to resolve
-  rather than something ordering can answer — it is **surfaced rather than resolved**, see below
+- **`last_effect_date`**: the newest transaction date the rule has applied a live effect to, kept as a
+  forward-only maximum. It is the transaction's date, never wall-clock, so a re-run cannot drift it.
+  Every apply site and the seed attribute a row through `effect_rule_ids` and `bump_rule_effect_dates`.
+  A rule is credited for a row it wins even when an import or a manual edit holds that row's category;
+  a rule that always loses to a more specific one reads as never used.
+- **`deleted_at`**: the rules trash. The categorizer and the matcher-identity checks filter
+  `deleted_at IS NULL`, so a trashed rule neither categorizes nor blocks re-creation of its matcher.
+  Restore refuses with a 409 when a live rule now holds the matcher. A rule-backed series is dropped on
+  trash and re-created on restore with its cadence reset to monthly.
+- **`is_managed`**: 1 for rules the app maintains (the money-movement `Type` rules). Cleanup skips them.
+- **Cleanup** (`POST /rules/cleanup`) trashes the reviewed set of live, unmanaged rules whose
+  `last_effect_date` is older than a user-chosen window or NULL. Categorizations are left in place
+  unless the user opts into a revert.
 
-- **charges that drifted out of a rule's amount range are reported on the Rules page**
-  (`GET /rules/range-drift`, `services/rule_range_drift.py`), because **an amount range on a rule is a
-  matching gate**: when a bill drifts past the bound the row stops matching, so it loses the rule's
-  category *and* its place in the rule's series, and nothing else in the app notices — the row is
-  categorized, just not as intended. Derived on read over a 90-day window, like the recurring signals it
-  was first written beside, and sharing their dismissal store (`services/signal_dismissals.py`) rather
-  than a table of its own. A charge missing a bound by up to 25% is a **warning** with a one-click
-  *Widen to include* (the bound has one right answer; the row then takes the category back, and the
-  detector returns it to the series on its next pass). **Widening is one transaction** (`POST
-  /rules/{id}/widen`), so it cannot stop between moving the bound and applying the rule. As two requests
-  it could, and a user once found exactly that state (the bound moved, the charge unclaimed, shown as a
-  near-edge warning at 0%) without the cause ever being established. One sitting within 10% *inside* a
-  bound is the
-  same warning one occurrence earlier, **information**, with no widen offered since the rule still claims
-  it. A row already carrying the rule's own category is never reported, and each rule reports at most its
-  three most recent near-misses, since a drifted range says one thing however many rows hit it — a
-  **dismissal does not consume that cap**, or acknowledging what is on screen would silence the rule.
-  This is the half of the Rules page's *Rule checkup* that **arrives on its own**, and therefore the only
-  half that badges the control: the overlap findings below change only when the user edits a rule.
+A rule must target an **active** category. Deleting a category deletes the rules pointing into it, and
+the categorizer skips a rule whose target is inactive. A tag-only rule has no category and is
+unaffected.
 
-- **rules that compete for the same rows are surfaced on demand**, from *Rule checkup* on the
-  Rules page (`GET /rules/overlaps`, `services/rule_overlaps.py`). Two findings with opposite intents.
-  An **amount overlap** is the case above: two rules the ordering can separate only by the span term,
-  whose ranges intersect with neither containing the other. **Nothing is offered but Edit** — inventing a
-  tiebreak would dress a coin flip as a decision, and *removing* a side is picking a winner rather than
-  fixing the model, so the resolution is to refine the two rules' conditions until only one applies.
-  A **matcher nesting** (`amazon` inside `amazon prime`, or a clause superset) is *not* a problem, and is
-  reported for two reasons. The winner is not the one a reader predicts: keyword length is
-  consulted only after scope, so an owner-scoped `amazon` rule beats a global `amazon prime` rule on
-  that owner's rows. And where the pair files to the **same category under the same scope and direction**
-  (`narrower_is_redundant`), the narrow rule changes no categorization at all and is simply surplus —
-  this is the half that carries **Delete**, on the *narrow* rule only, since removing the broad one would
-  strand every row the narrow matcher does not reach. The delete carries the rules list's own opt-in to
-  re-evaluate that rule's transactions, defaulted off as it is there. **Same category alone is not
-  sufficient** for redundancy: a scope or direction difference means the broad rule is not a superset,
-  and the narrow rule is what categorizes the rows the broad one cannot reach. The flag is also about the
-  *category* only — a rename or tag held by just one of the two changes hands on removal, which the panel
-  states before the fact rather than folding into the flag. Which rule wins is read from `rule_specificity_order_sql`'s own ordering rather
-  than re-decided, so the check cannot describe a precedence the engine does not apply. **Containment is
-  deliberately not a finding** — precedence answers it correctly, and flagging it would cry wolf on the
-  two-rule split that is the recommended way to model several bills from one biller. Bounds are
-  inclusive on both sides, so capping one rule at the other's floor leaves a **one-value** overlap that
-  is still reported: a rule set split at a round number is one whose bills land on that number. Managed
-  rules, trashed rules and rules targeting a deactivated category are excluded — a finding naming one
-  would name something the user cannot act on. Substring containment is compared between *matchers*
-  only; see [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+### How rules come into being
 
-- **a nesting finding can be dismissed; an amount overlap cannot** (`rule_overlap_dismissal`, keyed by
-  the finding's fingerprint — the check's only durable state). The asymmetry is the policy, and it is
-  owned by `rule_overlaps.DISMISSIBLE_KINDS` and enforced where findings are assembled, so no stored row
-  can suppress a warning however it got there (the API refuses a non-dismissible kind with a 400 rather
-  than a silent no-op). A nesting pair is *information*, and most are deliberate: a panel listing thirty
-  of them forever is one nobody opens twice, so an acknowledged pair drops out of the list and out of the
-  counts, with a *Show dismissed* toggle bringing the set back flagged and restorable. An amount overlap
-  is **nondeterminism** — nothing decides which of the two rules categorizes the charge — so it stays
-  listed until the conditions are refined; letting it be waved through would leave the ledger categorized
-  by an arithmetic accident with the app reporting that as settled.
-  **The key carries the pair *and* the redundancy verdict**, which is what keeps a dismissal honest: it
-  holds through edits that do not change the situation (a rename, a tag) and lapses when one does, so a
-  pair that becomes redundant re-raises the offer to delete its surplus half — an offer the user was
-  never asked about. Keyed by fingerprint rather than by rule id, so it is deliberately **not** a foreign
-  key: a dismissal whose pair later dissolves stops matching anything, which costs a row and no
-  correctness, and is why nothing prunes them. Shared rather than per-user, like the recurring signals'
-  dismissals — saying a pair of rules is fine is curation of the rule set, not a UI preference — and
-  carried in the data backup (payload version 14), without which a restore would re-raise every pair the
-  user had already waved through.
+Three paths write `category_rule`, and all go through the matcher reconciliation above: turning a
+manual categorization into a rule; *Generate rules*, which derives suggestions from rows that arrived
+categorized by their file (see [Rule suggestions](#rule-suggestions)); and the opt-in starter rules.
+Rules mutate transactions, so both bulk paths are reviewed per rule before anything is created.
 
-- **the ordering ends in the rule id, so a genuine tie is stable.** Without a final tiebreak two
-  indistinguishable rules are separated by whatever order SQLite returns, which means the same ledger can
-  categorize differently after a `VACUUM` or an index change
+### Concurrent writes
 
-- **the precedence contract lives in one function**, `categorizer.rule_specificity_order_sql`, consumed by
-  the engine, by the "what would this rule do" preview/apply mirror in `routers/rules`, and by the rules
-  list (which renders it reversed, general → specific). It was three hand-kept copies; a preview that
-  disagrees with what the import will actually do is worse than no preview
+SQLite has no row versioning, so two writes to one field of one transaction are last-write-wins. Three
+properties keep that narrow:
 
-- amount comparisons use absolute values, with debit/credit scope applied separately through transaction sign when a rule is limited to one side
+- edits are **field-scoped PATCHes** (`/category`, `/merchant`, `/notes`, `/tags`, `/uncategorize`), so
+  two writers collide only on the same field
+- a sync revision refreshes provider-owned fields and the content hash and leaves the user's category
+  and name edits
+- `category_overridden` keeps a manual categorization out of every automatic pass
 
-- owner-scoped rules beat global rules when otherwise similar
+What remains is two people writing the same field of the same row within seconds.
 
-- at most one rule per *matcher* (keyword + the `match_expr` clause set + owner + account + account **type** + amount range + debit/credit + the `match_source_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). The `match_expr` is canonicalized (clauses sorted) so reordering clauses never forks a phantom duplicate, and a multi-clause rule is a *distinct* matcher from a single-keyword rule that happens to portion the derived keyword (`contains "amazon flash"` ≠ `{contains "amazon", contains "flash"}`). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
+### How an existing transaction's category can change
 
-- **Last-used tracking + trash + cleanup (stale-rule hygiene).** Three `category_rule` columns support cleaning out obsolete rules:
-  - **`last_effect_date`** — the newest transaction *date* a rule has applied a **live effect** (category, rename, or tag) to, kept as a **monotonic-forward max**. It's a "does this rule still do anything" signal, not an event log: it's the transaction's date (never wall-clock), so a re-run can't drift it toward "now", and a rule that only touches old rows stays old-dated. Seeded by the v15 data-init (a derived pass, re-run after a restore of a pre-v15 backup — see *Schema evolution*) and maintained incrementally afterward. The seed **and** every apply site (`recategorize_all`, `_apply_rule_to_existing`, and the CSV import loop) attribute a row through the **same** `effect_rule_ids` helper (+ `bump_rule_effect_dates`), so they can't disagree — an earlier bug had the seed use its own stricter, source-gated logic and diverge. **Attribution is by winning *matcher*, not by a row's stored source:** a rule is credited for a row it *wins* (would categorize) even when import or an earlier manual edit currently holds that row's category (`category_source != 'rule'`) — the rule is still what categorizes that merchant, so it isn't stale. It is therefore **not** the raw match count the ↗ report shows (that is the *pure* matcher, every row the rule hits): a row shadowed by a **more-specific** rule credits that winner, not this rule, so a rule that always loses can match rows yet legitimately read "never used". Monotonic-max can slightly *overstate* freshness (a rule that once categorized a row later overridden still shows that date), which is the **safe** bias for a cleanup tool — it errs toward keeping a maybe-active rule.
-  - **`deleted_at`** — soft-delete marker for the **rules trash**. Deleting a rule (single or via cleanup) sets it; the categorizer (`load_categorization_rules`, `_find_matching_rule`) and matcher-identity (`_existing_rule_for_matcher`, the update-collision probe) all filter `deleted_at IS NULL`, so a trashed rule stops categorizing and stops blocking re-creation of its matcher, while its row + `rule_tag` survive for restore. Restore refuses if an *active* rule now shares the matcher (409). Purge hard-deletes. Rule-backed recurring series are dropped on trash and re-created on restore (cadence resets to monthly — a minor edge). Recoverable from Settings → Trash → Rules.
-  - **`is_managed`** — 1 for app-created infrastructure rules (the money-movement Type rules); the stale-rule cleanup **excludes** them so a sweep can't remove rules the app maintains.
-  - **Cleanup** (`GET /rules/cleanup-candidates?before=…` + `POST /rules/cleanup`): active, non-managed rules whose `last_effect_date` is older than a user-chosen window (or NULL = never used) are the candidates; the user reviews them (per-rule keep) and trashes the set — **retain-by-default** (categorizations left alone), with an opt-in batch revert. The window is a per-user preference and starts unset (nothing swept until chosen).
+`category_source` and `category_overridden` decide it:
 
-- a rule must target an **active** category. Deleting a category deletes every rule pointing into the deactivated branch, and the categorizer skips any rule whose target category is inactive — so a stale rule can never re-categorize new rows into a deleted category. Tag-only rules (no category) are unaffected.
+| source | locked | who may change it |
+| --- | --- | --- |
+| `manual` | yes | another manual edit, or a full-force rule apply |
+| `split` | yes | un-splitting only; no rule apply takes it |
+| `rule` | no | any automatic pass |
+| `import` | no | any automatic pass |
+| `cleared` | no | any automatic pass |
+| `enrichment` | no | the owning feature's reversal, or a full-force apply |
+| `refund` | no | follows its payment; a manual edit or a full-force apply ends that |
+| NULL | no | any automatic pass |
 
-- the same invariant is enforced when *editing* a rule (`update_rule`): if an edit makes a rule's matcher collide with a **different** existing rule, both rows already exist, so reconciling means one is removed — a mergeable/duplicate edit folds the edited rule's actions into the other rule and **deletes the edited rule**; a conflict is reported for the user to resolve (edit the other rule, delete one, or change scope). Both `create_rule` and `update_rule` take `on_existing` = `reject` (default: classify and report without writing) or `merge` (apply the reconciliation).
+`enrichment`, `split` and `refund` are `FEATURE_OWNED_CATEGORY_SOURCES` (`services/categorizer.py`),
+which every automatic pass skips by source.
 
-The goal is to make rule behavior explainable without requiring users to hand-maintain a priority table. Specificity and owner scope stand in for manual ordering because they usually match what a user means when two rules overlap. The one-rule-per-matcher invariant keeps that ordering meaningful: duplicate matchers would make "which rule wins" order-dependent, and editing one copy would leave the other firing.
+- **A trusted import is not locked.** A rule beats a file's label at import, so a rule created later
+  has to beat it too, or the ledger's categories would depend on which arrived first.
+- **Every write-back of a stashed categorization derives the lock through `category_lock_for`.** Link
+  priors, reimbursement completion records, undo snapshots and held duplicate payloads can predate the
+  point where `import` stopped being locked, and restoring the bit verbatim would re-lock the row.
+- **`enrichment`** marks a row a feature moved into an excluded category and joined to a `txn_link`
+  that stashes its prior (an Amazon funding charge, a wallet funding leg, a PayPal pair). A rule
+  reclaiming it would un-exclude the row and double-count the spend.
+- **`split`**: the row's categorization is its `txn_split` allocations, and `category_id` is the stashed
+  pre-split value. A full-force apply and a bulk category edit refuse a split row and report how many
+  they declined, because the allocations exist nowhere else. `PATCH /transactions/{id}/category`
+  refuses outright. A rule's rename and tags still apply.
+- **`refund`**: the row carries its payment's category and a trigger moves it with the payment (see
+  [Refunds](#refunds)). A category deletion rewrites it like any row and ends the following.
+- **`cleared`** is a row whose file label the user discarded. It is rule-eligible and keeps its
+  `imported_category` text, and it is skipped by the trust-flag re-derivation
+  (`_set_batch_imported_category_usage`), which fills ordinary NULL rows. NULL alone could not carry
+  that difference. `recategorize_all` keeps the marker when no rule matches.
 
-**How rules come into being.** Rules are rarely authored cold; three paths feed the same `category_rule` store. The primary one is *learning from a categorization*: when the user sets a transaction's category the UI offers to turn that action into a rule, and once saved the rule applies automatically to newly imported transactions (rule application can be disabled globally, and a *run categorization* pass can be triggered on demand). The bulk **Generate rules from imported data** path derives candidate rules from transactions that arrived already categorized in a curated import (the "categories present in the data" flag) and presents them for review — the data-driven path for users migrating curated data. The opt-in **starter rules** add a fixed, curated catalog for users with no data to learn from. The distinction that matters: rules mutate transaction data, so neither bulk path applies blindly — Generate rules is reviewed per suggestion, and the starter rules are presented as an approve-before-add list (the user sees every `keyword → category` before any is created). All three converge on the same one-matcher reconciliation described above; inert categories have no such gate, which is why a starter *category* can be added in one click while starter *rules* go through the list.
+The operations:
 
-**Concurrent writes to one transaction are last-write-wins, and the API shape is what limits the damage.** SQLite offers no protection here: there is no row versioning and no cross-request conflict detection, so the read that populates an editor and the write that saves it are unrelated transactions and the second write silently overwrites the first. **Three** existing decisions keep that narrow, and none should be undone casually. Edits are **field-scoped PATCHes** rather than whole-object writes (`/category`, `/merchant`, `/notes`, `/tags`, `/uncategorize`), so two writers collide only when they touch the *same* field — saving a note cannot clobber a category. Sync **partitions against user edits**: a provider revision refreshes provider-owned fields and the content hash while leaving the user's category and display-name edits intact. And `category_overridden` **locks a human categorization against the automatic passes** — `manual` and `import` set it, and `recategorize_all` selects only `category_overridden = 0` non-`enrichment` rows — so a rule pass cannot overwrite a saved manual edit, however much concurrent activity there is (and there is more by design, since sync stopped blocking the rest of the app and editing during a sync became normal rather than impossible).
+- **Run categorization** (`recategorize_all`) takes unlocked rows that are not feature-owned. It only
+  sets or changes a category and rule tags; a `rule` row that now matches nothing keeps its category,
+  so deleting or narrowing a rule does not un-categorize history. A matched `import` row becomes `rule`.
+- **Reconcile** (`recategorize_all(retain_unmatched=False)`) clears a no-match `rule` row and removes
+  its rule tags. It runs only over an explicit row set (`txn_ids`): one rule's matched rows on a rule
+  delete or edit with `?reconcile=true`, or the *Money movement* leaf's rows when a type is removed. A
+  cleared row falls back to what import would have given it with no rule in the way: its file label's
+  category as `import` when its batch is trusted (through `adopt_file_categories`), else uncategorized.
+  A no-match `import` row is left as it is.
+- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match regardless of source,
+  `manual` included, to `rule` and unlocked. An explicit apply is the user asking the rule to own those
+  rows.
+- **Preserve-manual apply** (`?preserve_manual=true`, or `_apply_rule_to_existing` over a row list)
+  skips `manual`, `enrichment` and `refund` rows and reclaims `import` rows.
+- **Manual edits** write `manual` and the lock.
 
-Between them those three close the machine-versus-human case entirely. **What remains exposed is two *humans*** — two browser tabs, or two people in the household — writing the same field of the same row inside the seconds between opening an editor and saving it.
+### Tags
 
-**If that is ever worth closing, the mechanism is a per-field compare-and-swap, not a row version.** The client sends back the prior value it read and the PATCH folds the comparison into the write — `UPDATE txn SET category_id = ? WHERE id = ? AND category_id IS ?` — treating `rowcount = 0` as a conflict instead of an overwrite. One statement, so there is no read-then-write window to lock around, and no schema change: SQLite already holds a write lock for the duration of the statement, so the atomicity is free. A **row-level version column is the wrong shape and would be a regression** — any field's change bumps it, so a rule re-categorization would reject an unrelated note save, reintroducing exactly the cross-field collisions the field-scoped PATCHes exist to prevent. The cost is breadth rather than depth: a prior-value field on six endpoints, every client call site passing what it read, and conflict handling in every editing surface. On conflict the intended resolution is to **discard the stale edit and re-present the current value**, as if the field had been reloaded, with a notice loud enough that the reverted value is not mistaken for a failed save — the edits are single-field and cheap to redo, so merge or conflict-resolution UI would cost more than the defect. **Trigger:** build it if a lost edit is ever actually observed; not before.
+Tags are separate from the category tree. A transaction's **effective tags** are the union of these
+sources, most specific first:
 
-**How an existing transaction's category can change.** Two fields govern this: `category_source` (`manual` / `import` / `rule` / `cleared` / `enrichment` / `split` / `refund` / NULL) records provenance, and `category_overridden` is a lock bit (1 = automatic categorization must leave the row alone), set for `manual` and `split`, clear for `rule`, `cleared`, `import`, `enrichment` and `refund`. The three feature-owned sources are one list, `FEATURE_OWNED_CATEGORY_SOURCES` (`services/categorizer.py`), which every automatic pass reads. The retroactive operations differ only in which of those they respect.
+- **direct** (`txn_tag`): added by a matching rule (`rule_present`) or by hand (`manual_state = 1`)
+- **category** (`category_tag` on the leaf)
+- **group** (`category_tag` on the leaf's parent)
+- **account** (`account_tag` on the effective account). A child account's own tags are not consulted
+  while it is merged and apply again on detach. The Accounts page offers to copy a child's tags the
+  parent lacks onto the parent at merge; those become the parent's own and a detach does not remove
+  them.
 
-**A trusted import is not locked, and must not be.** At import a rule already beats a file's label (see *categorization precedence at import*), so a rule created *after* the import has to beat it too — otherwise the ledger's categories depend on whether the rule or the file arrived first, which nothing a user can see explains. Until v54 the import writers set the lock on `import` rows, which is exactly that order-dependence; v54 clears it on existing rows (and is a data-init step, since an older backup brings the bit back). Because categorizations are also **stashed and put back** — an Amazon or wallet link's prior, a reimbursement's captured state, a rejected-suggestion Undo snapshot, a held duplicate's payload — and those snapshots can predate v54, every write-back derives the bit through `category_lock_for` rather than restoring it verbatim; restoring `import` with the bit set would re-lock the row silently and for good.
+`manual_state = -1` on a `txn_tag` row **blocks** that tag on that transaction whichever source would
+contribute it. Blocks are keyed `(txn_id, tag_id)` and survive rule reruns; only the direct-rule
+`clear_manual_blocks` path, which requires `rule_present`, clears one.
+`get_visible_transaction_tag_map` applies blocks last, and `get_blocked_transaction_tag_map` reports
+them.
 
-- **`enrichment` is feature-owned and off-limits to automatic categorization**, even though it carries `category_overridden = 0`. An excluded Amazon funding charge (`_exclude_charge`) or a suppressed wallet funding leg (`suppress_batch_funding_legs`) is deliberately moved into an excluded category and joined to a `txn_link` that stashes its prior categorization for reversal. Letting a rule reclaim it — or `recategorize_all` clearing it to NULL when nothing matches — would silently un-exclude the row and double-count the spend against its still-counted order/purchase. So both automatic passes (`recategorize_all` and its `preview_recategorize_count`) *and* the preserve-manual apply skip `enrichment` by source, not by the lock bit. The reversal path (batch undo / re-import replace, and the reconciliation report's unlink/detach) is what returns the row to its stashed prior. Only an explicit full-force rule apply may take an `enrichment` row.
-
-- **`split` is feature-owned too, and is the one source no rule apply may take.** A split transaction's categorization *is* its set of `txn_split` allocations; the row's own `category_id` is only the retained pre-split value that un-splitting restores. Every automatic pass skips it by source, as with `enrichment`. Where it diverges is the **full-force rule apply**, which may take an `enrichment` row but **refuses** a split one and reports how many it declined: an `enrichment` row's prior is recoverable from its `txn_link` metadata, whereas a split is hand-built allocation work with no other record, so replacing it with a single category would be an unrecoverable loss performed silently. Bulk category edit refuses on the same grounds and reports the same count, and `PATCH /transactions/{id}/category` refuses outright rather than discarding the parts. The refusal is scoped to the **category** effect only — a rule's rename and tags describe the purchase, which a split says nothing about, so those still apply. Un-splitting is therefore always an explicit act.
-
-- **`refund` is feature-owned as well: the row's category is its payment's.** A refund paired with the payment it returns (see [Refunds](#refunds)) carries that payment's category and follows it — every automatic pass and the preserve-manual apply skip it by source, as with `enrichment`, and a trigger moves it when the payment is recategorized by any path. A manual edit makes it the user's (`manual`) and it stops following; the full-force rule apply may take it, as it may an `enrichment` row, and it then belongs to the rule. A category deletion rewrites it like every other row, which also ends the following — taxonomy maintenance resets provenance for all sources alike.
-
-- **Run categorization** (`recategorize_all`, the *Categorize* button via `POST /sync/recategorize`) re-runs all rules but selects only `category_overridden = 0` rows that are not feature-owned (`enrichment`, `split`, `refund`) — `rule`, uncategorized, `cleared` and `import` — so only `manual` and the feature-owned rows are left untouched. A matched `import` row becomes `rule`, even when the rule agrees with the file's category, and so leaves the rule-suggestion learning set — exactly as a row a rule claimed at import never entered it. It is **retain-by-default and monotonic**: it only ever *sets* or *changes* a category (and rule-applied tags), never *removes* one. A `rule` row that now matches nothing **keeps its category** — it stays `category_overridden = 0`, so a future rule can still reclaim it. This is deliberate: deleting an obsolete rule, or narrowing one, must not silently un-categorize the history it already produced. (Rule *renames* have always behaved this way — a no-match row keeps its display name; this makes categories and rule-tags consistent with that.)
-
-  - **Reconcile is the opt-in, scoped exception.** `recategorize_all(retain_unmatched=False)` restores the old projection behavior — a no-match `rule` row is cleared, and its rule-tags removed. **Cleared means what import would have given the row with no rule in the way:** where the row carries a file label and its batch is trusted for categories, it falls back to that label's category as `import` (through the import pipeline's own `adopt_file_categories`, so batch owner/account scope and a deleted label's suppression apply); otherwise it becomes uncategorized (a `cleared` row keeps its marker). A no-match `import` row is left exactly as it is — nothing claimed it, so it already holds that fallback, and clearing and re-adopting it would mint a fresh leaf if the label's category had since been renamed. It is **only** ever run over a **specific row set** (`txn_ids`), never the whole ledger, so it cannot mass-revert the orphaned-rule rows that retain accumulates. Two callers: the **"re-evaluate this rule's transactions" opt-in** on a rule delete/edit (`DELETE`/`PATCH /rules/{id}?reconcile=true` — the "this rule was wrong, revert its rows" path, off by default), which reconciles just that rule's matched rows; and the money-movement **"remove a type"** path, which reconciles just the excluded "Money movement" leaf's rows so an un-approved type falls back out (retain would otherwise strand it there). Scoping to one rule's rows is what makes reconcile safe — it re-derives each row against the *remaining* rules (a dropped row clears or moves to another matching rule; a still-matched row is unchanged) and never touches a categorization another rule owns.
-
-- **Full-force rule apply** (`POST /rules/{id}/apply`, the "apply to N matching transactions" offered when a rule is saved) re-categorizes *every* matcher match regardless of source — including `manual` and `import` — to the rule (`category_source = 'rule'`, `category_overridden = 0`). It is the one bulk path that overrides a manual edit, on the premise that an explicit apply is the user asking the rule to own those rows (the api layer labels the no-flag call "full force, overwriting all matches").
-
-- **Preserve-manual apply** (`POST /rules/{id}/apply?preserve_manual=true`, and `_apply_rule_to_existing` scoped to a row list for an in-process caller such as a review action) is the same reclaim but with a `category_source IS NOT 'manual'` (and `IS NOT 'enrichment'`, `IS NOT 'refund'`) guard, so it reclaims `import` rows while sparing manual edits, feature-owned enrichment exclusions and following refunds — scoped to the rows it is given, where Run categorization would reach the same `import` rows only on its next run. It is used after a merge/replace changes a governing rule (see the suspect-duplicate section) and when accepting an import-rule suggestion (scoped to that suggestion's `source_row_ids`).
-
-- **The Generate-rules conflict screen** is the one place an `import` row is re-categorized *while staying `import`*: Recategorize (`PATCH /transactions/{id}/imported-category`) keeps `category_source = 'import'` and rewrites the stored `imported_category` so the row keeps feeding suggestions, while Preserve writes `'manual'`. This is the deliberate exception to "an imported-category edit elsewhere becomes a manual override" detailed in the rule-suggestions section below.
-
-- **Conflict-set matcher refinement happens before disposition.** On the Generate-rules conflict card, the top-level *Edit match* action refines the shared matcher for the rows currently represented by that card before any winner category or keep/preserve decision is made. Saving that edit immediately re-partitions the pending review: the narrowed subset becomes the current pending suggestion/card, while leftover rows return to canonical generation so equivalent remainders from other owners/cards can coalesce into one broader rule. If a refined card is later broadened back to the row's ordinary merchant matcher, it also returns to canonical generation so conflicts and owner scoping are recomputed against the full merchant population rather than staying hidden as a one-row refined partition. A remainder partition is retained only when the leftover rows would otherwise regenerate under the refined subset's own suggestion identity. This is a review-state partitioning step, not a rule/action edit — it changes which rows are grouped together for the next decision, not their category source or disposition.
-
-- **Rejecting a rule suggestion** (`settle_rejected_suggestion_rows`, behind the Generate-rules review's *discard and: keep / remove categorization* control and its conflict-set resolution — `keep`/`clear` modes below) settles the rows the suggestion covered, sparing rows already `manual`. Three outcomes by intent: **keep as imported** (mode `keep` with no `category_id`, or a `category_id` equal to the row's current one) **leaves the row untouched at `import`** — keeping the file's own category is not an override, so the row stays re-derivable and, crucially, still reclaimable by a later explicit "apply to existing" (a `manual` row would be *spared* by that, defeating the toast) — and by an automatic Run categorization, which lets any matching rule take it exactly as that rule would have at import. Discarding a suggestion declines *that* rule, not every rule. **Re-point** (mode `keep` with a *different* active-leaf `category_id`) writes `category_source = 'manual'` at the chosen category — a genuine override (the conflict-set card's "keep these, but as a different category"), spared by both Run categorization and explicit apply. **clear** writes `category_source = 'cleared'` with `category_id = NULL` (*the category is wrong* — messy/mangled source data; rule-eligible again). Only rows that actually change are returned in the prior-state snapshot, so Undo restores the exact pre-change `(category_id, source, overridden)` and a keep-as-imported (no-op) leaves nothing to restore. **Trade-off of keep-as-imported:** because the rows stay `import`-backed, the merchant keeps regenerating as a *discarded* suggestion rather than vanishing the way a `manual` settle did — benign, and the review's look-back lens hides stale ones anyway.
-
-Manual edits (`override_category`, bulk category edit) always set `category_source = 'manual'`, `category_overridden = 1` — the user's final say, undone only by another manual edit or a full-force apply.
-
-The **`cleared`** source is a deliberately distinct value from a plain NULL source. A `cleared` row is **rule-eligible** (`category_overridden = 0`, so Run categorization and future rules can claim it — at which point it becomes `rule`), but it **retains its `imported_category` text** for audit and is **skipped by the trust-flag re-derivation** (`_set_batch_imported_category_usage`), which otherwise re-applies a file label to any labeled non-`manual`/`rule` row on enable. NULL alone could not carry that distinction: the re-derivation must keep filling ordinary uncategorized (`NULL`) rows, so "the user discarded this label" needs its own marker. `recategorize_all` likewise preserves the `cleared` marker when no rule matches (it only overwrites to `rule` on a positive match), so a rename/tag-only rule cannot silently strip it.
-
-Tags are separate from the category tree and are meant for cross-cutting labels such as `Essential Expenses`, `Alice`, `Reimbursable`, etc. A transaction's **effective tags** are the additive union of these sources, listed by precedence (most specific first) when reporting the source for a tag the transaction picked up through more than one path:
-
-- **direct (txn_tag):** added on a transaction by a matching rule (`rule_present`) and/or a manual edit (`manual_state = 1`); manual `manual_state = -1` blocks a rule-applied direct tag for that one transaction without changing the rule
-
-- **category-level (category_tag):** any tag attached to the transaction's leaf category propagates to every transaction in that category
-
-- **group-level (category_tag):** any tag attached to the leaf category's parent group propagates to every transaction in any leaf under it
-
-- **account-level (account_tag):** any tag attached to the transaction's **effective (top-level) account** propagates to every transaction in that account. The effective account is `COALESCE(parent_account_id, account_id)`, so a top-level account's tags reach its own *and its child accounts'* transactions, while a child account's own tags stay **dormant** while it is merged (resolution never consults the child's row) and reactivate automatically when it is detached. Merging a tagged account under a parent therefore sets its tags aside rather than deleting them — the parent's tags govern, and the child's return on detach. **Promote-on-merge (UI):** when the merged child carries tags the parent *lacks*, the Accounts page offers to **promote** just those missing tags onto the parent (via `PUT /accounts/{id}/tags`), so they keep applying instead of going dormant; overlapping tags are already governed by the parent and left alone, and an identical/empty tag set merges silently with no prompt. Promotion is **one-way** — it adds the tags to the parent as its own, so a later detach does *not* strip them (both accounts then carry the tag, the child's having simply reactivated). Account is the broadest scope, so it is the most general (lowest-precedence) source
-
-Inherited tags (account-, category-, or group-level) **are** overridable on a single transaction: unchecking one in the transaction's tag picker hides it on that row only, without touching the category/account it comes from. This reuses the direct layer's `manual_state = -1` **block** as a *universal* per-transaction suppression — a `txn_tag` row with `manual_state = -1` removes the tag from that transaction no matter which source(s) would otherwise contribute it. Re-checking the tag clears the block (a purely inherited tag needs no `txn_tag` row at all once unblocked). Blocks are keyed to `(txn_id, tag_id)`, independent of rules, so they survive rule reruns and recategorization (only the direct-rule `clear_manual_blocks` path — which requires `rule_present` — ever clears one). `get_visible_transaction_tag_map` applies blocks last (after the source merge), and `get_blocked_transaction_tag_map` reports the hidden tags so the picker can offer them for restore.
-
-**Recategorizing a transaction therefore changes its tags**, and no client can predict how: the new set depends on the leaf, its group, the effective account and any blocks on that row. This is why every endpoint that moves a transaction between categories answers with the resolved `tags`/`blocked_tags` (see `docs/architecture.md`) — a caller patching its row in place has no other way to learn them, and a block already on the row means the new category's tag can arrive suppressed.
-
-Tag-aware filtering and aggregation matches a transaction if its effective tags include the requested tag, regardless of which source contributed it. Rules can still add tags directly:
-
-- a rule may assign a category, rename the merchant, add tags, or do any combination of those actions
-
-- category/rename still come from the first matching rule that provides that action, while direct tags are the union of all matching rules
+Recategorizing a transaction changes its effective tags in a way no client can compute, so every
+endpoint that moves a transaction between categories answers with the resolved `tags` and
+`blocked_tags`. Tag filters and aggregations match on effective tags.
 
 ## Recurring series
 
-A **recurring series** (`recurring_series`) is an ongoing obligation whose charges recur on a cadence —
-a subscription, a bill, a periodic tax. It is modeled as a first-class record rather than a per-
-transaction flag or a tag, because recurrence carries structure a boolean can't: a cadence
-(`weekly`/`biweekly`/`monthly`/`quarterly`/`semiannual`/`annual` + a canonical `period_days`), an
-expected amount band (`expected_amount`/`amount_min`/`amount_max`), a projected `next_due_date`, and a
-lifecycle. Transactions link to their series through the nullable `txn.recurring_series_id` — a match
-cache the detector maintains, not a user-authored field.
+A recurring series (`recurring_series`) is an obligation whose charges recur: a subscription, a bill, a
+periodic tax. It is a record of its own because recurrence has structure a flag cannot hold: a cadence
+(`weekly` … `annual`, with a canonical `period_days`), an expected amount band, a projected
+`next_due_date` and a lifecycle. `txn.recurring_series_id` links a row to its series; it is a cache the
+detector maintains.
 
-Detection lives in `backend/services/recurring_detection.py`; the API is `backend/routers/recurring.py`.
-Key invariants:
+Detection is `backend/services/recurring_detection.py`; the API is `backend/routers/recurring.py`.
 
-- **The grouping/detection key is (payee, category, sign), not payee alone.** One payee can host
-  several series distinguished by category — a town billing property tax quarterly, excise annually,
-  and water monthly. Category is the strong discriminator; within a group, amount clustering is a
-  fallback that separates same-category series (a fixed-price subscription buried in a noisy merchant,
-  or two same-category bills at different price points), and a fallback cluster must be **amount-tight**
-  (low amount CV) so a coincidental subset of noise can't masquerade as a series.
+### Identity and grouping
 
-  **The group is read both ways, and a plausible rhythm over the whole set is not sufficient.** Treating
-  amount clustering as a fallback used only when the whole set produces *no* rhythm is the intuitive
-  design and it merges real series: a $4 and a $20 monthly charge billing a fortnight apart interleave
-  into a perfectly plausible **biweekly** series at $12 spanning `[-20, -4]` — a cadence, an expected
-  amount and a band describing nothing that ever happens. So both readings are computed, and the split
-  is preferred when the whole-set reading is **amount-incoherent**, the split explains at least as many
-  charges, and each price point holds a rhythm of its own.
+- **The detection key is (payee, category, sign).** One payee can bill several things, and category is
+  what separates them. Within a group, amount clustering separates same-category series, and a cluster
+  must be amount-tight so a coincidental subset of noise does not pass as a series.
+- **Both readings of a group are computed.** Two monthly charges a fortnight apart interleave into a
+  plausible biweekly series, so the split by price point is preferred when the whole-set reading is
+  amount-incoherent, the split explains at least as many charges, and each price point has a rhythm.
+- **The payee is the name the row shows**, `display_name` first, then normalized (lower-cased,
+  punctuation to spaces, trailing store numbers and domain endings dropped). A rename or a rule's
+  `clean_name` therefore groups a vendor's spellings.
+- **`payee_key` is derived**, rebuilt from the current members' names on every full scan, so a
+  normalization change cannot strand a series. It comes from the members and not the editable label.
+- **The label** is a rule-authored name if the members have one, else the most common name still
+  appearing recently, else the newest member's. A user rename persists and does not affect matching.
+- **Timing regularity is the primary signal.** A high-volume irregular payee scores itself out through
+  gap variance, with no name blocklist.
 
-- **The "payee" is the user-facing name, resolved `display_name`-first** (matching the ledger's
-  `getTxnMerchantLabel`), then normalized (lower-case, punctuation→spaces, trailing store-number and
-  domain-ending tokens like `.org`/`.com` dropped). Because rule `clean_name`s and user renames land in
-  `display_name`, this makes the user's naming *drive* grouping: unifying a vendor's spelling (via a
-  rename/rule) automatically groups its variants, and the `Vendor: Subtype` convention naturally splits
-  a payee's distinct bills into separate series. `recurring_series.payee_key` is stored but **derived,
-  not authoritative** — re-derived from the current members' names on every scan, so a normalization
-  change (or an edited series name) can never strand a series with a stale key. It is derived from the
-  *members*, not the editable label, so renaming a series never breaks its matching.
+### Amount
 
-- **The series' display label is chosen by precedence, and is user-editable.** From its members:
-  (1) a rule-authored name (`category_source = 'rule'` → the rule's `clean_name`), else (2) the most
-  common name that still appears recently (a stale legacy spelling doesn't beat the current one), else
-  (3) the most recent member's name. The user can rename a series inline; the edit persists (it marks
-  the series user-owned, so a later scan won't overwrite it) and does not affect matching.
+`amount_mode` is `variable` (the default) or `fixed`. A `variable` series ignores amount when matching,
+because a bill recurs on schedule while its amount moves. A `fixed` series matches only charges inside
+its band. The detector sets `fixed` only where a group resolved into more than one series and this one
+sits at a single price point, since there the amount is all that tells them apart. Rule-backed and
+manually created series are always `variable`; for a rule-backed one the rule owns the amount gate.
+
+- **Every amount gate has a grace band**, narrower than the jump the detector splits price points on, so
+  a price rise still matches and can be reported, and the gate cannot re-merge a split pair.
+- **`amount_min` / `amount_max` are derived**: rewritten by every scan from the rows the series owns.
+- **`expected_min` / `expected_max` are pinned by the user**, never rewritten, and win when set.
+  Pinning marks the series user-owned.
+- **A band is extended to take in a new price, never moved onto it.** Membership is re-derived from the
+  whole ledger on every scan, so a band relocated to the new amount stops matching the series' own
+  history. *Accept new amount* moves only the bound the charge falls outside, and is offered only on a
+  `fixed` series; on a `variable` one the band gates nothing.
+- **The sign is applied before the bounds are ordered.** The band editor works in magnitudes, and
+  negating swaps which bound is lower.
+
+### Membership
 
 - **A transaction belongs to at most one series, and `occurrence_count` equals the linked-row count.**
-  A scan assigns membership exclusively: user-owned series are processed in priority order (active
-  before ended, account-scoped before account-agnostic, then higher confidence), each claiming only
-  rows not already claimed, and its stats are written from exactly the rows it owns — so the card's
-  count can never diverge from its drill-down. Two overlapping series (e.g. an account-agnostic and an
-  account-scoped one for the same payee) are prevented at the source: an auto candidate is skipped when
-  a user-owned series already covers it — **same payee + category with an overlapping account scope,
-  where a NULL (account-agnostic) scope covers every account.** (Pre-existing user-confirmed duplicates
-  still coexist until the user deletes one; the exclusivity rule just keeps their counts honest.)
+  User-owned series claim in priority order (rule-backed first, then active before ended,
+  account-scoped before account-agnostic, then confidence), each taking only unclaimed rows, and stats
+  are written from exactly the rows owned.
+- **An auto candidate is skipped when a user-owned series covers it**: same payee and category with an
+  overlapping account scope, where NULL covers every account.
+- **One charge per occurrence date.** When several share a date, the one closest to the series' typical
+  amount is the member and the rest are left for other series. This is why there is no
+  duplicated-charge signal: a real double charge is import dedupe's question.
+- **`recurring_membership_override`** (`txn_id`, `series_id`, `state = 'excluded'`) keeps a matched row
+  out of a series. It is its own table because membership is rebuilt each scan; `reconcile_series`
+  subtracts exclusions before the one-per-date selection. Setting one confirms the series, so an auto
+  series is not re-minted under a new id. Only `excluded` is written; a row that should belong and does
+  not is corrected by fixing its name or the rule. `state = 'clear'` removes the override.
+- The list feed carries `recurring_series_name`, `recurring_rule_id` and
+  `recurring_excluded_series_id`, and the transactions filter accepts `recurring_excluded_series_id`.
 
-- **Timing regularity is the primary signal, not frequency.** A high-volume but irregular payee
-  (Amazon, Venmo, PayPal) scores itself out via gap-variance with no name blocklist, while a low-
-  volume-but-regular payee (an annual tax) survives. **Amount is a confidence booster and a forecast
-  hint, and gates matching only where a series declares that it does** — see the next entry. A
-  variable-amount utility bill still recurs on schedule, and for it amount gates nothing.
+### Curation and lifecycle
 
-- **Amount is part of a series' identity only when it is doing discriminating work** — `amount_mode`,
-  `'variable'` (the default) or `'fixed'`. The default is the general truth: a bill recurs on schedule
-  while its amount swings, so gating on amount would evict its own charges. But one payee can bill two
-  *fixed-price* subscriptions in one category at different prices, and then nothing except the amount
-  tells them apart. A `fixed` series matches only charges inside its band; a `variable` one ignores
-  amount entirely.
+- **`source`, `confirmed`, `status`.** A scan rewrites `source='auto'`, `confirmed=0`,
+  `status='active'` series wholesale. Manual (`source='manual'`), confirmed and suppressed series are
+  user-owned and never overwritten. Confirm, suppress, edit, manual create, pin and exclude all make a
+  series user-owned.
+- **A candidate matching a user-owned identity is not proposed.** The identity is
+  `(payee_key, category_id, account_id, price point)`. A component NULL on either side matches
+  anything: category is derived from member rows, which keep being recategorized, so a decision made
+  while the charges were uncategorized must still cover them afterwards. The price point is NULL for a
+  `variable` series; with it, two price points of one payee are separate identities.
+- **`suppressed`** means the detector was wrong. The series owns no transactions and persists so the
+  candidate is not proposed again. `suppressed_member_ids` snapshots what it held before the links are
+  dropped, because membership is a periodicity fit and cannot be re-derived by query. `restore` clears
+  it.
+- **`ended`** means the series was real and has stopped. It keeps its transactions, is left out of
+  forecasts, and has its `next_due_date` frozen. A scan reactivates it when a charge lands on or after
+  that date, so a resubscription revives the same record. Only the user sets it; the missed-charge
+  signal offers it and never writes it.
+- **`created_at` means first detected.** An auto series is deleted and re-inserted with a new id on
+  every scan, so `scan_and_store` carries `created_at` across by the identity tuple
+  `(payee_key, category_id, scope_account_id)`. Anything that must outlive a rebuild is keyed by that
+  tuple, not the id.
 
-  The detector sets it, and only where the distinction is load-bearing: a group that resolved into more
-  than one series, where this one sits at a single price point. A lone series never needs the gate —
-  there is nothing to be confused with — and a loose one must not have it.
+### Rule-backed series
 
-  **Every amount gate here carries a grace band**, because a price rise would otherwise stop matching
-  the series that should report it: the charge would fall out of its own history and the price-change
-  signal would never fire. The grace is deliberately narrower than the jump the detector splits price
-  points on, so the gate can never re-merge a pair the detector separated.
+A rule with `is_recurring` set owns a series (`source='rule'`, `rule_id`, `confirmed=1`) whose
+membership is the rule's matches, through the same predicate rule apply uses
+(`categorizer.rule_matches_row`). `is_recurring` is a valid rule action on its own.
 
-  **The band comes from one of two places, in separate columns so a scan cannot erase a choice.**
-  `amount_min`/`amount_max` are *derived* — rewritten by every scan from exactly the rows the series
-  owns, self-adjusting, needing no maintenance, and the right default. `expected_min`/`expected_max` are
-  *pinned* by the user, never rewritten, and take precedence when set. A pin is for the bound a
-  percentage cannot express — a town's water bill and its property tax are each "about right" for the
-  other's grace margin. Pinning is an edit like any other, so it marks the series user-owned and the row
-  then survives the scan that re-mints auto series; nothing about a pin has to be carried across a
-  rebuild. Rule-backed and manually created series are always `variable`: for a rule-backed one the
-  **rule owns the matching gate**, which is where an amount condition belongs.
+- It is reconciled against the full window even on a scoped scan, since its members can span payees.
+- **Suppress** and **delete** clear the rule's `is_recurring` and drop the series, deleting the rule if
+  that leaves it with no action. **End** keeps the flag, so a resubscription can resume it.
+- Deleting the rule, merging it away, or unchecking the flag drops the series.
 
-  **A band is extended to take in a new price, never relocated onto it.** Membership is re-derived from
-  the whole ledger on every scan, so a band moved onto the new amount stops matching the series' own
-  history — measured, an eight-charge series drops to one. This is what the price-change finding's
-  *Accept new amount* does: it moves only the bound the charge falls outside and carries the other
-  across. The action is offered **only on a gated series**, since on any other the band is read by
-  nothing; there, dismissing the finding is the accept, and a variable series' envelope is learned from
-  exactly those dismissals. Unlike a rule's *Widen to include*, it opens the band editor on a proposal
-  rather than applying it — a rule bound has one right answer, while a series band has two ends and only
-  the user knows whether a rise lifted every bill (carry both up) or added one outlier (move one).
+### When a scan runs
 
-  **Apply the sign before ordering the bounds, never after.** The band editor takes magnitudes while the
-  ledger stores a direction, and negating swaps which of the two is the lower bound — so ordering first
-  sends an inverted band for every expense series. It fails silently and looks correct on screen, which
-  is why it is pinned by a test rather than left to review.
+`scan_and_store` takes an optional `payee_keys` scope.
 
-- **A series holds at most one charge per occurrence date.** When several charges share a date, only
-  the one whose amount is closest to the series' typical amount is a member; the rest are dropped from
-  it (never summed into the occurrence). This is what keeps an annual tax filing that lands on the same
-  day as a quarterly estimate from being folded into the quarterly series and inflating its amount.
-  Detection claims series iteratively — a series takes one charge per date, then leftover same-date
-  charges are re-examined and can coalesce into their own series (e.g. the annuals form an annual
-  series) rather than contaminating the first. This is also why there is **no duplicated-charge signal**
-  on a series: the case a reader has in mind is already handled here, silently and without a finding,
-  and a genuine double charge is a duplicate — import dedupe's question, not recurrence's. The same
-  one-per-date selection governs membership when a
-  confirmed/manual series is re-matched on a later scan, so the outlier can't creep back in.
+- **Scoped** (`scan_imported_payees`): a completed import or sync reprocesses only the payees it
+  touched. It does not stamp the watermark and does not re-derive payee keys.
+- **Every path that writes a category, merchant name, date or trash state re-evaluates the payees it
+  touched** (`rescan_edited_transactions`, and `rules._rescan_recurring` for the rule apply, reconcile
+  and trash paths). The scope is the payees the rows belong to now plus those they belonged to before,
+  so the caller reads the prior keys before it writes. A no-op edit skips the scan and a bulk edit scans
+  once, because a scan loads the whole detection window before it filters by payee.
+- **A payee series holding a paired row is always in scope** (`_payee_keys_holding`), because a
+  movement's two legs sit in different payee groups and an edit to one changes the other.
+- **Full** (`run_auto_scan`): app load calls `maybe_auto_scan`, which runs a global scan when none has
+  run or the last is older than about a day. `POST /sync/recategorize` triggers one directly, since it
+  can rename payees across the ledger.
+- The watermark is `db_meta.recurring_last_scan_at`, one per data database, because a database has one
+  set of series whoever loads it first.
 
-- **`source`/`confirmed`/`status` record curation and gate the idempotent rescan.** A scan
-  (`POST /recurring/scan`) is re-runnable: it rewrites `source='auto'` + `confirmed=0` +
-  `status='active'` series wholesale, while **manual** (`source='manual'`), **confirmed**
-  (`confirmed=1`), and **suppressed** (`status='suppressed'`) series are user-owned — never overwritten,
-  and a candidate matching a user-owned identity `(payee_key, category_id, account_id, price point)`
-  is **not re-proposed**. A component that is **null on either side is agnostic** — a series carrying no
-  category covers a candidate that has one, exactly as an account-agnostic series covers every account.
-  That is not a convenience: the category is *derived from the member rows*, and those rows keep changing
-  as rules and hand edits recategorize them, so treating null as a specific value let a decision the user
-  had already made walk out from under itself — a series suppressed while its charges were uncategorized
-  stopped covering those same charges once they were categorized, and returned as a fresh suggestion at
-  the same payee, cadence and amounts, with nothing in either row looking wrong. Category still
-  distinguishes two identities when both sides *have* one, for the same reason the price point does.
-  The price point is the last component and is null for a `variable` series;
-  without it the two price points of one payee share an identity, and confirming either one suppresses
-  the other as redundant — destroying a correctly-detected series by the act of endorsing its sibling. A suppressed series owns no transactions but persists so detection won't resurface it
-  ("this is not recurring"). **What it held is snapshotted into `suppressed_member_ids` before the links
-  are dropped**, because dropping them is not reversible by query — membership is a periodicity fit over
-  one charge per date, not a predicate — and a drill-down re-deriving it from the payee could not agree
-  with the `occurrence_count` shown beside it. Null for an unsuppressed series and for one suppressed
-  before the column existed; `restore` clears it, since a restored series owns rows again. Confirm/suppress/edit/manual-create/pin/exclude are all the actions that make
-  a series user-owned. Membership (`txn.recurring_series_id`) is recomputed for every surviving series on
-  each scan.
+### Money movement and transfer pairs
 
-- **Rule-backed series (`source='rule'`) let a user declare a series instead of waiting for detection.**
-  The common path is writing a rule for a charge already known to recur — after categorizing it, or from
-  the row menu — often before there is enough history for the detector to find it. Varying payee names
-  (`NYTIMES.COM` vs. `NYTimes NY TIMES …4637`) do *not* need this: those normalize to different keys, but
-  a rule renaming them to one `display_name` unifies the key the detector reads, and the series is found.
-  So a **rule** gains an `is_recurring` flag; when set it owns a
-  `recurring_series` row (`source='rule'`, `rule_id` FK, `confirmed=1`) whose **membership is the rule's
-  matches** — the same shared predicate (`categorizer.rule_matches_row`) that rule *apply* uses, so
-  "which rows the rule owns" has one definition. This is the deliberate exception to "unify the name to
-  unify the series": edit the rule (keyword/scope/amount condition) to change membership. The rule is
-  created/toggled through the shared rule editor's "Recurring series" checkbox (a cadence seeds the
-  rhythm); `is_recurring` counts as a valid rule action on its own (a track-recurrence-only rule with no
-  category). A rule-backed series is reconciled against the **full** window even on a scoped import scan
-  (its members can span payees a scoped pool omits — the whole point), so a newly imported matching row
-  attaches right away without stamping membership through every insert path. The transaction payload
-  carries `recurring_series_name`/`recurring_rule_id` (a `LEFT JOIN`) so a row's `↻` marker and the
-  editor's status row read membership directly, and the row menu's "Mark as recurring…" routes into the
-  rule editor rather than a separate dialog.
+A series whose category or group is `exclude_from_totals` is money movement. That is derived at read
+time and shown as a badge.
 
-- **`recurring_membership_override` is a surgical, scan-durable *exclusion* layered over the matcher.**
-  Membership is a rebuilt cache, so a one-off correction (`state='excluded'` keeps a matched row out)
-  can't live in `txn.recurring_series_id` — it lives in its own `(txn_id, series_id, state)` table that
-  `reconcile_series` re-applies every scan, subtracting the exclusions before the one-per-date selection.
-  Setting one **confirms the series** (like edit/confirm) so an auto series isn't deleted and re-minted
-  with a fresh id out from under the override.
+A movement between two tracked accounts is **one series that owns both legs**
+(`services/transfer_pairs.py`). `account_id` is the paying side, `counterpart_account_id` the receiving
+side, and `payee_key` is a synthetic `transfer:<from>:<to>`, because its identity is the two accounts
+and the category.
 
-  **There is deliberately no way to force a row *in*.** A `pinned` state existed — API, reconcile and
-  a partial unique index — and was withdrawn without ever having had a UI: a series is defined by *what
-  recurs*, so a charge that merely shares a payee and category with one (a late fee on a tax payment)
-  is not part of the series, and pinning it in would misrepresent the series and every total read from
-  it. A row that ought to belong and does not is a **matching** problem — correct its name, or widen the
-  rule — which is also why a hand edit now re-runs the scoped scan. The endpoint rejects the state and
-  `_load_overrides` filters on `'excluded'`, so nothing can write one; the index is vestigial. Don't
-  re-propose it. Stats derive from the effective (override-adjusted) set, so
-  `occurrence_count` still equals the linked-row count. Surfaced as the row menu's "Remove from recurring
-  series" and as **Exclude from series** on an *Amount changed* finding, the one finding that names a
-  charge (`POST /recurring/{id}/membership` for both). A removal is recoverable three ways: an immediate **Undo**
-  toast (clears the override right away); the removed row's own right-click menu, which offers **Restore
-  to recurring series** because the transaction payload carries the `recurring_excluded_series_id`/name it
-  was removed from; and — to browse all of a series' removals — the series drill-down's **"N removed"**
-  list (rows read via the transactions filter `recurring_excluded_series_id`), each with an **Add back**.
-  All three resolve to `state='clear'`, after which the row re-matches and rejoins.
+- **Rows are paired first and scored second.** Two rows pair when they have the same absolute amount and
+  category, on different accounts, in opposite directions, within `PAIR_WINDOW_DAYS`. Names are not
+  consulted, because two institutions describe one movement differently and change their descriptors
+  over time. A window is used because the two sides post on their own schedules. Resolution is
+  nearest-date-first across the whole pool, so the result does not depend on row order.
+- **Only money-movement categories pair.** Same-amount opposite rows in counted categories are
+  coincidences.
+- **A movement is all-or-nothing.** Its occurrences are pairs, so a movement that cannot have all its
+  rows is not inserted.
+- **The pair takes its rows from a payee series.** `scan_and_store` passes paired rows to
+  `reconcile_series` as `reserved`. Nothing is deleted: a confirmed payee series keeps the charges it
+  holds outside the payment.
+- **A rule-backed series wins over a pair.** `_rule_backed_holdings` is read before the reconcile, and a
+  movement touching one of those rows defers whole.
+- **A tie is asked** (`GET /recurring/transfer-review`): two same-day, same-amount candidates.
+  `transfer_pair_decision` stores the answer (`receiving_txn_id`, or NULL for a dismissal), and
+  `pair_money_movements` applies stored answers before it infers anything.
+- **A paired row is never payee material**, even when its pairs score no rhythm.
+  `detect_transfer_series` returns every paired row id, and the payee pass runs over the pool without
+  them.
+- The transfer pass runs over the full pool even on a scoped scan.
 
-  **Excluding the charge an *Amount changed* finding names does not have to reduce the findings.** The
-  step is measured against the newest occurrence, and one the *previous* charge already made is not
-  reported twice — so on a series whose price is still climbing (the demo's seasonal gas bill), removing
-  the newest charge promotes the one before it, whose own step was never news while it had a newer charge
-  above it, and that step is raised in its place. This is deliberate: the earlier rise is a real finding
-  that was only ever hidden by a later one, and suppressing it would mean an exclusion could bury a step
-  the user has not seen. It does mean the action can read on screen as having done nothing, which is the
-  accepted cost. A test about the exclusion therefore asserts that *that finding* is gone, never that the
-  list got shorter (`frontend/tests/ui/recurring.spec.js`).
-
-- **Rule↔series lifecycle coupling.** For a `source='rule'` series the "recurring" checkbox lives on the
-  rule, so the destructive series actions reconcile the two: **suppress** and **delete** clear the rule's
-  `is_recurring` and drop the series (and delete the rule outright if clearing the flag leaves it
-  actionless), while **end** deliberately keeps the flag live and freezes `next_due` so a resubscribe can
-  still resume it — end means "stopped", not "not recurring". Deleting the rule (or an edit that merges it
-  away) drops its backing series; unchecking `is_recurring` on the rule drops the series while keeping the
-  rule if it still has another action.
-
-- **Every path that writes a category re-evaluates the payees it touched — including a rule apply.**
-  Membership is a cache only a scan rewrites, so
-  before this a manual recategorization left the row linked to the series it used to belong to: the
-  row's menu opened the *old* series, the new series' drill-down never gained it, and a missed-charge
-  signal about it stayed open — one stale link with three faces, since all three read through it. None
-  of the other triggers covered it (import and sync scan the payees *they* touched, a global
-  recategorize scans everything, and the app-load catch-up is watermark-gated to roughly a day).
-  `rescan_edited_transactions` runs the scoped scan from the transaction edit endpoints for the fields
-  the detector actually reads — **category** (part of a derived series' identity), **merchant name**
-  (it *is* the key), **date**, and **trash**; tags, notes and the review flag are read by nothing.
-  Scope is the payees the rows belong to *now* plus any they belonged to *before*, because a rename
-  moves a row between groups and the group it left has to be reconsidered too — so the caller captures
-  those keys before it writes. The contract is **re-evaluation, not re-attachment**: a row that still
-  belongs where it was stays put. Two costs shape the wiring: a no-op edit (re-saving the same
-  category) skips the scan, and a **bulk** edit scans **once for the batch**, because a scan loads the
-  whole detection window before it filters by payee — measured at ~125 ms on a 20,000-row ledger,
-  effectively the same as a full scan, which is what makes the per-row version untenable and the
-  parked `payee_key` materialization worth more than it was.
-
-  **The rule paths write the same field in bulk and were the last ones left uncovered**
-  (`rules._rescan_recurring`): *apply to matching transactions*, *apply to these transactions* (accepting
-  a rule suggestion), the opt-in reconcile on a rule edit, and trashing a rule with *re-evaluate its
-  transactions* — the last two recategorize through `recategorize_all` directly rather than through the
-  endpoint that owns the full scan. Each runs the scoped scan after its transaction commits, in its own
-  connection, guarded so a detection hiccup cannot fail an apply that already succeeded; a bulk cleanup
-  scans once for every rule it trashed. Prior payee keys are read **before** the write for the same reason
-  a hand edit reads them: a rule's `clean_name` moves rows between groups, and after the update the old
-  name is gone.
-
-  What made these worth finding rather than merely missing is the **phantom series**. A movement's two
-  legs pair only when both carry a money-movement category, so filing the second leg by rule can make a
-  pair that did not exist — and the payee series over the first leg's rows, correctly detected while
-  nothing paired, becomes a reading of one payment off two descriptions. Unscanned it sits in *Needs
-  attention* beside a **Confirm** that makes it permanent: a confirmed series is preserved by every later
-  scan and goes on claiming rows, so the window between the rule apply and the next daily catch-up is one
-  in which the user can ratify a reading the ledger no longer supports.
-
-- **The scan also runs automatically, at two scopes, gated so it never does redundant heavy work.**
-  `scan_and_store` takes an optional `payee_keys` scope, so the same pipeline serves both:
-  - *Scoped* (`scan_imported_payees`, `payee_keys` set) — a completed CSV import or Plaid sync reprocesses
-    only the payees the batch touched, matching new charges into existing series and detecting new series
-    among those payees immediately, while every other payee's series and membership are left exactly as
-    they are. Correct because detection groups by payee and reconcile never disturbs out-of-scope rows.
-    A scoped pass **does not** stamp the watermark and **skips** the payee-key re-derivation (both are
-    global concerns it can't do), so it trusts stored keys.
-
-    **A payee series holding a paired row is always in scope, whatever the caller asked for**
-    (`_payee_keys_holding`). Pairing is the one relationship in the detector decided by the money rather
-    than by a name, so a movement's two legs normally sit in *different* payee groups — which makes an
-    edit to one leg's group an edit whose consequence lands on the other's. Scoped to the payee that
-    changed, the scan would never look at the group that has to give the rows up. The widening is
-    computed from the pairing that already runs over the full pool, so it costs one indexed read of the
-    membership links and nothing else.
-  - *Full* (`run_auto_scan`, `payee_keys=None`) — app load fires a catch-up (`POST /recurring/auto-scan`
-    → `maybe_auto_scan`) that runs a global scan only when *due*: never scanned or older than a ~daily
-    interval. It is the safety net for the cross-payee and normalization effects a scoped pass can't see.
-    A **recategorize** (`POST /sync/recategorize`) also triggers a full scan directly, because it can
-    rename payees (`clean_name`) and move categories across the whole ledger — and it is the one path that
-    renames *existing* series members, exactly the case a scoped pass leaves to a full rebuild.
-
-  "Last scanned" is a single data-DB-level watermark in `db_meta` (`recurring_last_scan_at`), not a
-  per-user `ui_preference`: one data DB has one set of series, so in multi-user mode the first client to
-  load triggers the catch-up and the rest skip. An absent watermark reads as "never scanned," so a
-  database migrated from a pre-recurring schema populates its series on first load. Scoped passes never
-  touch the watermark, so they give immediacy between the daily global rebuilds without suppressing them.
-
-- **`ended` is distinct from `suppressed`, and deliberately so.** Suppressed means *the detector was
-  wrong* (not a real series) and durably blocks re-proposal. **Ended** (`status='ended'`, set by
-  `POST /recurring/{id}/end`) means *the detector was right but the series has stopped* — a canceled
-  subscription. An ended series keeps its transactions linked (history) and is excluded from forecasts,
-  but is **not** blocked from re-detection: its `next_due_date` is **frozen** while ended, and a rescan
-  **reactivates** it (`ended → active`) if a charge lands on/after that frozen date — a resubscribe. So
-  a resumed subscription revives the same record rather than spawning a duplicate. (Reactivate also
-  happens manually via the same `restore` path suppressed series use.) The auto-*end* trigger — a
-  missed expected charge — is deferred with the rest of the anomaly signals; today ended is set by the
-  user, or offered by the missed-charge signal once a series has gone two whole periods without a charge
-  (a button on a confirmed series, the "Not recurring" split control's "Mark canceled" on a detected
-  one, or "Mark ended" on the signal). **The signal never writes the status itself** — a presumed-ended
-  series is a *derived reading*, not a stored one, because silently freezing a confirmed series'
-  `next_due` is invisible until it is wrong.
-
-- **Money-movement series are classified, not hidden.** A series whose category (or its parent group)
-  is `exclude_from_totals` — a transfer or a credit-card payment — is *money movement*, not spending or
-  income. Rather than dropping these from detection, the series is flagged (derived at read time from
-  the category, no stored column) so the UI marks it with a badge. It sorts in among the bills: it once
-  clustered after them to keep a transfer's two legs adjacent, which stopped applying when a pair became one
-  series owning both legs (below).
-  This keeps a recurring CC payment from masquerading as a bill while still surfacing genuine recurring
-  transfers.
-
-- **A movement between two tracked accounts is one series that owns both its legs**
-  (`services/transfer_pairs.py`, `recurring_series.counterpart_account_id`). A transfer — or a
-  credit-card payment — is a single movement of money that a ledger organized by account necessarily
-  records twice. Grouped by payee the detector saw two unrelated things; grouped by **pair** it sees the
-  movement. `account_id` is the paying side, `counterpart_account_id` the receiving side, and the series'
-  `payee_key` is a synthetic `transfer:<from>:<to>` because its identity is the two accounts plus the
-  category — deliberately not a name.
-
-  **Rows are paired first and scored second, and that order is the whole point.** Two rows pair when they
-  carry the same absolute amount and category, on different accounts, in opposite directions, within
-  `PAIR_WINDOW_DAYS`. Names are never consulted:
-
-  > One monthly card payment on the reference ledger, ten years, **sixteen descriptors** across its two
-  > institutions. Payee-grouped it fell into three series of 15, 16 and 3 members — two carrying cadences
-  > invented from a stale slice — with 210 of its 244 rows in no series at all. Paired, it is a single
-  > monthly series over 96 movements.
-
-  **Why a window rather than an exact date.** Two institutions post one movement on their own schedules;
-  a third of that payment's pairs are one to three days apart. Exact-date matching found 293 pairs across
-  the reference ledger, ±3 days found 660. Same width the duplicate report already uses for its
-  cross-account transfer twin. Resolution is **nearest-date-first globally**, so the outcome does not
-  depend on pool order.
-
-  **Why money movement only.** Of 637 unambiguous pairs on that ledger, **634 were already in an excluded
-  category**; the three that were not are coincidences (a shared meal, a refund) where two people's rows
-  offset by chance. The gate costs nothing and removes the whole false-positive class.
-
-  **A movement is all-or-nothing.** Its occurrences are pairs, so a candidate that could take only the
-  halves nobody else claimed would be a series of orphaned legs — wrong count, wrong amounts, a
-  drill-down showing one side of a two-sided thing. A movement whose rows it cannot have in full is not
-  inserted at all.
-
-  **The pair wins, and does not ask.** `scan_and_store` hands the paired rows to `reconcile_series` as
-  `reserved`, which holds them back from the payee series that would otherwise match them. A payee series
-  over those rows is the same payment read off two descriptions that drift apart, so it is simply the
-  wrong reading — being confirmed first does not make it the right one. **Nothing is deleted to achieve
-  this:** membership is exclusive, one row to one series, so a confirmed series covering a payment *and*
-  charges outside it keeps the charges outside it and is re-stated by the same pass. An earlier design
-  reported these as a *replacement* to accept or decline, and was withdrawn: it named a whole blocking
-  series beside the movement's own total — two populations that do not subtract — and a series reaching
-  outside the payment made `Accept` far more destructive than the card admitted.
-
-  **The one claim it yields to is a rule.** A `source='rule'` series' membership is an instruction the
-  user wrote (these rows, by this rule), so `_rule_backed_holdings` is read *before* the reconcile and any
-  movement touching one of those rows defers whole. `_reconcile_priority` orders rule-backed series ahead
-  of everything for the same reason. Deferral is silent and not reported: the answer is already known, so
-  there is no question to ask.
-
-  **One refusal is asked rather than resolved** (`GET /recurring/transfer-review`): *a tie* — nothing
-  distinguishes two same-day, same-amount candidates, and guessing files real money against the wrong
-  movement (one row in 18,400 on the reference ledger; those rows fall through to payee matching
-  meanwhile).
-
-  **What the user answers is the only stored part, and it is taken as given.** `transfer_pair_decision`
-  holds the answer to a tie — `receiving_txn_id` names the counterpart, NULL is the dismissal, one
-  column because they answer the same question. `pair_money_movements` applies it **before** it infers
-  anything: the pass never learns from a decision it made itself, only from one a person made, which is
-  the same discipline `account_pair_distinct` follows in the dedupe service. Additive, empty on an
-  existing database, and reversible — an unanswered question behaves exactly as it did before it
-  existed.
-
-  **A paired row is never payee material, even when its pairs are not a series.** `detect_transfer_series`
-  returns *every* paired row id alongside its candidates, and the payee pass is run over the pool minus
-  all of them — a wider set than `reserved`, which holds only what a movement series will actually claim.
-  The two differ because taking rows *away* from an existing series needs somewhere for them to go, while
-  declining to invent a new one does not. A pair with no rhythm is still a pair: the money moved between
-  two of the user's own accounts, so "not a series" is a fine answer for it and "a merchant" is not.
-  Measured: a card paid whenever it carried a balance (gaps of 1 to 50 days, amounts $400 to $5,600)
-  scored no movement, and its legs then surfaced as a handful of one-sided suggestions on each account —
-  the per-account fragments the pairing exists to remove, minus the rhythm that would have earned them.
-
-  **Most series are not movements.** The payee pass is untouched and detects everything else exactly as
-  before; the transfer pass only ever touches money-movement rows that actually pair. It runs over the
-  **full** pool even on a scoped scan, the same exception rule-backed series get and for the same reason:
-  a movement's identity is its two accounts, so a pool scoped to one payee holds only part of it.
+Two obstacles, both tracked in [`backlog/recurring-detection.md`](backlog/recurring-detection.md):
 
 - **Recency is measured in periods, which biases a stale series' cadence long.** `_score` discards a
-  reading whose last charge is more than three periods old, and that test is applied *after* a cadence is
-  proposed — so for data that has gone quiet, the longer the proposed period the more forgiving the test
-  becomes. A monthly series 336 days idle is rejected at 3 × 30 days; the amount-cluster fallback then
-  offers a semiannual reading of three of its charges, clears 3 × 183 days, and is emitted. **The wrong
-  cadence survives precisely because it is longer.** Confirmation then freezes it: a confirmed series is
-  never re-derived, and `_write_series_stats` rewrites counts, amounts and `next_due` but never
-  `cadence`/`period_days`. Pairing removes the trigger for money movements — their rows no longer go
-  stale under a drifting descriptor — but the bias is general and still reachable by any payee whose name
-  changes. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+  reading whose last charge is more than three periods old, after the cadence is proposed, so a longer
+  proposed period passes more easily. Confirmation then freezes the cadence:
+  `_write_series_stats` never rewrites `cadence` / `period_days`.
+- **A pair that is not a series is shown nowhere.** Pairing is derived per scan and not stored, so no
+  other surface can ask whether a row is half of a transfer.
 
-- **A movement that is not a series is displayed nowhere.** Pairing identifies every two-legged movement,
-  but only the routes that settle into a rhythm become a series, and a series is the only thing that
-  renders. On the reference ledger 84 of 248 pairs sit on routes that will never score — a card paid when
-  it carries a balance, a wallet drained to checking, an occasional reverse sweep — all correctly
-  identified, correctly kept out of payee matching, and shown by nothing. The obstacle is that pairing is
-  derived per scan and stored nowhere, so no surface outside recurring detection can ask whether a row is
-  half of a transfer. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+### Signals
 
-- **`created_at` on a series means *first detected*, not *last rebuilt*.** An auto series is deleted and
-  re-inserted with a fresh `uuid` on every scan, so the column would otherwise advance daily and no
-  surface could answer "what appeared since I last looked". `scan_and_store` captures each dropped auto
-  series' `created_at` keyed by its identity tuple `(payee_key, category_id, scope_account_id)` — the
-  same tuple candidate de-duplication uses — and carries it onto the row that replaces it. That
-  identity, not the id, is the only stable handle an auto series has; anything that must outlive a
-  rebuild is keyed by it.
+Upcoming, missed, new series and price change are derived on read (`services/recurring_signals.py`) and
+not stored.
 
-- **Anomaly/forecast signals are derived on read and never stored** (`services/recurring_signals.py`).
-  Four kinds: **upcoming**, **missed**, **new series detected** and **price change**. A fifth once lived
-  here — the charge that drifted outside an amount-gated rule's range — and now sits with the rules
-  (below); it reads as a recurring finding because a drifted range costs the row its series, but both
-  actions it offers edit a *rule* and it never needed a series to exist at all. Two facts force the
-  derivation rather than the event-driven alternative the scan seam was originally marked for:
-  - **The stored `amount_min`/`amount_max` band cannot detect a price change.** `_write_series_stats`
-    rewrites it from exactly the rows the series owns, so a hiked charge is *inside* the band by the
-    time anything could compare against it. Price change is measured against the occurrences
-    *preceding* the latest charge, which only a read-time derivation has. **Tightness is judged over the
-    whole prior history, the range over the recent window.** The split matters for a seasonal bill: four
-    consecutive winter gas bills look tight in isolation, so a trailing-window tightness test would
-    classify the series as fixed-price and then report the following spring as a price collapse. A step
-    whose *previous* occurrence already made it is not reported again.
+- **A price change is measured against the occurrences before the latest charge.** The stored band
+  cannot detect one, because the scan has already widened it to include the new charge. Tightness is
+  judged over the whole prior history and the range over the recent window, so a seasonal bill is not
+  read as fixed-price. A step the previous occurrence already made is not reported again.
+- **Excluding the charge a price-change finding names can raise the previous step in its place**, since
+  that step was hidden only by the newer charge.
+- **A dismissal on a `variable` series widens the range later charges are compared against**
+  (`_load_accepted_amounts`), to the dismissed amount and no further. It is derived by joining the
+  dismissals, so restoring one narrows the range again. It does not apply to a `fixed` series.
+- **A one-off dismissal** (`recurring_signal_dismissal.one_off`) leaves the charge in the series and out
+  of the history later charges are judged against (`_load_one_off_charges`). It is accepted only for
+  the price-change kind.
+- **Lateness is measured against data freshness.** "Now" for a missed charge is the newest live
+  transaction on the series' account (the ledger's newest for an account-agnostic series), never later
+  than today, so a month without an import raises nothing.
+- **`presumed_ended`** is a reading derived once a series has missed `_PRESUMED_ENDED_PERIODS` whole
+  periods. It changes what the signal offers and writes no status.
 
-    **A dismissal on a variable series teaches its range.** A gas bill that reaches its peak every
-    January should say so once, not every January — and a trailing window cannot remember across a full
-    cycle, since by the next winter the last one has long left it. So the amounts whose price-change
-    warnings the user has dismissed are folded into the range a later charge is compared against
-    (`_load_accepted_amounts`), and the seasonal envelope is *learned* from what the user accepts rather
-    than modelled from dates. Three properties make that safe: the band widens only to what has been
-    **explicitly accepted** — an untriaged outlier still reports next time, which using the full history
-    instead would not give; it widens only *to* the accepted amount, so a genuinely larger charge is
-    still reported; and it is **derived from the dismissals**, reconstructing the fingerprint by join
-    rather than storing an amount, so restoring a dismissal narrows the band again and a charge that
-    leaves the series takes its acceptance with it. Deliberately **not** applied to a fixed series: there
-    a dismissal means "yes, the price went up", the next charge at the new price is already silent under
-    the settled rule, and widening the band would mask the *next* hike.
-
-    **A one-off dismissal is the opposite answer** (`recurring_signal_dismissal.one_off`, v73): "fine
-    this time, but the usual amount still stands" — a hike the merchant agreed to reverse. The charge
-    stays in the series, but it is left out of the history every later charge is judged against
-    (`_load_one_off_charges`): out of the baseline, the tightness test and the settled rule's *previous*.
-    So a return to the usual amount is silent and a repeat of the excepted amount is reported as the
-    step it is, where after an ordinary dismissal the repeat would read as the price having settled. It
-    never teaches a variable series' range either. Offered only on *Amount changed* — no other finding
-    has a usual amount to keep expecting — and refused by the API on any other kind. Derived by join like
-    the accepted amounts, so restoring the dismissal, or re-dismissing it the ordinary way, undoes it.
-  - **Lateness is measured against data freshness, not the calendar.** The reference "now" for a missed
-    charge is the newest live transaction on the series' account (the ledger's newest, for an
-    account-agnostic series), never later than today. Comparing `next_due_date` to today would turn a
-    month without an import into a wall of false alarms, and an account that has stopped syncing has no
-    opinion about whether its charge arrived.
-
-- **`recurring_signal_dismissal` is the whole of the signals' durable state.** Keyed by each signal's
-  own fingerprint — a transaction id, or a series' identity tuple plus the date concerned — deliberately
-  *not* a `recurring_series` id, which an auto series loses on every scan. It carries no foreign key: a
-  dismissal whose subject is later trashed simply stops matching, which costs a row and no correctness.
-  Shared at the data-DB level rather than per-user, because "seen it, it's fine" is curation of the
-  ledger like confirm/suppress, not a UI preference. Dismissal is **per finding**, so a later missed
-  cycle or a different charge still surfaces.
-
-This is the same "algorithm proposes, user disposes" idiom as import rule suggestions, and the same
-"the rule is the cache" split as the parked online-categorizer note: detection is the expensive
-bounded-window pass, while matching a new transaction to an existing series is a cheap keyed lookup.
-The signals sit on the other side of that split again: they are cheap enough to recompute per request
-that storing them would only create state to keep true.
+`recurring_signal_dismissal` is the signals' only stored state. It is keyed by each signal's
+fingerprint (a transaction id, or a series identity tuple plus a date) and not by series id. It has no
+foreign key; a dismissal whose subject is trashed stops matching. It is shared across users and is per
+finding.
 
 ## Import batches and profiles
 
-CSV import creates supporting records for workflow and recovery:
-
-- **Import profiles:** saved mapping/setup templates for recurring CSV formats
-
-- **Import batches:** one record per import run so imported transactions can be undone
-
-- **What an import *recognized* rather than refused** (`import_batch.ignored_count`): rows turned away
-  as this source restating its own prior import — a re-export with an overlapping window, which is the
-  commonest thing an import does. They are counted here and **not written to the duplicate report**
-  (`is_settled_source_restatement`, `prune_source_restatements`), because the transaction each one
-  duplicates is in the ledger and is the record; a second copy of it plus the payload that would have
-  inserted it buys nothing, and on a real ledger that was 99% of the report's bytes
-  (`scale-and-limits.md`). The count is kept **apart from `deduped_count`** rather than folded into it,
-  so that count's contract holds by construction: it counts rows the report can actually show, which is
-  what the duplicates pill offers to open. Three conditions narrow it, and each is load-bearing — the
-  claim must be **Rule 1** (this source's own coverage of this source account, not a different source's
-  claim on the same account), a claim recognised by its label needs that label to be **non-empty** (two
-  single-account files both carry an empty one, which says nothing about whether they share a source —
-  that is Rule 2 unless the data source says otherwise, below), and the rejection must not be one of the
-  two
-  sub-states that **ask something** (`ADVISORY_REVIEW_SUBSTATES`: a covered date that paired with
-  nothing, or paired only two days out). A `transfer_match` is not among them — its verdict was the
-  coverage rule's and the probe only named a twin on another account — and that list is shared with the
-  card's "to review" count, so what the card ignores and what is never stored cannot drift apart.
-  **"This source account" is the label, or the same data source landing on the same account — under a
-  different label, or under none.** An aggregator renames accounts between exports, and a file with no
-  account column never names its account at all, so the label is only what the file called the account
-  that day; which account a data source's rows were filed on is recorded per batch
-  (`import_batch_account`) and does not move afterwards — unlike a linked group, which can be attached
-  and detached — so it identifies the source account where the label cannot. Rule 1 marks such a claim
-  `covered.same_source_account`, since its `source_csv_value` cannot say so. Both the data source
-  **and** the account must match: a different source feeding the same account is the cross-source case
-  the report keeps, and a file with no saved data source has only its label. For a renamed account the
-  verdict does not change — Rule 2 already rejected those rows — only whether they are recorded. **For
-  single-account files the verdict does change**: two of them on one account used to share no coverage
-  rule at all (Rule 1 had no label to key on and Rule 2 asked for a *different* one), so the later file
-  was matched row by row and a covered row reworded past the text match came in as a second copy. They
-  are now covered like every other pairing — by Rule 1 under one data source, by Rule 2 otherwise — and
-  the price is the one coverage always carries: a genuinely new row older than the trailing window that
-  shares an amount with a held row nearby is refused and listed for review instead of imported. The
-  after-the-fact pass below reads stored verdicts, which carry no such mark on cards written before
-  this, so an earlier report of this kind stays until its file is re-imported. A row the
-  **id rung** recognizes is the other way in (see `txn.source_transaction_id`): the source's own id and an
-  equal amount make it a restatement on the source's word, with none of the three conditions needed. A row that enriched its match keeps its record regardless, since that record is how
-  the enrichment is undone, which is why the pruning runs after auto-enrich rather than instead of
-  writing. **`deduped` counts these until the report is written**: a wholly-restated file would
-  otherwise trip the empty-batch delete and take its `file_content_hash` — half the re-import guard —
-  with it. What is given up is "Import anyway" for these rows, which is the deliberate re-adding of a
-  row already held, and the raw material a later auto-restore (`backlog/import-dedupe-followups.md`)
-  would have replayed after an undo; the recovery there is re-importing the file. **Reports written before
-  this are brought into line by migration v72** (`import_detail_storage.remove_batch_restatements`, which
-  applies the same test after the fact and moves the same counts), registered for post-restore replay so
-  an older backup comes back in the same shape. It is a migration rather than an offered action because
-  there is nothing in such a row to keep. It reads the row's source label back out of its stored cells
-  through the card's `config_snapshot.column_map`, so a card with no account column (a single-account
-  file, a sync card) is left alone rather than guessed about — measured on a real ledger, none of those
-  held a restatement the test could not see.
-
-- **What an import *changed* rather than added** (`import_batch.updated_count`): rows that corrected a
-  transaction already held, counted apart from imported and deduped because they are neither — the
-  ledger moved and no row was created. It is reported on the card because nothing else records it: the
-  corrected row shows its revised figure and no longer says it moved, so an unreported correction is
-  invisible. Three such
-  pairs sat in a real ledger for two and four months before anyone looked.
-
-- **Clearing a card's stored detail** (`detail_cleared_at`): an import keeps a **duplicate report** —
-  one row per row it refused, holding the raw values, the transaction it matched and the payload it
-  would have inserted — and that report is by a wide margin the largest thing the import history
-  stores. Measured on a real ledger it was 34 MB against a 73 MB database, more than every transaction
-  put together, and it rides every backup — before imports stopped writing a source's restatements of its
-  own earlier import, which were 89% of it (see `ignored_count` above). Clearing what remains is
-  maintenance over stored diagnostics (Settings → *Import storage*), so the
-  card **stays in the history** and says its detail was cleared; nothing disappears, which is what
-  keeps the action from needing a destructive vocabulary that would misdescribe it.
-
-  Everything else on the card survives, and each survivor is load-bearing somewhere a removal would
-  break silently: the `import_batch` row, because `txn.import_batch_id` is `ON DELETE SET NULL` and its
-  presence is how the ledger knows a transaction was not entered by hand; `file_content_hash` and
-  `status`, because together they are the re-import guard, which is why the marker is a column of its
-  own rather than a `status` value; `import_batch_account`, because its `coverage_*` columns are the
-  claim duplicate detection reads for a terminal-day window, and dropping it would let a later import
-  of an already-covered period bring those rows in again as new; and `config_snapshot`, because a
-  PayPal statement finds its account by reading the snapshots of the statements before it.
-
-  **`deduped_count` outlives the rows it counted**, and that is the one place a cleared card has to be
-  read carefully: the column stays true as a fact about the import, but it no longer names rows any
-  report can show, so it is excluded from the card's duplicates pill once `detail_cleared_at` is set
-  (see `removed_duplicate_count`, whose contract is that a count never names a row the report cannot
-  show). What survives a clear is counted from `txn` instead.
-
-- **A confirmed duplicate's owner follows its undo path.** A row trashed as a confirmed duplicate is
-  hidden from Settings → Trash while the originating card's duplicate report exists, because that report
-  is where it is restorable from (see `rejection_reason` below). Clearing the report closes that door, so
-  it hands the row to the Trash in the same write: `rejection_reason` and `dedupe_resolved_by` are
-  cleared and the row becomes ordinary trash, restorable and emptiable there. `suspect_duplicate_of` is
-  kept as the audit trail. This is the one path that makes `rejection_reason = NULL` on a row the user
-  did not delete by hand — it is accurate, because the row is now theirs to restore or purge, and the
-  alternative was a fourth `rejection_reason` value every reader of the column would have to learn. Rows
-  resolved by an account merge (`dedupe_resolved_by = 'auto_merge'`) are **not** released: their undo is
-  detaching the accounts, a path the clear does not disturb.
-
-- **What a batch covers** (`covers_start`, `covers_end`, `covers_source`): the span of transaction dates
-  the file carried, which is what the import history orders and groups by. It is written when the card's
-  rows are written rather than re-derived on read — once per import rather than per card per page load —
-  and that is also the more correct place, because coverage is a property of the *file*: trashing one of
-  its transactions a year later does not change what the file contained. `covers_source` names which kind
-  of answer it is. `'statement'` is a declared period and takes precedence where one exists, since a
-  February statement covers February however few dates its rows land on; `'rows'` is read from the batch's
-  transactions **and its deduplicated rows together**, because a file whose every row matched an earlier
-  import still covers those dates and `txn` alone would answer "nothing" for it; `'items'` is a
-  marketplace items-only card, whose parked items are the only dates it has. `import_batch_rejected_row`
-  is deliberately not a source — it is capped (`MAX_STORED_REJECTED_ROWS`), so it cannot be relied on to
-  widen a span, and measured over a real ledger it never did.
-
-Imports use exact content hashing first for duplicate detection, then can fall back to narrower cross-source heuristics when an import explicitly links a new account to an existing account/group for duplicate comparison.
-
-Important import-batch behavior:
-
-- duplicate detection only blocks rows that match transactions already in Luma before the import starts
-
-- **whether a $0.00 row is kept is declared by the source, not decided by the ingesting code.** A source often publishes a pending charge before it carries an amount, settling it later, so a $0 row is usually a placeholder rather than a transaction — but not always, and what it means differs by source. The policy lives on the source (`zero_amount_rows` on a `ProviderAdapter`; the registry in `services/source_capabilities.py` for the CSV and Amazon importers, which are data sources with no class to hold an attribute) and is honored through the single `rejects_zero_amount` predicate. **There is deliberately no default** — the reasoning does not generalize, so an undeclared source fails loudly rather than inheriting another's answer. **A $0 row is worth recording only when the zero is genuine** — a finished record such as a fully gift-carded or promotional order, or a refund netting out. A pending placeholder is not worth recording for itself: the transaction it stands for is recorded when it settles. **A placeholder is kept only where refusing it would lose that settlement** — where the provider revises the row in place, keyed on an id the ledger holds only if the placeholder was inserted, and a revision naming a row never inserted is ignored. Wherever the settled charge arrives as a row of its own, refusing the placeholder loses nothing, and an inserted one would be dead weight that duplicate detection cannot pair with the settled row, the amounts differing. Hence: **Plaid keeps** (a settling charge can arrive only as a `modified` revision of the row it names), **SimpleFIN rejects** (no change feed: a settling charge arrives as an ordinary row, sometimes under the placeholder's id — observed on a live connection, and the reason the already-held branch of `_insert_added` re-stamps the row's provider fields rather than only clearing its pending flag — and sometimes under a new one; either way it is inserted if the placeholder is not held), **CSV/PayPal reject** (the settled charge arrives in a later file as a row of its own — with a transaction id too, since an id the ledger does not hold is simply a new row), **Amazon keeps** (a $0 order is a genuine record; reconciliation would otherwise read it as an order with no charge found). A refusal is always **reported, never silent**: filed as kind `zero_amount` with reason "Zero amount", counted into the card's `rejected_count`, and listed under *Not imported* on the file's report — on a sync card through an `import_summary` in `config_snapshot`, the same key and shape CSV import writes, so the existing card UI needs no changes. Those sync counts **accumulate** across syncs, because a monthly period card is added to all month and a summary that overwrote would report only the latest pull's refusals. The consequence accepted where a source keeps them is that a genuinely-zero row stays in the ledger forever; that is harmless (it joins no total and cannot move a report), and suppressing it from display is not worth doing, since no display rule can tell it apart from a placeholder that is still live. Rationale and the full connector checklist: `docs/building-a-connector.md`.
-
-- exact duplicate protection remains the highest-confidence rule; heuristic matching only considers existing transactions in the same effective account scope with the same date and signed amount, then compares stored import evidence/source text to decide whether the row should be reviewed as a possible duplicate. Confidence decides which signal is trusted enough to **hard-reject** (vs. soft-flag for review); it does **not** decide the report *label* when several hard-reject rules overlap. There the broadest reason wins: a row that both exactly matches an existing transaction and falls inside an already-covered date range is reported as a covered-range duplicate, not an exact match — so a re-imported range reads as one uniform reason instead of a scattered "exact match" subset (which rows happen to share an identical content hash is an incidental artifact of merchant-string formatting). The verdict is identical either way; only the displayed reason differs. See the ladder/ordering in `backend/services/duplicate_detection.py`
-
-- a separate **soft-duplicate** check runs after a batch finalizes: every imported row is compared against existing rows **reported by a different source** by amount + **source text** + **date within a ±7-day window**. **The gate is the source, not the account** — and the change is a correction rather than a widening. The premise has always been *two independent sources describing one charge*: a single source does not report a charge twice, so two rows from one source are a legitimate repeat and are never paired. Landing on two different accounts used to imply that and still counts on its own, but it stopped being *necessary* once two data connections could each map `existing` onto **one** local account, at which point the same charge arrives twice inside that account, worded differently by each provider, where an account-difference test cannot see it. The condition therefore reads *differing origin* — a different connection, or a different file when neither row came from a connection — with "different accounts" retained as the other sufficient arm. Measured against a real ledger, the origin gate is what makes the same-account case safe at all: same-account cross-source candidates numbered in the single digits, against thousands of same-account **same**-source repeats it correctly refuses to pair. A **manual** row carries no origin and so never pairs within its own account — with no ingesting source it asserts nothing, and treating "no origin" as "some other origin" would pair every hand-entered row against its own account's history (the same charge often carries a transaction date from one source and a later posted date from another, and settlement skips weekends/holidays; candidates pair closest-date-first so a genuine same-day twin binds before a near-date one — `CROSS_ACCOUNT_DATE_WINDOW_DAYS` in `duplicate_detection.py`). The window was widened from 3 to 7 **on measurement, not intuition**: pairing a real ledger's connection rows against their CSV counterparts by amount and inspecting each by hand found genuine matches at +1, +3, +3, +4 and +6 days, while the false positives at those distances were rejected by the **text** comparison regardless of window (both halves of that measurement — the tail *and* the two distinct same-amount Zelle receipts that must never match — are kept as a fixture in `backend/tests/test_cross_account_window_evidence.py`, so the constant is held by a test that fails at 3 rather than by its own value) — the date is a far weaker discriminator than the text, so widening it is cheap. The real fix for the tail is `posted_date` (above), which collapses most of those gaps to zero; the window is the fallback for sources publishing only one date. The **text** side compares the *union* of each row's captured texts — `merchant_name`, `raw_name`, and the `import_evidence_json` description + extra fields (e.g. an "Original Statement") — via `source_match_texts`, rather than a single normalized payee: two sources for the same charge often park the rawest bank descriptor in different fields (a data-connection row keeps it in `raw_name`; a CSV that cleaned `raw_name` into a merchant column keeps the original only in an evidence field), so keying on one preferred field missed the match. `display_name` stays out (a user or rule rename on one side must neither hide nor create a match). Only **descriptive** captured fields participate — fields stamped `role: "categorical"` (see "Evidence field roles" below) are excluded, because the whole justification for the wide date window above is that the *text* rejects the coincidences the date lets through; a field two unrelated rows share by coincidence, admitted as text, quietly converts that strong test back into the weak one. A **byte-identical** overlap flags reason `cross_account` (high confidence — auto-confirmed on merge); a **near-miss** whose character similarity clears `CROSS_ACCOUNT_FUZZY_RATIO` flags `cross_account_fuzzy`; and two rows sharing at least `_WEAK_SHARED_TOKEN_FLOOR` **distinctive tokens** flag `cross_account_weak`. The last two are `REVIEW_ONLY_SOFT_FLAG_REASONS`, deliberately **never** auto-confirmed on merge (a slightly different spelling is surfaced, not silently trashed). **The union has one carve-out, `row_match_texts`/`RowMatchTexts`:** when *both* rows carry precise text — `raw_name` or a descriptive evidence field, as against the cleaned `merchant_name` — the tier is decided on the precise half alone, and the payee name can then reach no higher than `cross_account_weak`. A chain cleans every branch to one merchant string, so `TST*<SHOP> - <BRANCH A>` and `TST*<SHOP> - <BRANCH B>` intersect on the payee and come back byte-identical: the top tier, and auto-confirm-on-merge, asserted from the one field that cannot tell the two apart, while the field that can is outvoted. Demotion to weak is not a hedge — *same payee, different branch detail* is equally consistent with one charge described twice and with two real charges at two branches, and weak is exactly the tier meaning "worth a look, never act on it unseen". Measured on a real ledger the split moves **3 of 247** existing flagged pairs (all shaped like `TRADER JOE S #509` vs `Trader Joe's`), from auto-confirm into review. The ladder's own hard-reject rung (Rule 6, `find_textual_duplicate_candidate` over `score_duplicate_text_match`) deliberately keeps the plain union: **32 of 45** recorded text-strategy rejects there pair two sources that word a charge completely differently (`<PAYEE> Transfer` against `Send Money <PAYEE> <RECIPIENT>`), where the cleaned name is the only thing legitimately binding them — and same-date-**and**-amount already rules out the branch ambiguity. The weak tier exists because character similarity is the wrong instrument when two sources bracket one payee with different boilerplate — a bank's `WDRL-ACH <PAYEE> 5990 - debitpmt` against an aggregator's `<PAYEE> Insurance Debitpmt` sits near 0.57, nowhere close to the fuzzy ratio, while sharing the two tokens that actually name the charge. Two is the measured floor, not a guess: at one shared token a pair joined only by a survivor of `GENERIC_DUPLICATE_TEXT_TOKENS` ("general", "account") is admitted, which is noise. Note what this tier is emphatically **not** — corpus rarity. Weighting tokens by inverse document frequency was measured and inverts on a personal ledger: a recurring payee's own name is *common* there (df 327) while the generic payment suffix beside it is rare (df 51), so IDF ranks the boilerplate as the more distinctive of the two. Shared-token **count** works where rarity does not. Three differences are normalized away *before* that comparison rather than left to the similarity fallback, because in each the two texts do not actually disagree — one source simply wrote the same descriptor with different formatting, or wrote less of it, and which source did so is a property of the source, not of the charge. **Punctuation** is folded to single spaces on both sides (`_comparable_texts`): one bank's ACH descriptor reaches the ledger as `DEPOSIT - ACH PAYPAL TRANSFER - TRANSFER` through one aggregator and `DEPOSIT PAYPAL TRANSFER TRANSFER` through another, and the separators alone cost enough character similarity — 0.889 against the 0.90 floor — to sink a pair whose words agree completely, while the weak tier cannot recover it either, one distinctive token surviving the generic stoplist where two are required. It is folded for the **comparison only**: the stored texts keep their punctuation, which the processor-tag strip (it needs the `*` it removes) and the tokenizer both read, and a text of pure punctuation is dropped rather than folded to `""`, which would intersect on both sides and read as the top tier. Measured before adopting: across **756** candidate pairs over every import on a real ledger, exactly **one** pair changes tier, into review rather than auto-confirm — a deposit one aggregator wrote with separators and another without. **A leading payment-processor tag** (`<tag> *MERCHANT`, matched as a shape rather than a list of processor names) makes a row offer its descriptor *both* as delivered and with the tag removed, rather than stripping in place: sources disagree about the tag in two directions — dropped entirely, kept punctuated, or kept bare (`SQ MERCHANT`) — and stripping in place fixes the first disagreement while opening the second, since the bare form has no separator to strip and would then face a stripped counterpart it no longer resembles. Holding both forms matches whichever the other side kept. No variant is offered when too little would survive, so a residue like a single generic word never becomes a match key. This is deliberately *not* shared with `sanitize_rule_merchant_text`, whose trailing-reference-digit strip is also the rules engine's primitive — rule text is authored by the user and matched unanchored, so a typed tag is a deliberate choice there, while dedupe reads whatever pre-processing a source applied. **A truncation** is accepted by `classify_text_match` as exact when one text *is the other entire text* plus a tail of at most a few characters, and the cut either lands mid-word (nothing but a length limit slices a word) or comes after a long enough agreement to rule out a second location. The asymmetry is load-bearing and must not be relaxed into "the two share a long common prefix": two receipts to the same payee with consecutive reference numbers agree for their whole length but the last digit, and a common-prefix reading would promote them to the tier a merge auto-removes (the control in `test_cross_account_window_evidence.py`). Truncation length is *not* derivable per source — one charge was observed carrying 22-, 24- and 25-character forms while both sources publish descriptors past 100 characters — which is why the rule reads the shape of the disagreement instead of a length model. **A bank's own leading transaction-type token** (a withdrawal/ATM marker such as `WDRL-ACH`) looks like the same problem and is deliberately *not* stripped: the processor tag is applied by the charge's **originator**, and sources disagree about passing it through, so it lands *between* two records of one charge — whereas a bank-applied prefix rides along consistently with everything that bank feeds, and where a counterpart lacks it, the counterpart came from a different source and differs in substance too. Measured over a real ledger, stripping it recovered no matches at any tier, and the generalized form (dropping leading `GENERIC_DUPLICATE_TEXT_TOKENS`) recovered none while moving more pairs into review — stripping type words makes descriptors *more* generic, which is the direction that produces false pairings. See `docs/backlog/import-dedupe-followups.md` for the conditions under which this is worth re-measuring.
-
-**A matcher change re-examines stored rows once, gated on a version.** `DUPLICATE_DETECTION_VERSION`
-(in `duplicate_detection.py`) is bumped in the same commit as any change that could make detection reach
-a different verdict on rows already in the ledger — a new tier, a tokenizer change, a threshold move, a
-widened pairing condition. App load compares it against a `db_meta` stamp and, when the database was last
-examined under older rules, runs the existing-vs-existing scan over every account
-(`maybe_rescan_for_detection_change`, mirroring `recurring_detection.maybe_auto_scan` — same place in the
-lifecycle, gated on a *version* rather than an interval because the trigger is a code change, not elapsed
-time). It is deliberately **not** the schema version: tying them together would force a migration for a
-threshold tweak, and would silently consume a re-scan whenever a migration happened to land first.
-
-The scan lets each row take one partner per pass, so it converges rather than settling at once (measured
-on a real ledger: 70 flagged, then 5, then 3, then 0). `rescan_until_settled` loops to a fixed cap, which
-makes convergence a guarantee rather than an observation. Pairs already judged (`suspect_pair_distinct`)
-are skipped, so a bump surfaces what was never examined without re-asking anything that was. **This is
-the gap the version gate exists for**: the rules improved, nothing re-examined what was already stored,
-and the pairs the improvement was written for stayed invisible — including a tier added specifically to
-catch two sources bracketing one payee with different boilerplate, which then never fired on the rows
-that motivated it.
-
-A change to these text rules re-tiers **future** flags only. Both sweeps skip rows that already carry a `suspect_duplicate_of` pointer, so a flag keeps whatever reason it was given when it was raised; already-stored suspects are resolved by hand (or by a merge, for the exact tier) rather than being re-judged in place. A differing explicit check number (`Check #<n>`) vetoes either tier. Matches are flagged (not blocked) via the `suspect_duplicate_of` columns. The check is gated only by `account_pair_distinct` — pairs the user has previously asserted as distinct (via Keep on a soft-flag) are skipped, since the user has already declared the accounts to be different physical accounts. Same-batch sibling rows on different accounts are trusted as distinct (the CSV asserts via its account column that two rows on different accounts in one statement file are separate transactions, even if their date/amount/payee match); cross-batch matches are the candidates. There is no longer a "brand-new account" precondition: the check runs for every batch row, and `account_pair_distinct` is the mechanism that keeps the output non-noisy after the user has reviewed each pair. Account merges run `promote_in_group_suspects_to_confirmed` to graduate any pre-existing soft-flag whose two sides are now in the merged group, and `clear_account_pair_distinct_for_merge` to drop any prior distinct assertion between the now-merged accounts (the merge contradicts it). The same `promote_in_group_suspects_to_confirmed` also runs at import finalize (right after the sweep, scoped to the accounts the batch touched), so a batch importing into an account already merged with the matched account auto-confirms those in-group duplicates instead of leaving them for review — making import order and merge order interchangeable
-
-- **evidence field roles decide what may be compared as source text** (`backend/services/import_evidence.py`, a leaf module because CSV import and sync *write* the role while duplicate detection *reads* it). Each `import_evidence_json.extra_text_fields` entry is either **descriptive** — high-cardinality free text that *names* the charge (a memo, an item title, a counterparty, the raw bank descriptor), where a match between two rows is real evidence they are the same transaction — or **categorical**: a value from a small repeated vocabulary (type, status, currency) *or* a structured datum that describes a row without naming it (a date, a check number, a provider's opaque merchant id). Only descriptive fields feed duplicate text matching, through the single predicate `evidence_field_feeds_text_match` that both text collectors go through. Only `categorical` is ever stamped, so an unmarked field — including every evidence blob written before roles existed — reads as descriptive. CSV import infers the role from the column's cardinality across the whole file; a sync has no file to measure but knows what it is writing, so `build_sync_evidence` stamps each field, leaving `Counterparty` as the only sync-captured extra that participates. **The failure this prevents:** every synced row records its second date as a captured field and both provider adapters emit it as an ISO date, so while `source_match_texts` admitted *every* captured value, any two synced rows on different accounts sharing an amount and that date matched byte-identically **on the date string** — flagged `cross_account`, the high-confidence tier that auto-confirms on merge, with entirely unrelated merchants. The date is also exactly the signal the sweep's ±7-day SQL gate has already spent, so the text gate was answering with the weak discriminator it exists to backstop. (`collect_duplicate_match_texts` had applied the role filter from the start; `source_match_texts` never did — an asymmetry between two collectors of the same thing, which is why they now share one predicate rather than each carrying its own copy of the rule.)
-
-- **the soft-duplicate machinery now also runs on data-source sync and (freshly) on account merge, not only CSV import.** A **sync** stamps each newly-synced row with a `content_hash` (the same `make_hash` formula as CSV import, so synced rows become first-class dedupe citizens instead of the NULL-hash blind spot they were) and, after inserting a fetch's rows onto the connection's sync card (below), runs `mark_import_suspects` + `promote_in_group_suspects_to_confirmed` on that card exactly as import finalize does — closing the gap where a CSV/manual row re-fetched via a data source slipped through: the sync creates a *new* account record keyed on the provider handle (distinct from the CSV account until the user merges them), so the duplicate is **cross-account**, which same-provider-id idempotence never sees. An **account merge** additionally runs a fresh existing-vs-existing scan (`scan_scope_for_cross_account_duplicates`) over the newly-unified group *before* the promote sweep: import-time detection only ever compares an *incoming* row against what already exists, so a pair that both predate the comparison (e.g. a pre-existing synced row that ran no detection) is otherwise never looked at. The scan soft-flags each un-compared same-amount, source-text match (the same `source_match_texts` union basis as import — exact `cross_account`, near-miss `cross_account_fuzzy`, or shared-token `cross_account_weak`) within the ±7-day window between rows from two different **sources**, then the promote sweep confirms the in-group **exact** ones (reversibly, `auto_merge` — or `auto_cross_source` where the pair sits on one account); the review-only tiers are left flagged, never auto-confirmed. A **single** account is a legitimate scope for this scan, which the old two-account floor precluded: two sources can both report into one account, so a group of one still has pairs worth finding. Canonical choice keeps the more-curated row — a still-`needs_review` row (every synced row starts there) yields to a reviewed one, then earliest import, then id — so a re-fetched copy is the one trashed, not the categorized row it duplicates; a row already carrying a suspect pointer is never chosen as canonical, so no reciprocal double-flag is created
-
-- **A connection records its own sync health, and the four fields mean different things.** `connection.last_synced_at` is the time of the last **successful** pull — the freshness of the *data*, not of the last attempt — so a connection that has been failing reads as stale rather than as recently synced. `last_sync_error` / `last_sync_error_at` hold the most recent failure and are cleared by any success. `consecutive_sync_failures` is what separates a transient blip from a connection that has stopped working; it is **reset** on success rather than decremented, because one good pull settles that question. `last_sync_warnings` (JSON list) is the odd one: problems reported by a pull that **succeeded** — one bank on a multi-bank credential needing re-authentication while the others delivered — which is the only failure mode a sync cannot self-correct or even notice, since by every other measure it worked. It is replaced each pull, so a bank that starts working again stops being reported with nothing to dismiss. All four ride `GET /api/providers` with the connection list rather than a separate call, because the Connections card must be able to say "this stopped working" **while collapsed**: a failure a user has to expand a card to discover is one they will not discover. *(Added in migration **v27**; a connection that predates it starts with `last_synced_at` NULL — "never synced here" is the honest answer, since nothing recorded the earlier syncs.)*
-
-- **`txn.external_transaction_id` is the provider's own id for a transaction, and the key that makes a sync idempotent.** NULL for rows from a file import or entered by hand. A sync re-fetching a row it already holds finds it here and advances or skips it rather than inserting a second copy — which is what makes a re-pulled or overlapping window harmless, and therefore what lets a provider with no change feed be synced at all.
-
-  - **It must be unique across the whole ledger, and the *adapter* is what makes that true.** The column is `UNIQUE` and all four sync lookups query it unscoped (no account, no connection), so an id that repeats across two accounts reads as "already held" and the second account's rows are silently dropped — the account imports nothing while the sync reports success. **Every adapter stores its ids under a prefix Luma assigns**, because no provider can promise uniqueness against *another* provider's ids: Plaid's are unique across Plaid and are stored as `plaid:<id>` (migration v71 moved the ids stored bare before then, and replays on restore of an older backup); **SimpleFIN's are unique only within an account**, so its adapter namespaces the id by the (already provider-namespaced) account: `simplefin:<account>:<bank id>`, the same treatment `external_account_id` gets and for the same reason. This was not hypothetical — the Bridge's demo server derives ids from the posting instant and runs every account on one schedule, so two accounts issued byte-identical ids and the second imported nothing. **A new adapter must check its provider's uniqueness guarantee and namespace if it is per-account**; scoping the lookups instead would trade a real ledger invariant for generality nothing needs. `test_two_accounts_issuing_the_same_transaction_ids_both_import` holds the line, and the signature to recognize a regression is `added == skipped` exactly, with one account empty. *(Named `plaid_transaction_id` while Plaid was the only provider; renamed in migration **v26**, following `plaid_account_id` → `external_account_id` in v20. Backup payload **9** carries the new name and pre-v9 payloads are translated on restore — without that translation a restored row would come back with no provider id and the next sync would re-add it as a fresh transaction.)*
-
-- **`txn.source_transaction_id` is the identifier a *file* source gave a row, and it is scoped to the data source that issued it.** Some exports carry one (an aggregator's `Id`, a wallet's `Transaction ID`); a data source maps it like any other column (`column_map.transaction_id`), and a recognized PayPal file reads its `Transaction ID` whether or not the mapping names it. NULL for synced and hand-entered rows and for a source that maps no such column. Unlike `external_transaction_id` it is **not** unique and **not** looked up ledger-wide: an id means something only within its issuer, so it is matched only against rows whose batch belongs to the importing source (`import_batch.profile_id`). The scope is read through the batch rather than stored on the row, which is what lets it follow a file whose batch moves — a draft saved as a data source, or a deleted source's files assigned to another (`PATCH /batches/{id}/profile`). The mechanism is `services/source_transaction_ids.py`.
-  - **Invariant: a row's id was issued by the source of the batch it belongs to.** An id is only ever stamped onto a row of the importing source, and the one path that moves a row between batches — the pending→posted conversion, which re-homes the pending row — gives it the incoming id, or keeps only an id the same source issued.
-  - **The id rung runs ahead of the whole ladder.** A row whose id this source already holds is that transaction, however the source reworded or re-dated it: equal amounts restate (counted into `ignored_count` and not written to the report, like the ladder's own restatements), a held pending row converts in place, and a changed amount corrects the held row in place exactly as the revision tier does (`updated_count`, not re-homed) — but anywhere in the range and with no need for the descriptor to have survived, which is what the revision tier cannot offer: on a covered date the ladder can only reject. One id on several held rows pairs equal amounts first and changes nothing when none matches.
-  - **Different ids refute a pairing.** A held row this source gave a *different* id is withheld from every rung that would name it (`refuted` on `evaluate_duplicate`), from the pending and revision tiers, and from both post-import sweeps (`mark_import_suspects`, `scan_scope_for_cross_account_duplicates`), which otherwise read two files of one source as two origins. So a second identical charge arriving late on a covered date imports, where the coverage rule alone would bury it. Claims in the same import are withheld the same way, so one held row never absorbs two incoming ones. A transfer counterpart or corroborating payment on another account is *not* refuted: it is a different record by design, which an id cannot speak to.
-  - **Rows imported before the source carried ids take theirs per row, never on the layout change.** When the ladder pairs an incoming row with an id-less row of the same source precisely enough — a rung that names one row, or a coverage rejection with one same-date candidate or a same-date candidate with identical wording — that row is stamped with the incoming id. The first file carrying the column therefore backfills every row it overlaps, and nothing keys on the moment the column appeared: a row with no id never clears or rewrites one, so importing an older file without the column changes nothing, and moving between the two layouts any number of times is harmless. (Keying on the header change would have to decide which of two real layouts is the newer one — the same question the header fingerprint declines below.) A held row a coverage rejection could not name stays id-less until a later import pairs it one-to-one; nothing breaks meanwhile. On a real ledger the first id-bearing re-export of a source with three prior id-less imports stamped all but one of its 7,720 rows with distinct ids; the remaining row was one the newer export no longer carried.
-  - **It works best with one data source per provider.** Since the scope is the source, files from one provider split across two sources share no ids, and each source's rows are matched only against its own. Updating a source when the vendor changes its columns, rather than creating a new one, is what keeps the scope whole — which the header fingerprint below already makes cheap. Two sources can still be consolidated after the fact, because the scope follows the batches rather than anything stamped at import: deleting one source leaves its files without a source, and assigning each to the other source brings its rows — ids included — into that source's scope for every later import.
-
-- **Data-source sync uses a cursor where the provider has one, and a bounded range pull where it does not.** `run_sync` pulls each connection's changes since a stored `connection.transactions_cursor` — an **opaque provider resume token**, not necessarily a cursor: a provider with no change feed stores whatever checkpoint its own resume needs (SimpleFIN keeps a JSON walk position there). **What a metered provider has spent is deliberately not in that token** — it lives in `connection.provider_request_budget`, because the two persist under opposite rules: a resume token claims data is held and so must roll back with a failed pull's un-inserted rows, while spending can never roll back, the requests having already been made. It is therefore passed to the adapter as a *mutable* record and written back in a `finally`, since a return value cannot carry a partial pull's spending back out of an exception — and a metered adapter whose spending is forgotten on failure overruns the provider's limit precisely when a user is retrying a broken connection hardest. Where a provider publishes a limit as "N per day, replenished through the day", it is modelled as a refilling bucket rather than a per-day counter (a calendar reset grants a full allowance immediately after one already spent, which is exactly what a backfill resuming night after night does), and where it grants *separate* allowances per request shape — SimpleFIN gives an unfiltered `/accounts` call and each `?account=` call their own — each is metered separately. It drains pages (`has_more`) in one call — **applying and committing each page before fetching the next**, so no write transaction is ever held across a provider call. That matters twice over. SQLite serializes writers, so a transaction spanning a multi-minute pull blocked every other request that writes until it timed out, which is what made the app route but not load during a sync; and a pull that dies now costs the page in flight rather than everything it had fetched. The one thing that cannot be applied per page is **removed**: processing every `added` before any `removed` is what converts a pending→posted pair in place, and that pair can straddle a page boundary, so removals accumulate across the drain and are applied once it ends. Per-page commits also make each page a progress checkpoint (`connection.sync_progress`, cleared when the run ends) and a resume point, and they are why targets are re-derived from committed coverage on every page rather than computed once. It applies **added** (insert — categorized + `content_hash` + the dedup sweep above), **modified** (refresh the provider-owned fields + hash, but leave the user's category/name edits), and **removed** (trash the row). A pending→posted transition converts the pending row **in place** — new posted id + refreshed fields, with the row's category/name/tag edits and identity preserved — matched on the provider's explicit `pending_transaction_id`; all `added` are applied before all `removed`, so the pending row's `removed` entry becomes a no-op. Backfill readiness is polled **without a webhook**: each call returns the provider's readiness signal, and the client re-syncs until nothing more is available *right now*, with `connection.initial_sync_complete` recording that the historical pull finished. **"Nothing more right now" and "the history is complete" are separate facts** and the adapter reports them separately (`backfill_complete`, `resume_later`): a metered provider can stop mid-backfill with history still outstanding, and it must say *stop polling* — more requests would only push it toward cutting the connection off — while the connection stays un-flipped so a later sync resumes. Marking it complete there would strand the un-fetched history behind a short routine look-back with nothing left to go back for it. Fetch depth is `days_requested`, capped by the provider's own `max_history_days` (Plaid ≈ 730; a provider that publishes none is bounded by its adapter's own stopping rule), from the user's per-connection history-window default (persisted as a `connection.historyDays` preference). **A routine top-up is distinguished from an initial/deepening pull by an explicit `full_history` flag, not by the depth requested** — both send the same `days`, and only a full-history pull may widen the coverage claim backward or (on a provider with no cursor) re-walk history rather than fetching a bounded recent window. *(The parallel CSV pending→posted reconciliation matches on account + date + source-text and **converts in place, preserving edits** — it never deletes and re-inserts, which would lose them. It depends on the import's `ColumnMap` carrying the `pending` column through to `parse_pending_flag`; drop that column and the whole path goes silently inert.)*
-
-- **Sync import cards: one initial, then monthly by *transaction* month (`source_kind='connection_sync'`).** A connection's **first** historical backfill lands on a single **"Initial import"** card (`resolve_initial_sync_batch`; `config_snapshot.initial_backfill`), reused across the polling calls that make up that one pull rather than split across months — so a 24-month backfill stays one card. Once `initial_sync_complete` flips, routine syncs accrete onto **monthly period cards** (`resolve_sync_period_batch`, `sync_period='YYYY-MM'` in `config_snapshot`), keyed on **each row's own transaction date**, not the fetch date. One fetch may therefore write to more than one card. This is a correction, not a refinement: keying on the fetch month filed a July 30th transaction arriving August 2nd under "August 2026", and the month is the one property a user reads straight off the card. Card volume is unchanged for the daily-sync case — a fetch touches the current month, plus the tail of the previous one for a few days after rollover. Two consequences follow. First, **a card's date span is not a coverage claim**: a delta card can span all of July while holding only the three July rows that happened to arrive, and coverage lives on `connection_account` instead (below) — stated explicitly because the card *looks* like a CSV card, which does carry one. Second, **a row is filed once and stays put**: the card is chosen from the row's date at *insert*, and a later revision that moves that date — a pending charge dated by when it was made, settling into the following month — re-stamps the row without re-filing it. Deliberate, not an oversight: the card records which pull delivered the row, moving rows between cards after the fact would make an already-reviewed card's contents change underneath the review, and the drift is bounded to rows that settle across a month boundary. Third, **"reviewed" is not terminal on a delta card**: a late arrival re-badges an already-reviewed month, which is correct and already true of the current month today. All cards carry `connection_id` (indexed via `idx_import_batch_connection`) and the connection's `provider` key, written with the card because removing the connection nulls `connection_id` and a synced row should still name its connection afterwards (the origin hover then reads "Plaid (removed)"; cards whose connection was removed before the column existed, v55, stay unnamed). They are created **lazily on the first row the pull has something to say about** — an inserted row, a zero-amount refusal, or a row dropped for having no local account to land in — so a sync that genuinely found nothing leaves no empty card, while one that received data and imported none of it still has a card to report that on. (`row_count` is rows *received* — imported + skipped + deduped — exactly as on a file card, so a card whose entire content is dropped rows still counts them. It once counted only landed rows, which made the column mean two things on one card, since the history's reconcile re-derives it the file-card way.) **An already-held row is the deliberate exception**: it reaches no card and creates none. The other two are reported on a card because a card is the only place they appear at all — a dropped row is nowhere, a refused row is in no ledger — whereas an already-held row *is* in the ledger and a card entry would restate the transaction list; it is also the single most routine event a sync has (every top-up re-asks for recent days on purpose), so resolving a card for it would mint an empty one every month. They accumulate `row_count` / `skipped_count` / `deduped_count` + a per-account `import_batch_account` breakdown, and expose the standard per-batch duplicates + "Mark all reviewed" report. Two homes: the Import history (one row per connection, its cards as the expandable batches) and a review badge on the Import page's Connections tab. These cards have **no per-card Undo** by design — a sync isn't a discrete file event, and because the cursor has advanced past the rows, deleting them is not auto-recoverable by a normal re-sync; removing a connection's synced data is a **connection-level** action (`DELETE /connections/{id}/synced-transactions`) that also **resets `transactions_cursor` + `initial_sync_complete`** and clears the connection's coverage, so a later sync re-backfills. That removal **deletes** the connection's cards rather than leaving them as `status='undone'` tombstones the way a file's Undo does: a sync card records rows, not a user-supplied file, so with its rows gone and the cursor reset it records nothing — and both resolvers key on (connection, backfill/period) *without regard to status*, so a tombstone would be silently reused by the re-backfill and its rows would land on a card the history (`status='completed'`) filters out. It is available on a connection with nothing synced, because the case it recovers is precisely a sync that advanced the cursor while skipping every row for lack of a mapping. **A sync card emptied by any other route is deleted on the same reasoning**: deleting an account or emptying the trash recomputes each affected card's totals from the surviving rows (`delete_transactions` → `refresh_batch_totals`, `services/import_batch_totals.py`) and drops a `connection_sync` card that recomputes to nothing and holds no duplicate report — a CSV card in the same state is kept, because it records a file the user supplied and that stays true after its rows are gone. Without that, deleting the accounts a connection synced into stranded a zero-row card, and disconnecting afterwards (`connection_id` is `ON DELETE SET NULL`) put it beyond every cleanup path that keys on the connection, leaving it on the Import page as an empty card labelled "Data connection" — the generic subheading the history falls back to when a card's provider can no longer be resolved
-
-- **`import_batch_account.csv_value` for a sync card is the provider account *label*, not the opaque provider id.** "Source value" is simply whatever label a source uses to name an account, and a connection's is `"{provider_name} ···{mask}"` (`provider_account_label`). Three things depend on it: a sync card's per-account breakdown renders through the *same* `source label → mapped account` form a file card uses, with no connection special-case (the remaining `isConnection` branches in `ImportHistorySection` are about a sync being read-only — no rename/description/Undo — which is a real difference, not a labelling one), the ladder's source-scoped rules key on it, and the terminal-window matcher identifies a row's source account from the same label written into its `import_evidence_json.account.value`. Rows synced before this carry the opaque id and are rewritten by migration v24
-- **a sync card's `import_batch_account` rows cover the accounts that received *nothing*, not only the ones that contributed.** A source account whose rows were dropped for having no local destination gets a row with `was_skipped = 1` and the count it dropped — the same shape the CSV path writes for a source value the user chose not to map, so `✕ Some Account 35` means one thing on both kinds of card. Written from the sync's own per-account tally rather than from what landed, because a breakdown built from inserted rows structurally cannot name an account that inserted none; the label comes from `provider_account_index`, which unlike the dedupe context's `label_by_external` keeps `skip` and unmapped accounts, since those are precisely the ones needing a name here. `row_count` is rows **seen** for the pair, landed or dropped — `was_skipped` already says which kind, and only a card outliving the sync that made it can hold both. That is the case the flush's two merge clauses exist for: `account_id` is COALESCEd so a later sync's dropped rows (no destination, so NULL) cannot erase a destination an earlier one recorded, and `was_skipped` is MINed so mapping a previously-skipped account clears the flag on the next sync that lands a row and nothing can set it back — "skipped" is a claim about the pair, and one row landing disproves it. No coverage columns are written, for the reason a dropped row cannot make a coverage claim at all: it was never held. **An account that is mapped but simply received nothing still has no row here**, and cannot: there is nothing to count. That asymmetry is real rather than an omission — a file is a closed set, so "present but not imported" is always countable, whereas a connection's silent account leaves no trace anywhere. Only the connection card can show it, by building chips from the accounts the connection *offers*
-- **an import card's counts must still add up after rows leave the ledger.** A card states its counts three times — the `import_batch` columns, the `import_summary` headline, and the per-account `import_batch_account.row_count` — and an import or sync writes them together, but a later hard delete (an account deleted, the trash emptied) was free to move some and not others: account chips kept counting a purged row, and a recount rewrote `imported_count` and `total_rows` while leaving the summary's `deduped_count` behind, so a card could read "83 rows" beside chips and a duplicates pill summing to 67. The invariant is that **a hard delete of imported rows goes through `delete_transactions`** (`services/import_batch_totals.py`), which takes each row off the per-account entry that counted it — found by the source label in the row's evidence (`''` for a single-account file), not by its current account, since a row moved after import is exactly the one the account would miss — and then re-derives the columns and all four headline figures from one set of parts (`refresh_batch_totals`, the same recount the history listing runs). The entry is decremented, never removed, because a file card's entry also carries the coverage claim duplicate detection reads, and that stays true after the rows are gone. A file's Undo, a connection's synced-data removal and a restore are outside this: each deletes the card's accounting along with its rows. So is an Amazon order reversal, whose card counts orders rather than received rows
-
-- **"are these two accounts the same account?" is asked as a question about accounts, in two places, and never as a side effect.** A pile of cross-account flags between one pair of accounts is one question, not N: either the accounts are the same and the rows are duplicates, or they are different and every flag between them is a false positive. Both answers are terminal and both settle the whole pile, which is why it can be asked once. It is asked (a) at **mapping time** by the "Possible duplicate account?" chooser — where *Keep separate* now persists as an `account_pair_distinct` assertion via `distinct_from_account_id`, carried through `apply_account_mapping` (connections) and `new_accounts` (CSV) and recorded once the account exists; and (b) in the **duplicate report**, from `unresolved_account_pairs`, which names each pair still carrying unresolved flags and says whether a merge is even possible (`can_merge` — same type, compatible owners, neither already grouped; decided server-side so it and the Accounts page cannot disagree).
-
-  What the two answers do differs, and the asymmetry is deliberate. **Different accounts** (`record_account_pair_distinct`) clears *every* unresolved flag between the pair whatever its tier, because if the accounts differ then all of them are false positives by definition — and the clearing is not a convenience but what makes the assertion self-consistent, since the assertion suppresses future detection and leaving the existing flags would have the same evidence read as a problem before it and as nothing after. **Same account** (a merge) auto-confirms only the *exact* matches and leaves the review-only tiers standing, because a near-miss inside one account is a genuinely open question — two similar real transactions, or one recorded twice — and trashing on similarity alone would destroy real data. A same-account pair is refused outright: a `(X, X)` row would be matched by the sweep's own `MIN`/`MAX` filter for every future candidate on that account, switching detection off there for good.
-
-  This replaced a much worse arrangement in which **keep** carried the account decision. A button on a transaction row, labelled for what it did to that transaction, silently wrote a durable assertion suppressing detection between two accounts forever and cascade-cleared every other flag between them — so selecting five rows and clicking it resolved forty-two, making the bulk selection beside it a fiction, and the assertion it wrote had no screen anywhere to show or undo it. Assertions are now listed and reversible under Settings → *Duplicate detection exceptions* (**Distinct account pairs**) (`GET`/`POST`/`DELETE /accounts/distinct-pairs`); forgetting one only re-enables checking and never revisits decisions already made about individual rows.
-
-- **three stores describe a sync, and which one a fact belongs in is decided by who may lose it.** A connection accumulated several overlapping records of "what happened", and the resulting confusion was structural rather than cosmetic — the connection card's own summary was being derived from a debugging artifact. The split, and the rule for each:
-  - **Connection status** — `connection` (cursor, last synced, last outcome + summary, request budget, error/failure state) and `connection_account` (coverage, history completeness). **Durable, and provider-shaped.** Each adapter genuinely needs different things here — a cursor provider keeps a resume token, a walking one keeps per-account coverage and a metered allowance — and that variation is expected rather than a gap to close.
-  - **Diagnostic history** — `connection_sync_log`. **Best-effort and disposable**: pruned by age on every write, cleared wholesale from the UI. Nothing user-facing may derive from it. It carries what only a per-call record can explain — cursor fingerprints, requested windows, the allowance a pull left behind, the status sequence — and the app must remain fully legible after it is emptied.
-  - **The bundle of transactions received** — `import_batch` + `import_batch_account` + `import_batch_duplicate` + `config_snapshot.import_summary`. **Behaves like a CSV import card.** The monthly-vs-per-file boundary is the expected difference; anything else is an exception that needs a reason (per-card Undo, rename, coverage claims — each argued separately above).
-  
-  Two defects followed from not stating this. `_sync_outcome` derived the connection card's pill, totals and per-account chips from the newest log row, so `DELETE /sync/diagnostics` — a debugging action on a healthy connection — erased the card's entire "Last sync" block; the outcome is now computed at sync time by `sync_outcome` and stored on `connection.last_sync_outcome` / `last_sync_summary`, written from the same assembled facts as the log row so the two cannot describe one pull differently. And the log stored **sums of itself**: `skipped_no_account` / `skipped_already_held` were column-wise totals of `account_counts` in the same row, while the one bucket that never got a column was recovered by subtracting the others *in the browser* — so every bucket added afterwards silently corrupted whichever was computed last. The buckets now live only in `account_counts` and are summed on read (`_skipped_breakdown`); the two columns are vestigial, written 0 and read by nothing, and removable whenever a rebuild of that table is otherwise worth doing.
-
-- **`skipped` on a sync is four unrelated events, and only one of them is anyone's problem.** `skipped_by_choice` (the account is mapped `skip` — the user's decision being honoured), `skipped_unknown_account` (no mapping decision yet, or an account the provider added since), `skipped_already_held` (the incremental overlap re-asking for recent days, non-zero on every top-up by design), `skipped_zero_amount` (a refusal the adapter's declared policy chose). The split is taken where the row is counted, from `connection_account`: a `skip` row means the first, anything else means the second. **`attention` is reserved for a problem with no other surface**, which leaves exactly one — already-held rows that a *different* connection brought in, the outward appearance of a transaction-id collision. No-destination rows used to raise it and that was wrong twice: a `skip` account's alarm could never be cleared, so a correctly-configured connection reported a problem forever; and an account genuinely awaiting a mapping already raises the "N to map" badge from `connection_account`, so a second alarm added nothing. Where those rows *went* is a question about the bundle received, and it is answered per account on the import card.
-
-- **Connection sync diagnostics (`connection_sync_log`).** A per-call record of provider syncs written by `run_sync` — and, despite the name, of every other operation on a data connection (see *Every connection operation* at the end of this entry) — for answering the two questions a connection cannot answer about itself: *did this sync fetch everything?* (the motivating case: an initial pull that stopped at the ~30-day Initial Update instead of running to `HISTORICAL_UPDATE_COMPLETE`) and *why did nothing arrive?* One row per (connection, `/sync` call): `status_sequence` (the adapter's `update_status` readiness signal across the drained pages — Plaid's `transactions_update_status` today), `final_status`, `became_complete` (the call that flipped `initial_sync_complete`), page count, added/updated/removed/skipped **deltas**, `mode` (`initial`/`routine`), `days_requested`, cursor fingerprints (never the full resume token — see below), `card_counts`, `requested_windows`, any `error`, and the two message lists below. The last two exist because a per-call total answers neither question a reader actually arrives with. **`card_counts`** (`[{card, added, id, imported_at}]`) names the import cards the rows landed on: a sync files each row under its *own* transaction month, so one call routinely writes to several cards while `added` reports one number — and against an Import page showing one card at a time, a total that reconciles with nothing on screen reads as rows having gone missing. **`requested_windows`** (`[{start, end}]`) records the date ranges actually asked for, which for a walking, budgeted adapter is not recoverable from anything else: it may spend twenty requests and stop partway, leaving a resume checkpoint that says where it *ended up* rather than what it looked at. Both are optional in the page contract and empty for a cursor provider, which asks for "everything since this token" and names no window. **The governing rule is that a consumable's *level* belongs in the row, not only its effect.** Everything a sync advances or spends lives, by default, in a column the *next* sync overwrites — `connection.provider_request_budget` holds the metered allowance, `connection_account.coverage_*` holds each account's position. A log row that records only outcomes can therefore say a pull "paused on the request limit" while the limit it names is unverifiable and already gone, which is a record of what happened rather than one anybody can diagnose from. So three things are snapshotted per call even though they duplicate live state: **`request_allowance`** (`{capacity, refill_per_hour, pools:{pool key: tokens left}}` — an absent pool is a full one, and NULL means the provider meters nothing, which is *not* a measured zero), the **`pool`** each entry of `requested_windows` was charged to (a walk narrow enough to filter spends each account's own bucket while a wide one spends the shared bucket, so a bare request count reconciles against neither), and the **`reached`/`history_complete`** pair merged into each account's `account_counts` entry (where that account got to on *this* call, as against where it stands now). Relatedly, `update_status` distinguishes `BUDGET_PAUSED` from `RATE_LIMITED`: this client declining to ask and the server refusing a request are opposite failures — the second means the local accounting disagrees with the provider's — and collapsing them left the log unable to tell "working as designed" from "the model of the limit is wrong". **Provider-agnostic by construction** — it records only the neutral adapter fields from `services/providers/base.py`, so it serves any future aggregator unchanged, not just Plaid. The row carries a denormalized `provider`/`institution` snapshot, which labels it without a join. **Retention is by age** — a ledger setting (`connections.log_retention_days` in the shared preference scope, so it rides backups), default 30 days, 1–365, pruned on every write and at once when the setting changes — which, with the clear endpoint, is exactly why nothing user-facing may read from here (see the three-store split above). It replaced a cap of the newest ~500 rows, which let one busy connection push every other connection's history out of the log with nothing to say it had happened. The read endpoint derives each row's `skipped_breakdown` from `account_counts` rather than shipping counts for the client to reconstruct. Read/cleared via `GET`/`DELETE /api/sync/diagnostics`, and its retention set with `PUT /api/sync/diagnostics/retention`. The read takes repeatable `subject` (a connection id, or `connect:<provider>`) and `provider` filters, a row matching either being returned, so a scoped view does not ship the whole retention window to be filtered in the browser; it returns the newest `limit` (200) matches with their `total`. Opened from the **Sync log** button on the Import page's Connections tab: the button at the top of the tab opens it unfiltered, a provider card's starts it filtered to that provider, and a connection's last-sync outcome pill to that one connection. **Excluded from the regular backup** — operational diagnostics tied to `connection` (itself credential data that rides the separate credentials backup, not the data backup), not part of the financial dataset a backup preserves.
-
-  **Every connection operation, not only syncs** (`services/connection_log.py`). Each operation that talks to a provider on a connection's behalf writes one row, named by `event`: `sync`, `connect`, `reconnect`, `refresh_accounts`, `disconnect`, and the per-connection outcomes of an exposure response's credential `reissue` and a vault reset's `revoke`. A non-sync row fills only `error` and `detail` (a JSON object of its own facts: accounts offered, whether a disconnect revoked at the provider, a credential outcome) and leaves the sync columns at their defaults. On a failure of any kind of row, sync included, `detail.provider_error` keeps what the provider itself said — Plaid's error body, request id and documentation link among it, never the response headers — beside the readable `error`; the dialog shows it under the row's **Details** and *Copy for support* includes it. One log because they are one story — a sync failing the morning after a secret rotation is explained by the rows beside it. What is recorded is **the provider's answer**, not the app's own pre-flight refusals (vault locked, demo data loaded, not configured), which already say why in place and involve no provider. A Link session that errors in the browser is reported back (`POST /api/plaid/link-error`) so the connect it belonged to is not missing. **Two kinds of row have no live connection**, which is why v60 made `connection_id` nullable and removed its foreign key: a connect that failed before the provider issued one (`connection_id` NULL, filed under the provider's connect attempts), and a **disconnect**, which deletes the connection's other rows and keeps its own under the gone connection's id, so the log can still say when a connection was removed and whether access ended at the provider. The disconnect endpoint is the only place a connection is deleted, and it does that cleanup itself (`delete_for_connection`). v56 had once made the id `NOT NULL … ON DELETE CASCADE` because rows kept with the id *nulled* collapsed into one pill that could not filter; keeping the real id is what avoids that here. Don't re-add the cascade: it would delete the disconnect row the moment it was written.
-
-  - **`warnings` and `advisories` (both JSON, added in migration v31) are the "why did nothing arrive" half**, and they split by *who can act*, the same rule the connection card uses. `warnings` are user-actionable bank-level problems and mirror what the card shows; `advisories` are `[{message, count, context}]` for things nobody can act on — what the provider said about *our own request* (a date range wider than it recommends), plus the sync layer's own notices that rows had nowhere to go (an unmapped non-ledger-currency account, newly discovered provider accounts skipped until mapped). `count` is how many of the call's requests drew the same remark: a windowed history walk provokes an advisory on every one of its ~24 requests, and "24 times" says the whole walk was affected rather than one stray request. `context` names one concrete request that drew it (the first — e.g. `fetching 2023-11-22..2024-01-06`), which the message alone cannot. **They are separate fields deliberately**: the message is the aggregation key, so folding the request into it would give every window its own entry and destroy the count. The card deliberately shows only `warnings` — a note about our request shape sitting beside "your bank needs re-authentication" teaches the user to ignore both — but *not worth a card* was never a reason to leave something unrecorded, which is what the log now fixes. The console (`log_warning`) keeps receiving all of it; it simply stopped being the only sink.
-
-  - **The cursor fingerprint has two shapes, because `transactions_cursor` holds two different things.** Plaid's is an **opaque** paging token, where `len=<n>·<first 8 chars>` is the only marker available. A provider with no change feed stores its own **JSON checkpoint** there instead, and slicing that yields `{"throug` — meaningless, indistinguishable from a truncation bug, and hiding the fact worth having (how far the walk reached). A checkpoint is therefore summarized as its own short scalars: `through=2026-08-08`. Values longer than a date or a count are elided — parsing as JSON does not make a token non-secret, so "never store the whole thing" holds for both shapes.
-
-  - **`skipped` is several unrelated events** and is recorded split, per provider account, in `account_counts` — keyed by the *provider's* account id rather than the local one, because a tally built from what landed can never name the account that received nothing, which is exactly the account worth naming. The buckets and the rule that decides which one an alarm may read are above; the column-wise totals that used to sit beside them (migration v32's `skipped_no_account` / `skipped_already_held`) are vestigial.
-
-  - **`already_held` is a contradiction only when another connection brought the row in, and is judged by who, not when.** A connection re-seeing its own rows is routine however it happens — the top-up's overlap, a metered backfill resuming across many syncs, a walk's overlapping pages, a restore that clears the resume point and puts every synced row back — so the bucket that counts is `skipped_held_by_other_connection`: rows whose import card belongs to a different, still-existing connection. That is what a transaction-id collision looks like from the outside (see `txn.external_transaction_id` above), and it is the signal that would have caught that bug on the first sync rather than the third. It was once judged by timing (no resume point meant a first pull, which could hold nothing), and the first sync after every restore then reported the connection's entire history as a collision with itself. A row whose card has lost its connection (the connection was removed) is not counted: a reconnect re-offering it is that account's earlier data coming round again.
-
-  - **The connection card's last-sync summary is NOT derived from this log.** It once was — `list_connections` joined each connection's newest row — and the consequence was that clearing a debugging view blanked the "Last sync" block on a healthy connection, because a capped, prunable, user-clearable buffer had become a user-facing contract. The outcome word is now computed at sync time by `sync_outcome` and stored on `connection.last_sync_outcome` / `last_sync_summary`; both records are written from the same assembled facts in one call (`_record_connection_last_sync`), which is what preserves the original guarantee that the card and the log cannot describe one call differently. The vocabulary still names the *effect on the user's data*, not the mechanism: a walk that stopped on the provider's request budget is `incomplete` — "more history to fetch" — because "budget paused" means nothing to someone who doesn't know the provider meters requests.
-
-  - **A pull's own rows are recorded on the connection, capped, so "review what just arrived" is answerable.** A synced row's only lasting provenance is its import card, and a card is per-(connection, calendar month): it accretes across every sync of that month, so filtering by it answers *what did this month receive*, never *what did this pull bring*. Nothing on `txn` records which sync delivered it — there is no `created_at` and no run id, and the id lists a sync builds (`card_added_ids`, `touched_ids`) live only for the duration of the call. `last_sync_summary` therefore also stores `cards` (`[{id, label, added, imported_at}]` — the id is what lets a surface *open* the card rather than merely name it) and `row_ids`, the rows the pull added or revised. Three rules govern it, and each is avoiding a specific way this goes wrong:
-    - **Past `_SCOPED_SYNC_ROW_CAP` (250) the list is dropped whole, never truncated.** A partial list is a report that misstates its own extent. The fallback is the card itself, which at that size is the better report anyway: the only pull that exceeds the cap is a first backfill, and a backfill already lands on one dedicated "Initial import" card that isolates it exactly. The cap is a judgement about the *report* — past a few hundred rows nobody is categorizing them one at a time — not a limit of the query.
-    - **The ids are never published.** `list_connections` projects the summary through `_projected_sync_summary` and sends `scoped_rows` (a count) instead. `GET /api/providers` is **polled** for the duration of every sync, so the ids would ride every poll, for every connection, whether or not anyone opened the report. The report is served by connection id instead: `sync_connection_id` on the transactions filter expands the list in SQL (`json_each` over the stored summary), which also keeps it out of a query string that would otherwise carry ~10KB of uuids on every page and every sort, and puts it in the **shared** filter builder so the list feed and the bulk endpoint resolve the identical set.
-    - **Every missing case collapses to zero rows, not to the unfiltered set.** No summary, a summary written before this existed, a dropped list, an unknown connection id — a scope that silently widened to the whole card would misreport the pull, which is the one thing the report exists to get right. The row set is also **replaced every pull**, which is what makes it "the last sync" and not an audit trail; the rows themselves remain on their card.
-
-    `removed` rows are deliberately outside the scope: they are trashed, so a report cannot show them and offering to categorize a row that has left the ledger would be nonsense. And this list is **not** copied to `connection_sync_log` — a 500-row ring buffer would retain the ids 500 times over for a report only the newest pull can serve, and a user-facing report may not rest on something `DELETE /sync/diagnostics` erases (the same rule that moved the outcome word here).
-
-  - **It is deliberately not behind `LUMA_DEVELOPER_OPTIONS`** (it was until 2026-08-08, *including writes* — so enabling the flag after trouble produced an empty table and the user had to reproduce the failure to learn anything, which is backwards for the one case the log exists for). That flag gates **destructive dev reset tools** and stays env-only for the reasons in `docs/operations.md` -> "Considered and rejected"; this log is read-only, is the only in-app answer to "why did this connection import nothing?", and is what a user attaches to a help request. It inherited the gate by having been added as a neighbouring Settings card, not by needing one.
-
-- duplicate rows within the same CSV are allowed
-
-- **coverage has two shapes, and both are correct.** A **file** stores its trusted window plus its terminal date per raw account label on `import_batch_account`: a file's claim genuinely *is* per-batch ("this file covered this range"). A **data connection** stores `coverage_start_date` / `coverage_through_date` on `connection_account` instead, because a cursor delta is **not a date range** — it is "everything new to us since checkpoint C", an arbitrary set of rows scattered across whatever dates they carry, so no window computed from what a delta happened to contain means anything. What *can* carry a claim is the chain: `transactions_cursor` + `initial_sync_complete` together assert "every change the provider has reported, back to the backfill window, is in the ledger", which is a stronger claim than any per-card one and belongs to the account over time. A **range pull** (the initial backfill, or Fetch more history) establishes or extends `coverage_start_date` backward; a **delta** only advances `coverage_through_date`; a **failed** sync advances nothing, so coverage simply stops growing — self-correcting, with no staleness flag to maintain; a cursor reset clears both. Which of those two paths runs turns on whether the adapter **reports** per-account coverage, never on whether the report is non-empty: an adapter that keeps no per-account coverage (a cursor provider) licenses recording the depth that was *requested*, while a walking adapter reporting an empty set is saying this pull reached nothing new. A walking provider reports exactly the empty set once every account's history is complete, so reading the two as the same thing made "Fetch more history" on a finished connection claim the whole requested depth — years — for accounts nothing had fetched. A per-account `coverage_start_date` therefore carries a second meaning worth stating: **its absence on a mapped account identifies one that joined the connection after its history was fetched.** Every account present during a range pull came away with a start date, so a mapped account with none was not there at the time — which is how such an account is picked up by the next history pull without anything having to track newcomers or schedule work for them. (`skip` is excluded: it has no destination to fill.)
-
-- **`connection_account.history_complete` is a different claim from `coverage_start_date`, and only it may stop a search.** Coverage says how far back data has been fetched; it cannot distinguish "the account's history ran out" from "we stopped at the depth asked for" or "we ran out of request budget". Only the first means there is nothing older, and only it may prevent a later, deeper request from looking again — so it is stored separately rather than inferred. `history_empty_streak` is the per-account form of the two-empty-windows stop that concludes it (one empty window is a quiet period; two is the end of history), persisted so a walk that pauses resumes counting rather than starting the streak over. Both are per account because a connection's accounts do not advance together: one added on the provider's side later starts with no history while its siblings are years deep. *(Added in migration **v28**; existing rows take `history_complete = 0` — "we have not established that this account's history has ended" — which costs one extra window on the next deep pull, where the opposite guess would leave history that is never fetched again.)*
-
-- **the ledger holds one currency at a time, and which one is a user setting.** The constraint is *one*, not *USD*: `txn.amount` is a bare number with no denomination stored beside it, so two denominations saved together are indistinguishable and both join every total, budget and report. There is nothing to convert *from* and no rate source to convert *with*, so face-value import of a second currency is the one option that silently corrupts arithmetic. The value lives in `import_workflow_state` under `ledger_currency` (workspace-wide shared state, not `ui_preference` — everyone reads the same numbers, and a per-user copy would be orphaned by a restore into another profile), is read through `services/ledger_currency.py`, and reaches provider adapters as the `ledger_currency` argument to `fetch_transactions_sync` — the same "the caller owns the database, so it owns the facts in it" rule that governs `account_targets`. The frontend's counterpart is `MONEY_DISPLAY_CONFIG.currencySymbol`, applied at boot from the same setting and derived via `Intl` rather than a hand-kept table. **A date-format setting is the opposite case and belongs in `ui_preference`** — two people can legitimately prefer different date orders while reading the same ledger, where they cannot prefer different currencies for the same numbers. Do not "make them consistent": they sit on opposite sides of the dividing line below because the questions differ, and the date half is not built (see Open).
-  - **The question is "does this match the ledger", never "is this dollars".** A consistently-AUD ledger is entirely correct; only *mixing* breaks. An earlier version compared against a hardcoded `"USD"`, which would have discarded every transaction belonging to a non-US user whose data was never wrong — so **nothing outside `ledger_currency.py` may compare against `DEFAULT_LEDGER_CURRENCY`**, or the setting becomes decorative and the bug returns.
-  - **Changing it converts nothing** — no amount is rescaled or rewritten, so the change is instant and perfectly reversible. That is also what makes it dangerous: it silently relabels every historical figure. `PUT /api/currency` therefore answers **409** (`currency_change_needs_confirmation`, carrying from/to and the row count) when the ledger already holds transactions and the caller has not confirmed; an empty ledger changes in one click, since there is nothing to relabel and that is the first-run case.
-  - **Multi-currency is a separate, much larger change** and this is not a down payment on it: holding two at once needs a per-row currency column, a rate source with historical rates, and a decision about what a total spanning currencies means.
-  - **Both adapters report it, at the level their provider states it.** SimpleFIN carries a currency per account, so a mismatched account is dropped whole and never becomes a walk target. Plaid carries one per *transaction* (`iso_currency_code`, or `unofficial_currency_code` for crypto and currencies it does not officially support — which can never equal an ISO ledger, the right answer for them), so its adapter filters `added` and `modified` row by row. Both report the same `unsupported_currency` map, and the one place the difference *does* reach the sync layer is what the user is told, which each adapter declares as `currency_scope`: a per-account drop warns that the account "is held in" the other currency and cannot fill, while a per-transaction drop says that *some* of the account's transactions were not imported — the account-level sentence is false for a wallet that holds one foreign charge among dollar ones.
-  - **A file states currency per row, through an optional mapped column** (`column_map.currency`). Mapped, a row whose cell names another currency is refused and listed on the import card as a rejected row (`kind: "currency"`, counted in `currency_rejected_count`), the same visible refusal a $0 row gets; a blank cell states nothing and is taken to be the ledger's. Unmapped, nothing is judged, which is right for nearly every export, since nearly none carries the column. The mapper suggests a column headed *Currency*, so a wallet export that does mix currencies costs nothing to set up. Refusing rather than importing matters twice over for a wallet: a £10 subscription imported as $10 is wrong in every total, and its real cost — the $14.21 charge on the funding card — can never pair with it as a duplicate because the amounts differ.
-  - The provider's stated denomination is recorded per account as `connection_account.provider_currency` at connect/refresh time — **before** any mapping decision, so the mapping grid can warn instead of letting the user create an account that can never fill (migration **v29**; existing rows take NULL). **NULL means "not stated", never "not ours"**: the field is optional in the protocols, and rejecting an account over a missing field would discard real data on a formatting gap — only a *stated* other currency is unambiguous. Such an account is excluded from `_build_account_targets`, which matters for correctness and not only cost: a target that can only ever be discarded would come back with `coverage_start_date` set and its empty-window streak climbing to `history_complete`, both asserting there is no data over a range where there plainly is — the over-claim shape above, reached by a different route. The user-facing warning is driven by the **stored** currency rather than by what a given pull discarded, because the walk narrows a request to a single account whenever only one still wants history, and a warning that appears or vanishes with the shape of an unrelated fetch teaches the user that its absence means nothing. Only *mapped* accounts warn; unmapped ones are logged, since their rows are dropped regardless and there is nothing there to lose.
-
-**A range pull claims what it actually reached, not what it asked for, and per account**: the adapter reports `account_coverage`, and only where it cannot say does the caller fall back to the requested depth for everything synced (right for a cursor provider, whose maintained window *is* the requested one and is the same across the item). Both halves matter for a provider that walks history in windows and can stop early — out of history, or out of request budget. Claiming the requested depth would assert coverage over a range nothing fetched; spreading one figure across every account would do the same to accounts a filtered pull never touched. Coverage that overstates itself makes the ladder hard-reject genuine transactions — concretely, a later CSV import of that period discarded as duplicates of rows that were never fetched. Sync cards therefore write **no** coverage columns at all. `build_dedupe_context` reads the **union** of both shapes, so the ladder sees one coverage picture regardless of which recorded it. **A walking adapter's request bounds are instants while its coverage claim is per date, and the two have to line up.** SimpleFIN's windows abut — each one's end date is the next one's start date — so only the window holding the pull's *newest* bound closes at 23:59:59; every older one ends at midnight, where the window forward of it already covers the rest of that day. Closing them all long instead was not a correctness bug (the insert is idempotent on the provider transaction id) but it re-fetched the boundary day in full and, since the bounds are instants, made a nominal N-day window N days plus 23:59:59 on the wire — enough to trip the Bridge's own same-sized range advisory. The newest window is the one place the long bound is load-bearing: nothing covers the rest of today, so a midnight end there would leave anything posted since midnight outside every window ever requested while coverage went on claiming the day — the over-claim shape this whole bullet is about, reached through the clock instead of through the calendar
-
-- **the terminal *window* generalizes the terminal day, and a source is assumed to lag unless it says otherwise.** Coverage stops short of a source's last date, and those excluded days are reconciled one-to-one (Rule 5) rather than blanket-rejected. The original premise — that only the export *day* is partial — turned out to be the special case rather than the rule: **most sources lag the thing they describe.** An aggregator (Monarch, Fidelity, any data connection) is itself waiting on the bank, so an export dated the 27th can be missing a 25th transaction it had not yet ingested; only a first-party export of records the source itself created (Amazon, PayPal) genuinely has no lag. So the covered range ends at the **last date the source actually carries** that is still before `terminal_date - (terminal_window_days - 1)` — the window sets the bound, but coverage never claims a date the file does not contain, so widening the window moves the end back by more than the window's own size whenever the file's last dates are sparse. Every day in the window gets a candidate slot, and the **default is the lagging case (7)** for CSV sources and connections alike — with **1** available as the explicit opt-out for a first-party source. The setting is a property of the source: `csv_import_profile.terminal_window_days` for a saved CSV data source (surfaced in the data-source editor as how many days it lags the bank), `connection_account.terminal_window_days` for a connection, applied to the trailing edge of `coverage_through_date`. **The two halves must be kept together, and for a connection they were not.** Candidate slots were built solely from `import_batch_account.terminal_date`, which a sync card deliberately never writes (a cursor delta is not a date range), so a connection received the coverage carve-out with none of the reconciliation it exists to enable — a `terminal_window_days`-wide hole at the leading edge of every connection's coverage in which neither the coverage rules nor Rule 5 could fire, and through which a second source's copy of a charge imported silently. `build_dedupe_context` now derives a connection's slots from its own claim (`coverage_through_date` + `terminal_window_days`, candidates being that connection's rows on those days), keyed into the same two indexes a file's rows feed. Slots are registered *before* the coverage computation bails on a connection whose range is entirely inside its own lag: proving no range is not the same as having no rows to reconcile against. The self-exclusion asymmetry is unchanged — a connection reconciles against every source but itself, because a delta inside its own window is a late-posting charge, not a re-import.
-  - **Why the default is the wide one — the errors are not symmetric.** Too *narrow* a window blanket-rejects a real transaction the earlier export had not caught yet: it never enters the ledger, and the only trace is a "covered, no specific match" line in that file's duplicate report. Too *wide* a window costs one extra one-to-one reconciliation pass over a few more days, which still catches genuine duplicates *and names the row it matched* — a better answer than "date covered" either way. The window is also a far weaker discriminator than the text match running alongside it. 7 is the same evidence-derived bound as `CROSS_ACCOUNT_DATE_WINDOW_DAYS`: measured posting skew between two sources describing one charge reached +6 days.
-  - **A revised amount is a correction, not a duplicate and not a new row (`match_terminal_amount_revision`).**
-  Rule 5 pairs a terminal-window candidate on exact hash, then on **amount alone** — so a row whose
-  descriptor the source rewrote between two exports still finds its twin, while a row whose **amount**
-  moved matches neither tier, clears the rest of the ladder, and imports as a second copy of a
-  transaction already held. Measured across seven consecutive aggregator exports of one ledger, every
-  amount revision was a restaurant or cafe charge settling with its tip added, 0-2 days inside the
-  window, and each had landed twice. The descriptor is all that is left to match on and is far too weak
-  alone — two charges from one merchant on one day at different amounts are ordinary — so the
-  `(source, date, descriptor)` group is reconciled as a **set**: equal amounts pair off first, and only
-  a lone leftover on each side is read as a revision. Anything else has more than one reading and is
-  left alone. This cannot be decided row-at-a-time; consumption order would otherwise settle it, with
-  the revised row taking the candidate on text and pushing the error onto its neighbour. The match
-  **updates the held row in place** — amount and `content_hash` — exactly as a posted row supersedes a
-  pending one, so the user's category, rename, tag and note edits survive; a reject-and-replace would
-  drop them. Two deliberate bounds: it is **same-source only**, because a cross-source amount
-  disagreement is a reconciliation question rather than a settlement and belongs in the duplicate
-  report, and the row is **not re-homed** to the correcting batch, since that import did not create it
-  and undoing that import must not delete it. The cost of not re-homing is that undo leaves the
-  corrected amount in place.
-  - **A coverage reject's candidate list is filtered *relatively*, not absolutely (`_display_candidates`).** The lookup finds candidates on amount and date alone, so the report has to decide which of them are worth showing as "this is what the row duplicates". A candidate is kept if it agrees textually (exact / fuzzy / weak), or if there is no text on one side to compare at all — a nameless money-movement leg agrees with nothing by design, and silence is not disagreement. The third rule is the one that matters: an exact-date or ±1 candidate with **no** textual agreement is kept **only while nothing else in the list has any**. That band genuinely is the case the lookup was built for — two sources routinely describe one charge with no shared text whatsoever (a bank's terminal string against an aggregator's cleaned merchant name) — but stated as an absolute rule it cannot tell that case from a coincidence arriving close in. Three same-amount charges on adjacent days each listed all three candidates at equal confidence, with each row's real twin (identical wording, matching amount, a day away) buried among two unrelated charges. Once *some* candidate agrees textually, a better explanation is already present and the wordless neighbours become exactly the noise the filter exists to remove. The kept list is then ordered by **tier, then date distance** rather than date alone, so the row a reader checks first is the one most likely to be right. All of this is display-only and applied **last**: `_coverage_reject_verdict` sees the complete list, so nothing here changes which rows were rejected or why.
-  - **Within one batch, a worded same-day claim outranks a near-date guess at the same row (`release_contested_candidates`).** Each row's lookup judges that row alone, so two rows of one file can both name one existing row — and one file does not describe one transaction twice. The case that found it: a wallet purchase and its refund two days apart, each with a nameless card leg of the same amount beside it in the wallet's export; each leg's only same-amount row in reach was the *other* day's purchase or refund, while that row's own same-day, same-wording twin was claiming it. Auto-enrich then folded the leg's `Type` into the wrong row, and a refund reading "General Card Deposit" sent the PayPal reconciliation looking for a card charge that does not exist. So before the report is saved and enrichment runs, a candidate is dropped from a row's list when another row of the batch names it as its **only** match, **in agreeing words** (or as a specific ladder match), **more strongly** — tier, then date distance. A row left with nothing reads as `no_match`, and `refresh_unexplained_coverage_candidates` honours the same claims when it looks wider. Two guards hold it to what it is for, and both were measured: a **cross-account** candidate is never released (a file carrying both legs of a PayPal payment rightly points two rows at one card charge, in two senses — releasing those turned ~45 settled rows on a real ledger into review work), and a **wordless** claim releases nothing (a same-day neighbour with no shared text proves no more than the guess it would displace). With both, the real ledger's stored reports change in 8 rows. Verdicts are untouched.
-  - **Enrichment refuses a row that states a different kind of transaction (`import_enrichment._conflicting_kind`).** A captured `Type` is the source's own word for what the row is; when both sides carry one and they name different kinds — payment, refund, wallet funding, wallet withdrawal, other money movement, compared by kind because two exports spell one type differently — nothing of the incoming row is folded in. It cannot stop a *first* enrichment, since a row with no captured type has nothing to disagree with; the batch claims above are what keep the wrong row from being reached at all.
-  - **Two safeguards divide this space; know which one catches what.** A *named* row inside a covered range that matches **nothing at all** was already falling through and importing before the window widened (`_coverage_reject_verdict`, for the wallet-funded-payment case). What that escape cannot rescue is a row colliding with a **coincidental same-amount** row elsewhere in the range — the collision counts as a candidate, so the row is rejected. It no longer costs the row its *explanation*, though: once the text tiering empties the displayed list, the ledger probe runs again for the report and names the corroborating charge if one exists (the verdict is untouched — the row stays rejected either way). That collision case, plus nameless money-movement legs, is what the trailing window actually rescues. Worth stating because a test that widens the window and asserts "the row imports" will pass with or without the change unless it constructs the collision.
-  - **A source that does not outrun its own lag covers nothing** — correct, not a bug: it has proven nothing, so it must blanket-reject nothing. Its rows still reconcile one-to-one. This is why a short export no longer establishes a coverage claim at all, and why the dedupe fixtures span more than a week.
-  - **The narrow setting is not reachable by accident.** A stated window below 1 clamps to 1 (a window under 1 would push coverage *past* the source's own last date); an absent or unreadable one takes the default. The two are deliberately distinguished, so a stray `0` cannot be read as "unset" and handed the widest window of all.
-  - **Migration v25 flipped this**, rewriting the rows v24 had written at 1. That rewrite was sound only at that moment: the setting had no writer of any kind until the data-source editor gained the field, so every stored 1 was a column default rather than a decision. Afterwards a 1 *is* a decision — and, being byte-identical to the old default, it is protected only by `run_post_restore_data_init`'s version gate, not by its value. Note also that SQLite cannot change a column default in place, so an upgraded database keeps `DEFAULT 1` in its DDL where a fresh one has 7; this is harmless **because every insert path states the column explicitly**, and a new writer that omits it would silently create no-lag sources on upgraded databases only
-
-- the coverage-window, terminal-window, and text-strategy medium-confidence rules only hard-dedupe against prior coverage when the receiving account itself appeared in that coverage (or was explicitly declared an alias of an existing account — today only a `connection_account` mapped `existing`, i.e. "this provider account IS that local account"); a brand-new sibling account inheriting only its linked-group's coverage does not satisfy the precondition and the row passes through to the soft-duplicate review instead, because the prior import provably did not contain transactions from this new account and "covered" cannot mean "covered for this account." Exact content-hash matches are unconditional — same date+amount+payee is high-confidence enough to drop regardless of which account the receiving row lands on
-
-- **a connection's own coverage is excluded when that connection is the one ingesting**, and the asymmetry is load-bearing. A CSV re-import of an already-covered range **is** a duplicate — the user handed over the same range twice. A sync delta inside its own connection's covered range is **not**: the provider has just reported a late-posting charge, and the claim was only ever "everything the provider has told us about is here", never "nothing more will arrive for these dates". Without the exclusion every late arrival would be rejected against the connection's own coverage. Coverage from *other* sources — a CSV, another connection — applies to a sync unchanged, and is what catches a re-fetch of rows already imported from a file
-
-- saved data sources keep reusable import mapping defaults plus a default `use_imported_categories` flag for future files from that source; in the UI this is exposed as whether categories present in the data should be used by default
-
-- **a saved data source's `header_fingerprint` is the layout of the last file imported through it, not the layout it was created with.** A file is matched to a source by exact equality on this value, so a vendor adding one column would otherwise orphan every later export and leave "a second data source per layout generation" as the only way forward. A completed import through a source therefore rewrites it (`run_import_parsed`) — written at the import and not when the mismatch warning was dismissed, because only a completed import proves the source's mapping still reads the file. That is also what makes an unattended folder recoverable: a file whose header has moved parks with a reason naming the one hand import that clears it, rather than needing the source's settings edited. Importing an **older** file takes the source back to that older layout; accepted rather than guarded against, since the next current file moves it forward again and a rule to prevent it would have to decide which of two real layouts is the newer one. A **recognized** source (PayPal) is excluded, because one such source serves two file shapes — the activity CSV and the PDF statement — and is matched on the recognized kind rather than on this value, so letting each import claim it would leave the two rewriting each other.
-  - **The mapping screen is where a changed layout is surfaced, and it has to be marked to be seen.** Capture never widens on its own (`column_map.evidence_columns` is authoritative when present), so a column a vendor adds is captured nowhere until someone ticks it — and on a real ledger one was missed exactly that way, because the capture panel already listed it indistinguishably from the columns that were always there. The columns gained and lost since the source's stored layout are therefore named above the mapping controls and marked in the capture panel (`importColumnDelta`). Each change is surfaced once, on the file that introduced it, which is the consequence of the source learning the layout on import.
-  - **There is one definition of the value: `ParsedFile.fingerprint`, with blank header cells dropped.** The preview built its own from every cell including blanks, so a file with a trailing comma on its header row auto-matched a source in the UI and was parked by the watched-folder scan, or the reverse, depending on which path had created the source. One definition matters more now that the app rewrites the value itself.
-- saved data source names must be unique after trimming and case-folding so source pickers never show ambiguous duplicate labels
-
-- saved data sources remember the last template filename/hash used while editing them, but loading a fresh template file remains an explicit user action
-
-- each completed import batch stores whether that specific file used categories present in the data, along with any owner or unassigned-account filtering used for that scope
-
-This separation exists because the reusable default and the actual decision for one file are not the same thing. A source may usually provide useful categories while a specific file from that source still needs to be treated differently, and undo/review flows need the exact per-batch choice, not just the profile default.
-
-- imports that use categories present in the data can assign real `category_id` values to imported transactions, lock those assignments against *automatic* rule reruns (an explicit per-rule apply can still reclaim them — the preserve-manual variant, used after a merge/replace and when accepting an import-rule suggestion, does so while sparing manual edits), and treat those rows as learning input for future rule suggestions. Accepting a suggestion auto-applies the rule's outputs (category / rename / tags) to *only* the rows that generated it (a preserve-manual apply scoped to that suggestion's `source_row_ids`), so conflicting rows owned by other suggestions and Preserved manual exceptions are left alone rather than reassigned. The accepted review entry stores whether that save created a rule owned by the suggestion, plus the rows' pre-apply categorization snapshot; returning that accepted entry to pending uses those persisted facts to remove only the owned rule and put the rows back into the suggestion pool. Editing an already-accepted suggestion redraws that accepted row partition: newly matching rows are added to `source_row_ids` and to the restore snapshot, while rows that no longer match are restored immediately to their original imported/manual state so they can regenerate as pending suggestions instead of remaining stranded as rule-sourced rows
-- each review action — accepting (including editing an accepted suggestion), changing a status, resolving a conflict set — is **one transaction across the rules, the rows and the review state** (`routers/import_export/rule_suggestion_actions.py`), so a failure part way changes none of the three. A same-matcher rule that assigns something different is an expected outcome rather than a failure: that suggestion stays pending and the rest of the request commits. Each action answers with the undo payload that reverses all three together — the prior review entry and status of every suggestion it touched, the first-captured categorization of every row it changed (including rows an opted-in *apply to existing* reached, which `accepted_prior_rows` does not hold and a return to pending therefore does not restore), and the rules it created or trashed. Undo trashes a created rule rather than deleting it, so it stays recoverable, and it **does** reverse a change to a rule the review did not create — an accepted suggestion's rule edited in place, a merge into a pre-existing rule, or *Replace existing*. Every pre-existing rule an action writes to is snapshotted whole (the row plus its tags) before that write, including one a collision merge folds away and deletes, which undo re-inserts; restoring writes the pre-edit matcher, which by construction did not collide with the rule that survived the merge. A re-created recurring series does not recover its cadence (it resets to monthly), the same accepted edge as restoring a trashed rule. **Every control on the review that writes transaction categories is one of these actions**, including the resolve banner's offer to re-apply a rule a merge or replace repointed to everything it already matches (`…/rule-suggestions/apply-rules`, preserve-manual, all the named rules in one transaction). That offer reaches rows *outside* the suggestion that changed the rule, so routing it through a bare rule apply left the largest write on the screen as the only one with no captured prior state and no undo entry. Rule applies **elsewhere** — the Rules page, the row menu's rule modal, the post-import suggestion toast — deliberately stay bare `POST /rules/{id}/apply` calls with no undo: those surfaces offer undo for nothing, so an undoable apply there would be the anomaly, where on the review it was the one control lacking what all of its neighbours had. The payload is **exact rather than replayed** — replaying statuses through the review write re-ran an accept's side effects and could not reinstate a trashed rule — and there is deliberately **no route that writes review state on its own**: that primitive is what let a page action change the three stores non-atomically, so review-state writes exist only as the half of an action that `record_rule_suggestion_review` performs inside the action's transaction
-- accepted, deferred, and discarded rule-suggestion entries are review artifacts, not live mirrors of the rule table. Clearing one of those settled piles removes the entries from the active review and stores them as one restorable trash set for that clear action (surfaced as the **cleared sets** pill — named for the action that fills it, and counting *sets* rather than suggestions like every other pill). Restoring a set returns every suggestion in it to its prior review status. Clear/restore never creates, deletes, or edits live rules and never mutates transactions; it only prunes or rehydrates the persisted review-state entries so long-lived import reviews can be kept compact without losing a short-term recovery path
-- those imports promote missing imported category names into real leaf categories under the protected `Unassigned` group instead of keeping a pending review list
-- imported labels that only mean "still uncategorized", such as `Uncategorized`, `Uncategorised`, or `Unassigned`, should not create real categories; those rows stay at `category_id = NULL` so the app has one canonical uncategorized state
-- reporting and category-management surfaces may still split that one `NULL` state into synthetic expense-side and income-side buckets based on transaction sign, but those are presentation buckets rather than stored categories
-- those imports match an imported label against existing **leaf** categories only: a label that matches an existing leaf reuses it, otherwise a new leaf is created under `Unassigned`. A top-level group that happens to share the label is *not* treated as a match (it is not assignable), so an imported `Miscellaneous` becomes a `Miscellaneous` leaf rather than being folded into a `Miscellaneous` group
-- a label matching an **inactive (deleted)** leaf is suppressed: the row imports uncategorized (`category_id`/`category_source` left NULL, `imported_category` retained), no new leaf is created, and the inactive leaf is *not* resurrected. This is what makes a deletion durable across re-imports — a deleted label keeps landing uncategorized instead of repopulating the organize pool. The match is name-based, so reactivating the leaf (which restores it under `Unassigned`) lets future imports of that label adopt it again. A **set-aside** (still-active) label is *not* suppressed — imports keep categorizing to it, because set-aside only parks the category, it does not remove it
-
-- **categorization precedence at import is `mapping → rule → imported label → uncategorized`, and it is deliberate.** The user's own rules run *before* the file's category: when a rule categorizes a row it is stored under the rule's category and the file label is **not** promoted into a category for that row (it would be an empty, unused category). An explicit per-label mapping from the review screen outranks rules; the imported label is adopted (and lazily created) only for rows nothing above claimed, and only when the source/batch is flagged to use imported categories. Tag-only rules still apply their tags while leaving the category open for the label fallback. The raw label is always kept on the row as `imported_category` text regardless of which category wins, so it survives for audit (surfaced in the transaction detail's Origin → "Show more"). The same precedence governs the post-import per-batch "use imported categories" toggle, so enabling it later fills only rows no mapping or rule has claimed — it never overrides a rule. **It also holds after import, whichever arrived first:** a rule created later reclaims a row holding its file category on the next Run categorization, and a scoped reconcile that releases a row returns it to its file category rather than to uncategorized (both under *How an existing transaction's category can change*), so the order of the rule and the file never decides the outcome.
-
-  **Why this order — the intent behind the "use imported categories" flag.** The flag is a *bootstrapping* aid, not an authority claim (its UI label "use/trust the categories present in the data" reads stronger than its real job). Early on Luma has no categories or rules, so a source's own categories seed the user's taxonomy and give the rule-suggester something to learn from. As the user groups/cleans categories and builds rules *inside Luma*, Luma becomes the source of truth and the external source decays into a mere aggregator — a pipe, not a categorizer. So the file label is only ever a gap-filler for rows the user has not yet taught Luma to categorize, and the flag **self-attenuates**: as rules grow, more rows are claimed by rules before the label fallback is reached, so the source's categories quietly stop mattering without the user ever turning the flag off. That is why a rule must win over the file label, and why we never mint a category nothing is stored under.
-
-- imported categories created from a batch that used categories present in the data keep their source batch id only while that batch is their sole source, so undo can remove them when safe but repeated appearance in another such file makes them independent of the original import
-
-- system-wide rule suggestions are generated from imported transactions that carry real categories — rows whose category came from the file (`category_source = 'import'`), plus manual rows that *reinforce* a category the file already evidenced for that merchant (e.g. rows the user reconciled onto it). A category seen only through manual edits — one the file never carried for that merchant — does not originate a suggestion, so a Preserved one-off neither spawns its own suggestion nor re-creates a conflict. Suggestions are not built from per-file proposal queues or raw imported category text alone
-
-Using real categorized transactions rather than raw imported labels keeps rule suggestions aligned with the actual category tree the app is using. That avoids learning from labels that were never accepted, were ambiguous, or no longer map cleanly to the current category structure.
-
-When the same merchant carries *different* imported categories across rows, those rows surface as a conflict group (the majority category is the reference; the rest are flagged). The suggestion's matching-transactions report lets the user act on them two distinct ways, and the distinction is deliberate:
-
-- **Recategorize** — the per-row category picker, the "set all to" bulk pick, and the per-row "Use majority" button — records a *corrected file categorization* (`setImportedCategory`, `PATCH /transactions/{id}/imported-category`): it keeps `category_source = 'import'` and rewrites `imported_category` to the chosen category's name. Because the row stays import-derived it keeps driving the suggestions, so re-categorizing re-targets / collapses the conflict rather than removing rows from the learning set; and because the recorded file label is rewritten, toggling the batch's "trust these categories" flag (which re-derives `'import'` rows from their stored label) can't revert it. Undoing the import and re-importing the file still starts fresh.
-- **Preserve This Categorization** records a manual exception (`setCategory`, `'manual'`): the rules never change that row and it drops out of the suggestions entirely — a deliberate one-off, not part of any rule.
-
-The report is **scoped to the rows the opening card represents** — a single suggestion's own `source_row_ids`, or the union across a conflict set's members — passed as `row_ids` to `/rule-suggestions/matches`. This keeps the report's contents matching the card's row count: a *generic* suggestion (no owner/account/amount scope) would otherwise match every same-keyword row, sweeping in rows owned by other separately-scoped or already-disposed suggestions for that merchant. (When `row_ids` is omitted — e.g. a re-added suggestion with no stored source rows — the keyword/scope match defines the set, the legacy behavior.)
-
-For display the report treats the scoped row ids as authoritative, whatever their *current* source, so a Preserved row stays visible (with a manual-override badge) and an accepted row can still be inspected after the rule has reclaimed it as `rule`. A manual row is never flagged as conflicting — it's a settled decision, not an open conflict. Re-categorizing the minority onto the winner therefore collapses the conflict to a single-category suggestion that keeps its full row count, instead of shrinking and relocating. A legitimately distinct subset can instead be kept on its own category via Preserve — and because that category then has no file-derived backing, it simply drops out rather than re-surfacing as a conflict.
-
-This splits a judgment call that was previously open: a category edit on the conflict-resolution screen is treated as *correcting the file's data* (it keeps `import` and rewrites the label), while Preserve is the way to say "this one is a manual exception." The reasoning is least surprise — on a screen whose whole purpose is resolving cross-row categorization conflicts, the common gesture (fixing a mislabeled row so the merchant's rule is right) should feed the rule and survive a trust-flag re-toggle, and only the explicit "preserve" gesture should carve out an untouchable exception. Note this makes the conflict-resolution screen an intentional exception to the general "an imported-category edit elsewhere becomes a manual override" default.
-
-In the pending review a conflict group is resolved as a unit on one **conflict-set card** (`ConflictSetCard`), and that card is built around the input/output split the rest of this section depends on. It shows two category columns per member: **Imported category** is the input fact (the category those rows currently carry) and is read-only; **Target category** is the output (where those rows should land) and is an editable pill on *every* row, defaulting to the imported category. A radio marks one member the **winner** — its target becomes the rule (`merchant contains keyword → target`). Each other member's disposition is then *derived by comparing its target to the winner's category*, with no separate keep/recategorize control:
-
-- target **== the winner's category** → the rule owns those rows: they ride in the same preserve-manual rule apply as the winner's own rows (the accept's scoped preserve-manual apply), so `import` rows are reclaimed to `rule` at once (later edits to the rule propagate to them via Run categorization);
-- target **== another active leaf, different from the row's imported category** → kept as a manual exception there (`settle_rejected_suggestion_rows` in `keep` mode with that `category_id`), the "keep these, but as a different category" case;
-- target **== the row's own imported category** (unchanged) → left at `import` (keeping the file's category is not an override; see Rejecting a rule suggestion above);
-- target **emptied** → `cleared`.
-
-With **no winner** chosen, every member is settled to its target (`keep`) — the "no rule, keep everything as imported (or as edited)" path: members left at their imported category stay `import`, members re-pointed to a different category become `manual`. The whole set commits in one combined Undo entry (prior member review statuses plus the row snapshots of rows that actually changed, including rows reclaimed by the winner's rule). Only the winner's rows and rows re-targeted to the winner become `rule`-owned; a re-pointed keep becomes a `manual` carve-out the rule must not touch, while an unchanged keep stays `import`.
-
-When a conflict-set action changes a member's row categories, the review entry also keeps a compact `review_action` summary of the category transition (grouped counts from original category to applied category). This is display history, not category truth: transactions remain at their current category, and restoring an individual discarded/deferred suggestion does not automatically roll rows back. The settled views use this metadata to preserve context such as `Lunch (was Food & Dining)` after several formerly distinct buckets have been re-pointed to the same target category.
-
-All suggestions for one displayed merchant render together in the review inside one **bordered merchant container** (the container appears only when a merchant has >=2 distinct items; a lone card or a lone conflict set renders bare). The grouping key is each suggestion's `review_group_id`, computed by the review response over the whole returned list (`_assign_rule_suggestion_review_groups`) so the page parses no ids. It favors the normalized merchant label, falling back to the keyword when no label is available; unresolved conflict sets use their canonical conflict keyword so members with sampled label differences still stay together. Refined keywords such as `merchant renewal` remain in the original merchant's neighborhood rather than sorting away from the broader `merchant` suggestion. A card a split came from and the remainder that left it share a working-set key, named by the remainder's own partition record (below) rather than derived from its id; that split key outranks display-label grouping, so neither label cleanup differences such as `Merchant` vs `MERCHANT #1234` nor a remainder that regenerates under a different scope — an owner-scoped card's leftover comes back global once no other owner files the merchant elsewhere — can separate the chunks the user is actively resolving. Settling one member of that split does not delete the pending remainder: accepting, deferring, or discarding one chunk leaves the remaining chunk in the review with its own row ownership, so the accepted entry cannot be overwritten by the regenerated remainder. The group's **combined** row count across all members drives its sort position, so a small owner-scoped variant sorts beside its high-volume sibling instead of sinking down the list. A conflict subset inside the container still resolves on its own `ConflictSetCard`. This is purely a display/grouping concern — the key is derived on read and never stored, and it does not change how suggestions are generated or scoped. Distinct merchants never merge: scope variants for the same merchant can legitimately co-exist as separate rules (the more specific wins at categorize time), so broadening one — e.g. removing its owner to make it generic — never discards the others.
-
-The review record (`review_state.suggestions[id]`, in the batch/profile/system snapshot) reflects edits made on the way to acceptance: removing a suggestion's owner or account to generalize it is persisted back to the record (an explicit clear-to-null is honored, not dropped), so the accepted card shows the rule's real scope. An accepted suggestion also carries its `rule_id` (from `review_state.statuses[id]`) in the API response, so editing an already-accepted suggestion updates that existing rule in place rather than creating a second one.
-
-**A review entry's partition — which entries own their rows.** Most pending entries are snapshots: the generator rebuilds them from live rows on every read, so the stored entry is only what was last seen. An entry carrying a `partition` record owns its `source_row_ids` instead — while it is pending those rows are withheld from canonical generation, and the entry persists as it stands rather than being regenerated. Two kinds exist. A **refined** partition is the matched subset of a card whose selection criteria were edited (*Conflict-set matcher refinement* above); a multi-member refined set's `conflict_group_id` names the seed suggestion rather than a keyword, which is how the grouping above tells it from a canonical conflict set. A **remainder** partition holds rows split away from another card — the leftover of an accept whose matcher is stricter than the rows its entry held, or a refinement's remainder that would otherwise regenerate under the refined card's own identity — and names both the suggestion whose re-refinement or return to pending discards it (`origin_id`) and the card it renders beside (`split_root_id`). Those two differ for a refinement, whose root is the refined card rather than the seed it was refined from. The record is what every reader consults; a remainder's id exists only to keep it distinct from the suggestion its rows would otherwise regenerate as, and nothing parses it. It rides on the entry rather than in a **separate top-level collection of partitions**, which was the rejected shape: undo compares state per suggestion (entry plus status) and a trash set stores whole entries, so a per-entry record travels through both with no work of its own, where a collection would be a second copy of the same membership for each to keep in sync. Before migration v57 the same facts were carried as flags plus a back-reference, with the split root parsed out of the id — which cost a remainder its place beside its card whenever the leftover rows regenerated under another scope. A backup older than v57 restores without the records, which costs that backup's pending refinements and remainders — their rows return to ordinary generation — and nothing else. **Normalizing the old shape on read was the rejected alternative**: old backups exist indefinitely, so that path keeps a legacy reader in live code permanently to buy a graceful restore of something a fresh backup settles (the real database held 9 entries in the old shape when the choice was made, 2 of them pending).
-
-What owns a suggestion's rows differs by state, and every action above is a move between these:
-
-| State | What owns the rows | Rule | What `source_row_ids` means |
+- **`csv_import_profile`** is a saved data source: the mapping and settings for a recurring file format.
+- **`import_batch`** is one import run, the unit a file's Undo removes. A connection's syncs write
+  batches too (see [Sync import cards](#sync-import-cards)).
+
+### What a batch counts
+
+- **`imported_count`**: rows inserted.
+- **`deduped_count`**: rows refused as duplicates that the batch's duplicate report can show. It is left
+  out of the card's duplicates figure once `detail_cleared_at` is set, since the count's contract
+  (`removed_duplicate_count`) is that it never names a row the report cannot show.
+- **`ignored_count`**: rows turned away as this source restating its own earlier import, which is what
+  an overlapping re-export mostly is. They are counted and not written to the duplicate report
+  (`is_settled_source_restatement`, `prune_source_restatements`), because the transaction each
+  duplicates is already the record and storing them dominated the report's size
+  (`scale-and-limits.md`). It is kept apart from `deduped_count` so that count's contract holds.
+- **`updated_count`**: rows that corrected a transaction already held. The corrected row does not say it
+  moved, so the card is the only record.
+- **`rejected_count`**: rows refused for a reason other than duplication (see
+  [Rejected rows](#rejected-rows)).
+- **`row_count`**: rows received: imported, skipped and deduped.
+
+A row counts as a **restatement** when all of these hold:
+
+- the claim is Rule 1: this source's own coverage of this source account
+- the source account is identified by a non-empty label, or by the same data source having filed onto
+  the same account. `import_batch_account` records which account a source's rows were filed on per
+  batch, and that does not change afterwards, so it identifies the source account when an aggregator
+  renames it or a single-account file never names it. Rule 1 marks such a claim
+  `covered.same_source_account`. Both the data source and the account must match
+- the rejection is not one of `ADVISORY_REVIEW_SUBSTATES` (a covered date that paired with nothing, or
+  paired only two days out). That list is shared with the card's "to review" count
+
+A row the id rung recognizes with an equal amount is a restatement on the source's word (see
+[`source_transaction_id`](#source_transaction_id)). A row that enriched its match keeps its record,
+since the record is how the enrichment is undone; pruning therefore runs after auto-enrich. Until the
+report is written `deduped` includes these rows, so a wholly restated file does not trip the
+empty-batch delete and lose its `file_content_hash`.
+
+Two single-account files on one account are covered like any other pairing: by Rule 1 under one data
+source, by Rule 2 otherwise.
+
+### Clearing a card's stored detail
+
+`detail_cleared_at` marks a batch whose duplicate report was cleared (Settings → *Import storage*). The
+report holds, per refused row, the raw values, the matched transaction and the payload that would have
+been inserted, and is the largest thing the import history stores. Everything else stays, because each
+part is read elsewhere:
+
+- the `import_batch` row: `txn.import_batch_id` is `ON DELETE SET NULL`, and its presence is how the
+  ledger knows a row was not entered by hand
+- `file_content_hash` and `status`: together they are the re-import guard, which is why the marker is
+  its own column and not a `status` value
+- `import_batch_account`: its `coverage_*` columns are the claim duplicate detection reads
+- `config_snapshot`: a PayPal statement finds its account by reading earlier statements' snapshots
+
+### What a batch covers
+
+`covers_start`, `covers_end` and `covers_source` are the span of transaction dates the file carried,
+which the import history orders and groups by. They are written with the batch, because coverage is a
+property of the file: trashing one of its rows later does not change what the file contained.
+
+- `'statement'`: a declared period, which wins where one exists
+- `'rows'`: read from the batch's transactions and its deduplicated rows together, since a file whose
+  every row matched an earlier import still covers those dates
+- `'items'`: a marketplace items-only card, dated by its parked items
+
+`import_batch_rejected_row` is not a source, because it is capped.
+
+### Zero-amount rows
+
+Whether a `$0.00` row is kept is declared by the source and read through `rejects_zero_amount`:
+`zero_amount_rows` on a `ProviderAdapter`, and the registry in `services/source_capabilities.py` for the
+CSV and Amazon importers. There is no default; an undeclared source fails.
+
+A `$0` row is usually a pending placeholder. It is kept only where refusing it would lose the
+settlement: where the provider later revises the row in place, keyed on an id the ledger holds only if
+the placeholder was inserted.
+
+| source | policy | reason |
+| --- | --- | --- |
+| Plaid | keep | a settling charge arrives only as a `modified` revision of the row it names |
+| SimpleFIN | reject | no change feed; the settled charge arrives as an ordinary row. It sometimes reuses the placeholder's id, so the already-held branch of `_insert_added` re-stamps provider fields |
+| CSV, PayPal | reject | the settled charge is a row in a later file |
+| Amazon | keep | a `$0` order is a finished record (gift card, promotion) |
+
+A refusal is recorded as kind `zero_amount`, counted in `rejected_count`, and listed on the card. A sync
+card records it through `config_snapshot.import_summary`, the key and shape CSV import writes, and
+accumulates the counts across the month's syncs. The connector checklist is in
+`docs/building-a-connector.md`.
+
+### Duplicate detection at import
+
+Detection blocks only rows that match transactions already in the ledger before the import starts.
+Duplicate rows within one file are allowed.
+
+- **Exact content hash** is the highest-confidence rule and is unconditional.
+- **The ladder** (`backend/services/duplicate_detection.py`) then applies coverage, terminal-window and
+  text rules within the same effective account scope.
+- **Confidence decides whether a signal may hard-reject.** It does not decide the label: when several
+  hard-reject rules apply, the broadest reason is reported, so a re-imported range reads as one reason.
+- **The coverage, terminal-window and text rules hard-reject only when the receiving account itself
+  appeared in the prior coverage**, or is an alias of one (a `connection_account` mapped `existing`). A
+  new sibling account that only inherits its group's coverage passes to the soft-duplicate review,
+  because the earlier import did not contain that account's transactions.
+- **A connection's own coverage is excluded when that connection is ingesting.** A sync delta inside
+  its own covered range is a late-posting charge; the claim was "everything the provider has told us is
+  here", not "nothing more will arrive". Coverage from other sources applies to a sync unchanged.
+
+### Soft duplicates
+
+After a batch finalizes, and after each sync writes to its card, `mark_import_suspects` compares every
+new row against existing rows from a **different source**: same amount, matching source text, dates
+within `CROSS_ACCOUNT_DATE_WINDOW_DAYS`. A match is flagged through the `suspect_duplicate_*` columns,
+never blocked.
+
+- **The gate is differing origin**: a different connection, or a different file when neither row came
+  from a connection. Landing on different accounts also suffices. One source does not report a charge
+  twice, so two rows from one source are a real repeat.
+- **A hand-entered row has no origin** and never pairs within its own account.
+- **Same-batch rows on different accounts are distinct**; the file's account column says so.
+- **Text is the union of each row's captured texts** (`source_match_texts`): `merchant_name`,
+  `raw_name`, and the descriptive evidence fields. `display_name` is left out, so a rename neither hides
+  nor creates a match.
+- **Tiers.** Identical text (after the comparison's normalization) is `cross_account`; a character
+  similarity at or above `CROSS_ACCOUNT_FUZZY_RATIO` is `cross_account_fuzzy`; at least
+  `_WEAK_SHARED_TOKEN_FLOOR` shared distinctive tokens is `cross_account_weak`.
+- **When both rows carry precise text** (`raw_name` or a descriptive evidence field), the tier is
+  decided on that text and the cleaned payee name alone can reach no higher than weak
+  (`row_match_texts`). A chain cleans every branch to one merchant string.
+- **A differing explicit check number vetoes a match.**
+- **Skipped**: pairs in `suspect_pair_distinct`, account pairs in `account_pair_distinct`, rows that
+  already carry a suspect pointer, and rows the source gave different ids.
+- The window is wide because two sources date a charge on different bases; the text comparison is what
+  rejects coincidences inside it.
+
+`promote_in_group_suspects_to_confirmed` runs at import finalize, after a sync, and on an account merge.
+It confirms exact matches whose two sides share a group (`auto_merge`) or an account
+(`auto_cross_source`), so import order and merge order give the same result.
+
+An account merge also runs `scan_scope_for_cross_account_duplicates` over the group first, because
+import-time detection compares only incoming rows against existing ones. A single account is a valid
+scope. The canonical row is the reviewed one over a `needs_review` one, then the earliest import, then
+the id; a row already carrying a suspect pointer is never canonical.
+
+**A matcher change re-examines stored rows once.** `DUPLICATE_DETECTION_VERSION` is bumped with any
+change that could alter a verdict on stored rows. App load compares it with a `db_meta` stamp and runs
+the existing-versus-existing scan over every account (`maybe_rescan_for_detection_change`).
+`rescan_until_settled` loops to a fixed cap, because each row takes one partner per pass. It is not the
+schema version: a threshold change needs no migration. A flag already raised keeps its tier.
+
+### Evidence field roles
+
+Each `import_evidence_json.extra_text_fields` entry is **descriptive** (free text that names the
+charge) or **categorical** (a small repeated vocabulary, or a structured datum such as a date, a check
+number or an opaque id). Only descriptive fields feed duplicate text matching, through
+`evidence_field_feeds_text_match` (`backend/services/import_evidence.py`).
+
+- Only `categorical` is stamped; an unmarked field is descriptive.
+- CSV import infers the role from the column's cardinality across the file.
+- `build_sync_evidence` stamps each field by declaration, which leaves `Counterparty` as the only
+  sync-captured extra that takes part.
+
+A categorical value two unrelated rows share would otherwise match as identical text, which is the
+auto-confirming tier.
+
+### Are these two accounts the same account?
+
+A set of cross-account flags between one pair of accounts is one question. It is asked at mapping time
+(the "Possible duplicate account?" chooser, where *Keep separate* passes `distinct_from_account_id`)
+and in the duplicate report (`unresolved_account_pairs`, with `can_merge` decided server-side).
+
+- **Different accounts** (`record_account_pair_distinct`) clears every unresolved flag between the pair,
+  whatever its tier, because the assertion also suppresses future detection.
+- **Same account** (a merge) auto-confirms only exact matches. A near-miss inside one account may be two
+  real transactions.
+- A pair of an account with itself is refused; it would switch detection off for that account.
+
+Assertions are listed and reversible (`GET` / `POST` / `DELETE /accounts/distinct-pairs`). Forgetting
+one re-enables checking and does not revisit row decisions.
+
+### external_transaction_id
+
+`txn.external_transaction_id` is the provider's id for a synced row; NULL for file and hand-entered
+rows. A sync that re-fetches a row it holds finds it here, which makes an overlapping pull harmless.
+
+The column is `UNIQUE` and the sync lookups query it unscoped, so an id must be unique across the
+ledger. Each adapter stores ids under a prefix: `plaid:<id>`, and `simplefin:<account>:<bank id>`
+because SimpleFIN ids are unique only within an account. A new adapter namespaces by account if its
+provider's guarantee is per account. A regression shows as `added == skipped` with one account empty
+(`test_two_accounts_issuing_the_same_transaction_ids_both_import`).
+
+### source_transaction_id
+
+`txn.source_transaction_id` is the id a file source gave a row (`column_map.transaction_id`; a
+recognized PayPal file reads `Transaction ID` regardless). It is not unique and is matched only against
+rows whose batch belongs to the importing source (`import_batch.profile_id`). The scope is read through
+the batch, so it follows a file whose batch is assigned to another source. The mechanism is
+`services/source_transaction_ids.py`.
+
+- **A row's id was issued by the source of the batch it belongs to.** The pending-to-posted conversion,
+  which re-homes a row, gives it the incoming id or keeps only an id the same source issued.
+- **The id rung runs ahead of the ladder.** A row whose id the source already holds is that
+  transaction: an equal amount restates (`ignored_count`), a held pending row converts in place, and a
+  changed amount corrects the held row in place (`updated_count`).
+- **Different ids refute a pairing.** A held row the source gave a different id is withheld from every
+  rung, tier and sweep that would name it (`refuted` on `evaluate_duplicate`). A counterpart on another
+  account is not refuted; it is a different record.
+- **An id-less row takes an id when the ladder pairs it one-to-one with an incoming row of the same
+  source.** A row with no id never clears or rewrites one, so files with and without the column can be
+  imported in any order.
+- The scope is the data source, so files from one provider split across two sources share no ids.
+  Assigning one source's batches to the other brings them into one scope.
+
+### Sync state on a connection
+
+- **`transactions_cursor`** is an opaque resume token. A provider with no change feed stores its own
+  checkpoint there (SimpleFIN keeps a JSON walk position).
+- **`provider_request_budget`** holds what a metered provider has spent. It is separate because the two
+  persist under opposite rules: a resume token rolls back with a failed pull, and spending cannot. It is
+  passed to the adapter as a mutable record and written back in a `finally`. A "N per day, replenished"
+  limit is a refilling bucket, and separate allowances per request shape are metered separately.
+- **Each page is applied and committed before the next is fetched**, so no write transaction is held
+  across a provider call. **Removals accumulate and are applied after the drain**, because a
+  pending-to-posted pair can straddle a page boundary and every `added` must be applied before any
+  `removed`.
+- **`sync_progress`** is the per-page checkpoint, cleared when the run ends.
+- **A pending row converts in place** when it posts, matched on the provider's
+  `pending_transaction_id`, so the user's category, name and tags stay. The CSV path does the same on
+  account, date and source text, and depends on `ColumnMap` carrying the `pending` column to
+  `parse_pending_flag`.
+- **`initial_sync_complete`** records that the historical pull finished. "Nothing more right now" and
+  "history is complete" are separate adapter signals (`resume_later`, `backfill_complete`): a metered
+  provider can stop mid-backfill, and marking it complete would strand the unfetched history.
+- **`full_history`** on a pull, not the depth requested, distinguishes a deepening pull from a routine
+  top-up. Only a full-history pull may widen coverage backward or re-walk history.
+- **Sync health.** `last_synced_at` is the last successful pull. `last_sync_error` /
+  `last_sync_error_at` hold the latest failure and are cleared by a success.
+  `consecutive_sync_failures` resets on success. `last_sync_warnings` holds problems reported by a pull
+  that succeeded (one bank of several needing re-authentication) and is replaced each pull.
+- **`last_sync_outcome` / `last_sync_summary`** are computed at sync time by `sync_outcome` and written
+  with the log row from the same facts (`_record_connection_last_sync`). A walk that stopped on the
+  request budget is `incomplete`.
+- **`last_sync_summary.row_ids`** lists the rows the last pull added or revised, and `cards` the cards
+  they landed on. Past `_SCOPED_SYNC_ROW_CAP` the list is dropped whole, since a partial list would
+  misstate its extent. `list_connections` publishes a count (`scoped_rows`) and not the ids, because
+  that endpoint is polled during a sync. The transactions filter `sync_connection_id` expands the list
+  in SQL. A missing summary, list or connection yields zero rows. The set is replaced every pull.
+
+### Three stores describe a sync
+
+Which store a fact belongs in is decided by who may lose it.
+
+- **Connection status**: `connection` and `connection_account`. Durable, and shaped by the provider.
+- **Diagnostic history**: `connection_sync_log`. Pruned by age on every write
+  (`connections.log_retention_days`, a shared preference) and clearable from the UI, so nothing
+  user-facing may derive from it. It is left out of the data backup.
+- **The transactions received**: `import_batch`, `import_batch_account`, `import_batch_duplicate` and
+  `config_snapshot.import_summary`. These behave like a CSV import card.
+
+The log (`services/connection_log.py`) holds one row per provider operation, named by `event`: `sync`,
+`connect`, `reconnect`, `refresh_accounts`, `disconnect`, `reissue`, `revoke`. It records the
+provider's answer, not the app's own pre-flight refusals.
+
+- `connection_id` is nullable with no foreign key, because a failed connect has no connection and a
+  disconnect's row must outlive the connection it removed.
+- A row snapshots the level of anything the next sync overwrites (`request_allowance`, the `pool` each
+  requested window was charged to, each account's `reached` / `history_complete`), since the live
+  columns no longer hold it.
+- `update_status` distinguishes `BUDGET_PAUSED` (this client declined to ask) from `RATE_LIMITED` (the
+  server refused).
+- `warnings` are problems the user can act on and mirror the connection card; `advisories`
+  (`{message, count, context}`) are remarks nobody can act on. The message is the aggregation key.
+- The cursor is stored as a fingerprint, never whole: a length and prefix for an opaque token, the short
+  scalars for a JSON checkpoint.
+- The columns `skipped_no_account` / `skipped_already_held` are vestigial; the buckets live in
+  `account_counts` and are summed on read (`_skipped_breakdown`).
+
+**`skipped` on a sync is four separate events**, counted per provider account in `account_counts`:
+`skipped_by_choice` (mapped `skip`), `skipped_unknown_account` (no mapping yet), `skipped_already_held`
+(the top-up's overlap) and `skipped_zero_amount`. `attention` is raised only for
+`skipped_held_by_other_connection`: rows whose card belongs to a different, still-existing connection,
+which is what a transaction-id collision looks like. An unmapped account is already reported by the
+"N to map" badge.
+
+### Sync import cards
+
+A connection's batches have `source_kind = 'connection_sync'`, carry `connection_id`, and store the
+connection's `provider` key so a card still names its provider after the connection is removed.
+
+- **The first backfill lands on one card** (`resolve_initial_sync_batch`,
+  `config_snapshot.initial_backfill`), reused across the polling calls of that pull.
+- **After `initial_sync_complete`, rows land on monthly cards** (`resolve_sync_period_batch`,
+  `sync_period = 'YYYY-MM'`) keyed on each row's own transaction date, so one fetch may write to
+  several cards.
+- **A card's date span is not a coverage claim.** Coverage lives on `connection_account`.
+- **A row is filed once.** A later revision that moves its date does not move it between cards, so a
+  reviewed card's contents do not change underneath the review.
+- **A card is created on the first row the pull has something to report**: an inserted row, a
+  zero-amount refusal, or a row dropped for lack of a local account. An already-held row creates none.
+- **There is no per-card Undo.** The cursor has moved past the rows, so a re-sync would not bring them
+  back. `DELETE /connections/{id}/synced-transactions` removes a connection's synced data, deletes its
+  cards, and resets `transactions_cursor`, `initial_sync_complete` and coverage. The cards are deleted
+  and not left `undone`, because both resolvers key on (connection, period) regardless of status and
+  would reuse a tombstone the history filters out.
+- **A sync card emptied by another route is deleted** when it recomputes to nothing and holds no
+  duplicate report (`refresh_batch_totals`). A CSV card in that state is kept, since it records a file
+  the user supplied.
+
+**`import_batch_account` on a sync card:**
+
+- `csv_value` is the provider account label, `"{provider_name} ···{mask}"` (`provider_account_label`),
+  not the provider id. The per-account breakdown, the ladder's source-scoped rules, and the
+  terminal-window matcher (through `import_evidence_json.account.value`) all key on it.
+- A source account whose rows had no local destination gets a row with `was_skipped = 1` and its count,
+  the shape CSV writes for an unmapped value. `row_count` is rows seen for the pair.
+- On update, `account_id` is COALESCEd, so a later sync's dropped rows cannot erase a recorded
+  destination, and `was_skipped` is MINed, so one landed row clears it for good.
+- No coverage columns are written.
+- A mapped account that received nothing has no row.
+
+**A card's counts stay consistent after rows leave the ledger.** A hard delete of imported rows goes
+through `delete_transactions` (`services/import_batch_totals.py`), which decrements the per-account
+entry that counted each row (found by the source label in the row's evidence, not its current account)
+and re-derives the batch columns and summary figures (`refresh_batch_totals`). An entry is decremented
+and never removed, since it carries the coverage claim.
+
+### Coverage has two shapes
+
+- **A file** stores its trusted window and terminal date per source account label on
+  `import_batch_account`.
+- **A connection** stores `coverage_start_date` / `coverage_through_date` on `connection_account`. A
+  cursor delta is a set of rows, not a date range, so only the chain of cursor plus
+  `initial_sync_complete` can carry a claim.
+
+`build_dedupe_context` reads the union of both.
+
+- A range pull (initial backfill, *Fetch more history*) sets or extends `coverage_start_date`; a delta
+  advances `coverage_through_date`; a failed sync advances nothing; a cursor reset clears both.
+- **A range pull claims what it reached, per account.** The adapter reports `account_coverage`. The
+  caller falls back to the requested depth only for an adapter that keeps no per-account coverage (a
+  cursor provider). A walking adapter that reports an empty set reached nothing new. An overstated
+  claim makes the ladder hard-reject real transactions.
+- **A mapped account with no `coverage_start_date` joined after the history was fetched**, and the next
+  history pull picks it up. `skip` accounts are excluded.
+- **`history_complete`** means the account's history ran out, which coverage cannot say, and only it may
+  stop a deeper request. `history_empty_streak` persists the two-empty-windows count across a paused
+  walk. Both are per account. A new row starts at `0`.
+- **A walking adapter's windows abut**, and only the window holding the pull's newest bound closes at
+  the end of the day, since nothing else covers the rest of today.
+
+### The terminal window
+
+Coverage stops short of a source's last date, and the excluded days are reconciled one-to-one (Rule 5)
+instead of rejected as covered, because most sources lag what they describe: an aggregator is waiting
+on the bank.
+
+- The covered range ends at the last date the source carries that is before
+  `terminal_date - (terminal_window_days - 1)`.
+- The setting is `csv_import_profile.terminal_window_days` for a file source and
+  `connection_account.terminal_window_days` for a connection. The default is
+  `DEFAULT_TERMINAL_WINDOW_DAYS`; `1` is the setting for a first-party source with no lag.
+- The default is the wide one because the errors are not symmetric: too narrow rejects a real
+  transaction, too wide costs one more reconciliation pass that still catches duplicates.
+- A stated window below 1 clamps to 1; an absent or unreadable one takes the default.
+- An upgraded database keeps `DEFAULT 1` in the column's DDL, so every insert path states the column.
+- **A connection's candidate slots are derived from its own claim** (`coverage_through_date` and
+  `terminal_window_days`), and are registered before the coverage computation returns for a connection
+  whose range lies inside its own lag.
+- **A source that does not outrun its own lag covers nothing.** Its rows still reconcile one-to-one.
+
+**A revised amount is a correction** (`match_terminal_amount_revision`). Rule 5 pairs on exact hash,
+then on amount; a row whose amount moved matches neither. The `(source, date, descriptor)` group is
+reconciled as a set: equal amounts pair off first, and a lone leftover on each side is a revision. The
+held row is updated in place (amount and `content_hash`), so the user's edits stay. It is same-source
+only, and the row is not re-homed to the correcting batch, so undoing that import leaves the corrected
+amount.
+
+**Candidates shown for a coverage reject** (`_display_candidates`) are filtered after the verdict. A
+candidate with no textual agreement is kept only while no other candidate has any, and the list is
+ordered by tier and then date distance.
+
+**Within one batch a worded same-day claim outranks a near-date guess at the same row**
+(`release_contested_candidates`). A candidate is dropped from a row's list when another row of the
+batch names it as its only match, in agreeing words, more strongly. A cross-account candidate is never
+released, and a wordless claim releases nothing. Verdicts do not change.
+
+**Enrichment refuses a row that states a different kind of transaction**
+(`import_enrichment._conflicting_kind`): when both sides carry a captured `Type` and the kinds differ,
+nothing is folded in.
+
+### One ledger currency
+
+`txn.amount` stores no denomination, so the ledger holds one currency, and which one is a setting:
+`ledger_currency` in `import_workflow_state` (shared, because everyone reads the same numbers), read
+through `services/ledger_currency.py`.
+
+- **The test is "does this match the ledger".** Nothing outside `ledger_currency.py` compares against
+  `DEFAULT_LEDGER_CURRENCY`.
+- **Changing it converts nothing.** `PUT /api/currency` answers 409
+  (`currency_change_needs_confirmation`) when the ledger holds transactions and the caller has not
+  confirmed.
+- **Adapters report mismatches at the level the provider states currency.** SimpleFIN states it per
+  account, so a mismatched account is dropped whole. Plaid states it per transaction, so rows are
+  filtered. Both report `unsupported_currency`, and `currency_scope` tells the sync layer which warning
+  is true.
+- **`connection_account.provider_currency`** is recorded at connect and refresh, before mapping. NULL
+  means not stated and is accepted. An account with a stated other currency is excluded from
+  `_build_account_targets`, since a target that can only be discarded would accumulate false coverage.
+  The warning is driven by the stored currency.
+- **A file states currency through an optional mapped column** (`column_map.currency`). A row naming
+  another currency is refused (`kind: "currency"`, `currency_rejected_count`); a blank cell is taken to
+  be the ledger's.
+
+### Data sources
+
+- A source's name is unique after trimming and case-folding.
+- A source stores a default `use_imported_categories`. Each batch stores the choice that file actually
+  used, with any owner or unassigned-account scope, because undo and review need the per-file decision.
+- **`header_fingerprint` is the layout of the last file imported through the source.** A file is matched
+  to a source by equality on it, so a completed import rewrites it (`run_import_parsed`); only a
+  completed import shows the mapping still reads the file. A recognized source (PayPal) is matched on
+  its kind and is excluded, since it serves two file shapes.
+- The value is `ParsedFile.fingerprint`, with blank header cells dropped, for every caller.
+- `column_map` also stores the per-value account map (`account_assignments`, `account_skips`,
+  `account_new`), written by `autoSaveProfile` after each import.
+- A per-user preference seeds whether new imports use file categories (`all`, `none`, `per_source`). It
+  does not override a source's or a batch's setting.
+
+### Categorization at import
+
+Precedence is **mapping → rule → imported label → uncategorized**.
+
+- An explicit per-label mapping from the review screen wins.
+- A rule runs before the file's category. When a rule categorizes a row, the file label is not promoted
+  into a category for it.
+- The imported label is adopted, and its leaf created, only for rows nothing above claimed and only
+  when the batch uses imported categories. It is matched against **leaf** categories only.
+- A label matching an **inactive** leaf leaves the row uncategorized and creates nothing, which is what
+  makes a deletion hold across re-imports. A set-aside label is still used.
+- Labels that mean "uncategorized" (`Uncategorized`, `Unassigned` and similar) create no category.
+- `imported_category` keeps the raw label on the row whichever category wins.
+- A tag-only rule applies its tags and leaves the category to the label.
+
+The same precedence governs the per-batch toggle after import and every later pass, so the order in
+which a rule and a file arrived never decides the outcome. The flag is a bootstrap: file categories
+fill rows the user's rules have not claimed.
+
+A category created by a trusted batch keeps that batch's id while it is the category's only source, so
+undo can remove it.
+
+### Rule suggestions
+
+Suggestions are generated from transactions whose category came from the file
+(`category_source = 'import'`), plus manual rows that reinforce a category the file already showed for
+that merchant. A category seen only through manual edits originates none.
+
+When one merchant carries different imported categories, the rows form a **conflict set**. Two edits
+are available on its rows:
+
+- **Recategorize** (`PATCH /transactions/{id}/imported-category`) keeps `category_source = 'import'` and
+  rewrites `imported_category`, so the row keeps feeding suggestions and a trust-flag re-derivation
+  does not revert it.
+- **Preserve** writes `manual`, and the row leaves the suggestions.
+
+Resolving a conflict set derives each member's disposition from its target category:
+
+| target | result |
+| --- | --- |
+| the winner's category | reclaimed to `rule` by the accept's scoped preserve-manual apply |
+| another leaf, different from the row's imported category | `manual` at that leaf |
+| the row's own imported category | left `import` |
+| emptied | `cleared` |
+
+With no winner, every member is settled to its target. Rejecting a suggestion
+(`settle_rejected_suggestion_rows`) uses the same three outcomes and spares rows already `manual`.
+Keeping a row as imported is not an override, so a later rule can still claim it.
+
+**Accepting** applies the rule to the suggestion's own `source_row_ids` with a preserve-manual apply.
+The accepted entry stores `rule_id`, `created_rule_id` when the review created the rule, and
+`accepted_prior_rows`.
+
+**Each review action is one transaction across rules, rows and review state**
+(`routers/import_export/rule_suggestion_actions.py`), and answers with an undo payload holding the prior
+review entries, the first-captured categorization of every row changed, and every rule created, edited
+or folded away, snapshotted whole. Undo trashes a created rule. No route writes review state on its
+own; `record_rule_suggestion_review` runs inside an action's transaction.
+
+**A partition record makes an entry own its rows.** Most pending entries are regenerated from live rows
+on every read. An entry with a `partition` record owns its `source_row_ids`, which are withheld from
+generation while it is pending.
+
+- **refined**: the matched subset of a card whose matcher was edited. A multi-member refined set's
+  `conflict_group_id` names the seed suggestion.
+- **remainder**: rows split away from another card. `origin_id` names the suggestion whose
+  re-refinement or return to pending discards it, and `split_root_id` the card it renders beside.
+
+A backup from before the records existed restores without them, and its pending refinements return to
+ordinary generation.
+
+| state | what owns the rows | rule | `source_row_ids` |
 | --- | --- | --- | --- |
-| pending, generated | nothing — rows stay `import` | none | rows the generator grouped on this read (recomputed every read) |
-| pending, refined partition | the persisted entry; its rows are withheld from canonical generation | none | rows matched by the refined matcher at refine time |
-| pending, remainder partition | the persisted entry | none | the leftover of a partial accept, or of a refinement whose remainder id collided |
-| accepted | the rule — rows reclaimed to `rule` by a scoped preserve-manual apply | `rule_id`; `created_rule_id` only if this review created it | rows the accept applied to; `accepted_prior_rows` is their pre-apply snapshot |
-| deferred (`skipped`) | unchanged | none | rows as they stood at deferral |
-| discarded | `import` (keep) / `manual` (re-pointed) / `cleared` | none | rows settled; `review_action` records the category transition |
-| trashed | review state only | untouched | preserved so Restore brings the set back |
+| pending, generated | nothing; rows stay `import` | none | recomputed every read |
+| pending, refined | the stored entry | none | rows the refined matcher matched |
+| pending, remainder | the stored entry | none | the leftover of a partial accept or a refinement |
+| accepted | the rule | `rule_id` | rows the accept applied to |
+| deferred (`skipped`) | unchanged | none | rows at deferral |
+| discarded | `import`, `manual` or `cleared` | none | rows settled; `review_action` records the transition |
+| trashed | review state only | untouched | kept for restore |
 
-**Look-back lens.** Rules are forward-looking, so a merchant pattern with no recent activity is unlikely to recur and just clogs the review. Each generated suggestion carries `latest_txn_date` (the newest date among its source rows); the pending/conflicts views show only merchant working sets with visible activity inside a per-user window (`ui.importRuleSuggestions.lookbackYears`, default 2; `0` = all time, set via the **Look back** control). The stale remainder isn't dropped — fully stale merchant groups move to a dedicated **`older` pill** (a pending sub-filter, surfaced only when non-empty), so the `pending` pill is lensed to the in-window merchant groups and `pending + older = all pending` (the counts still reconcile to `total`). Clicking `older` shows those fully stale groups — the natural place to bulk-settle them (Discard, keep). The lens is a **view filter only** — it never changes generation or stored review state, and the substance threshold stays computed from full history (so narrowing the window can't lower the bar and flood the list with tiny suggestions). A merchant group or split working set (one `review_group_id`) is kept whole while any visible member of that working set is recent, including recently accepted/deferred/discarded siblings, because settling one chunk should not immediately strand the remaining pending chunk in Older while the user is still resolving that merchant. Once those visible settled siblings are cleared from review, a fully-stale pending group naturally lives under `older`. Decoupling "is this pattern substantial" (full history) from "is it still live" (recent activity) is deliberate: recency, not raw count, is the better predictor of recurrence.
+- `review_group_id` groups one merchant's suggestions for display. It is derived on read
+  (`_assign_rule_suggestion_review_groups`) and not stored.
+- `latest_txn_date` is the newest date among a suggestion's rows. The look-back preference
+  (`ui.importRuleSuggestions.lookbackYears`) filters the view only; generation and the substance
+  threshold use full history.
+- Clearing a settled pile stores its entries as one restorable set. Clear and restore change no rule
+  and no transaction.
 
-**Bulk disposition.** The pending bulk menu settles a whole selection at once with one combined Undo entry: **Discard, keep categories** marks the suggestions discarded and leaves their rows `import` (status-only — the rows keep their category and stay reclaimable), and **Discard, clear categories** additionally clears the rows to `cleared`. There is deliberately no bare "remove" — keeping-as-imported is the honest default for "reviewed, don't build a rule." A stale tail outside the look-back window needs no special bulk control — existing controls already re-apply rules to it. Both dispositions leave the rows unlocked (`cleared` and `import` are both `category_overridden = 0`), so the page's global **Apply categorization rules** button — which runs `recategorize_all` — reclaims any row from either that now matches a rule the user has since created; a per-rule **apply to existing** reaches the same rows for that one rule.
+### Rejected rows
 
-- **What a file left out is a record of its own, not just a count** (`import_batch_rejected_row`, one row
-per refused line, holding the whole row as written plus the date, description and amount the import got
-as far as parsing). An uploaded file is unrecoverable — a browser upload carries no path, and in the
-networked topologies the file was never on the server's disk at all — so a count is the entire answer to
-"why is this account short of what I fed it" unless the rows themselves were kept. Four properties are
-load-bearing:
+`import_batch_rejected_row` holds one row per refused line: the row as written plus the date,
+description and amount parsed so far. An uploaded file cannot be re-read, so the stored rows are the
+only answer to what a file left out.
 
-  - **Every class of refusal is here, including the deliberate one.** A row skipped because its account
-    was set to Skip used to leave only a per-value tally on `import_batch_account`, which cannot say what
-    was in the part that was left out. Duplicates are the one exception, and they are excluded because
-    they are *reviewable* rather than merely dropped: they keep their own table, their own review state
-    and their own report, and a second read-only listing of them would be a list with nothing to do
-    about it.
-  - **The record is capped and the cap is filled by priority** (`MAX_STORED_REJECTED_ROWS`,
-    `REJECTED_ROW_KIND_PRIORITY` in `import_export/core.py`). A misconfigured mapping can refuse every
-    row of a large file, and this is a diagnostic record rather than a second ledger. Where it binds, a
-    parse failure outranks an account the user chose to skip — the reverse fills the record with the one
-    outcome already known.
-  - **The exact totals stay in `config_snapshot.import_summary`, which is what makes a partial record
-    safe.** The report compares what it holds against those counts and says so when they differ, so there
-    is no truncation flag to fall out of step with the rows.
-  - **A suspected footer collapses to one row naming the range.** The tail was excluded on a single
-    judgement, so it is a single fact; listing forty lines of address block would bury the handful of
-    rows a reader opened the report for. It is the one kind whose stored row count is deliberately not
-    its row total.
-
-  Batches imported before the table existed fall back to the up-to-twenty sample their snapshot recorded
-  (with no account-skipped rows among them), which is worth more than reporting that the file dropped
-  nothing.
-
-  **Two other ways to answer the same question were considered.** *Re-attaching the file on demand* —
-  the report offers a drop zone, verifies what is dropped against `file_content_hash`, and renders the
-  whole file with each row marked — needs no storage and works in every topology, and is the only one
-  of the three that shows a row the import never reached (a line the parser stopped at). It was not
-  built because it asks the person to still have the file, and the stored rows already answer the
-  question they would be opening it for; it stays the natural addition if "show me the literal file"
-  turns out to be a separate need. *Storing the source file* is the only one that still works weeks
-  later once the exports have been cleaned up, and a CSV is small enough that the cost is not the
-  bytes — it puts raw statements at rest, enlarges the data backup, and needs a retention policy of its
-  own, so it would have to be an opt-in per source rather than a default. Neither is foreclosed.
-
-  **No path is stored, and none can be.** A browser upload carries only a file name, and in the LAN and
-  container topologies the file is never on the server's disk at all. A *watched* source is the one case
-  where the server does hold a directory it can re-read — see *Watched import folders* below — and even
-  there the path belongs to the source rather than to the batch, so a batch imported by hand still has
-  nothing to re-open.
-- when later account cleanup deletes imported transactions, batch summaries and per-account import breakdowns should shrink to match the transactions that still remain from that batch
-
-- detailed duplicate-row review data is stored separately and loaded on demand so long-lived import history stays compact
-
-- per-user preferences may also carry a default mode for whether categories present in the data should be used for new imports (`all`, `none`, or `per_source`); this does not override saved data-source settings or per-batch choices, but it seeds the initial import workflow before a source-specific decision exists
+- Every kind of refusal is recorded, including rows for an account set to Skip. Duplicates are not;
+  they have their own table and report.
+- The record is capped at `MAX_STORED_REJECTED_ROWS` and filled by `REJECTED_ROW_KIND_PRIORITY`, in
+  which a parse failure outranks a skipped account.
+- Exact totals stay in `config_snapshot.import_summary`, and the report says when it holds fewer rows.
+- A suspected footer is one row naming the range.
+- No file path is stored. A watched source's directory belongs to the source, not the batch.
 
 ## Watched import folders
 
-A data source may name a directory on the **server** (`csv_import_profile.watch_dir`), and a CSV that
-appears there is imported without anyone opening the Import page. The mechanism is in
-`architecture.md` → *Import / export*; what belongs here is what the fields mean and what the scan may
-never decide on its own.
+A data source may name a directory on the server (`csv_import_profile.watch_dir`); a CSV appearing
+there is imported unattended. The mechanism is in `architecture.md` → *Import / export*.
 
-**The path and the switch are separate fields, and that is deliberate.** `watch_dir` is where to look;
-`watch_enabled` is whether to. A restore from another instance clears the switch and keeps the path
-(see *Backups*), so the person sees what the folder was set to on the machine the data came from rather
-than having to rediscover it. Clearing the path clears the switch with it, since there is nothing left
-to watch.
+**`watch_dir` and `watch_enabled` are separate.** A restore from another instance clears the switch and
+keeps the path, so the person can see what the folder was. Clearing the path clears the switch.
 
-**Never create or guess an account.** This is the whole safety rule, and every refusal follows from it:
-everything else an unattended import gets wrong is visible and reversible on the file's card, while an
-invented account quietly splits a ledger in a way nothing later surfaces. So a file is parked, not
-imported, when
+**The scan never creates or guesses an account**, because an invented account splits a ledger in a way
+nothing later reports, while every other mistake is visible on the file's card. A file is parked when
 
-- any non-empty value in the account column is unmapped, maps to an account that no longer exists, or
-  maps to an account in the trash;
-- the source's map carries an `account_new` entry for a value present in the file, which is a standing
-  instruction to create an account;
-- the source has no account column and no `account_id`, or would create its single account (only a source
-  saved from the import screen can be in that state: the data source editor resolves the request on save,
-  to the existing account of that name or by creating the account there and then — `new_account` on the
-  profile endpoints);
-- the source's `header_fingerprint` disagrees with the file's, meaning the columns are not the ones this
-  source is set up for;
-- **the source has no completed batch yet.** A source imports unattended only once one file has been
-  imported by hand. For a multi-account source this is close to automatic, because the stored account map
-  exists only because an import wrote it; the rule is stated anyway, so a single-account source proves its
-  column map against a real file too.
+- any non-empty account value is unmapped, or maps to an account that no longer exists
+- the source's map has an `account_new` entry for a value in the file
+- the source has no account column and no `account_id`, or would create its single account
+- the source's `header_fingerprint` differs from the file's
+- the source has no completed batch yet, so every source proves its mapping on one hand import
 
-The interactive flow resolves a dead mapping by falling back to an exact **name** match and showing the
-result for approval. Unattended there is nobody to approve it, and a name match is precisely the guess
-that puts rows on the wrong account, so the same situation refuses here. A **blank** account cell is not
-an unmapped account: the import already refuses that row on its own and records it on the card, and
-parking a whole file for one would make every export with a footer line a Task.
+The interactive flow's fallback to an exact name match is not used here, since nobody is present to
+approve it. A blank account cell is not an unmapped account; the import refuses that row and records it.
 
-**`import_watch_file` is a cache, not a record.** It holds `(size, mtime)` per file so a scan can skip
-what it has already judged, plus the reason a file is waiting. The durable answer to "have we taken this
-exact file" stays `import_batch.file_content_hash`, which is why the table is deliberately left out of
-backups: it describes a filesystem the restoring machine does not have, and a target that rebuilds it
-from its own disk loses nothing.
+**`import_watch_file` is a cache**: `(size, mtime)` per file plus the reason a file is waiting. It is
+left out of backups because it describes a filesystem the restoring machine does not have. The durable
+record of a file having been taken is `import_batch.file_content_hash`.
 
-A **parked** file is retried on every scan, because its refusal is about the ledger and the fix happens
-somewhere else entirely — that is what lets the Task clear itself once the account is mapped. A file
-whose **import raised** is not retried: the cause is unknown by definition, and re-running an unknown
-failure on a timer is a loop with nobody watching. It waits for the file to change or for someone to open
-it by hand.
+- A **parked** file is retried on every scan, since its fix happens in the ledger.
+- A file whose **import raised** is not retried until it changes or someone opens it by hand, because
+  the cause is unknown.
 
-**Purging only ever deletes a file it can still prove it imported.** Eligibility is never "everything
-older than N days in that folder": a row must name a file this app recorded as imported, and the stored
-content hash is re-checked against what is on disk immediately before the delete, so a file replaced
-under the same name is left alone and reported. What that capability costs, and why it is gated, is in
-`security-model.md` → *Reading and deleting outside the data directory*.
+**Purging deletes only a file the app can still prove it imported**: a row names it, and its stored
+content hash is re-checked against the disk immediately before the delete. The cost of that capability
+is in `security-model.md` → *Reading and deleting outside the data directory*.
 
 ## Transaction links and Amazon order import
 
-**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below), **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)), **reimbursable expenses** (`kind='reimbursement'`, see [Reimbursable expenses](#reimbursable-expenses)), **PayPal funding pairs** (`kind='paypal_funding'`, see [PayPal funding pairs](#paypal-funding-pairs)) and **refunds** (`kind='refund'`, see [Refunds](#refunds)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade. One trap for a new client: `get_link` returns `metadata` **already parsed** into a dict, so a reader that reaches for a JSON-string helper on it silently gets an empty object rather than an error — every field it was looking for reads as absent, and the write path keeps working, so the loss shows up only as a stored value that never comes back.
+### The link primitive
 
-**Amazon order import is the first client** (parsed from an AZAD orders/items export; **orders-only model**, 2026-07-10 — the earlier per-item itemization was superseded). Each order becomes **one spending transaction** in a chosen **Amazon account** — an ordinary account, since an account here is only a reporting/owner dimension with no balance or net-worth role — amount = net cash (`total − refund`), memo = the orders file's concatenated item list, categorized by the user's normal rules. The matching card charge (found by amount + date, with the account resolved from the funding-source map — see below) is recategorized into the excluded **"Amazon Funding"** leaf (created under the seeded `Transfers` group, so exclusion is inherited via `COALESCE(parent, leaf)`) and joined to the order by an `amazon_order` link (member roles `order` + `charge`). An order may link **several** charges (a split-shipment order — see the reconciliation bullet): each charge's prior categorization is stashed per charge in the link `metadata_json` (`charge_priors: {charge_id: prior}`; the legacy singular `charge_prior` written by the auto-matcher is still honored) so undo restores each exactly. The invariants that keep totals honest:
+`txn_link` groups transactions under a `kind`. Each `txn_link_member` row carries a `role`. A link has
+an optional `external_ref` (the outside entity it stands for) and a `metadata_json` blob for
+kind-specific data.
 
-- **The money counts once.** The order row counts as spending; the funding charge is excluded. Exclusion is *conditional* — only a charge actually linked to an imported order is excluded (a blanket `AMAZON.COM → exclude` rule would wrongly drop Amazon spend that has no imported order), which is exactly the fact the link records.
-- **The items file is optional enrichment, not rows.** The orders file alone is a complete transaction. If the **items** export is present, its per-item reference detail (ASIN, list price, quantity) is folded into the existing order transaction's `import_evidence` (idempotent, PayPal-style) — never as separate rows. Amazon's category taxonomy is parsed but deliberately unused (the user categorizes their own way). Item rows whose order isn't imported yet are **parked** rather than lost: their detail is retained in `amazon_pending_item` (keyed by `order_id`, upserted so a re-imported items file refreshes rather than duplicates; `parked_batch_id` ties each row to the orphan import that created it), and importing the matching orders file later **auto-attaches** it at order creation (`_take_parked_items`) — no manual re-import. A parked row is consumed on attach and cleared when its parking import is undone. Once an items-only card is fully matched it is folded into the orders card that holds its orders (`_merge_items_card_into_orders`: the items file's name, hash, and enrichment summary move onto the orders card and the empty items card is deleted), so a split import converges to one card labeled with both files — the same end state as importing them together. This is symmetric in import order: items-**before**-orders folds the prior parked-items card into the new orders card; items-**after**-orders (an items file enriching already-imported orders) folds the new empty items card into the prior orders card. Only when a single orders card is involved. While only *partly* matched, the items card survives and its "no matching order" count is derived **live** from the ledger (`unmatched_parked_order_count`) so it resolves toward zero as orders arrive and re-flags if an import is undone; it stays *not* hash-remembered (see the per-file hashes bullet) so a manual re-import isn't blocked, though with auto-attach it's rarely needed.
-- **Non-cash orders do not count.** An order funded only by `Rewards Points` or `Amazon gift card balance` (the export never discloses their dollar figure) is recorded in the excluded category — visible, no cash counted. An order whose card charge is on an *untracked* card (no ledger match) instead counts directly as the sole record, with nothing to exclude.
-- **Reconciliation report.** `amazon_reconciliation(batch_id)` (endpoint `GET /import-export/amazon/reconciliation/{batch_id}`) reports, per import batch, five buckets:
-  - **matched** — order ↔ the charge(s) it excluded (`charges`: usually one, several for an accepted split).
-  - **duplicate** — an order whose charge is *duplicated* (≥2 same-amount candidate charges made the auto-match ambiguous — the Mint double-import case). Carries every copy plus a **`mergeable`** flag: merge (keep the richest copy, fold the losers' distinguishing detail into its evidence, trash the rest, link the survivor) is offered only when no *other* unmatched order shares the amount — otherwise the copies are distinct purchases and merging would steal a charge, so the per-copy Discard is the resolution (`merge_duplicate_charges` guards the same condition server-side). Folded "Merged duplicate detail" is filtered for noise: a loser's text folds only if it adds a token that is both new (exact or abbreviation-subsequence, so MKTPLACE≈MARKETPLACE) and identifier-like (digit-bearing) — generic payment filler never folds.
-  - **matched_review** — a would-be-unmatched cash order whose total is covered by a **unique** combination of unaccounted charges (≤4 parts, within ±14 days, ~2¢ tolerance): Amazon billed the order as split shipments. Advisory only — **Accept** links the whole set (each charge excluded), **Dismiss** persists `split_suggestion_dismissed` in the link metadata so it stops re-surfacing (cleared if the order is later linked). Ambiguity (two covering combinations) is never guessed at.
-  - **amazon_unmatched** — a cash order with no candidate charge at all; resolvable by hand via the multi-charge link (`POST /amazon/link-charges`), which warns on (but allows) a sum that doesn't equal the order total. It counts toward attention until acknowledged: **Mark reviewed** (`POST /amazon/mark-no-charge-reviewed`, bulk by `link_ids`, `reviewed=false` un-acknowledges) sets `no_charge_reviewed` in the order's link metadata, dropping it out of the attention count while it stays visible in the report. Linking a charge clears the flag (so an order re-surfaces fresh if later unlinked). This is the escape valve for untracked-card orders that have nothing to link — mirrors the CSV advisory-reject `reviewed_at` acknowledgment.
-  - **payment_unmatched** — the heuristic *reverse scan*: Amazon-looking ledger charges (`merchant/raw LIKE %AMZN%/%AMAZON%`, positive) on the cards Amazon uses (this batch's matched-charge accounts ∪ globally-mapped funding accounts), in the batch's date range, that no order is linked to. The candidate pool the split suggestion draws from (with a wider ±14-day window). Each counts toward attention until acknowledged: **Mark reviewed** (`POST /amazon/mark-unaccounted-reviewed`, bulk by `txn_ids`, `reviewed=false` un-acknowledges) writes a row to `amazon_charge_reviewed`, dropping it out of the attention count while it stays listed. The acknowledgment is cleared if the charge is later linked to an order (so it re-surfaces fresh if unlinked). Trashing a charge doesn't clear the flag, but a trashed charge leaves the reverse scan anyway; the row cascades away on hard-delete.
+- **A link is pure association.** Creating or deleting one never changes the linked transactions. The
+  feature that owns a kind makes any change and records the prior state in `metadata_json` so it can
+  reverse it.
+- **A member row cascades with either endpoint; a link row has no foreign key to `txn`.** The owning
+  feature and the wipe path delete stale links explicitly.
+- Both tables ride the data backup. Writes to `txn_link` bump `recon_epoch`, which invalidates the
+  cached reconciliation attention counts.
+- `get_link` returns `metadata` already parsed into a dict.
 
-  **Actionable attention** = the duplicate + duplicate_review + matched_review + unaccounted_duplicate counts, plus each **unacknowledged** no-charge-found order **and** each **unacknowledged** unaccounted (reverse-scan) charge (`reconciliation_attention_count`). Both of the last two are often benign (an untracked-card/pre-coverage gap with nothing to link; a purchase the export didn't cover), but a real anomaly — e.g. a stray unpaired duplicate — can hide in either pile, so each is surfaced until the user **Mark reviewed**s it (see the buckets above; no-charge-found acknowledgment lives in the order's `txn_link` metadata as `no_charge_reviewed`, unaccounted-charge acknowledgment in the `amazon_charge_reviewed` table). The acknowledgment is what keeps them from nagging forever. Attention is surfaced as `recon_attention_count` on each Amazon batch in `GET /import-export/batches` and as an `amazon_reconciliation` warning task in `GET /tasks`, so the file card and the Tasks nag clear together as items are resolved or acknowledged.
-- **Which account the charge is on comes from the funding-source map (`amazon_funding_map`), not the mask.** An order's `payments` field names the paying **instrument** (a card `last-4` + network label), but imported ledgers rarely carry card masks, so keying the charge on `account.mask` alone matches nothing. The map keys an instrument → the system **funding account** it charges. Three states: a row with `funding_account_id` set = **mapped** (the charge search is constrained to that account, `t.account_id = funding_account_id`, which also resolves same-amount ambiguity across accounts); a row with `funding_account_id` NULL = **untracked** (an explicit "not an account I hold" — the items are the sole record and count directly, no charge); no row = **unmapped** (falls to the *graceful-last-4* search — the last-4 disambiguates only among accounts that *carry* a mask, so a maskless account can't contradict it and is carried by amount + date + uniqueness). Scope: `amazon_account_id` NULL is the **global default** (applies when importing for any Amazon account); a non-NULL value is a **per-account override** that wins for that one account. Resolution order is therefore **override → global → graceful-last-4 → no match** (a `$0` charge never matches, and the search always excludes the target Amazon account so an order can't self-match its own item). The map is user-maintained on the Amazon import tab, accrues instruments as imports surface them, and is many-to-one (several Amazon accounts, or a reissued card, may point at one funding account). It rides in backups; a mapping whose named account doesn't survive a restore is dropped (returning that instrument to unmapped) rather than silently flipped to untracked.
-- **Idempotent, order-independent.** Ingestion is keyed on `order id` — a re-imported order that already has a link is a no-op (`already_applied`); a later items file for an already-imported order folds its detail in once (a re-imported items file whose order already carries item detail reports `already_enriched`, distinct from a duplicate order). An items file whose orders file is absent parks its detail (see above), so importing the files in either order converges once both are in — the parked detail attaches when the orders file arrives.
-- **The card and the orders converge in either order too.** The import matches a new order against the charges already in the ledger, so an Amazon file imported before the card's sync or statement finds nothing to match; every CSV import and every sync therefore runs `match_orders_after_ingest` over the rows it brought, linking an unmatched order exactly as its import would have — the charge is the order's **only** candidate — plus one rule the import never needed, because it saw one order at a time: no *other* unmatched order may want that charge, since which of two same-amount orders it paid is not deducible. Anything less clear-cut stays a suggestion in the report. A pending charge competes but is not linked until it posts (a provider may drop it and send the posted row under a new id, which would leave the order linked to a trashed row). **Unlinking is remembered**: `unlink_order_charges` records the detached charges in the link's `declined_charge_ids`, which no automatic pass (this one, or the equal-amount pairing) offers that order again; linking one by hand clears it. The pass runs before PayPal pairing, which would otherwise claim a PayPal-looking Amazon charge first.
-- **Persisted marketplace summary + per-file hashes.** Unlike CSV imports, a marketplace batch's outcome is investigable *after* the fact: `run_amazon_import` persists into `config_snapshot` the `import_summary` (the outcome counts plus the rows that never became transactions — `enriched_items` / `already_enriched_items` [each with the enriched order's `txn_id`], `discarded_items`, `duplicate_orders`, all carrying `source_file` provenance, and `skipped_files` — files whose *every* row discarded, struck through on the file card) and `amazon_file_hashes` (`{filename, hash}` per file taken, via the CSV importer's `make_import_file_hash`). A later upload whose content hash matches a **completed** batch's file is **skipped** and reported "already imported" (announced at scan time; an all-skipped import creates *no* batch — the file already has its card); an undone batch's files, and any file with discarded rows, are deliberately not remembered so they stay re-importable. Each created order transaction also records its `source_file` in `import_evidence`. `GET /import-export/amazon/import-detail/{batch_id}` renders all of this as the import-detail report (orders / items matched / already enriched / discarded / duplicates / matched charges by payment account), resolving enriched items by `txn_id` since the orders they touched usually live in the *orders* file's batch.
-- **Undo restores the outside-the-batch charge first.** The order row belongs to the import batch and is removed by ordinary batch undo, but the linked charge lives *outside* the batch; batch undo (and the re-import replace path) therefore restores each linked charge's prior category from the link metadata and deletes the link *before* deleting the batch's own rows — the same ordering discipline as enrichment reversal, and for the same reason (otherwise the reclassification is orphaned and un-reversible).
-- **History grouping.** The import batch is stamped `source_kind = 'marketplace:amazon'` — a generic `import_batch` column (NULL for ordinary CSV imports) — so the recent-import history groups these under an "Amazon" entry rather than "unknown data source" (a marketplace import has no CSV profile).
+| kind | roles | what the owner changes |
+| --- | --- | --- |
+| `amazon_order` | `order`, `charge` | the charge moves to the excluded *Amazon Funding* leaf |
+| `wallet_funding` | `leg`, `purchase` (or `refund`) | the leg moves to the excluded *Money movement* leaf |
+| `paypal_funding` | `paypal`, `counterpart` | one or both rows are excluded (see [PayPal funding pairs](#paypal-funding-pairs)) |
+| `paypal_funding_declined`, `paypal_funding_reviewed` | — | nothing; they record a decision |
+| `refund` | `payment`, `refund` | the refund takes the payment's category (see [Refunds](#refunds)) |
+| `purchase` | `payment` | nothing (see [Multi-payment purchases](#multi-payment-purchases)) |
+| `reimbursement` | derived | nothing (see [Reimbursable expenses](#reimbursable-expenses)) |
 
-**Wallet funding-leg suppression is the second client** (`kind='wallet_funding'`, `services/money_movement.py`, landed 2026-07-19). A wallet-style CSV (PayPal, Venmo, …) records a single balance-funded purchase as **two** rows in one export — the payment out to the merchant, and an equal-and-opposite nameless deposit *into* the wallet balance. That deposit is money movement, not income. After the import insert loop, `suppress_batch_funding_legs` pairs the two **within the batch** — a *nameless credit* whose **unique** same-day equal-and-opposite twin is a *named debit* — and recategorizes only the **leg** into an excluded **"Money movement"** leaf (under the seeded `Transfers` group), joining it to the purchase by a `wallet_funding` link (roles `leg`/`purchase`, the leg's prior category stashed in `metadata_json` for reversal). Always on, but deliberately high-precision so a genuine inbound payment (a *named* credit with no offsetting purchase) is never touched and an *ambiguous* group (two same-amount rows on a side) is left entirely alone. The captured `Type` value ("Bank Deposit to PP Account", …) is **corroborating, not required**: the recognized vocabulary is a code constant, the structural signal stands without it, and any unrecognized `Type` on a suppressed leg is reported in the import summary (`money_movement_unrecognized_types`). The category is intentionally **generic/source-agnostic** (the same two-legged shape occurs across wallets); per-source provenance lives on the link + the leg's `import_evidence`. Reversal (`reverse_batch_money_movement_links`) runs in both `undo_batch` and the re-import replace path — and, unlike the Amazon charge, both paired rows belong to the batch, so reversal exists mainly to drop the link (a `txn_link` row has no FK to `txn`) plus restore any leg that outlives the batch. **A stated reference outranks the structure.** A PayPal statement names the payment each funding deposit paid for (the deposit's `Ref ID` is the payment's `Transaction ID`), so those pairs are taken first, as stated (`_referenced_pairs`) — including a deposit that carries the merchant's name, which the structural signal would read as a genuine inflow. Only a deposit `Type` can be a leg of a *payment* this way: a refund refers to its payment the same way and is real money back. The statement also shows that refund's way out: a refund lands in the balance and a withdrawal carries it straight back to the card or bank, naming the same payment (or the refund itself) in its `Ref ID`. That withdrawal, equal and opposite to a refund it names, is the **refund's** leg — money movement, linked with the refund in the `refund` role — while the refund itself stays real money back, paired with its payment (see [Refunds](#refunds)). It is taken only as stated: a withdrawal of money *received* has no reference and is left to the `Type` rules below.
+### Amazon orders
 
-**PayPal source recognition + `Type`-based money-movement categorization** (landed 2026-07-20). Beyond the structural funding-leg pairs above, the other money-movement rows (holds/reversals, standalone deposits/withdrawals/currency conversions) are recognized by the PayPal `Type` field, with three supporting pieces:
+Each order in an orders export becomes **one spending transaction** on a chosen Amazon account: amount
+is net cash (`total − refund`), the memo is the order's item list, and the user's rules categorize it.
+The matching card charge is moved to the excluded *Amazon Funding* leaf under `Transfers` and joined to
+the order by an `amazon_order` link, whose `external_ref` is the order id.
 
-- **Source recognition.** A PayPal Activity CSV is identified by its header (`sniff_paypal_activity`, a marker-subset test). A recognized import auto-attaches to the **single system "PayPal" data source** — `csv_import_profile.source_kind = 'source:paypal'`, created on first use (named "PayPal", "PayPal 2"… on name collision), `account_id` NULL so one source spans accounts (the target is picked per import), **visible/renamable but not deletable**. A *hand-created* PayPal source is **adopted** (tagged `source:paypal`) on its next PayPal import rather than left untagged, so there's exactly one. The batch is likewise stamped `source_kind = 'source:paypal'`.
-- **Monthly statements (PDF).** PayPal's monthly statement lists the same transactions as the activity CSV, with the same Transaction IDs, so it imports through the same data source: `services/paypal_statement.py` reads the PDF's text layer by column into rows under the CSV's own column names (the description split into `Type` and `Name` at its first colon), and `routers/import_export/paypal_statement.py` hands them to the ordinary import as a `ParsedFile` — one batch per statement, mapping-free. Only the document's first statement ("PayPal account") is read; the second ("PayPal Balance account") repeats the rows that touched the balance. The statement's `Ref ID`, `Transaction ID`, `Type` and the bank a payment drew on are captured as **categorical** evidence, declared rather than measured (a month is too few rows for cardinality). A row in another currency is refused as a CSV's is, and so is a same-currency deposit or withdrawal whose `Ref ID` names one — the card deposit that paid for a payment in pounds would otherwise pair its card charge away and leave nothing counting the purchase. **Each statement belongs to one PayPal account, both ways**: its header names the PayPal Account ID, the first import of an ID ties it to the account chosen, and after that a statement for that ID is refused anywhere else and an account holding one ID's statements refuses another's. The tie is read from the completed batches' snapshots (`config_snapshot.statement`), resolved to the account group, so undoing those imports undoes it and nothing else stores it. A PayPal data source first created by a statement has no header fingerprint; the first activity CSV to attach gives it that CSV's header and mapping.
-- **Forced capture.** A recognized file **force-captures** `Type`, `Item Title` and `Transaction ID` into `import_evidence` regardless of the user's column-capture picks (`_forced_evidence_headers`), so the signal money-movement handling depends on is always present (an unchecked `Type` can't silently drop it), and so does the identifier the activity CSV shares with a statement, which is how a statement's refund finds a payment only the CSV brought in ([Refunds](#refunds)). `Transaction ID`'s role is **declared categorical** (`_PAYPAL_FORCED_CATEGORICAL`) rather than measured: a value unique to every row measures as descriptive text and would feed duplicate matching, where an opaque identifier names nothing two sources would both write. The statement declares the same column the same way.
-- **User-approved `Type` rules, not a frozen vocabulary.** Approved types become `match_source_text` rules keyed on the `Type` value → the excluded **Money movement** category. `is_money_movement_type` is **fragment-based** (*deposit / withdrawal / currency conversion / hold* — so a future `eCheck Deposit` still matches, stale-resistant) and only **pre-checks** a review; the user decides which types become rules. The review is **source-scoped** (`money_movement_type_proposals_for_profile` unions the `Type`s across all the source's imports — one surface for every type, not one per card) and **bidirectional** (each type's `already_ruled` state; an `{add, remove}` apply creates/deletes rules and runs `recategorize_all`, so *existing* rows move too). Rules are **account-type-scoped** (`account_type='paypal'`), so **one** rule per `Type` covers every PayPal account and a same-text transaction on a non-PayPal account can't match. Approving a `Type` also types the source's accounts `paypal` when generic (so the type-scoped rule matches — see Accounts → `type`). Reached from a "Money movement" button on the PayPal data-source header and automatically after a PayPal import.
+- **The money counts once.** The order counts; its linked charge is excluded. Only a charge linked to
+  an imported order is excluded, so Amazon spending with no imported order still counts.
+- **An order may link several charges** (split shipments). Each charge's prior categorization is stashed
+  in `metadata_json.charge_priors`, keyed by charge id; a singular `charge_prior` is still read.
+- **The items file is enrichment, not rows.** Its per-item detail is folded into the order
+  transaction's `import_evidence`, once. Amazon's own categories are not used.
+- **Items with no imported order are parked** in `amazon_pending_item` (keyed by `order_id`, upserted,
+  with `parked_batch_id` naming the import that parked them) and attached when the orders file arrives
+  (`_take_parked_items`). A parked row is cleared when its parking import is undone. A fully matched
+  items-only card is folded into the orders card (`_merge_items_card_into_orders`), so importing the two
+  files together or apart, in either order, ends in the same card. A partly matched card's "no matching
+  order" count is derived from the ledger (`unmatched_parked_order_count`).
+- **An order funded only by points or gift-card balance** is recorded in the excluded category, since
+  the export gives no cash figure. An order whose card is not tracked counts as the sole record.
+- **Ingestion is keyed on the order id.** A re-imported order that has a link is `already_applied`; an
+  items file for an order that already carries item detail is `already_enriched`.
+- **Orders and charges converge in either order.** Every CSV import and sync runs
+  `match_orders_after_ingest` over the rows it brought. It links an order only when the charge is its
+  sole candidate and no other unmatched order wants that charge. A pending charge is not linked until
+  it posts. It runs before PayPal pairing.
+- **Unlinking is remembered.** `unlink_order_charges` records `declined_charge_ids` on the link, and no
+  automatic pass offers those charges to that order again; linking one by hand clears it.
+- **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import
+  replace restore each linked charge's prior and delete the link before deleting the batch's rows.
+- The batch has `source_kind = 'marketplace:amazon'`. `config_snapshot` holds the `import_summary` and
+  `amazon_file_hashes`. An upload whose hash matches a **completed** batch's file is skipped; an undone
+  batch's files, and files with discarded rows, are not remembered.
+
+**The funding-source map** (`amazon_funding_map`) says which account an order's paying instrument
+charges, because imported ledgers rarely carry card masks.
+
+| row | meaning |
+| --- | --- |
+| `funding_account_id` set | **mapped**: the charge search is limited to that account |
+| `funding_account_id` NULL | **untracked**: not an account the user holds; the order is the sole record |
+| no row | **unmapped**: the last-4 disambiguates only among accounts that carry a mask |
+
+`amazon_account_id` NULL is the global default; a value is an override for that Amazon account.
+Resolution is override, then global, then last-4, then no match. A `$0` charge never matches, and the
+search excludes the target Amazon account. The map rides the data backup; a mapping whose account does
+not survive a restore is dropped, not turned into "untracked".
+
+**Reconciliation** (`amazon_reconciliation(batch_id)`) reports per batch:
+
+- **matched**: an order and the charges it excluded
+- **duplicate**: an order with two or more same-amount candidate charges. `mergeable` is set only when
+  no other unmatched order shares the amount; otherwise the copies may be distinct purchases
+  (`merge_duplicate_charges` checks the same condition)
+- **matched_review**: an unmatched order whose total is covered by a unique combination of unaccounted
+  charges. Accepting links the set; dismissing stores `split_suggestion_dismissed` on the link
+- **amazon_unmatched**: an order with no candidate charge. `no_charge_reviewed` on the link acknowledges
+  it, and linking a charge clears the flag
+- **payment_unmatched**: Amazon-looking charges on the cards Amazon uses, in the batch's date range,
+  that no order links. `amazon_charge_reviewed` acknowledges one, and linking clears it
+
+`reconciliation_attention_count` is the duplicate and review buckets plus each unacknowledged row of the
+last two. It is cached as `import_batch.recon_attention_count` against `recon_epoch`.
+
+### Wallet funding legs
+
+A wallet export (PayPal, Venmo) records one balance-funded purchase as two rows: the payment out and an
+equal, opposite, nameless deposit into the balance. `suppress_batch_funding_legs`
+(`services/money_movement.py`) pairs them within the batch and moves only the **leg** to the excluded
+*Money movement* leaf, linking it to the purchase (`wallet_funding`) with the leg's prior stashed.
+
+- **The structural signal is a nameless credit whose unique same-day equal-and-opposite twin is a named
+  debit.** A named credit with no offsetting purchase is left alone, and so is a group with two
+  same-amount rows on a side.
+- **A captured `Type` corroborates and is not required.** An unrecognized `Type` on a suppressed leg is
+  reported as `money_movement_unrecognized_types`.
+- **A stated reference outranks the structure** (`_referenced_pairs`). A PayPal statement's deposit
+  names the payment it paid for through `Ref ID`, so those pairs are taken as stated. Only a deposit
+  `Type` can be a payment's leg this way; a refund refers to its payment the same way and is real money
+  back.
+- **A withdrawal equal and opposite to a refund it names is the refund's leg**, linked with the refund
+  in the `refund` role. The refund itself stays paired with its payment.
+- `reverse_batch_money_movement_links` runs in batch undo and re-import replace.
+
+### PayPal source recognition
+
+- A PayPal activity CSV is recognized by its header (`sniff_paypal_activity`). A recognized import
+  attaches to the single system PayPal data source (`csv_import_profile.source_kind = 'source:paypal'`,
+  `account_id` NULL), which cannot be deleted. A hand-made PayPal source is adopted on its next PayPal
+  import. The batch is stamped `source:paypal`.
+- **A monthly statement (PDF)** imports through the same source: `services/paypal_statement.py` reads it
+  into rows under the CSV's column names. Only the document's first statement is read; the second
+  repeats the rows that touched the balance.
+- **A statement belongs to one PayPal account.** Its header names the PayPal account id; the first
+  import ties that id to the chosen account group, and later statements are held to it. The tie is read
+  from completed batches' `config_snapshot.statement`, so undoing those imports undoes it.
+- **`Type`, `Item Title` and `Transaction ID` are always captured** (`_forced_evidence_headers`),
+  whatever the user's capture choices, because money-movement handling and refund pairing read them.
+  `Transaction ID` is declared categorical (`_PAYPAL_FORCED_CATEGORICAL`): a unique value would measure
+  as descriptive and feed duplicate matching. A statement declares its `Ref ID`, `Transaction ID`,
+  `Type` and funding bank categorical too.
+- A statement row in another currency is refused, and so is a same-currency deposit or withdrawal whose
+  `Ref ID` names one.
+- **Money-movement `Type`s become rules the user approves.** Each approved type is a
+  `match_source_text` rule to the *Money movement* leaf, scoped `account_type = 'paypal'` and
+  `is_managed`. `is_money_movement_type` matches by fragment (deposit, withdrawal, currency conversion,
+  hold) and only pre-checks the review. The review covers the source's types across all its imports
+  (`money_movement_type_proposals_for_profile`), and applying runs `recategorize_all`.
 
 ### PayPal funding pairs
 
-A tracked PayPal account holds the real transaction — the purchase, the payment received — because money
-can sit in a PayPal balance, and then the PayPal row is the only record there is. What PayPal took from a
-card or bank, or sent back to one, also lands on that account as a PayPal-looking row, and counted there
-too the purchase is counted twice. After every import and every sync, `services/paypal_funding.py` pairs
-each PayPal row with the bank or card row on the other side of the same movement, links the two
-(`kind='paypal_funding'`, roles `paypal` / `counterpart`) and makes the money count once. The wallet
-funding-leg suppression above works *inside* one PayPal export; this works *across* accounts, and the two
-compose: a suppressed funding leg is one of the PayPal rows that pairs.
+A tracked PayPal account holds the real transaction. What PayPal took from a card or bank, or sent back,
+also appears on that other account, and counted in both places the purchase counts twice. After every
+import and sync, `services/paypal_funding.py` pairs each PayPal row with the row on the other side of
+the movement and links them (`paypal_funding`).
 
-**What a pair changes depends on which way the money went, and the invariant is "counted once".**
+- **A transfer pair** (money into or out of PayPal) is movement on both sides, so both rows move to the
+  *Money movement* leaf.
+- **A payment pair** (a PayPal payment a card or bank paid directly) counts once. The PayPal row records
+  what was bought, so the card row is excluded, unless the PayPal row is already excluded, in which case
+  nothing changes.
+- The card row is excluded only because its PayPal row is in the ledger. A blanket rule would drop
+  spending for anyone not tracking the PayPal account.
+- Changed rows get `category_source = 'enrichment'` and their priors are stashed on the link (`priors`).
+- A PayPal row with no captured `Type` could be either kind; the candidate's sign settles it.
 
-- A **transfer** pair — money into PayPal from a card or bank (a funding leg, or a row whose captured
-  `Type` is a deposit), or out of PayPal to one (a `Type` naming a withdrawal) — is money moving on both
-  sides, so both rows move to the excluded *Money movement* leaf. Two rows the user had filed alike so
-  they cancelled keep the same net, now without a phantom expense and a phantom income.
-- A **payment** pair — a PayPal payment a card or bank paid directly — must count exactly once, and the
-  PayPal row is the record of what was bought, so the card row is excluded. **Unless the PayPal row is
-  already excluded**: then the user has chosen to count the card side, which already counts it once, and
-  excluding the card row too would drop the purchase from every total. Nothing changes in that case, and
-  nothing changes when both are already excluded.
+**A candidate** is a row on a non-PayPal account that reads as PayPal in its name, raw text or evidence,
+with the same amount to the cent, within that module's `PAIR_WINDOW_DAYS`, on an account whose owner is
+compatible (same owner, the shared owner, or none). Pending rows wait until they post. Split rows and
+rows an Amazon order or wallet leg already claims are not offered.
 
-Excluding the card row is safe only because the PayPal row it belongs to is in the ledger — the same
-conditional exclusion the Amazon importer applies, and for the same reason: a blanket "PAYPAL → excluded"
-rule would drop real spending for anyone not tracking the PayPal account, where the card row is the only
-record. What a pair changed is stashed per row on the link (`priors`), with `category_source =
-'enrichment'` on the changed rows so automatic passes leave them alone. A PayPal row with no captured
-`Type` (a synced account) could be a payment or a withdrawal, so it is offered both directions; the sign of
-the candidate settles which.
+**Only an unambiguous pairing applies itself**: a row with exactly one candidate no other row wants, or
+a cluster of interchangeable rows where every assignment has the same effect. A row with a single
+candidate claims it, which can leave another row with one uncontested candidate, so the rounds repeat
+until one claims nothing. Two rows cornered on one candidate are a shortage, and both go to the user.
 
-**What makes a candidate**: a row on a non-PayPal account whose name, raw text or captured detail reads as
-PayPal, of the matching amount to the cent, within `PAIR_WINDOW_DAYS` either side, on an account whose owner
-is compatible (the same owner, the shared owner, or none recorded — a household's second PayPal account is
-funded from different accounts, and a coincidence of amount between them must not pair). Pending rows wait
-until they post; split rows and rows an Amazon order or a wallet leg already claims are not offered. The
-window was measured on one real ledger: over 241 unambiguous pairs, the card or bank row was dated between
-two days before and four days after the PayPal row, and widening the window to seven days found no more.
-
-**Only an unambiguous pairing applies itself**: a PayPal row with exactly one candidate that no other PayPal
-row also wants, or a cluster of interchangeable rows (one amount on each side, every PayPal row wanting
-every candidate, as many of each) where every assignment has the same effect. A row with a single candidate
-also **claims** it, taking it out of the lists of rows that have alternatives — that row can pair with that
-one or with nothing, so leaving it on offer elsewhere is what strands it. Two same-amount payments days
-apart do this on a real ledger: the earlier one's only bank row falls inside the later one's window too, and
-both were handed to the user although only the later one was ever in doubt. A claim often leaves another row
-with a single uncontested candidate in turn, so the rounds repeat until one claims nothing, and a row left
-with no candidate at all is treated as having none to find. The claim is made only where a **single** row is
-cornered: two rows cornered on one candidate is a *shortage* rather than an ambiguity (the other payment came
-from the balance, or its own bank row isn't in the ledger), at most one of them can have it, and which is not
-deducible — so nothing is taken from anyone and both go to the user. That shortage is most of what is left
-for a person: of the six clusters one ledger could not settle, five were two payments competing for one bank
-row, and a sixth was a bank deposit imported twice.
-
-**The review** (`paypal_funding_report`, shown as the *PayPal reconciliation* — the PayPal vendor of the
-reconciliation shell, where a pair reads as a *match*) lists the pairs and
-three kinds of work: a PayPal row the pass could not settle — shown as *Several possible matches* where it
-has a choice of candidates, and, where its single candidate is one other rows are cornered on too, as *Two
-transactions, one match*: **one row carrying every rival**, each beside the button that gives the
-transaction to it. Listed a row apiece they showed the same lone transaction twice with no sign of the
-rivalry that was the whole difficulty, and a picker offering one candidate is not a choice. The split and
-the grouping are made in the vendor, off the candidate lists the report already sends, since it is one
-bucket's work and one bucket's data. Declining is the group's own action (*Neither*, in the Actions column,
-where the answer is about the group rather than one of its rows): it declines the contested row for every
-rival, which releases it to the unaccounted list, where it reads as a bank row no PayPal row accounts
-for — which is what it is; a PayPal row stating that money crossed to
-another account (a deposit or withdrawal) with no candidate — a payment with none is not listed, since a
-balance-funded payment has no counterpart to find; and a PayPal-looking bank or card row nothing pairs
-with, looked for only on accounts already paired with a PayPal account and only within the dates that
-PayPal account's rows cover, since a PayPal-looking charge elsewhere belongs to a PayPal account the ledger
-does not track, where it is the only record. The report is read-only; the pairing runs after ingestion and
-after each **decision** that changes what is there to pair — `pair_after_decision`, on the pair / unpair /
-decline endpoints — never from a report `GET`. A decision is not only about its own row: taking a
-transaction settles what everything cornered on it could have been, and declining one releases it, so a row
-the decision just made unambiguous would otherwise drop out of the review (nothing is left to ask about it)
-while nothing paired it, its bank row counting on beside the PayPal row until the next import happened to
-run the pass. Claiming reaches that state from more decisions than the old rule did, since settling one row
-now cascades through the rows it was cornered against. It is best-effort and runs after the decision's own
-write, which stands whatever the pass then finds; acknowledging a row runs nothing, since a review state is
-not consulted by the matching. The whole pass is ~80 ms over an 18k-row ledger, one more than the report
-already runs on each reload.
-
-**Decisions are links of their own kinds**: unpairing records the pair as declined
-(`paypal_funding_declined`), so the pass never makes it again; "none of these" declines each candidate
-shown; acknowledging a row with nothing to pair records it as reviewed (`paypal_funding_reviewed`).
-Storing them as link kinds rather than tables means they ride in backups, cascade with their rows, and
-invalidate the attention cache through the `recon_epoch` triggers already on `txn_link`.
-
-**Reversal restores only what is still the pairing's.** Unpairing, or undoing the import that brought either
-row in (`undo_batches` runs `reverse_batch_paypal_funding` before the rows go), puts a row's category back
-only while it still holds the category and source the pairing set; a category the user chose since is
-kept. A link has no foreign key to `txn`, so a pairing whose PayPal row was hard-deleted by some other path
-(emptied from Trash, an account merge) is **healed** at the start of the next pass: the surviving row is
-restored and the link dropped — otherwise its bank row would stay excluded with nothing left counting the
-money.
-
-**Which cards offer it, and attention.** A card offers its share of the review when that share lists
-anything (`card_counts`: per batch, the rows its review lists and which of them need the user — ids, so
-a data source's collapsed header can total its cards counting each row once, since a bank row with no
-PayPal record is listed by every card whose dates cover it). The card is
-chosen by where its rows landed, not by what kind of file it was — a PayPal account's rows arrive by
-PayPal file, by an aggregator's export and by sync alike — and a card whose PayPal rows have no other side
-(payments from the balance, holds) is left out rather than offering an empty report. **Attention** —
-every row with a choice of candidates, every contested bank or card row (**once**, named by that row: a
-shortage is one decision however many PayPal rows it settles, and naming it by the contested row also
-counts it once across cards when the rivals arrived with different files), plus each unreviewed row of the
-other two kinds — tints the card and,
-over the whole ledger, drives one Tasks entry, since pairs are made after syncs too. Both are cached in
-`db_meta` against the `recon_epoch` (`services/reconciliation_attention.py`), the per-card figures from
-one analysis of every card.
+- **Decisions are links.** Unpairing writes `paypal_funding_declined`, so the pass does not repeat the
+  pair; acknowledging a row with nothing to pair writes `paypal_funding_reviewed`. As link kinds they
+  ride backups, cascade with their rows, and invalidate the attention cache.
+- **The pass runs after ingestion and after each pair, unpair or decline** (`pair_after_decision`),
+  never from a report read, because a decision can make another row unambiguous.
+- **Reversal restores only what is still the pairing's.** Unpairing, or undoing either row's import
+  (`reverse_batch_paypal_funding`), puts a category back only while the row still holds the category
+  and source the pairing set.
+- **A pair whose PayPal row was hard-deleted is healed at the start of the next pass**: the surviving
+  row is restored and the link dropped.
+- **Attention** counts each row with a choice of candidates, each contested bank or card row once, and
+  each unreviewed row of the other kinds. It is cached in `db_meta` against `recon_epoch`
+  (`services/reconciliation_attention.py`). `card_counts` gives per batch the rows its review lists.
 
 ### Refunds
 
-Money back on a purchase is not income: it offsets what was spent (see [Reporting assumptions](#reporting-assumptions)),
-and it does so in the totals only when the refund sits in the purchase's category. Where a source says which
-payment a refund returns, `services/refund_links.py` pairs the two after each import and keeps the refund in
-the payment's category. A PayPal statement says it on every refund — its `Ref ID` is the payment's
-`Transaction ID`, which the activity CSV always captures too, so a statement's refund pairs with a payment
-from either file. A CSV refund can say the same only through the optional `Reference Txn ID` column, which
-an activity download does not always include; it is read where it was captured and not forced. A reversal of a payment *received* refers to it the same way and pairs
-the same way. The link is `kind='refund'` (roles `payment` / `refund`), and it may cross imports and arrive
-in either order, since a refund may land in a later statement than its payment.
+Money back on a purchase offsets what was spent, and does so in the totals only when the refund sits in
+the purchase's category. Where a source states which payment a refund returns,
+`services/refund_links.py` pairs the two after each import (`refund`, roles `payment` / `refund`).
 
-- **Only a stated reference pairs.** No amount-and-date matching: a refund is paired with the payment it
-  names, on the same account group, in the other direction, for no more than was paid — so a partial refund
-  pairs and a mismatched reference does not. A refund with no reference stays an ordinary transaction.
-- **The refund follows the payment's category, whichever way that changes.** It takes the category with the
-  feature-owned source `refund` (see *How an existing transaction's category can change*), and the
-  `trg_refund_follows_payment` trigger moves it whenever the payment's `category_id` changes. A trigger for
-  the reason the purchase prune trigger is one: a category is written from many places, and one missed
-  would leave the refund counting against a category its payment has left. While the payment is split the
-  trigger holds still, since a split payment's `category_id` is only the value its allocations replaced, and
-  a refund of an already-split payment is linked without being moved.
-- **The user's category wins.** A refund categorized by hand is linked but not moved; categorizing it by hand
-  later stops the following. What the pairing changed is stashed on the link (`refund_prior`), and undoing
-  either row's import — or losing the payment to any other deletion, healed at the start of the next pass —
-  puts it back only while the refund is still following.
-- **It can be filtered for.** The *Refunded* attribute (`refund`) selects both sides of every pairing, in
-  the ledger's quick filter and the Transactions and Dashboard filter bars alike (see
-  [Attributes](#attributes--filtering-by-what-a-row-is)).
-- **The row shows it with the link marker.** The list feed carries `refund_link` per row — its role and the
-  other side's name, date and amount (`refund_map_for`) — and the ledger draws it with the `🔗` the
-  multi-payment purchase already uses, opening the other transaction.
-- **The client is told what moved.** A category write answers with `followed_ids`, the refunds that moved
-  with it, since a surface patches only the row it edited; see `ui-patterns.md` → *Transaction lists*.
+- **Only a stated reference pairs.** A PayPal statement's `Ref ID` is the payment's `Transaction ID`; a
+  CSV refund says the same through the optional `Reference Txn ID` column. The refund must be on the
+  same account group, in the other direction, for no more than was paid. A refund with no reference is
+  an ordinary transaction. A reversal of a payment received pairs the same way.
+- The pair may cross imports and arrive in either order.
+- **The refund follows the payment's category.** It takes the category with `category_source = 'refund'`
+  and `trg_refund_follows_payment` moves it whenever the payment's `category_id` changes. It is a
+  trigger because a category is written from many places. While the payment is split the trigger does
+  nothing, since a split payment's `category_id` is the stashed prior.
+- **A refund categorized by hand is linked and not moved.** What the pairing changed is stashed as
+  `refund_prior` and restored on undo only while the refund is still following.
+- The list feed carries `refund_link` per row (`refund_map_for`). A category write answers with
+  `followed_ids`, the refunds that moved with it (`ui-patterns.md` → *Transaction lists*).
 
-Recording a refund as a member of a [multi-payment purchase](#multi-payment-purchases) is the other way to say
-the two belong together, and changes no category; a stated refund needs no such act. What a refund is **not**
-is a [reimbursable expense](#reimbursable-expenses): nothing is owed back, and the money has already returned.
+A refund is not a [reimbursable expense](#reimbursable-expenses): nothing is owed back.
 
 ## Backups
 
-Backup/restore deals with two different classes of data:
+Two artifacts, kept separate so the ordinary backup holds no secret: the **data** backup and the
+**credentials** backup. Each declares its `kind` (`data` or `credentials`): in `meta.json`, in a
+credentials payload, and in an encrypted archive's `manifest.json`, outside the ciphertext, so an
+encrypted backup can be identified before a private key is produced. A file without the field is
+identified by the sections it carries. Each restore endpoint refuses the other kind by name.
 
-- regular app data
+Secrets stay in the data database as ciphertext and keys stay in the control database. That separation
+is why a leaked database does not leak tokens.
 
-- credentials/secrets such as Plaid-linked credentials
+### The data backup
 
-Those are intentionally separated so normal backups can stay safer and simpler.
+It covers the whole data database, so a restore reproduces the working app and not only the ledger:
+every table, the user's decisions and preferences included, plus each document file. The exceptions
+are listed with their reasons in `backend/tests/test_backup_restore.py`: `EXCLUDED_TABLES` (among them
+`connection_sync_log`, `import_watch_file`, the `document_fts` index, `db_meta`, and the credential
+tables that ride the other backup) and `EXCLUDED_COLUMNS`.
+`test_backup_carries_every_column_of_every_table` compares each section's columns with the live table,
+because an omitted column restores at its default, which for `txn.trashed_at` would bring every trashed
+row back.
 
-**The credentials backup (payload version 4) exports ciphertext, never plaintext.** Versions 1 and 2
-*decrypted* every connection credential and app-level provider secret into a plain zip — an artifact
-strictly weaker than the databases it came from, which hold only ciphertext — and producing it was the
-sole reason the export demanded an unlocked vault. v3 copies `connection.credential_enc` and
-`provider_config.secret_enc` as they sit and carries the exporting vault's key material alongside them
-(`vault: {...}` from `crypto_service.export_vault_slot`). **v4 is the same file with a keypair slot in
-that block** — `{public_key, wrapped_private_key, sealed_dek}` where v3 had a directly-wrapped
-`wrapped_dek` — and the block is read by its `format`, so v1–v3 all still restore. The version bump exists
-so an *older* install rejects a v4 file outright rather than reporting the passphrase as wrong when it
-reaches material it cannot interpret. Consequences, each load-bearing:
+- **Layout.** `meta.json` (the header and a sha256 per member) and one NDJSON member per section,
+  `sections/<name>.ndjson`, a row per line. Document files are `documents/<id>` members, stored
+  uncompressed. The line-per-row layout is what lets both directions stream; neither may hold the
+  archive in memory.
+- **The export builds in a staging file beside the database**, not the system temp directory, which is
+  RAM-backed on many Linux installs. The file is unnamed, so an interrupted export leaves nothing.
+- **Integrity.** Restore recomputes every member digest before anything destructive. Older single-JSON
+  payloads and the credentials backup carry `content_sha256` over the canonical payload. Both are
+  optional and detect accidental corruption only; authenticity is the encrypted backup's AES-GCM tag.
+- **An encrypted restore decrypts `payload.bin` to a staging file and checks the tag before opening
+  it.** The envelope's `manifest.json` carries `format: "luma-encrypted-backup"`.
+- **Restore is destructive and is one transaction**, so a failed restore leaves the target untouched.
+  It runs with `PRAGMA defer_foreign_keys = ON`, inserting rows as they stream and repairing references
+  in SQL before commit. `restored_counts` is counted from the tables afterwards.
+- **Referential repair has three outcomes.** An optional reference is nulled. A row meaningless without
+  its reference (a rule with no category) is dropped. A reference where NULL is a different, legitimate
+  state is dropped too: an Amazon funding mapping with no account means "untracked", which a lost
+  account should not become.
 
-- **Export needs no vault at all.** It copies wrapped material and never touches a plaintext secret, so a
-  locked vault is not an error on this path. (It used to answer `423`, and because the button was a plain
-  browser navigation rather than a fetch, the user got a raw JSON error page in place of the app — see
-  `downloadUrl` in `lib/api.js`.)
-- **One slot, the exporting user's.** `export_vault_slot` asks for `method="passphrase"`, so the file
-  carries that account's passphrase slot and nothing else — never a passkey (its key comes from an
-  authenticator's PRF for a device-bound credential, so it cannot be reproduced during a restore
-  elsewhere), and never another member's. Consequence for a shared workspace: **cross-install**, only the
-  exporting user's passphrase opens the file. That is deliberate — each slot is an independently
-  offline-crackable wrap of the same DEK, so carrying every member's would make the file only as strong as
-  the weakest passphrase among them. The alternative is recorded in
-  `backlog/backup-restore-scope-and-secrets.md`.
-- **The slot material is what makes the file portable.** The ciphertext lives in the data DB and the key
-  that opens it in the control DB (`vault_slot`), so a credentials backup carrying only one half restores
-  nowhere but the install that produced it. Including it is safe *because* every part of it is guarded by
-  the passphrase: the file's security is exactly the vault passphrase's strength, which is why
-  `meets_production_min` rides along for the UI to warn on.
-- **There is no encrypted variant.** A payload that is already ciphertext gains nothing from the RSA
-  recipient layer, so the credentials section offers one button and no choice. (Data backups keep theirs
-  — that payload really is plaintext.)
-- **Restore is where the passphrase is asked for**, and only when it must be. What decides that is
-  whether the file's ciphertext is **already valid under the live workspace DEK** — a property of the
-  workspace, not of who exported the file. Two checks establish it: the file carrying *this* slot
-  (`crypto_service.vault_slot_is_local`), which is cheap and works with the vault still locked; failing
-  that, trial-opening one of the file's secrets with the live DEK, which needs the vault unlocked because
-  it uses the key. Either way the rows go back **verbatim** — no passphrase, no re-encryption.
+### Two version axes
 
-  The second check is not a refinement of the first, it covers cases the first calls foreign. **Every
-  member's slot seals the same DEK**, so a colleague's backup restores verbatim on the shared install;
-  identity alone would demand their passphrase to re-key data that is already correct. And because
-  changing a passphrase re-wraps the *same* DEK, leaving stored ciphertext untouched, a backup predating a
-  passphrase change was never stranded on **this** install either — only on a different one. That is the
-  precise scope of "keep your old passphrase": it is about restoring elsewhere. A file from
-  elsewhere needs the passphrase *that backup* was made with (`unwrap_dek_from_slot`, whose AAD is the
-  exporting `user_id` — hence that id in the payload) **and** the local vault unlocked, because each
-  secret is reopened with the backup's DEK and re-sealed under this workspace's own. A foreign slot is
-  never adopted into `vault_slot`: one DEK per workspace.
-- **v1 and v2 still restore** (their plaintext payloads keep the old local-vault requirement — there is
-  something to encrypt), and round-tripping one **upgrades** it: what came in as plaintext goes back out
-  as ciphertext.
-- **Each export is recorded, so a passphrase change can name what it strands.** Changing the passphrase
-  re-guards the *same* slot under a new KEK: stored ciphertext is untouched, the DEK's seal is untouched,
-  and no data source needs re-linking — but every credentials file written beforehand carries the old
-  wrapping and stays restorable **only with the old passphrase, permanently**. Nothing on screen would
-  otherwise reveal that at the moment it happens. `credentials_export` (control DB, beside `vault_slot`)
-  therefore holds one row per export: a timestamp and `wrapped_dek_fingerprint`, a salt-free digest of the
-  slot's **wrapping** — never the passphrase, never the DEK, and not the wrap itself, since the only
-  question it answers is "same wrapping?". *Which field that digest covers is load-bearing:* on a keypair
-  slot it is `wrapped_private_key`, because a passphrase change leaves `sealed_dek` byte-identical, and
-  fingerprinting the seal would report "nothing changed" after exactly the event this record exists to
-  detect. (Converting a format-1 slot re-points the existing rows to the new value rather than orphaning
-  them — the conversion does not change which passphrase opens those files.)
-  The change dialog matches it against the slot in force and names those backups by date;
-  files from before an earlier change are deliberately *not* listed, having been stranded already, and a
-  general caution covers exports predating the record. It lives in the control DB because it describes
-  vault state and must survive a **data** restore — the event most likely to be followed by wondering
-  which backup still opens. Distinct from `meets_production_min` above, which travels *inside* the file
-  and describes the strength of the wrap rather than which wrap it was.
+- **`version`** is the payload format, set by `BACKUP_PAYLOAD_VERSION`. Restore accepts the versions in
+  `RESTORABLE_PAYLOAD_VERSIONS` (`routers/import_export/backup.py`) and rejects any other.
+- **`schema_version`** is the migration level (`db_meta.version`) the data conformed to.
 
-Secrets deliberately stay in the **data** DB while keys stay in the **control** DB. That is not "secrets
-in the data DB" but the standard separation of key material from the ciphertext it protects, and it is
-the only reason the "leaked DB ≠ leaked tokens" property holds; `connection` additionally carries
-ledger-coupled sync state (`transactions_cursor`) that has no business in the security DB.
+Restore inserts only the payload columns the live table still has (`_insert_section` intersects with
+`PRAGMA table_info`). A column the schema has since added takes its default; one since dropped is
+skipped.
 
-The regular backup (payload version `BACKUP_PAYLOAD_VERSION`, bumped by hand as the format changes; the
-restorable set is `RESTORABLE_PAYLOAD_VERSIONS`) covers the full **data-DB** state so a restore reproduces the working app, not just the ledger: owners, accounts, categories/groups, rules, merchant renames, import profiles/batches/history, transactions, the entire **tag system** (`tag` plus every attachment — `txn_tag`, `category_tag`, `account_tag`, `rule_tag`), the `account_pair_distinct` and `amazon_charge_distinct` assertions, the `amazon_charge_reviewed` acknowledgments (reconciliation reverse-scan "Mark reviewed" state), the **recurring series** (`recurring_series` plus the
-`txn.recurring_series_id` membership link), the **transaction links** (`txn_link` plus its `txn_link_member` membership — see "Transaction links and Amazon order import"), the **Amazon funding-source map** (`amazon_funding_map` — the instrument→account mappings the Amazon importer resolves charges against), the **parked Amazon items** (`amazon_pending_item` — per-item detail from an items file awaiting its orders file; kept whole rows whose `parked_batch_id` survived the restore), the **non-secret half of each connection** (`connection` less its credential and in-flight sync markers — see *A connection is split across the two backups* below), the **connection account mapping** (`connection_account` — see Accounts; it rides the *data* backup because nothing in it is a credential and its coverage claim must move with the ledger it describes, re-resolving `account_id` via the stable `external_account_id` on restore), **UI/layout preferences** (`ui_preference` — see below), the **split allocations** (`txn_split` — without them a restore leaves rows flagged as split with nothing to expand into, and every category rollup silently drops that money), and the **attached documents** (`document`, plus each file as its own zip member — see "Attached documents" below). Restore is destructive — it wipes and rebuilds inside one transaction, and drops any attachment whose endpoints didn't survive. Every payload version in `RESTORABLE_PAYLOAD_VERSIONS` (`routers/import_export/backup.py`) is still accepted — the list is not restated here, because it grows with the format and a copied range goes stale. The later ones differ from the current format only by sections a newer build added, which an older archive simply lacks; the pre-10 ones additionally have their pre-rename columns translated on restore — v7's `plaid_account_id`/`plaid_item_id` account columns to the current `external_account_id`/`connection_id`/`provider` shape, and pre-v9's `plaid_transaction_id` to `external_transaction_id` (see the two-version-axes note below); older payload versions are no longer accepted.
+- **A renamed column is translated explicitly**, since drop-and-default would lose its value. A
+  version-7 account's `plaid_account_id` / `plaid_item_id` become `external_account_id` and a resolved
+  `connection_id` plus `provider` (`_reconcile_restored_account_links`), and a pre-9 transaction's
+  `plaid_transaction_id` becomes `external_transaction_id` (`_legacy_transaction_transform`). Without
+  the second, the next sync would re-add every restored row.
+- **After the insert, restore replays the data-init half of every migration newer than the backup**
+  (`run_post_restore_data_init`), so derived columns the backup predates are recomputed. See
+  [Schema evolution](#schema-evolution).
+- **A backup with a newer `schema_version` than this build is refused** (`newer_schema`), because its
+  newer columns would be dropped.
 
-**The archive is streamed, not assembled — in both directions.** A backup grows with the ledger, and nothing in this project is allowed to degrade as the transaction count grows, so neither writing nor reading one may hold it in memory. That is what version 10's layout is for: `meta.json` (the header plus a digest per member) and one **NDJSON member per section**, `sections/<name>.ndjson`, a row per line. Versions 7-9 were a single JSON object, which forces whole-payload handling on the way back in; the line-per-row layout makes both directions a stream with no incremental JSON parser and no new dependency. The *content* of a section is unchanged from version 9, which is why the restore's per-section handling is shared across every version rather than duplicated. Versions 11 and 12 are additive in the same way: 11 added the `txn_splits` section, 12 the `documents` section and the `documents/<id>` file members beside it. Members are individually compressed: the sections deflate ~10:1, while an already-compressed member (the encrypted payload, and every attached document) is stored, since deflating it would be pure CPU.
+### The compatibility guard
 
-Consequences worth knowing, because each is load-bearing rather than incidental:
+The payload is stamped with the source database's `instance_id` and `access_mode`. Restore proceeds when
+the target is empty or the backup is this system's own in the same mode. Otherwise it answers
+`409 restore_incompatible` with reasons `different_system`, `mode_mismatch` or `newer_schema`, and
+`force` is the only way past.
 
-- **The export builds into a staging file beside the database, never the system temp directory** — `/tmp` is RAM-backed `tmpfs` on many Linux installs, which would put the artifact back into the memory this exists to avoid, and the data directory is both the volume the user has sized for their data and the one a portable install carries. The file is unnamed (`tempfile.TemporaryFile`), so an interrupted export cannot strand one. Because the artifact is finished before the first byte is sent, the response carries a real `Content-Length`.
-- **The encrypted path streams through an incremental cipher and the envelope is unchanged.** `AESGCM.encrypt()` is one-shot and needs plaintext and ciphertext resident at once; the incremental encryptor over the same cipher emits byte-identical output (ciphertext followed by the 16-byte tag), so an archive written this way opens with the one-shot API and no manifest version bump was needed.
-- **Decryption verifies before anything acts on the result.** GCM authenticates only at the end, so a restore decrypts `payload.bin` into a staging file and checks the tag *before* that file is opened as an archive. Nothing is ever read out of unverified plaintext.
-- **Referential repair is SQL over the restored tables, not set membership over the payload.** The restore transaction runs with `PRAGMA defer_foreign_keys = ON`, so rows can be inserted in any order as they stream and dangling references repaired before commit — which is what removes the last thing a restore held in memory (an id set per table). The three kinds of rule are a product decision, not a technicality: an optional reference is **nulled** and its row survives; a row that is meaningless without its reference (an attachment with no transaction, a rule with no category) is **dropped**; and a reference where NULL is legitimate but a *broken* value is not is also dropped rather than downgraded into the NULL state, because that state means something different (an Amazon funding mapping with no account means "untracked", which is not what a lost account should become). Most children declare `ON DELETE CASCADE`, so dropping an orphaned parent takes its attachments with it. A rule naming a column the live schema no longer has is skipped, for the same reason the insert path intersects payload keys with `PRAGMA table_info`.
-- **The restore transaction stays whole.** Splitting it into committed chunks was considered and rejected: an open SQLite write transaction spills to the WAL rather than to memory, so there is nothing to gain, and all-or-nothing is the property that makes a *failed* restore leave the target untouched. `restored_counts` is therefore counted from the tables afterwards — what actually landed, net of rows dropped as unreferenced — rather than from what the payload offered.
+**A restore adopts the backup's `instance_id`**, since afterwards the data is the backup's lineage.
+Restoring one backup twice into a fresh database therefore does not trip the guard. The id also
+namespaces browser-local UI caches.
 
-**Every backup declares which of the two it is.** The data and credentials backups are separate artifacts
-with separate consequences, and telling them apart used to depend on the *name* of the member inside the
-zip — which is why choosing the wrong one answered "Unexpected backup file inside ZIP" rather than naming
-what had actually been chosen. Each container now carries a `kind` of `data` or `credentials`: in
-`meta.json` for a version-10 archive, in the payload for a credentials backup, and in `manifest.json` for
-an encrypted archive. That last one is the point of putting it there — **an encrypted backup must be
-identifiable before anyone has produced a private key for it**, so the declaration sits outside the
-ciphertext, where it discloses nothing the filename did not already say.
+### A connection is split across the two backups
 
-Files written before the field exists are identified by **shape**: the sections a payload carries are as
-good a fingerprint as a declaration (`connections`/`provider_configs`/`plaid_items`/`vault` for
-credentials, `owners`/`transactions`/`accounts`/`categories` for data), with the member name used only as
-a last resort. Detection is never *primarily* by filename — files get renamed, and a name is not a fact
-about the contents. A file matching nothing is refused as not being a backup at all, and each restore
-endpoint refuses the other kind by name rather than by symptom.
+The credential (`credential` / `credential_enc`) rides the credentials backup. The data backup's
+`connections` section carries the rest: that the connection exists, its sync-health fields, and
+`transactions_cursor` with `initial_sync_complete`. The resume point belongs with the data because it
+is a claim about data held, written with the rows it describes.
 
-**Two version axes, and why restore tolerates schema drift.** The payload carries `version` (the *payload format* — its section names, its row contents and, from version 10, its member layout — bumped by hand, with restore hard-rejecting anything it does not know) and, independently, `schema_version` (the *DB migration level* `db_meta.version` the data conformed to when exported). They move on different cadences: a schema change bumps `CURRENT_VERSION` without touching the envelope shape. Restore rebuilds each table by inserting only the payload columns the *live* table still has (`_insert_section` intersects the row's keys with `PRAGMA table_info`), so it survives schema evolution in both safe directions: a column the schema has since **added** is simply absent and takes its default (e.g. `category_rule.match_source_text`), and a column since **dropped** is skipped rather than failing the whole restore with "no column named …" (the real case: `category_rule.priority`, removed once rule ordering became automatic, which a pre-removal backup still carries). The accounts and transactions dumps additionally use curated column lists rather than `SELECT *`, so they never carry an incidental/legacy column in the first place; the `SELECT *` tables (categories, rules, tags, …) rely on the restore-side filtering. **A curated list must still name every column the table has**, because a restore is meant to return the system to the state it was in when the backup was taken and an omitted column restores at its default — which for `txn` is not neutral: a list that had fallen behind the schema dropped `trashed_at` and the dedupe-resolution columns, so every trashed row and every confirmed duplicate came back into the ledger as a live transaction. `test_backup_carries_every_column_of_every_table` compares each section's columns with the live table, and a column that deliberately does not travel has to be recorded, with its reason, in that test's `EXCLUDED_COLUMNS`; the round-trip tests compare every row's full contents rather than counts, since a restore can return every row while resetting a column on each. A **column *rename*** is the one drift the drop-and-default handling can't absorb (the payload's old name is dropped and the renamed column silently takes its default) — so restore **explicitly translates** each one before insert. For version-7 accounts: `plaid_account_id → external_account_id`, and `plaid_item_id →` a resolved `connection_id` (looked up against the live `connection` table, which restore never wipes) plus a `provider` (see `_reconcile_restored_account_links`); the same pass nulls any `connection_id` absent locally, so a cross-system restore can't leave a dangling FK. For pre-version-9 transactions: `plaid_transaction_id → external_transaction_id` (`_legacy_transaction_transform`) — the case that shows why this matters rather than being tidiness, since that column is what makes a sync idempotent, and letting it default to NULL would have the next sync re-add every restored transaction as a fresh row. The one direction restore can *not* make safe is a **downgrade** — a backup whose `schema_version` is newer than this build — because a column the newer build added with real content would be dropped silently; the compatibility guard refuses that (see below). Restore loads the old values straight into the current schema and then **replays the data-init half of every migration newer than the backup** (`run_post_restore_data_init`, gated on the backup's `schema_version` — see *Schema evolution* → migrations' two halves) so derived fields the backup predates are recomputed rather than left empty. The column-drift handling above and this data-init replay are complementary: the former fills *stored* columns the payload lacks with their defaults; the latter recomputes *derived* columns a newer migration would have produced (e.g. `last_effect_date`), which no default can supply. The schema DDL itself is deliberately **not** replayed — the target is already at `CURRENT_VERSION`, so those ALTERs would be no-ops; only the data-derivation half is missing after a raw insert.
+`connection` is never wiped, so a data restore (`_restore_connections`) reconciles:
 
-**Content integrity: a digest per member, and the hash it replaced.** A version-10 archive records the sha256 of each member in `meta.json`, and restore recomputes them all — in a pass of its own, *before* anything destructive — refusing a mismatch with a `400`. That is the same guarantee version 9 got from a single `content_sha256` field embedded in the payload, but checkable while streaming instead of by re-serializing the whole payload to compare one hash, and it extends to members that are not JSON at all. Versions 7-9 and the credentials backup still carry `content_sha256` over the canonical payload (sorted keys, compact separators, the hash field itself excluded), and so does any payload handed to `POST /restore` as a dict, since a materialized payload has rows rather than member bytes and needs an integrity check of its own. Either form is **optional and additive**: absent → skipped (a backup predating the field, or one a power user deliberately stripped, still restores), exactly like `schema_version`. It is deliberately an *unsigned* checksum — it detects **accidental** corruption, not tampering: anyone editing the plaintext file can recompute or drop the hash, so it makes no authenticity claim. Tamper-/authenticity-proofing is the **encrypted backup's** job: its `payload.bin` is sealed with AES-256-GCM, whose auth tag is verified at decrypt time (a stronger, keyed check), and the hash rides along inside the encrypted inner payload for free rather than being duplicated at the envelope level.
+- **A connection in both** (same id, or the same provider handle under another id) takes the backup's
+  state and keeps its credential.
+- **One only in the backup** is created without a credential, so its accounts, mappings and cards have
+  a parent. A later credentials restore fills it in.
+- **One only on the install** keeps its credential and loses its resume point and its account list,
+  since its synced rows and `connection_account` rows went with the old ledger. *Refresh accounts*
+  rebuilds the list; Tasks reports the state (`connections_without_accounts`).
 
-The **encrypted backup envelope** carries the `format` tag `"luma-encrypted-backup"` in its `manifest.json`.
+The backup's resume point is reset, not restored, when the backup is older than
+`RESTORED_CURSOR_MAX_AGE_DAYS` or undated, or when the live row's handle has changed.
+`provider_request_budget`, `sync_started_at` and `sync_progress` stay with the target: spending cannot
+be un-made, and the other two describe a running process.
 
-**The keypair generator stores nothing.** Encrypted backups need a keypair the user owns, and producing
-one otherwise means knowing an `openssl` incantation — a barrier unrelated to the decision being made. So
-`POST /import-export/backup/keypair` will make one, with **no side effects at all**: no recipient row, no
-file, no record that it was called. The private half is returned once in that response (`Cache-Control:
-no-store`, never written to either database) and the *caller* submits the public half to
-`POST /backup/recipients` only after the user has saved it — so a recipient can never exist whose private
-key was never kept. Optionally passphrase-protected: a passphrase produces standard PKCS8
-(`BestAvailableEncryption`), so the file is readable by `openssl pkcs8` and by restore's own
-`load_pem_private_key`, and improves as the library does.
+**A credentials restore fills credentials in and does not replace rows.** It matches by id, then by
+provider handle, writes the credential and handle, and inserts only a connection the install never had.
+A connection the file does not hold keeps its row and is flagged `reauth_required`. `connection_account`
+cascades from `connection`, so replacing rows would erase the mappings. The two restores can run in
+either order.
 
-Generating server-side rather than in the browser is deliberate. The browser's selling point — that the
-app never sees the private key — does not survive the observation that the app is what serves the script
-doing the generating, and it would cost hand-built PKCS8 encryption in JavaScript whose failure mode is a
-key file that only proves unreadable at restore. Here the library that writes the key is the one that
-reads it back.
+**A connection may hold no credential.** A vault reset clears credentials and keeps the rows, because
+the mappings, coverage and cards hang off `connection_id`. `crypto_service.connection_has_credential`
+asks without decrypting, and `decrypt_connection_credential` raises `MissingCredential`. A disconnect
+then removes the row locally and reports `revoked: false`; re-authorize and refresh-accounts refuse; a
+sync skips and flags `reauth_required`.
 
-**The UI calls these "backup keys"; the code, the API and the file format call them recipients.** The
-divergence is deliberate, not drift: `manifest.json` writes `recipient_id` and `wrapped_keys[].label` into
-every encrypted backup ever produced, so that name is permanent in the format, while "recipient" reads as
-a person being sent something — which is wrong for what is usually your own key, kept so you can read your
-own file later. The line falls at the user-visible boundary: display text says *backup key*, and
-`backup_recipient`, `/backup/recipients`, `?recipients=` and the manifest fields keep the original name so
-the code agrees with the artifact it writes. Do not "fix" one side to match the other.
+### The credentials backup
 
-**`enabled` is eligibility; the selection is per backup.** An encrypted export with no recipient list
-seals to every enabled recipient, which is what a single-recipient install always wants. Naming ids
-(`?recipients=…`) narrows it, for a file going somewhere that should not be openable by every key on the
-list — and an id that is unknown or not enabled is an **error, not a silent omission**, since encrypting
-to fewer keys than were asked for yields a file the user believes one of their keys opens and none does,
-discovered at restore. The UI asks which keys only when more than one is enabled: a dialog showing a
-single entry that is always accepted trains dismissal rather than providing verification.
+It exports ciphertext: `connection.credential_enc` and `provider_config.secret_enc` as stored, with the
+exporting vault slot's key material (`crypto_service.export_vault_slot`) in a `vault` block read by its
+`format`. The reasoning is in `security-model.md`.
 
-The public key stays retrievable from its recipient row (an **Export** action saving SPKI PEM — `.pem`,
-not `.pub`, which reads as an OpenSSH key and is a different format). That exists for one use: adding the
-same recipient on another install, which is a paste-the-public-key job. It is deliberately *not* a
-recovery path, because there is nothing to recover — a PKCS8 private key already contains its public half
-(`openssl rsa -in key.pem -pubout` reproduces it), which is also why the generator hands over the private
-key alone rather than a pair. Bundling both would imply the public half is precious and dilute the one
-message that file has to carry.
+- **Export needs no unlocked vault**, since it copies wrapped material.
+- **It carries one slot, the exporting user's passphrase slot.** Each slot is an independently
+  crackable wrap of the same key, so carrying every member's would make the file as weak as the weakest
+  passphrase. A passkey slot cannot be reproduced elsewhere.
+- **Restore asks for a passphrase only when the file's ciphertext is not already valid under the live
+  workspace key.** That is true when the file carries this install's slot
+  (`crypto_service.vault_slot_is_local`) or, with the vault unlocked, when one of its secrets opens
+  with the live key. Rows then go back verbatim.
+- **A file from another install** needs the passphrase that backup was made with
+  (`unwrap_dek_from_slot`, whose AAD is the exporting `user_id`) and the local vault unlocked. Each
+  secret is re-sealed under this workspace's key; a foreign slot is never adopted.
+- **`credentials_export`** (control database) holds one row per export: a timestamp and
+  `wrapped_dek_fingerprint`, a digest of the slot's wrapping. On a keypair slot it covers
+  `wrapped_private_key`, the field a passphrase change alters. The passphrase-change dialog uses it to
+  name the backups that will need the old passphrase. It is in the control database so it survives a
+  data restore.
 
-**Recipient names must be unique**, compared case-insensitively on the trimmed value, on both add and
-rename. Not tidiness: the name is how a person tells two saved keys apart, since the fingerprint beside it
-is forty characters of base64 that settles nothing at a glance — so two rows sharing a name make the list
-unreadable at exactly the moment it matters, choosing which key a backup was sealed to.
+### Backup recipients
 
-Keys are required to be **at least 2048-bit**, whether generated or pasted (the generator offers 2048 /
-3072 / 4096 and defaults to 4096). The floor is not ceremony: a backup is a long-lived artifact, so the
-key has to hold for however long the file sits on a drive.
-
-The payload is also **stamped** with the source data DB's `instance_id` (from `db_meta`) and its `access_mode` (`local`/`auth`). Restore uses this as a **compatibility guard** so it can't silently replace the wrong system: it proceeds freely when the target is empty (no accounts/transactions — a fresh install) or when restoring this system's *own* backup (matching `instance_id`) in the same mode, but returns `409 {code: "restore_incompatible", reasons: […]}` when the target already has data and the backup came from a *different* `instance_id` (`different_system`), when the access modes differ (`mode_mismatch`), or when the backup's `schema_version` is **newer** than this build's `CURRENT_VERSION` (`newer_schema` — the lossy downgrade above). An older or absent `schema_version` is safe and never flagged. The UI turns that 409 into an explicit confirmation and retries with a `force` flag; `force` is the only way past the guard, so an accidental cross-system, cross-mode, or downgrade wipe always requires a deliberate second confirmation.
-
-**A connection is split across the two backups, and a restore reconciles it rather than replacing it.**
-The credential (`credential`/`credential_enc`) rides the credentials backup; everything that describes the
-ledger in a data backup rides with it, in the `connections` section — that the connection exists, its
-captured fields, what its last sync did (`last_synced_at`, `last_sync_error*`,
-`consecutive_sync_failures`, `last_sync_warnings`, `reauth_required`, `last_sync_outcome`,
-`last_sync_summary`) and how far it had read (`transactions_cursor` + `initial_sync_complete`). The resume
-point belongs with the data because it is a *claim about data held* ("every change the provider has
-reported is in the ledger") and was written in the same export as the rows it claims, so handing it back is
-what returns the system to the backed-up moment: the next sync is a delta from there, re-delivering
-everything the provider reported since, rather than a full backfill that finds the whole history already
-held. It is an opaque position in the provider's feed and opens nothing without the credential. Because
-`connection` is never wiped, a data restore (`_restore_connections`) works through three cases:
-
-- **A connection the backup names and this install has** (same id, or the same provider handle under
-  another id, which the restore then maps the backup's references onto) takes the recorded state. Its
-  credential stays.
-- **One the backup names and this install lacks** — a fresh install, or credentials not restored yet — is
-  created **without a credential**, the "waiting to be re-linked" state below, so its accounts, mappings and
-  sync cards survive instead of being dropped for want of a parent (a sync card naming a missing connection
-  failed the whole restore on its foreign key). A credentials restore later fills the credential in on that
-  same row.
-- **One this install has and the backup does not name** keeps its credential and loses its resume point:
-  its synced rows went with the rest of the ledger, and a cursor past them would leave every one behind it
-  for good (the same reset `Remove synced transactions` performs after deleting rows). It also loses its
-  account list, because `connection_account` is wiped with the ledger and only the backup's rows go back —
-  so it is left with a credential and nothing to import into until **Refresh accounts** rebuilds the list.
-  The Tasks page reports that state (`connections_without_accounts` in `routers/tasks.py`), which a
-  credentials restore with no data backup produces too. A backup written before the section existed names
-  no connections, so every connection takes this path.
-
-The backup's resume point is not handed back in two cases, which reset it instead: a backup older than
-`RESTORED_CURSOR_MAX_AGE_DAYS` (Plaid documents a cursor as valid for at least a year) or with no export
-date, and a live row whose handle has changed since, which reads a different feed. Three columns stay with
-the target and are listed, with reasons, in the backup coverage test: `provider_request_budget`, because
-spending is a record of requests the provider really received and a restore cannot un-make them, and
-`sync_started_at`/`sync_progress`, which describe a sync running in the process that wrote them.
-
-**A credentials restore fills credentials in; it does not replace connection rows.** It matches each file
-connection by id, then by provider handle, and writes the credential (and the handle, since the ciphertext
-is bound to it) onto that row, inserting only a connection the install has never had. A connection the file
-does not hold keeps its row and loses its credential, flagged `reauth_required`, exactly as a vault reset
-leaves one. It once deleted every connection and re-inserted the file's, and because `connection_account`
-cascades from `connection`, restoring credentials onto a ledger that already held its mappings — the state a
-data restore leaves — erased all of them. Together the two rules make the backups order-independent: data
-then credentials, or credentials then data, end in the same rows.
-
-**A connection may hold no credential at all, and that is a state rather than a fault.** A vault reset
-clears `credential`/`credential_enc` on every connection and deliberately *keeps* the rows, because the
-account mappings, per-account coverage and sync history hanging off `connection_id` are the expensive part
-and are not lost with the credential — the row is what a re-link lands back on. So "no credential" means
-*this connection is waiting to be re-linked*, and `crypto_service.connection_has_credential` is how a
-caller asks without attempting a decrypt.
-
-The consequence is a rule for every path that reaches for one: `decrypt_connection_credential` raises
-`MissingCredential` rather than returning `""`. It previously returned the empty string, which is
-indistinguishable from a credential, so callers passed it to the provider — Plaid answers *"access_token
-must be a non-empty string"*, and because `disconnect` converts a failed revocation into a 502 that keeps
-the row, the connection that could not be revoked also could not be deleted. A reset therefore left husks
-with no way to clear them. Each caller now answers in its own terms: a **disconnect** skips the provider
-call and removes the row locally, reporting `revoked: false` (for a provider that normally *does* revoke,
-that is a real caveat — the access may still be live at the provider); **re-authorize** and
-**refresh-accounts** refuse with somewhere to go; a **sync** skips and flags `reauth_required`.
-
-**A restore adopts the backup's `instance_id`.** Because a restore is a full replacement — it wipes the target and reloads the backup wholesale — afterward the data *is* exactly the backup's system, so the DB takes on the backup's `instance_id` rather than keeping the target's old one. (Only the identity changes; `access_mode` is a property of the deployment, not stored in the DB.) This keeps identity meaning "which data lineage this is": without it, restoring a backup into a fresh DB and then restoring the *same* backup again would wrongly trip the "different system" guard, since the fresh DB would still carry its own throwaway id. The guard itself is unaffected — it compares the *incoming* backup against the *pre-restore* data to decide whether confirmation is needed; the adoption only sets the identity the DB carries once that data has been replaced. The `instance_id` also namespaces browser-local UI caches (remembered profile, account-UI state) per database, so adopting the backup's id keeps those caches aligned with the data lineage they describe.
+- `POST /import-export/backup/keypair` generates a keypair and stores nothing. The private key is
+  returned once; the caller submits the public half to `/backup/recipients` after the user has saved
+  it, so no recipient exists whose private key was never kept.
+- Keys must be at least 2048 bits.
+- Recipient names are unique after trimming and case-folding.
+- `enabled` is eligibility. An encrypted export with no list seals to every enabled recipient;
+  `?recipients=` narrows it, and an unknown or disabled id is an error, since a file sealed to fewer
+  keys than asked for fails only at restore.
+- The UI says "backup key"; the code, API and file format say "recipient", because `manifest.json`
+  writes `recipient_id` into every encrypted backup.
 
 ### Preferences
 
-Non-sensitive **UI/layout preferences** — page layouts, collapse state, dashboard view, the currently-selected dashboard breakdown, import-page UI state (expanded rows, panel positions), etc. — live in the **data DB** in `ui_preference(scope_id, pref_key, pref_value)`. `scope_id` is the authenticated user id (auth mode) or the local-preference-profile id (local mode). They live here, with the data they describe, rather than in the control DB — so a data backup carries them and there is no cross-DB/scope plumbing. The **control DB keeps only identity/secrets** (users, auth secrets, recovery codes) and the local-preference-profile *definitions*; profile names stay control-side, the preference *values* are data-side.
+`ui_preference(scope_id, pref_key, pref_value)` lives in the data database, so a data backup carries
+it. `scope_id` is the user id in auth mode or the local preference profile id. The control database
+keeps identity, secrets and the profile definitions. `/preferences` (`services/preferences.py`) is the
+one facade.
 
-**The dividing line is per-user chrome vs. shared data state.** `ui_preference` is only for things that may legitimately differ per person — column choices, collapse/sort state, panel geometry, which dashboard view/breakdown they prefer. State that describes *the shared data itself* must not be scoped per profile, because every user is looking at the same data and a restore into a different profile would orphan it. Such state lives in shared `import_workflow_state` (the workspace-wide KV store, carried by backups) instead. Two worked examples: the "Group Imported Categories" workspace draft (how the one shared category tree is being organized — `system_category_workspace_draft`, see `architecture.md` → Organize / inactive surface), and the **dashboard tag-report catalog** (`system_dashboard_tag_reports`, via `GET`/`PUT /tags/dashboard-reports`). The tag-report case shows the split sharply: the *catalog* of saved reports is shared (everyone sees the same saved reports), while which report a user currently has open (`ui.dashboard.spendingViewBy`) stays a per-user `ui_preference` — **shared catalog, personal selection**. When adding a new persisted value, classify it on this line before choosing a store.
+**The dividing line is per-person chrome versus shared data state.** `ui_preference` holds what may
+differ per person: columns, collapse and sort state, which dashboard view they prefer. State that
+describes the shared data lives in `import_workflow_state`, the workspace-wide store, because every
+user reads the same data and a restore into another profile would orphan a per-user copy. Examples of
+shared state: the category workspace draft (`system_category_workspace_draft`), the saved tag reports
+(`system_dashboard_tag_reports`) and the ledger currency. Which report a user has open
+(`ui.dashboard.spendingViewBy`) is per user.
 
-The `/preferences` API (`auth.py`) is the single facade: it resolves the scope id and reads/writes `ui_preference` (via `services/preferences.py`). `init_control_db` drops two legacy tables (`user_preference` / `local_preference_value`) from installs that predate the move into the data DB, so the control DB holds only identity and secrets.
+Ledger-level settings the user chooses, such as the reimbursement reminder default and the sync-log
+retention, sit in a reserved shared scope of `ui_preference` and not in `db_meta`, which backups leave
+out.
 
 ## Schema evolution
 
-Fresh installs are created directly in the current schema by `init_db` and stamped at
-`CURRENT_VERSION`. The historical incremental migration chain (v1..v32) that upgraded pre-rebrand
-databases was dropped at the Luma rebrand break point and the baseline reset to `1`; there is no
-in-place upgrade path *off a pre-rebrand database* (those come across via backup + restore into a
-fresh install — see the backup envelope note above).
+A fresh database is created in the current schema by `init_db` and stamped `CURRENT_VERSION`. An
+existing one is advanced by `run_migrations`, which applies each registered `@migration(version)` newer
+than `db_meta.version`, in order. `backend/db/database.py` is the record of what each migration does. A
+database from before the rebrand has no upgrade path; it comes across by backup and restore.
 
-Post-rebrand, the **migration runner is active**: `run_migrations` advances an existing database to
-`CURRENT_VERSION` by applying each registered `@migration(version)` newer than the DB's recorded
-`db_meta.version`, in order. Fresh installs skip the runner — they are created at the full current
-schema and stamped directly. Registered migrations so far: **v2** adds `category_rule.match_source_text`,
-**v3** adds `txn.needs_review`, **v4** adds `txn.recurring_series_id` (the `recurring_series` table
-itself is created by `init_db`'s `CREATE TABLE IF NOT EXISTS` script, which runs on both fresh and
-migrated databases, so only the new *column* needs an `ALTER`). Later migrations continue the additive
-pattern; **v12** adds the `import_batch.recon_attention_count` / `recon_epoch` cache columns and the
-recon-epoch invalidation triggers, **v13** adds `category_rule.account_type` (the account-type rule scope),
-**v14** adds `category_rule.match_expr` (the multi-clause AND/contains merchant matcher),
-**v15** adds the stale-rule cleanup columns — `category_rule.last_effect_date`, `deleted_at` (the rules
-trash), and `is_managed`; **v16** adds the `amazon_pending_item` parked-items table; **v17** adds the
-`amazon_charge_reviewed` table (reconciliation reverse-scan "Mark reviewed" acknowledgments).
+**A migration has two halves, schema and data-init.** A migration that derives a field from existing
+rows puts the derivation in a named function, calls it, and registers it in `POST_RESTORE_DATA_INIT`
+keyed by version. A restore loads rows into the current schema, so it runs the registered steps in
+`(backup_schema_version, CURRENT_VERSION]` in ascending order
+(`run_post_restore_data_init`). Each step runs once, on data that predates it, because some are
+destructive when repeated. A backup with no `schema_version` is treated as version 1.
 
-The list above is illustrative rather than exhaustive — `database.py`'s `@migration` registrations are the
-record, and each carries its own reasoning. The ones this document's other sections rely on are called out
-where they matter: **v20** makes the account→connection link provider-neutral (`plaid_account_id` →
-`external_account_id`, `plaid_item_id` → `connection_id` + `provider`) and drops the vestigial `plaid_item`
-table, **v24** backfills `connection_account` mappings, **v25** widens unset CSV terminal windows, **v26** renames `txn.plaid_transaction_id` to
-`external_transaction_id`, **v27** adds the connection sync-health columns, **v28** moves history state onto
-`connection_account`, **v29** adds `connection_account.provider_currency`, and **v30** adds
-`connection.reauth_required`. **Do not restate the current version here** — `database.py`'s
-`CURRENT_VERSION` is the only copy that can be right, and a number transcribed into prose goes stale at
-the next migration (this one read `30` while the code was at `48`).
+When the schema changes:
 
-**Migrations have two halves — schema and data-init — and a restore replays the data-init half.** Some
-migrations do more than add a column: they *derive* the new field from existing data (**v6** re-derives
-`display_name_source`; **v13** backfills PayPal account types + consolidates money-movement rules; **v15**
-seeds `last_effect_date` and flags `is_managed`). Each such data step is extracted into a named function,
-called by the migration, and registered in `POST_RESTORE_DATA_INIT` keyed by version. This exists because a
-**backup restore** loads the backup's rows into the *already-current* schema (restore never re-creates an
-old schema or replays schema DDL), so the data-init half of every migration *newer than the backup* would
-otherwise be skipped — the concrete bug being restored rules reading `last_effect_date` NULL despite recent
-matches. `run_post_restore_data_init(conn, backup_schema_version)` (end of `restore_backup`) runs exactly the
-registered steps in `(backup_schema_version, CURRENT_VERSION]`, in **ascending order** (later steps may read
-earlier ones' output — v15's date seed reads the provenance v6 sets). Gating on the recorded `schema_version`
-is essential: each step runs **once, only on data that predates it**, because some are destructive if re-run
-(v6 overwrites provenance; v13 deletes duplicate rules), so "always re-run all backfills" is unsafe. A backup
-with no/unknown `schema_version` — including any **pre-rebrand** backup — is treated as **Luma v1**, so all
-post-rebrand data-init runs; a backup newer than this build runs none (empty range).
-
-When the schema changes from here:
-
-- update `init_db` in `backend/db/database.py` so fresh databases are created directly in the new
-  shape (add the column to the baseline `CREATE TABLE`)
-
-- register a `@migration(N)` that brings an existing database to the same shape (idempotent
-  `ALTER TABLE … ADD COLUMN …` etc.) and bump `CURRENT_VERSION` to `N`
-
-- if the migration *derives* the new field from existing rows (not just an additive column that takes a
-  default), extract that derivation into a named function, call it from the migration, **and** register it
-  in `POST_RESTORE_DATA_INIT[N]` so restoring an older backup re-runs it. Write it to be correct run once on
-  data that predates it — it runs exactly once, gated on the backup's `schema_version`
-
-- a migration that changes what an existing database *holds* — renames a column with data in it, sets a
-  value on rows that exist, backfills from another table, drops an index that forbade rows now allowed, stamps
-  an identity — gets an upgrade test from a hand-built database at the version before it. A fresh install is
-  created directly in the current shape, so it proves nothing about an upgrade. Everything from v26 to v53
-  that does this is covered in `test_migrations_after_v25.py`; purely additive migrations (an empty column or
-  table) need none
-
-- a data step must **check that the tables and columns it touches exist** and return quietly if they do
-  not. The per-migration tests (`test_migration_v24.py`, `test_account_type_rules.py`, …) hand-build a
-  minimal schema at an old version and then run the *whole* chain to `CURRENT_VERSION`, so every later
-  migration executes against a database holding only what that one test needed. An unguarded `UPDATE txn
-  SET category_overridden …` (v54's first draft) failed thirteen tests that have nothing to do with it; v53
-  and v54 show the `sqlite_master` + `PRAGMA table_info` guard
-
-- a structural object that *references* a migration-added column **or a migration-added table** (e.g. an
-  index over the column, or a trigger on the table) must **not** live in `init_db`'s
-  `CREATE TABLE`/`executescript` block — on a pre-`N` database that column/table doesn't exist yet when
-  that script runs (it is all `CREATE TABLE IF NOT EXISTS`, so the column is added only later by
-  `run_migrations`). Create such objects after the fresh/migrate branch in `init_db`, where they are
-  guaranteed present on both paths. `idx_txn_needs_review` is the worked example for a column-referencing
-  index; the recon-epoch triggers (`_create_recon_epoch_triggers`) are the example for triggers on tables
-  a migration adds (`amazon_funding_map`, `amazon_charge_distinct`) — they also need `db_meta`, which the
-  fresh/migrate branch has just created, so the post-branch placement satisfies both dependencies.
+- update `init_db` so a fresh database is created in the new shape
+- register a `@migration(N)` that brings an existing database to that shape, and bump `CURRENT_VERSION`
+  to `N`
+- if the migration derives data, extract and register the step as above
+- a migration that changes what an existing database holds (a rename with data, a backfill, a dropped
+  constraint) gets an upgrade test from a hand-built database at the version before it
+  (`test_migrations_after_v25.py`). A fresh install proves nothing about an upgrade
+- a data step checks that the tables and columns it touches exist and returns quietly otherwise,
+  because the per-migration tests build a minimal old schema and run the whole chain against it
+- an index or trigger that references a migration-added column or table is created after the
+  fresh/migrate branch in `init_db`, not in the baseline script, where the column does not exist yet on
+  an older database (`idx_txn_needs_review`, `_create_recon_epoch_triggers`)
+- every insert path states a column whose default a migration changed, since SQLite cannot change a
+  column default on an existing database
 
 ## Reporting assumptions
 
-A few behavior rules matter across the whole app:
+- income groups match money-in transactions and expense groups money-out
+- a branch may still hold the other sign: an expense category holds refunds, an income category holds
+  reversals. Summaries include every matching transaction
+- `exclude_from_totals` is honored by every summary and chart
+- pending rows are left out of totals
+- **A group's total equals the sum of its category slices.** It holds because a leaf's type always
+  matches its group's. No single bucket looks wrong when it breaks, which is why it is tested
+  (`backend/tests/test_report_sign_filters.py`)
+- **Every category rollup counts allocations, not transactions.** A split transaction contributes one
+  row per `txn_split` part, with that part's category and amount. A new aggregation gets this by
+  selecting from `txn_effective_sql` and loses it by selecting from `txn` (see
+  [Transaction splits](#transaction-splits))
 
-- income groups match money-in transactions
+### Totals come from the server
 
-- expense groups match money-out transactions
+A total or breakdown is aggregated server-side, never by summing a fetched page, because the
+`/transactions` list is paginated and a client sum undercounts past the page size. A client gets a
+total from one of:
 
-- `exclude_from_totals` must be honored consistently across summaries and charts
+- a `/summary/*` endpoint, which returns a total and count per bucket
+- `range.total` / `range.count` from the monthly-trend aggregation (`computeDetailRange`)
+- the list response's `total` (count) and `sum_amount` (signed net over the whole filtered set)
 
-- category grouping is only two levels deep
+`/transactions` returns a default page; a scoped list that can exceed it paginates
+(`usePagedTransactions`). `limit=0` means "every matching row" and is for scopes known to be bounded.
 
-- **a group's total equals the sum of its category slices.** No single bucket can look wrong on its own when this breaks, which is why it is the invariant worth testing (`test_report_sign_filters.py`). It holds because a leaf's type always matches its group's, across creation, moves and retyping (see *Categories*)
+### One aggregation sign
 
-- **An average per month or per year divides by elapsed days, never by how many buckets were drawn,
-  and is withheld where the window does not cover a whole one of that unit.** Averaging a series of
-  month or year totals divides by the bucket count, which is wrong three ways at once: a partial bucket
-  at either end counts as whole (a ledger ending in March divides that year by twelve), a bucket
-  manufactured to keep the axis continuous counts as an observation, and even the full buckets are
-  uneven — February and July are not the same amount of time, so treating them as equal terms in a
-  *rate* is an error with no partial-period excuse. Days are the right atom because they are the finest
-  grain the data has: `txn.date` carries no time component. The span is the **first and last transaction
-  in the window**, inclusive, which is why `/summary/monthly-trend`, `/summary/monthly-cash-flow` and
-  `/summary/monthly-by-group` each return `first_date` / `last_date` beside their totals — a bucket key
-  cannot say when within itself the data starts, and on a yearly chart whose first year holds one
-  December transaction the key says "a year" where the truth is one month. Absence at either end
-  therefore shortens the span while a gap in the middle does not, which is the same rule answering both:
-  the empty months between two transactions did elapse. **The withholding half is not presentation.**
-  Four months of spending divided into a yearly rate is not a summary of what happened but a forecast
-  of what has not, and the app does not make one silently — so `periodAverage` returns null, and the
-  caller hides the figure *and any reference line drawn at it* rather than rendering a zero.
-  `frontend/src/lib/periodAverage.js` is the one implementation, and every stated rate and every
-  average **reference line** reads it: the cash-flow frame's per-year and per-month cards, the Trends
-  tab's "Total per month" and its per-group Avg/mo column, the annual-totals chart's line, and the
-  single-period trend's line and axis pill (per month, quarter or year, whichever grain is drawn).
-  **An unlabelled `Avg $X` line is not exempt just because it states no unit.** That was argued once
-  and is wrong: a plain mean of the bars breaks every January, when the current year is a two-week stub
-  drawn beside full years and the line whose whole job is "what a typical year looks like" is dragged
-  down by it, recovering only over the following twelve months. For full buckets the two agree, so the
-  rate is the same line everywhere it was already right. **The one genuine exception is same-span mode**
-  on the single-period trend, which keeps the mean of its buckets: those buckets are the user's own
-  window repeated — Jan 1 to Oct 7 in each year — so they are equal by construction and the newest is
-  full by definition of the span. Comparing like with like is the entire point of that mode, and a
-  day-rate would undo it
+Every reporting bucket carries the **signed net**, through `_summary_signed_total_sql`: income-type
+buckets negate so income reads positive, and reverses (a refund in an expense bucket, a return in an
+income bucket) stay negative. A bucket whose refunds outweigh its spend is negative and reduces the
+period total. A total under `ABS` would show a net refund as spending and make the pies disagree with
+the trend.
 
-- **How much history a trend chart draws is a setting, not the extent of the ledger.** The Dashboard's
-  three multi-period charts — the single-period trend, the Trends tab's annual totals, the cash-flow
-  frame's yearly trend — ran back to the first transaction, which is unreadable at twenty years of bars
-  and is the wrong denominator for "what does a typical recent year look like". The **trend span**
-  (`frontend/src/lib/trendSpan.js`, persisted at `ui.dashboard.trendSpan`) is one setting across all
-  three, because three charts each remembering their own would let the reports disagree about what an
-  average covers. It is a **floor on where the data starts**, deliberately not a filter on the
-  selection: the single-period trend still widens to the selected period, since a chart captioned with
-  a period it does not contain is the defect. A span of N years is counted in **whole buckets of the
-  grain being drawn** — 5 years is 5 year bars, 20 quarters or 60 months — because counting in months
-  and letting the chart snap outwards draws a sixth bar covering most of a year nobody asked for. A
-  `since:` month is exact instead, and the bucket containing it is drawn whole; that is safe precisely
-  because the span floors the bars rather than the figures, so the averaging rule above still divides a
-  boundary bucket by the days it actually holds. "Last N years" is anchored on the **data's last
-  month**, not on today, which matters only where anchoring on today would answer a ledger that stopped
-  in 2020 with an empty chart — the same choice `resolveTrendsWindowKey` makes
+Charts that cannot draw a negative magnitude floor the geometry at zero on the client. Every displayed
+number keeps the signed value.
 
-- **every category rollup counts allocations, not transactions.** A split transaction contributes one row per `txn_split` part, carrying that part's category and amount, so the rules above apply *per allocation*: an excluded part leaves the totals while its siblings stay, and an income-typed part negates on its own terms. This is a property of the row source (see *Transaction splits* below), not of each query — a new category aggregation gets it by selecting from that source, and silently loses it by selecting from `txn` directly
+**Which side a bucket is on is inherited.** A leaf usually carries no `category_type`, so "is this
+income" is `COALESCE(leaf, parent)` at the category level and `COALESCE(parent, leaf)` at the group
+level, where the bucket is the group. Selection and signing are separate expressions and both must
+resolve the type the same way.
 
-If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.
+### Averages
+
+An average per month or year divides by **elapsed days**, not by the number of buckets drawn, and is
+withheld where the window does not cover one whole unit. Buckets are uneven, a partial bucket at either
+end is not a whole one, and `txn.date` has no finer grain than a day.
+
+- The span is the first and last transaction in the window, inclusive, which is why
+  `/summary/monthly-trend`, `/summary/monthly-cash-flow` and `/summary/monthly-by-group` return
+  `first_date` / `last_date`.
+- `frontend/src/lib/periodAverage.js` is the one implementation. It returns null when the window is too
+  short, and the caller hides the figure and any reference line.
+- Same-span mode on the single-period trend keeps the mean of its buckets, because those buckets are
+  the same window repeated across years and are equal by construction.
+
+The **trend span** (`frontend/src/lib/trendSpan.js`, `ui.dashboard.trendSpan`) sets how much history
+the dashboard's multi-period charts draw. It is one setting, so the charts agree on what an average
+covers. It floors where the bars start and does not filter the selection. N years is counted in whole
+buckets of the grain drawn, and "last N years" is anchored on the data's last month.
 
 ### Cash flow
 
-Cash flow is a **frame over the same population**, not a separate rule set: all transactions, minus
-`exclude_from_totals`, netted. The endpoints are in `architecture.md`; what follows is what the numbers
-are allowed to mean.
+Cash flow is a frame over the same population: all transactions, minus `exclude_from_totals`, netted.
 
-**`exclude_from_totals` is the entire exclusion mechanism.** Excluded from spending means excluded from
-cash flow, and there is no second axis. The directional asymmetry people expect comes out of
-**categorization, not configuration**: an inflow that funds spending is categorized somewhere *not*
-excluded and reads as income, while a transfer out that represents saving is categorized somewhere
-excluded and drops out. No new field, no new setting, no new system category.
-
-Three richer mechanisms were considered and rejected. **Do not re-propose them:**
-
-- **Transfer-leg pairing** — treating a movement as internal when both legs are visible and as
-  boundary-crossing when one is missing. It decides *dynamically* what the category flag already decides
-  declaratively. (Recurring series *do* pair their two legs, under *Recurring series* above, but only to
-  draw one card over them — it changes no total, and is not a route to this.)
-- **A boundary relative to the current filter selection** — money "leaving" whatever accounts are
-  selected. Its motivating case, validating a period against a statement, is served by reading the
-  statement. What it costs is disqualifying: cash flow for two accounts selected together would not equal
-  the sum of each selected alone, so *adding* an account to the filter could *lower* the total.
-- **A separate `exclude_from_cash_flow` flag**, or a settings surface for exempting categories. A second
-  exclusion axis on categories drifts against the first.
-
-**Credit-card payments need no special handling.** A card payment already sits under the seeded
-`Transfers` group, so the `COALESCE(parent, leaf)` rollup excludes it, while the purchases on that card
-count at their own transaction dates. The double-count that would otherwise arise does not exist.
-
-**A bucket's side is the sign of its own net, not its `category_type`.** An expense category that
-refunded more than it spent moved money *in* that period. This is what keeps the frame honest under
-signed-net reporting — no link in the diagram can have a negative width, so the alternative would be an
-`ABS()` somewhere. The consequence to design against: **a bucket changes sides between periods**, so
-nothing durable — colour, ordering, identity — may be keyed to the side it landed on.
-
-**The atom is a category's net for the period, not a transaction's sign.** A period's inflow is the sum
-of the categories that net money in and its outflow the sum of those that net money out, so a period's
-two bars *are* the two sides of that period's diagram. **Do not switch it to gross** to simplify the
-SQL: reading every negative-amount row as inflow and every positive one as outflow nets to the same
-figure while reporting larger magnitudes in both directions, and stops reconciling against the diagram
-beside it.
-
-**A rolling window is calendar months, not rows.** The two differ exactly when the ledger skips a month
-— taking twelve rows and running the axis continuously across them spans thirteen or more months under
-a label reading "Last 12 months". A ledger shorter than the window starts where its data starts rather
-than being padded with months it never had.
-
-**A tag report has no cash-flow reading.** A signature bucket mixes categories from both directions, so
-it has no single direction to net and no `category_type` to derive one from. Deciding what a
-mixed-direction signature's net *means* is the prerequisite for any proposal here.
+- **`exclude_from_totals` is the whole exclusion mechanism.** Excluded from spending means excluded
+  from cash flow. An inflow that funds spending is categorized somewhere counted and reads as income; a
+  transfer to savings is categorized somewhere excluded and drops out. A second exclusion axis would
+  drift against the first.
+- **A credit-card payment** sits under `Transfers` and is excluded, while the card's purchases count at
+  their own dates.
+- **A bucket's side is the sign of its own net**, not its `category_type`. A bucket can change sides
+  between periods, so colour, order and identity are not keyed to the side.
+- **The atom is a category's net for the period.** A period's inflow is the sum of the categories that
+  net money in. A gross reading by row sign nets to the same figure with larger magnitudes on both
+  sides and does not reconcile with the diagram.
+- **A rolling window is calendar months**, so a ledger that skips a month still spans the labelled
+  period. A ledger shorter than the window starts where its data starts.
+- **A tag report has no cash-flow reading.** A signature bucket mixes categories of both directions and
+  has no `category_type`.
 
 ## Transaction splits
 
-A purchase that spans categories — part groceries, part hardware — is held as **one ledger row with a set of allocations** (`txn_split`), never as a parent row with children. The per-item-rows model was already tried and abandoned for the marketplace importer (orders-only, 2026-07-10, see *Transaction links and Amazon order import*); reviving it here would have brought back a visible parent/child hierarchy, a double-count risk, and tree handling in editing, undo and import, to solve a problem that is really about reporting.
+A purchase that spans categories is **one ledger row with a set of allocations** (`txn_split`). There
+are no child transactions, so nothing can count twice and editing, undo and import handle one row.
 
-A part also carries an optional **`label`** — free text naming what that allocation covers, defaulted from an imported order's item description and meant to be edited down by the user. It is descriptive only: no report or total reads it, which is why it can be changed freely while the category and amount carry the protections below. It is *shown* and *searched*: a part row in a category-scoped list carries its label under the merchant name, and the ledger's unprefixed search reads it — any part's label for a whole split (marked `matched_split_label`, since the row shows no label), only the row's own part's label under expansion, so a search inside one category does not return a sibling part of the same purchase. It exists because without it a saved split is a column of amounts with no record of *why* each was set — the pre-fill's item names were visible while editing and then thrown away. Marketplace item titles routinely run past 200 characters, so the stored value is capped and every display truncates it with the full text on hover.
-
-**The invariants**, enforced on save in `services/txn_splits.py` rather than by the DB, because no SQLite constraint expresses a cross-row sum:
+Enforced on save in `services/txn_splits.py`, since no SQLite constraint expresses a cross-row sum:
 
 - the parts sum to the transaction's amount, to the cent
-- every part shares the transaction's sign — `_summary_signed_total_sql` needs a bucket's type to be constant, and *Reporting assumptions* ties income groups to money-in, so a mixed-sign split would report against both. (A part representing a refunded item is a coherent future relaxation, deliberately not built.)
-- several parts **may** name the same category. A split records the *items* a payment covered, and two items bought together can classify alike — two records from one order are two purchases at two prices, and folding them into one allocation would discard exactly the detail a split exists to keep. The cost is that an expanded bucket holds more rows than transactions, which is paid for on the reporting side: **every summary counts `DISTINCT` transactions**, not rows. (The list endpoint keeps a row count, because its count drives pagination.) An earlier one-part-per-category rule was imposed to avoid that count change and was wrong — it traded the user's data for a query convenience
-- a part names a leaf, never a group — the same rule ordinary categorization follows
-- at least two parts; one part is a category assignment, and admitting it would leave a row flagged as split, reporting identically to an ordinary one, while being skipped by every automatic pass
+- every part shares the transaction's sign, because `_summary_signed_total_sql` needs a bucket's type
+  to be constant
+- a part names a leaf
+- at least two parts; one part is a category assignment
+- several parts may name the same category. A split records the items a payment covered, and two items
+  can classify alike. Every summary therefore counts `DISTINCT` transactions
 
-**A part is *shown* in the transaction's own direction, not as it is stored.** Since every part shares the transaction's sign, a part's sign states nothing its transaction's amount does not already state — and printed raw it contradicts it, because the ledger displays a stored amount negated (`getTransactionDisplayAmount`): a deposit's allocations read as money out beneath a row reading money in, and splitting a deposit means typing a column of negative numbers. Both surfaces that show parts — the row's hover card and the split editor, which works in that direction end to end and converts back on save — therefore multiply by `transactionDirection`, so a charge's and a deposit's allocations alike read as shares of the whole and direction is left to the row's own amount and the money-in green. Multiplying rather than taking an absolute value is what keeps this honest should the mixed-sign relaxation above ever be built: an opposing part would still print negative, and the parts on screen would still visibly sum to the transaction.
+A part's optional **`label`** is free text naming what it covers, defaulted from an imported order's
+item description. No report reads it. It is shown under the merchant name on a part row and is read by
+the ledger's plain search (`matched_split_label`). The stored value is capped.
 
-`txn.category_id` is **retained** while a row is split, as the stashed prior that un-splitting restores — the same reversal discipline the `txn_link` metadata follows for an excluded charge. `txn.is_split` marks the row for everything that must know it is split without reaching for its parts.
+- **`txn.category_id` is kept while a row is split**, as the prior that un-splitting restores.
+  **`txn.is_split`** marks the row.
+- **`txn_effective_sql` is the expansion seam.** It left-joins `txn` to its allocations and substitutes
+  the part's `category_id` and `amount` where one matched, so every filter, sign expression and
+  exclusion written against `t.category_id` / `t.amount` applies per allocation. The substitution keys
+  on whether a part row matched, so a part whose category was deleted stays uncategorized. It is a left
+  join because a union reads `txn` twice on every summary, split or not.
+- **`split_part_id`** is the allocation that matched, NULL where none did. Under expansion `t.id` does
+  not identify a row, since two parts may share a category and an amount, so windowed lists key on the
+  part id. An expanded row also carries the transaction's `is_split` with the part's amount;
+  `split_part_id IS NOT NULL` is the test for "this row is one allocation" (`lib/splitRows.js`).
+- **Expansion is chosen by what a query is for.** Summaries and trends always expand. The list expands
+  only when a category-shaped facet scopes it (a category or group filter, or a `spending` / `income`
+  view), so a drill-down's rows sum to the total it came from. Dedupe, rule matching, recurring
+  detection and import read plain `txn`.
+- **The CSV export follows the list.** Unscoped, a split exports once at its full amount with Category
+  and Group reading `--split--`, since `category_id` on a split is the stashed prior and an empty cell
+  would read as uncategorized.
+- The list feed carries `split_parts` and `split_part_count` for rows flagged `is_split`.
+- **A part is shown in the transaction's direction**: surfaces multiply by `transactionDirection`, since
+  the ledger displays stored amounts negated.
+- **Tags resolve per part.** A direct tag applies to the whole transaction; an inherited tag follows
+  each part's category. In the tag-signature report a split can contribute to two buckets.
+- **Pre-fill from an order's items**: an item with no list price becomes a zero part for the user to
+  fill, and pre-fill is refused when net cash or the list prices sum to zero.
 
-**The expansion seam is the whole reporting story.** Every category aggregation selects its rows from `txn_effective_sql`, which left-joins `txn` to its allocations and substitutes the part's `category_id` and `amount` wherever one matched. A non-split transaction joins to nothing and yields itself; a split one yields a row per part. Because the summary and list queries were already phrased entirely against one alias — `t.category_id`, `t.amount`, `t.id` — every facet filter, uncategorized sentinel, signed-total expression and `exclude_from_totals` guard then applies per allocation with no restatement. The substitution keys on whether a part row *matched* (`s.txn_id`, NOT NULL) rather than on its values, so a part whose category was deleted stays uncategorized instead of falling back to the transaction's own.
-
-The list feed carries a split row's allocations inline (`split_parts`, plus `split_part_count`), resolved for the whole page in one query keyed only on the rows already flagged `is_split`. They are part of the payload rather than a per-row lookup because the ledger renders them in the row's hover, where a fetch would mean a loading state inside a tooltip.
-
-**An expanded row is not a transaction, and says so.** The seam also projects `split_part_id` — the id of the allocation that matched, null where none did — and the list feed carries it. Two things need it, and both are silently wrong without it. First, **identity**: expanded, `t.id` no longer identifies a row, because two parts may name the same category (the split rules permit it) and come back as two rows with one id; two parts alike in category *and* amount are not distinguishable by value either, so the part id is the only honest key, and it is what the windowed lists key their rows by. Second, **which kind of row this is**: an expanded row carries the part's `category_id` and `amount` but the transaction's own `is_split`, so a renderer reading the flag alone treats one allocation as the whole split — labelling a $10 part "Split (2)" and answering a hover about it with the other part's $240. `split_part_id IS NOT NULL` is the test that separates the two, and the frontend writes it down once in `lib/splitRows.js`.
-
-**Expansion is opt-in per query, and the rule is what a query is *for*.** Summaries and trends always expand — rollup is their job. The transaction list expands **only when a category-shaped facet scopes it** (a category or group filter, or a `spending`/`income` view, which resolve through a category): scoped that way a split returns as the part that matched, so a drill-down's visible rows sum to the total its summary reported; unscoped, the ledger shows one row per purchase at its full amount. Everything else — dedupe, rule matching, recurring detection, import — reads plain `txn`, because those operate on the purchase rather than on how it was allocated. The CSV export follows the list (it shares `transaction_list_scope`), so a category-scoped file holds the matching parts; unscoped, a split exports once at its full amount with **Category and Group reading `--split--`** — a CSV row cannot hold several categories, and `txn.category_id` on a split is only the stashed pre-split prior, which a file would otherwise present as current. The marker is deliberate over an empty cell, which would read as *uncategorized* — an equally wrong claim, and a silent one. **Copying is the other answer to the same question**: the clipboard and share text are read by a person rather than re-imported, so there a split names every category it touched (`Groceries / Hardware`, repeats collapsed, a name containing the separator quoted — `splitCategoryNames` in `lib/splitRows.js`).
-
-**Tags resolve per part without any special handling.** A row's effective tags are already the union of its direct `txn_tag` rows (keyed on the transaction id) and the tags inherited from its category. Under expansion a direct tag therefore applies to the whole transaction and every part, while an inherited tag follows each part's own category — which is the semantic worth wanting, and is what the existing SQL already meant. One consequence to expect: in the tag-signature report a split transaction can contribute to two signature buckets, each with its part's amount.
-
-**Pre-fill has refusal edges, and they are not guesses.** Where a split is seeded from an imported
-order's captured item detail, an item with **no list price** is excluded from the proportional weighting
-and lands as a **zero part for the user to fill** rather than being dropped or estimated; and pre-fill is
-**refused outright** when net cash is zero (a fully gift-carded or points order) or when the list prices
-sum to zero, since there is nothing to apportion against.
-
-**The seam is a left join rather than a union of the split and non-split branches, and that is measured
-rather than stylistic.** The obvious formulation — select the unsplit rows, `UNION ALL` the split ones
-joined to their parts — reads `txn` twice. Measured on a real-scale ledger of ~18.5k rows **with no
-splits in it at all**, that cost about **80%** on top of *every* summary query (23.6 ms → 42.9 ms), and
-driving the second branch from `txn_split` instead barely moved it (41.9 ms). The left join measures
-**~6%** (23.6 ms → 25.0 ms). A feature nobody has used yet should be close to free on every report in
-the app, and this is the difference between that and a standing tax on all of them. **Do not "optimize"
-it back into a union.**
-
-Which paths may and may not overwrite a split is covered under *Categories* → "How an existing
-transaction's category can change"; the alternatives that were rejected, and the neighbouring mechanisms
-a split is not, are in [`mechanism-index.md`](mechanism-index.md).
+Which paths may overwrite a split is in
+[How an existing transaction's category can change](#how-an-existing-transactions-category-can-change).
+Neighbouring mechanisms are told apart in [`mechanism-index.md`](mechanism-index.md).
 
 ## Attached documents
 
-A transaction records that money moved and where it went; it does not record *what was bought*. For most rows nobody cares. For the ones where it matters — a car repair, a service invoice, a warranty-relevant purchase — the useful fact exists only on a document the app has never seen. A **document** (`document`) is that paperwork attached to a transaction: the row is the record, the bytes are a file under `documents/` beside the data database.
+A **document** (`document`) is paperwork attached to a transaction. The row is the record; the bytes
+are a file under `documents/` beside the data database. The noun is "document" because "attachment"
+already means a tag attachment in this codebase.
 
-**A document can be kept before its transaction exists.** An invoice routinely arrives days before the charge it describes is imported, and making someone find it again later is the cost this avoids. Such a document is **stored**: `txn_id` is NULL, and it is attached later by setting it. That is a column value rather than a second store on purpose — upload, extraction, the digest, the viewer and the backup are all the same for both states, and attaching or detaching never touches a file. The consequences worth knowing:
+- **A document may be stored before its transaction exists**: `txn_id` is NULL, and attaching sets it.
+  One table serves both states, so upload, extraction, viewing and backup are the same and attaching
+  never touches a file.
+- **Nothing cascades a stored document away.** Every wipe of the ledger names `document` explicitly.
+- **Detaching** returns a document to the stored set. **Deleting** removes the row and then the file.
+  Moving a document directly between transactions is refused.
+- **Arriving where an identical file already is keeps the one already there.** The duplicate check on
+  upload applies to the stored set as its own scope.
+- **Several documents may hang off one transaction.**
+- **A name can be changed.** It is display and download text; the file is keyed by id.
 
-- **Nothing cascades a stored document away.** Every wipe of the ledger that relies on deleting transactions (the restore, the demo-data clear) names the `document` table explicitly; a wipe that forgot would leave stored documents from before a restore mixed into the restored ledger.
-- **A document is taken off a transaction in one of two ways, and they differ in what can be undone.** *Detaching* moves it back among the stored documents — the answer to "attached to the wrong transaction", reversed by attaching it again. *Deleting* removes the row and then the file, and nothing brings it back. Moving a document from one transaction straight to another is refused rather than offered: no surface does it, and a mistaken request should not quietly take a receipt off the row it belongs to.
-- **Arriving where an identical file already is folds the two together.** Attaching a stored document to a transaction that already carries the same bytes, or detaching one onto an identical stored copy, keeps the copy already there (and its name) and removes the moved one. It is the upload's duplicate check applied to a move, for the same reason: two entries holding one receipt differ in nothing a person can tell apart. The duplicate check on upload applies to the stored set as a scope of its own.
-- **A stored document's text is indexed but explains no row.** Search reaches documents through the transaction they hang off, so a stored invoice is not found from the ledger until it is attached — at which point it is, with no reindexing, because the index follows the row.
-- **A name can be changed after the fact,** attached or stored. It is display and download text only (the file is keyed by id), so a rename goes through the same reduction an upload's name does and cannot be emptied. A paste arrives named `documentation.<ext>` — neutral, since it could be a receipt, an invoice or a confirmation — and a lone document added to the store opens its name for editing, because the name is what it will be picked by later.
+Storage:
 
-The noun is deliberate. **"Attachment" was already taken** — it means a *tag* attachment throughout this file ("tag definitions before any attachment") — and "document" reads better for a repair invoice anyway.
+- **Files on disk, not blobs**, so backup and restore copy them between disk and zip member with a
+  fixed buffer.
+- **The directory is derived from the data database's path**, not `DATA_DIR`, so a `DB_PATH` override
+  keeps documents beside the ledger that references them.
+- **The file is written first and the row second.** A crash leaves a file with no row, which a sweep
+  reclaims, and never a row with no file. Each file is written to a temporary name and `os.replace()`d,
+  so a file present under its real name is complete.
+- **`sha256` and `byte_size` describe the stored bytes.** The digest lets a restore tell a complete file
+  from a torn one, extends the backup's integrity check to the files, and is the key for the duplicate
+  check.
+- **Removal is derived.** Whatever destroys documents deletes rows (or lets the cascade) and then sweeps
+  files no row references. Incremental callers spare recently written files, since a file is
+  unreferenced between its write and its row commit.
+- **Documents follow their transaction through the trash**: hidden with it, restored with it, and
+  deleted when it is purged. A stored document has no trash.
+- **They ride the data backup**: rows in the `documents` section, each file as `documents/<id>`. Their
+  digests are not repeated in `meta.json`.
+- **Drift resolves toward keeping the ledger.** An export whose file is missing writes the row without
+  its member. A restore reports a document it could not write or that failed its digest, deletes a
+  corrupt file, and continues.
 
-**Several documents may hang off one transaction**, and there is deliberately no unique index saying otherwise. A repair arrives as an estimate and then a final invoice; a two-page bill arrives as two photographs. Constraining that would be a limit on what the user is allowed to record whose only justification is that one file is the common case, which is not a reason.
+Content:
 
-**Files on disk, not blobs in the database.** The backup payload is JSON, so a blob would have to be base64'd into it — a third larger, and a receipt that has to be held whole in memory to be encoded. Files keep the bytes out of the JSON entirely, which is what lets both backup directions copy them straight between disk and zip member with a fixed buffer, at any size. The directory is derived from the data database's own path rather than from `DATA_DIR`, so a `DB_PATH` override (which an install carrying pre-rename filenames uses) keeps documents beside the ledger that references them rather than beside a directory the environment happened to name.
+- **Accepted kinds**: files, photographs, pasted text, pasted HTML, and a saved email (`.eml`), which is
+  converted at ingest to its HTML or plain part with the subject as the filename. `message/rfc822` is
+  never a stored type.
+- **A formatted paste is stored as `text/html`** when it contains markup, so a receipt's table layout
+  is kept.
+- **Every document is served with `Content-Security-Policy: sandbox; default-src 'none'`**, so stored
+  HTML runs no script and fetches nothing. The attach preview rebuilds the same policy on the client
+  (`lib/pastedHtmlPreview.js`).
+- **An oversized photograph is downscaled once at ingest and the original is not kept.** PDFs pass
+  through byte for byte. `MAX_DOCUMENT_BYTES` caps a file.
+- **Editing a `text/plain` document replaces it** (`replace_document_text`): a new file is written, the
+  old row deleted and the new one inserted in one transaction, and the old file removed afterwards.
+  The file cannot be rewritten in place because `sha256` must describe the bytes on disk. The filename
+  and `created_at` carry over; **the id changes**, so every holder of the id swaps it.
 
-**The write order is the invariant, because file and row cannot be one transaction.** The file is written first and the row second, so a crash between them leaves a file with no row — inert litter a sweep reclaims — rather than a row with no file, which is a broken link on screen. Each file is written to a temporary name and `os.replace()`d into place, so a torn write is never visible under the real name and "present on disk" keeps meaning "complete".
+Text and search:
 
-**`document.sha256` is not bookkeeping.** It is what lets a restore tell a complete file from a torn one and resume, what extends a backup's integrity check to cover the files rather than only the JSON, and the natural key for noticing the same receipt was attached twice. It and `byte_size` describe the **stored** bytes, which are not always the uploaded ones — see downscaling below.
-
-**Removal is derived from the ledger, never declared beside it.** Everything that destroys documents — a purged transaction, a cleared demo dataset, a restore replacing the ledger — deletes rows (or lets `ON DELETE CASCADE` do it) and then *sweeps* files the ledger no longer references. Two reasons: the file-first write order makes litter a normal outcome that something has to reclaim anyway, and an interrupted destructive operation then leaves extra files rather than having already deleted originals it cannot get back. The sweep's one subtlety is that it must not race an ingest — between that file write and its row commit a file is legitimately unreferenced — so incremental callers spare recently-written files and a restore, which has just replaced the entire ledger, does not need to.
-
-**Documents follow their transaction through the trash.** Trashing hides the row and its documents together, restoring brings them back intact, and the age-based purge deletes the transaction, cascades its document rows, and sweeps the files. The trash is the reversible stage and the purge the irreversible one; documents inherit that rather than defining their own lifetime. A stored document has no transaction to follow and so no trash: it stays until it is attached or deleted.
-
-**In the backup they ride the *data* bucket**, because a document is transaction detail rather than a credential — and it is the backup people actually take, so anything else would mean a backup that silently omitted every receipt. The rows travel as the `documents` section and each file as its own `documents/<id>` member, stored rather than deflated. Their digests are deliberately **not** repeated in `meta.json`: the digest on the `document` row is the one source of truth, and duplicating it would create a second that could disagree.
-
-**Row-and-file drift is expected rather than exceptional, and always resolves toward keeping the ledger.** An export whose file is missing writes the row without its member instead of refusing to produce a backup — withholding the whole ledger over one unreadable receipt is the worst available answer. A restore reports a document it could not write, or one that failed its digest, and keeps going; a file that arrives corrupt is *deleted* rather than left, so the "present means intact" invariant survives.
-
-**A document is a file, a photograph, or pasted content.** Text is a first-class kind rather than only something extracted *from* a document: a receipt forwarded by email is pasted rather than saved first, and that paste is the whole of the email story — no mailbox polling, no receiving address, nothing that would put mail credentials in the vault. A pasted-text document stores exactly what was pasted and carries `text_source = 'verbatim'`, which is deliberately **not** an extraction tier: nothing was interpreted, so it is the most trustworthy text the store holds and a later re-extraction pass must never treat it as weaker output to improve on. Text is also the one accepted kind with no magic number, so it is identified by *decoding* — and only when the upload claimed to be text, since plenty of binary happens to decode and this is a receipt store rather than a general file dump.
-
-**A paste keeps the layout it came with, because the clipboard carries more than one flavour.** A receipt copied out of an email offers both `text/html` (the table the sender laid out) and `text/plain` (that table flattened, every cell on its own line, so an amount lands *under* the item it prices rather than beside it). Storing the plain flavour loses structure that was never the app's to lose, so a formatted paste is previewed as formatted and stored as `text/html`. It is attached as shown or discarded; the formatting is not editable. The rich flavour is only taken when it actually contains markup — a source offering `text/html` that is merely the same words again has no layout to preserve, and storing it as HTML would be strictly worse. Its search text is the markup with tags removed (`text_source = 'html_text'`): derived, but from the document's own words rather than from interpreting a picture of them, so it sits with a PDF's text layer in reliability. A table row becomes one line with its cells tab-separated, so the extracted text keeps an amount on the same line as its item. That has to hold against how point-of-sale receipts are actually marked up, with the item name in a `<div>` *inside* its cell: a cell's content is gathered on its own and only its edges are trimmed, so the block around a lone item name does not split the row, while breaks within a cell (a work order's notes) survive. Cells whose end tags were omitted close at the next cell or row of their own table, and a layout table around the receipt does not merge it with the letterhead. Source whitespace is not layout and collapses as a browser collapses it; script and stylesheet bodies are dropped, being text to a parser and noise to a reader. Search text already stored under an earlier extraction is not rebuilt; its terms are the same words, and the ledger search matches terms rather than lines.
-
-**A saved email (`.eml`) is accepted and converted at ingest.** It is the one receipt source no clipboard quirk can defeat, and no browser renders one — so keeping the message would mean storing a document that could never be viewed. Its HTML part becomes the document (falling back to the plain part), which keeps the seam's promise that every ingestion path produces *(bytes, media type, filename)* and nothing downstream knows where they came from. The **subject** becomes the filename, since an exported message is usually named opaquely by whatever produced it while the subject is what a person recognizes later. `message/rfc822` is therefore an *accepted upload* type but never a stored one. Detection reads the first line for a real RFC 5322 header rather than trusting the declared type, which browsers report inconsistently for `.eml` — and requires the colon to arrive before any whitespace, so a text file that merely opens with the word "From" stays a text file. **Inline `cid:` images do not render**: the sandbox CSP blocks every subresource, so an image-heavy receipt arrives with gaps — the honest cost of never fetching anything an email points at.
-
-**Stored HTML is rendered under the same headers as everything else, which is what makes it safe to keep.** `Content-Security-Policy: sandbox; default-src 'none'` accompanies every document: `sandbox` with no tokens means no scripts and an opaque origin, and `default-src 'none'` blocks every subresource — including the remote tracking images an email may carry, which would otherwise fire the moment a receipt was opened. That header was added for PDFs and covers this unchanged, which is why storing markup from an email needed no new defence. The one place pasted markup is rendered *before* it has a URL to carry that header — the attach preview — rebuilds the same policy on the client (`lib/pastedHtmlPreview.js`), so nothing an email points at is fetched at that step either. **Neither stops a frame navigating itself**: the preview removes links and refresh directives for that reason, while a stored document's links still load their target inside the viewer when clicked.
-
-**A `text/plain` document can be edited after it is attached, and an edit is a replacement.** The file cannot be rewritten in place: `sha256` must describe the bytes on disk, and file and row cannot change together, so an in-place rewrite has a moment where they disagree, and a crash in it leaves a document that restore and backup both read as torn. So an edit is ordinary ingest (`replace_document_text`): the new file is written, the old row is deleted and the new one inserted in one transaction, and the old file is removed after that commits, or by the next sweep if the request dies first. The filename and `created_at` carry over, so the document keeps its name and its place in the list; **its id does not**, and every holder of a document id has to swap it, which for the ledger row's own copy is the viewer's `onDocumentReplaced` contract. The replacement is still `text_source = 'verbatim'`, because the edited text is exactly what the person wrote. An edit is **not** checked against the transaction's other documents for duplicates: that check catches the same file dropped twice by accident, and an edit is a deliberate statement of what the text should be. An edit to nothing is refused (removing the document is the way to do that), and HTML, PDFs and images are not editable. HTML is kept for its formatting, and editing markup safely costs more than trimming a receipt is worth.
-
-**Ingest is deliberately lossy for photographs and lossless for PDFs.** A receipt shot at 12 MP is ~4 MB and carries nothing above roughly 300 DPI at text size that any reader or extractor can use, so an oversized image is downscaled once, at ingest, and the original is not kept — worth doing on its own merits, not as a response to storage pressure. Three rules shape it: EXIF orientation is applied before re-encoding (which drops EXIF, so a naive resize lands the receipt sideways), an image with transparency stays PNG (flattening alpha changes the picture rather than trading quality), and a re-encode larger than its input is discarded. Small images pass through untouched, since a screenshot's crisp text is what JPEG treats worst. PDFs pass through byte-for-byte: re-rendering one needs far more machinery, a digital invoice is small anyway, and its text layer is exactly what makes it worth preferring. A generous per-file cap (~25 MB) stops pathology; it is not a ration, because a cap that rejects is a dead end for someone photographing a receipt with the phone they own.
-
-`document.text` holds text pulled out of the document and `text_source` records which tier produced it. NULL means no text was obtained — a photograph, or a PDF with no text layer — which is distinct from a document whose text is genuinely empty. Nothing but search reads it, so a document with no text is fully functional. **`text_source` is recorded rather than inferred from the media type** because the tiers are not interchangeable in reliability: a PDF's own text layer is exact, OCR is a guess, and anything reading the text later — a decision to re-extract once a better tier exists, how much to trust a match — needs to know which it got. Tier 1 (a digital PDF's text layer) is the only one that runs today; a PDF yielding only a handful of stray characters is treated as having *no* text layer, since recording that as an extraction would mark the document searched when nothing searchable was found.
-
-**Searching a receipt works from the plain search box, and `doc:<terms>` narrows to documents only.** The text is indexed by SQLite's built-in FTS5 (`document_fts`, external-content over `document.text`, so the terms are stored but not a second copy of the text). **Why not `LIKE` over the text column:** it is a substring scan that grows with the stored text, and substring is the wrong instrument for prose, where word matching is what a person means by searching a receipt. Terms match by prefix and several terms are an AND, where a term is what was typed between spaces: `13.80` or `store-west` is one phrase, its pieces adjacent and in order, because ANDing the pieces loose matched any receipt holding a word that starts with each. A full date is searched as the date rather than as its spelling — `8/25/2026` also finds `08/25/26`, `2026-08-25` and `Aug 25, 2026` (`_fts_date_phrases`), since a receipt prints its date in whatever form its issuer chose; a month and day with no year (`8/25`) gets the same forms without one, and so finds `08/25` and `Aug 25` in any year. Every term is quoted before it reaches FTS5 — MATCH is a query language, so raw input would turn an ordinary typo (an unbalanced quote) into a server error and let a search accidentally become an expression.
-
-**A row that matched inside a document says so, and that is what makes the plain-box behaviour safe.** A hit on document text has no visible cause — every field shown on the row lacks the term, so it reads as a wrong result — and the answer is to show the cause: the list feed projects `matched_document` for rows whose match came from an attachment, and the ledger emphasizes the document marker on them. The projection is added **only when the filter actually has a document component**, so an ordinary listing pays nothing for it, and it is deliberately absent for a field-scoped filter like `merchant:` — the flag is a *reason*, and marking a row that matched its payee would send the reader looking for an attachment that had nothing to do with it. A row's imported text is handled the same way — its raw name and captured free text are searched from the plain box and marked with `matched_hidden_text`.
-
-**The index is maintained by triggers, which is a correctness requirement rather than a style choice.** A `document` row is most often removed by `ON DELETE CASCADE` when its transaction is purged, and a restore rebuilds the whole table by streaming rows in — neither is a place application code could hook even if every endpoint remembered to. An index that missed those would keep returning transactions that no longer exist. The same property means the restore needs no search awareness at all: rows land, the index follows. It is derived state and is deliberately **not** backed up; it is rebuilt from `document.text` whenever it is created.
-
-The extraction tiers above tier 1 — local OCR, a BYOK line-item extractor, and the splits hand-off they feed — are unbuilt; see [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md).
+- **`document.text`** holds text obtained from the document. NULL means none was obtained, which is
+  distinct from empty.
+- **`text_source`** records how it was obtained, because the sources differ in reliability: `verbatim`
+  (pasted text, exactly as written, never to be replaced by an extraction), `html_text` (markup with
+  tags removed), or a PDF's own text layer. A PDF yielding only stray characters is recorded as having
+  no text.
+- **`document_fts`** is an FTS5 index over `document.text`, maintained by triggers, because rows leave
+  by `ON DELETE CASCADE` and arrive by restore, where no application code runs. It is derived, is not
+  backed up, and is rebuilt when created.
+- A stored document's text is indexed but found from the ledger only once it is attached.
+- The list feed projects `matched_document` on rows whose match came from a document, and
+  `matched_hidden_text` on rows matched through raw or captured text, only when the filter has such a
+  component.
 
 ## Multi-payment purchases
 
-A deposit and a final payment — or a three-instalment plan — are several real movements of money that
-together buy one thing. Each is recorded correctly on its own date, and nothing in the ledger says they
-belong together: "what did the deck actually cost" has to be reassembled from memory, and a deposit
-sitting alone reads as a mysterious partial amount.
+A deposit and a final payment are several real movements that buy one thing. A **purchase**
+(`txn_link` `kind='purchase'`, `services/purchase_links.py`) groups them.
 
-A **purchase** (`txn_link` `kind='purchase'`, `services/purchase_links.py`) is that grouping. It is the
-third client of the link primitive and by far the cheapest, because of what makes it different from the
-other two: Amazon order itemization and wallet funding-leg suppression both exist to stop the *same*
-money counting twice, so each recategorizes a leg into an excluded bucket and stashes the prior for
-reversal. Here both payments are genuinely spent money on genuinely different dates. **Nothing is
-excluded, restated or netted** — the link is pure association, exactly what the primitive is by
-default, which is what makes grouping a purchase incapable of changing a total that was already right.
+**Nothing is excluded, restated or netted.** Every payment is real money on its own date, so the totals
+are already right and the link adds only the relationship. No report reads it.
 
-**Every reporting surface is deliberately untouched.** Summaries, trends, the dashboard and every drill
-read plain `txn` and know nothing about purchases; a grouped payment reports exactly as it did before.
-This is the opposite of the choice [Reimbursable expenses](#reimbursable-expenses) makes, and for a
-stated reason: there the numbers are wrong across a period boundary and a holding
-category is what fixes them, so pairing is optional and late. Here the numbers are already right and
-only the *relationship* is missing, so the link is the whole feature and no category machinery is
-warranted. Do not add one.
+- Members carry role `payment`. One role serves every member, since the dates already say which
+  payment came first.
+- `external_ref` is an invoice or order number. `metadata_json` holds `label` and `expected_total`.
+- **`expected_total` is stored signed**, in the ledger's convention. The UI derives the sign from the
+  payments (`lib/purchaseLinks.js` → `signedExpectedTotal`).
+- **`unaccounted` is `expected_total − linked_total`.** It may be a payment not made or one not linked.
+  It is NULL when no expected total was stated, which is different from zero.
 
-**What it holds.** The members carry role `payment`; `external_ref` is the invoice or order number when
-there is one; `metadata_json` holds `label` (a name for the purchase) and `expected_total`.
+Enforced in the service:
 
-- **`expected_total` is stored signed, in the ledger's convention** (`amount > 0` is money out), like
-  every amount the API carries. A person types a magnitude — "6000", not a sign against a convention
-  they have never seen — so the *UI* derives the direction from the payments being linked
-  (`lib/purchaseLinks.js` → `signedExpectedTotal`) and shows the derived figure back before saving,
-  which keeps the inference visible rather than silent. A sign the user typed explicitly is honored
-  rather than overridden.
-- **`unaccounted` is `expected_total − linked_total`, and is named for what it is.** The gap may be a
-  payment not made yet or one made and not linked, and nothing in the ledger can tell which, so it is
-  deliberately not called "remaining" or "owed". It is NULL when no expected total was stated — "not
-  stated" is a real answer and is not the same as zero, which would claim the purchase is complete.
+- **A transaction belongs to at most one purchase**, or one payment would count whole into two totals.
+  Dividing one payment is a [split](#transaction-splits).
+- **At least two payments.** Removing one that would leave fewer deletes the link.
+- **Signs are not constrained.** A refund against the purchase is part of what it cost.
+- **Totals count live payments.** A trashed payment stays listed and is not counted, and a trashed row
+  cannot be added.
 
-**The invariants**, enforced in the service rather than the schema (no SQLite constraint reaches across
-the two tables to express them):
-
-- **A transaction belongs to at most one purchase.** Not a query convenience: one payment covering two
-  invoices would count whole into both purchases' totals, so admitting it would make the single figure
-  this feature exists to produce wrong. Dividing *one* payment across things is the other axis —
-  [transaction splits](#transaction-splits) — and the refusal says so.
-- **Two payments minimum.** One payment is not a multi-payment purchase. Removing a payment that would
-  leave fewer than two therefore deletes the whole link rather than leaving a degenerate one that
-  renders "1 of 1".
-- **Signs are not constrained.** A refund against the purchase is part of what it cost, so it may be a
-  member and the honest total is the net. (Contrast splits, where a mixed-sign allocation would report
-  one transaction against both an income and an expense bucket.)
-- **One role for every member.** Which payment is the deposit is already told by the dates, and a role
-  saying it again is a second truth that can drift from the first.
-
-**Totals count live payments only; trashed ones stay visible.** A trashed payment is money that is not
-in the ledger, so counting it would overstate the purchase — and it is given no ordinal, since it is
-not one of the N the purchase is made of. It is still listed (struck through) rather than silently
-dropped, because the trash is the reversible stage and a payment vanishing without explanation is worse
-than one shown as removed. A trashed row cannot be *added* to a purchase, which is a different case: it
-would contribute nothing, so a purchase whose figures do not move when a payment is added is the
-confusing outcome being avoided.
-
-**A purchase does not outlive its payments, and a trigger is what guarantees it.** A `txn_link` row has
-no FK to `txn`, so hard-deleting the last member leaves an orphan link nothing will ever show again.
-Transactions are hard-deleted from five scattered places (empty-trash, batch undo, account merge, an
-Amazon order's removal, a restore's wipe), so `trg_purchase_link_prune` (`db/database.py`, created in
-the deferred post-migration block alongside the recon-epoch triggers) drops a purchase link once its
-last member row goes — the same "a trigger makes a miss impossible" reasoning the recon-epoch and FTS
-triggers record. Its `WHEN` clause is scoped to `kind='purchase'` precisely because the other kinds run
-multi-step reversals that must not have rows swept out from under them.
-
-**No schema change was needed and none should be added.** `txn_link`/`txn_link_member` already carry
-every field this uses and already ride in backups, so a purchase round-trips through export and restore
-with nothing feature-specific in the payload. One side effect worth knowing: writes to `txn_link` bump
-`recon_epoch`, so creating a purchase invalidates the Amazon reconciliation's cached attention count.
-That is over-invalidation of the harmless kind the cache already documents — it forces one recompute on
-the next read — and is not worth complicating the trigger to avoid.
-
-**Four things were deliberately not built.** Each is re-proposable, so each carries its reason:
-
-- **Automatic suggestion.** The plausible signals — same payee, two-to-four payments within a few
-  months, amounts summing to a round figure — are weak on their own, and this repo's precedent for the
-  shape is *advisory only, never guessed at*. The genuinely strong signal is the invoice, and
-  `document.text` plus full-text search already exist to search one; what is missing is extraction, so a
-  photographed invoice yields nothing to match on. **A re-open condition, not pending work** — revisit
-  if OCR lands ([`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → tier 2).
-- **A document attached to the purchase rather than to one payment.** The invoice that revealed the
-  problem covers both payments and can currently hang off only one of them, arbitrarily. `document` keys
-  on `txn_id`; letting it key on a link as well is a real change to that table's contract.
-- **A Tasks entry for an unaccounted purchase.** Exactly the "needs attention" shape, but a purchase
-  legitimately part-paid for months would nag the whole time — the same objection recorded against
-  nagging an open receivable. Age-gate it if it is ever added.
-- **A purchases list page.** Purchases are reached from their payments; a browse surface is worth
-  building only once there are enough of them to browse, which is a question about use rather than
-  design.
-
-How this differs from the mechanisms it is most often confused with — splits, recurring series and
-reimbursements — is in [`mechanism-index.md`](mechanism-index.md).
+**`trg_purchase_link_prune`** drops a purchase link when its last member row goes, because a link has
+no foreign key to `txn` and transactions are hard-deleted from several places. Its `WHEN` clause is
+limited to `kind='purchase'`, since other kinds run multi-step reversals.
 
 ## Reimbursable expenses
 
-Money that leaves as an expense and comes back later — concert tickets bought for friends, a work
-expense paid personally and claimed afterwards. Both movements are already recorded correctly and
-categorization is already right; what breaks is that **the netting crosses a period boundary**, so
-February overstates spending until July's repayment lands, and July shows an inflow that is not income.
+Money that leaves as an expense and comes back later. Both movements are recorded correctly; the
+problem is that the netting crosses a period boundary, so one month overstates spending and a later one
+shows an inflow that is not income.
 
-**The model is a holding category, not a restatement.** The reimbursable portion of the expense is
-allocated (through `txn_split`) to a leaf under the seeded, excluded **`Reimbursable`** group, and the
-later inflow lands against the same group instead of against income. February then reports its own
-spending correctly on its own, July reports no income, and **the outstanding balance is simply the
-group's sum** — no pairing required to produce it. Nothing is asserted about a repayment that may never
-arrive, which is the failure of the obvious alternative (flag the expense and exclude it): if the money
-never comes back, spending is under-reported permanently with nothing showing what is outstanding.
+### The holding category
 
-**The group is machinery, and its identity is `system_key = 'reimbursable'`, not its name.** Two
-properties follow, both load-bearing. The empty-category sweep deletes leaves with no transactions and
-groups with no surviving children, skipping only `system_key IS NOT NULL` rows — and a receivable
-category is *empty exactly when nothing is outstanding*, which is its healthy state rather than evidence
-it is unused. And the user may rename the group freely, because every read resolves it by key. It is
-seeded for everyone like the other top-level reporting groups; its **leaves are created on first use**
-(`services/excluded_categories.py`), so someone who never records a reimbursable carries one empty group
-and no stray category.
+The reimbursable portion of the expense is allocated, through `txn_split`, to a leaf under the seeded,
+excluded **`Reimbursable`** group, and the repayment is filed in the same group. Each period then
+reports correctly on its own, and **the outstanding balance is the group's sum**, with nothing paired.
+Nothing is assumed about a repayment that may never arrive.
 
-**The group carries the state; its leaves carry the thing, and no leaf is seeded.** `Reimbursable ›
-Concert tickets` — "owed back" is already said by the parent, so a leaf that says it again is doing the
-group's job instead of its own. Only the user knows what a given receivable is *for*, which is why the
-app seeds the group and nothing inside it.
+- **The group's identity is `system_key = 'reimbursable'`.** The empty-category sweep skips keyed rows,
+  and a receivable category is empty exactly when nothing is outstanding.
+- **Leaves are created on first use** (`services/excluded_categories.py`), and any active leaf in the
+  group is a receivable. A leaf is named for what the money is for, so it stays true after repayment.
+- **The group cannot be deleted, moved, or have `exclude_from_totals` changed.** A moved group becomes a
+  leaf, which no lookup finds, and clearing the exclusion restores the overstatement. Renaming and
+  re-sorting are allowed.
+- **A leaf holding claimed money stays in the group.** Moving or deleting it is refused while any
+  reimbursement, completed ones included, claims money in it. A delete whose replacement is another
+  Reimbursable leaf is allowed.
+- **A completed pair stays where it is.** It is `+n` and `−n` in one excluded group and nets to zero.
 
-The rule generalizes and is worth stating because getting it wrong is self-concealing: **a category
-named for a state goes stale, because the state changes and the name does not.** A leaf called
-"Awaiting reimbursement" is a lie about every row in it the moment that row is repaid, and the apparent
-fix — a second "Completed" leaf that finishing moves rows into — was designed and then rejected here,
-because it pays for a bad label by destroying a good one. Moving a finished row out of "Concert tickets"
-loses exactly the thing that made it findable. Named for what the money is, a leaf stays true forever
-and nothing has to move.
+### Reimbursement records
 
-Nothing is lost by leaving completed rows where they are, on any surface: a completed pair is `+n` and
-`−n` inside the same excluded group, so it **nets to zero and cannot distort the group's balance**
-wherever it sits; the outstanding report lists open reimbursements only; and the ledger's row marker
-renders a completed one dimmed and an open one bright.
+A record is a `txn_link` with `kind='reimbursement'` (`services/reimbursements.py`). `external_ref` is
+the counterparty. `metadata_json` holds the per-transaction **claims**, an optional reminder date, and
+once finished the **completion record**.
 
-**The feature keys on the group, never on one blessed leaf.** Any active leaf inside it is a receivable,
-so the user may keep the default `Awaiting reimbursement`, rename it, or add their own beside it. This
-is what makes "one receivable category or one per counterparty" a non-question, and it is safe because
-`exclude_from_totals` is `NOT NULL`, so an existing parent always wins
-`COALESCE(parent.exclude_from_totals, leaf.exclude_from_totals, 0)` — a leaf under the group cannot opt
-itself back into spending totals whatever it carries. **The group itself cannot be deleted, moved, or
-have its `exclude_from_totals` changed** — three flat refusals rather than gates on whether it currently
-holds anything:
+- **A claim is how much of one transaction's receivable belongs to this record.** A row may appear in
+  as many records as it has receivable to divide: one charge split between two people is two debts.
+- **Claims are amounts, not split-part ids.** `save_split` deletes and reinserts parts on every edit,
+  so part ids are not stable. A part's label is kept as display provenance. When settling draws from a
+  row with several shares, which allocation shrinks is taken in order.
+- **A transaction's claims across all records may not exceed its receivable.** The remainder is
+  **unclaimed**. Each claim is non-zero and has the sign of the row's receivable. A transaction
+  allocating nothing to the group cannot join.
+- **One claim per transaction per record**, keyed by transaction id. Attaching again replaces it, so
+  choosing several portions means one claim for their sum.
+- **Roles are derived from the claim's sign**: positive is an `expense`, negative a `repayment`.
+- **The expected total is not stored.** It is the sum of the expense claims.
+- **Tracking is optional.** The outstanding total is the open records' residuals plus the unclaimed
+  money in the group. A record adds a counterparty and the pairing that settling needs.
+- **Moving a claim between records releases and re-attaches in one transaction, in that order**, since
+  the invariant counts claims across every record.
 
-- **delete** never durably worked anyway: seeding restores the group at next start, leaving deactivated
-  leaves holding the balance outside the group the feature reads.
-- **move** is the quietest of the three. Reparenting turns the group into a *leaf*, and every lookup
-  that finds it requires `parent_id IS NULL` — so the next write creates a second group while the whole
-  outstanding balance stays stranded under the moved row, and the report reads zero with nothing having
-  visibly gone wrong.
-- **exclusion** is the likeliest accident, and clearing it silently restores the exact overstatement the
-  feature exists to remove.
+### Settling and completing
 
-Renaming and re-sorting stay open, because the key is the identity and what the group is called is the
-user's business.
+A repayment rarely equals the expense. Repaid short leaves a real cost, repaid over a real gain, and a
+short repayment cannot be told from an unpaid one by amount, so settling is an explicit act.
 
-**A leaf holding claimed money stays in the group.** A reimbursement stores its claims as amounts against
-transactions and reads the money behind them from whatever sits in a Reimbursable leaf, so moving that
-leaf to another group, or deleting it, takes the money out from under claims that survive — the
-outstanding balance vanishes with nothing visibly wrong. Both are refused while any reimbursement claims
-money in the leaf, completed ones included, since reopening one works on the same allocations. A delete
-whose replacement is another Reimbursable category is allowed, being the one path that keeps the money
-inside the group, and a leaf with nothing claimed in it moves and deletes freely.
+- **A positive residual settles on an expense.** The shortfall is money spent, and this restates the
+  original period.
+- **A negative residual settles on the repayment**, in the period the surplus arrived. This is legal at
+  any size, since every part of an inbound repayment has the same sign, so no mixed-sign split is
+  needed.
+- **Settling is per record**, because moving a residual means rewriting a named transaction's
+  allocations.
+- **Settling draws against this record's claim**, and the claim is reduced with the allocation, so
+  another record's portion of the same row is not consumed.
+- **`complete`** marks the record finished. It moves a residual where there is one and requires a
+  destination category for it. No path closes a record leaving money in the holding group, which keeps
+  the group's balance meaning "still owed".
+- **The completion record stashes the target's prior allocations, category and provenance**, and
+  `reopen` restores from it. It does not recompute an inverse, because the destination may have been
+  edited since.
+- **A record with only repayments is a credit**, named as such in summary text. It completes like a
+  surplus.
 
-**The residual is the feature.** A repayment is not reliably equal to the expense — tickets bought for
-$400 may be sold on for $350 or $450 — so the receivable rarely closes cleanly, and what is left behind
-is the point: repaid short leaves a real cost genuinely incurred, repaid over leaves a genuine gain, and
-not repaid at all leaves money still outstanding. A short repayment and an unpaid one are
-**indistinguishable by amount**, and only the user knows which happened, which is what makes *settling*
-an explicit act rather than something derived.
+### Reminders
 
-**Where a residual lands is decided by its sign, and is not a preference.** The residual is a category
-balance rather than a row, so moving it means rewriting the allocations of a transaction that already
-exists, and there are only two candidates:
-
-- a **positive** residual (repaid short, or never repaid) settles on an **expense** — the shortfall is
-  money genuinely spent, and only an outbound row points the right way to absorb it. This **restates the
-  original period, deliberately**: $125 is what February actually cost once the repayment is final. The
-  restatement is explicit and user-initiated; nothing restates on its own.
-- a **negative** residual (repaid over) settles on the **repayment** — the surplus came back when the
-  overpayment arrived, so booking it into February would claim a gain in a month where nothing had yet
-  gone right.
-
-**Settling is per record, never per position.** "Write off $50 of this category" sounds like the
-simpler control and has nothing to act on: a residual is a category balance, so it can only be moved by
-rewriting a *named transaction's* allocations, and a position-level action could not choose between the
-expense and the repayment without already knowing which expense fell short.
-
-**That asymmetry is why no mixed-sign split is needed, and the rule must not be reached for here.**
-Settling everything on the expense is the uniform-looking trap: a surplus larger than the buyer's own
-share drives the expense's real-category part negative, which `txn_splits.validate_parts` refuses by
-design — and would make relaxing that rule look like a prerequisite for this feature. It is not one.
-Sending a surplus to the repayment is legal at *any* magnitude, because every component of an inbound
-repayment points the same way.
-
-**Completing is the terminal act, and it is not the same thing as settling a residual.** A
-reimbursement that was repaid in full has nothing to move and still has to be finishable, or it sits on
-the open list forever — which is exactly what happened while "already square" was an error rather than
-the easy case, leaving the outcome the whole feature aims at unreachable. So `complete` means *this is
-finished*: it moves a residual where there is one, closes with no change where there is not, and asks
-for a destination category only in the first case. **Any residual must be given a category** — a
-shortfall, a surplus, or a reimbursement nothing was ever repaid against (the write-off, where the
-residual is the whole amount). There is no path that closes a reimbursement leaving money unaccounted
-for in the holding group, which is what keeps the group's balance meaning "still owed". `reopen` reverses either, restoring allocations only
-where any were moved.
-
-**The outstanding report lists open reimbursements only.** A completed one is absent rather than sorted
-to the bottom or filed under a second heading: there is no work left on it, and it stays reachable from
-any of its transactions. The headline total is unaffected either way, because a completed
-reimbursement's claims sum to zero. Note the consequence that its transactions **stay in the holding
-group** — the two sides cancel there, so no report is wrong, and moving them would restate a period for
-no reporting gain.
-
-**The link is the fourth client of `txn_link`** (`kind='reimbursement'`, `services/reimbursements.py`),
-and it observes the primitive's contract: the link never mutates what it joins. `external_ref` carries
-the counterparty, `metadata_json` the per-transaction **claims**, the record's own **reminder date**
-where it has one, and — once finished — the **completion
-record**, which stashes the target's prior allocations, category and provenance so any move can be
-reversed exactly (all null where completing moved nothing). Reversal reads that stash rather than
-recomputing an inverse, because the destination category may have been edited since and re-deriving
-"what it must have been" would launder those edits into the restore.
-
-**A reimbursement covers a *portion* of a transaction, not the transaction — and this is the correction
-that matters most here.** The first implementation made a transaction the unit and enforced "at most one
-reimbursement per transaction". That cannot express two ordinary uses of splits, which exist precisely
-so one ledger row can mean several things:
-
-- one charge split between two friends is **two debts**, each needing its own counterparty, its own
-  repayments and its own settlement;
-- one ATM deposit split across buckets can **repay two different debts at once**.
-
-So a link records a **claim** per transaction — how much of that row's receivable belongs to *this*
-reimbursement — and a row may appear in as many reimbursements as it has receivable money to divide.
-`txn_link_member` is keyed `(link_id, txn_id)`, so several links over one row need no schema change; the
-claims live in the link's `metadata_json`. Do not reintroduce the per-row rule: it reads as a tidy
-invariant and is the thing that made the feature unable to model its own motivating example.
-
-**Claims are stored as amounts, deliberately, not as split-part ids.** `save_split` deletes and
-reinserts a transaction's parts on every edit, so part ids are not stable across an ordinary re-split
-and a claim keyed on one would break the first time an amount was adjusted. A part is still how the
-*user* picks a portion — the picker offers "Dana's ticket $250" — but what is written down is the amount,
-with the part's label kept alongside as display provenance that no arithmetic reads. One consequence:
-when settling draws a residual out of a row holding several shares, *which* allocation shrinks is taken
-in order, so the labels are not evidence of whose money moved. Nothing reported anywhere depends on it —
-the row's receivable, each link's residual and every category total are identical either way.
-
-**The invariant is per portion.** A transaction's claims across all reimbursements may not exceed its
-receivable, and what is left over is **unclaimed** — which is what the outstanding report lists as loose
-and what the link picker offers. Every claim must be non-zero and point the same way as the row's
-receivable. A transaction allocating *nothing* to the group is refused at the join with the next step
-named — split the expense so the part owed back lands in the group — because a member contributing
-nothing to the residual would sit in the report as a row with no action attached.
-
-**The expected total is deliberately not stored, though the first design said it would be.** It is the
-sum of the members' receivable claims, so a stored copy would be a second truth able to drift from the
-ledger the moment a split was edited — the same objection that makes roles derived rather than stated.
-A **free-text note** beside the record's name is likewise gone (removed 2026-09-02; nothing migrates,
-since `metadata_json` is a blob): the name is free text already and appears everywhere the record does,
-while the note reached exactly one surface. Surfacing it more widely to justify it is the wrong
-direction — that is inventing a use for a field after the fact.
-
-**One claim per transaction per reimbursement**, keyed by transaction id, and this shapes the picker.
-Attaching a second portion of a row a reimbursement already covers *replaces* the first rather than adding
-to it — which is what makes re-picking a share a correction instead of a silent doubling, and which is
-why choosing several portions has to mean **one claim for their sum**. The picker is therefore multi-select
-(`ClaimPortionPicker`): a charge divided between two people is routinely owed back in full by one of them,
-and there is no other way to express it.
-
-**The outstanding report is organised by direction, not by tracked-ness.** Left is everything owed back
-— records and unclaimed expenses together — and right is money in that nothing has claimed; a record
-shows its members nested under it, dated by its earliest member so it sorts where the debt started.
-Nesting hangs off the record rather than off an expense because a reimbursement may hold several
-expenses and one payment may be split across two records, and each nested line states *that record's
-claim* rather than the transaction's amount.
-
-**A pairing is offered against both piles, because tracked-or-not is not a property of the money.** When
-a repayment asks what it repays, the candidates are the open reimbursements *and* the untracked
-receivable rows of the opposite sign; picking an untracked one creates the record holding both sides at
-once. Offering only records made the ordinary case unreachable — an expense had to be turned into a
-record by hand before anything could be matched to it, which is a step that exists only because of how
-the data happens to be stored. Two filters keep the list honest: **opposite sign only**, so it never
-proposes a pairing the server would refuse; and **not a record that already claims this row**, since a
-reimbursement holds one claim per transaction and a second would replace the first rather than add to it.
-
-**The sign decides what there is to do with a row, not just what role it plays.** Roles are already
-derived from it; the surfaces follow the same rule. Money out is an expense — the act is saying it is
-coming back, which needs no counterpart to exist yet. Money in repays something — the act is naming
-what, chosen from the open reimbursements. Offering "track this" on both is what stranded every expense
-in one ledger: a repayment tracked on its own became a record holding only a credit, and since **a claim
-belongs to exactly one record**, the expense (already claimed by its own) could never be joined to it.
-Recording a repayment alone stays available, because a credit can genuinely clear before its receipt is
-entered; it is the quiet option rather than a refused one.
-
-Worth stating plainly because it is what makes the asymmetry legible: **tracking is optional.** The
-outstanding total is the open records' residuals plus the unclaimed money in the group, so an untracked
-reimbursable expense is already counted, as loose. A record adds exactly two things the category cannot
-— a counterparty's name, and the pairing that settling requires.
-
-**A reimbursement with no expense recorded is a credit, not an overpayment.** Its only entries are
-repayments, so the arithmetic makes every penny a surplus — reported as one it reads as an error on a
-record whose sole entry *is* that money. It is named separately in the summary text (`Unmatched $240.00
-credit`) rather than as a distinct status, because for every other purpose it genuinely is a surplus and
-completes the same way. The amount named is whatever the surface is describing: a card inside one
-transaction's panel names that row's claim, a list describing the whole record names its total.
-
-**Every figure the panel shows is stated against the row's whole receivable.** A claim's amount is
-otherwise a number with no visible cause: a $250 deposit with $10 claimed reported "$240.00 not yet
-matched" while the reimbursement holding that $10 said nothing about this row at all, so the missing $10
-was unaccounted for anywhere on screen. Each reimbursement card therefore names what it claims *of this
-transaction* (where the row is shared — on a row it covers whole it would only restate the figure beside
-it), the unclaimed line reads "$240.00 of $250.00", and a refused selection names both the sum asked for
-and the standing claim rather than only the limit.
-
-A consequence worth stating, because it looks like a bug from the UI: **a claim is an amount, never a set
-of parts.** Split parts are rewritten wholesale by `save_split`, so binding a claim to one would not
-survive an edit. Once part of a row is claimed, its named portions therefore no longer describe what is
-available — a $250 deposit divided $10/$240 with $10 claimed still lists both portions while only $240 is
-left. Every subset remains a *legal* claim (the limit is the total, not the identity), but none of them is
-"the remainder" by name, so an explicit **everything not yet claimed** option is offered — and only in
-that case, since otherwise it would sit beside a share of identical value.
-
-**Roles are derived, never stored as an independent fact.** A member's role follows the sign of its
-claim — positive is an `expense`, negative a `repayment` — so there is no second truth able to disagree
-with the ledger.
-
-**Pairing stays optional and late.** Reporting works off the category aggregate with nothing linked at
-all; a link is required only to settle, because that is the one operation that has to know which inflow
-closes which expense. One payment may close several expenses (an employer settling a month of receipts),
-so the link is one-to-many throughout and the residual's target is named by the user whenever a role has
-more than one candidate — nothing in the ledger can say which expense fell short.
-
-**Settling draws against this link's own claim, never against the whole row.** A charge whose other
-portion belongs to a different reimbursement must not have that portion consumed, so the limit is the claim,
-and the claim is reduced along with the allocation — which keeps a row's claims and its receivable in
-step whichever of its reimbursements is settled first.
-
-**A reminder is a property of the debt, not of the transaction.** The date a receivable starts being
-asked about lives on the *record* (in the link's `metadata_json`, beside its claims), because one charge
-split between two friends is two debts that may be owed back on two different dates. A `remind_on` on
-`txn` could hold only one of them, which is the same "at most one reimbursement per transaction" mistake
-in another costume.
-
-It follows that **loose receivable money answers only to a household default**: an unclaimed portion has
-no record to carry a date, and the way to give one a date of its own is to track it — which is the thing
-worth doing with a receivable one intends to defer anyway. Storing per-row dates outside the ledger (in
-the per-user preference store, say) was rejected: it would put a ledger fact in a per-user surface that
-does not share the ledger's lifecycle.
-
-**The clock runs from the transaction's date, never from the record's creation.** A reimbursement
-entered today for a February charge is already months old. Dating it from the record would mean that
-tidying up — the one act the feature wants to encourage — postpones the reminder every time, and a
-repayment arriving would restart it, so partial progress would push the reminder further away than no
-progress at all. For the same reason a record's clock starts at its **oldest expense**, not its oldest
-member of any kind.
-
-**A record's reminder has three states, not two.** Absent means *follow the household default*; empty
-means the user switched this record off; a date means they chose it. "Off" and "unset" have to stay
-distinguishable, or turning a reminder off would silently revert the next time the default was
-consulted. The default itself is **ledger-level**, kept in a reserved shared scope of `ui_preference`
-rather than in `db_meta`: it is user-chosen configuration, and `db_meta` is deliberately outside the
-backup payload, so a value stored there would quietly revert to 30 days on restore. Zero disables the
-default and is not a dead end — a record can still carry a date of its own.
-
-**Only money still owed is ever due.** A surplus is a gain waiting to be booked rather than something to
-chase, an unmatched credit is not under-reported spending, and a completed record has no work left. The
-signal exists because an unsettled receivable *is* under-reported spending — the disease the
-flag-and-exclude model was rejected for — so it must not fire on any state where that is not true.
-
-**The signal is grouped by owner, read from `txn.owner_id`.** That column is stamped from the account
-when a row is created and is the axis every owner filter in the app already uses, so a task can
-deep-link to precisely the rows it counted; joining through to `account.owner_id` instead would fork a
-second owner axis that disagrees with the ledger the moment one row's owner is corrected. A record is
-attributed to the owners of its **expense** side — the question a reminder asks is who is owed, so a
-repayment landing on someone else's account does not make the debt theirs — and one whose expenses span
-two people appears under both. Grouping applies only where the household has **more than one personal
-owner**, since a built-in `Shared` owner exists as soon as the Owners page is opened.
-
-**Claims are exclusive, so moving one is its own operation.** What one record holds, another cannot,
-which is why the ordinary picker offers unclaimed money only — and which left a row whose receivable was
-entirely spoken for reachable from nowhere but the record already holding it. The move releases and
-re-attaches in one transaction, in that order: the invariant counts claims across every record, so an
-add before the release would be refused as an over-claim of a row that is merely mid-move.
-
-The mechanisms this one is adjacent to but is *not* — splits, multi-payment purchases, `txn_link`,
-`exclude_from_totals` — are told apart in [`mechanism-index.md`](mechanism-index.md).
+- **The reminder date lives on the record**, since one charge split between two people is two debts
+  with two dates. Unclaimed money follows only the household default.
+- **Three states**: absent follows the default, empty is switched off, a date is chosen.
+- **The default is ledger-level**, in a reserved shared scope of `ui_preference`. Zero disables it.
+- **The clock runs from the oldest expense's transaction date**, so recording a debt late or receiving a
+  part payment does not postpone it.
+- **Only money still owed is due.** A surplus, an unmatched credit and a completed record raise nothing.
+- **The signal is grouped by `txn.owner_id` of the expense side**, and only where the household has more
+  than one personal owner.
 
 ## Open
 
-Decisions still owed on this document's subjects, each naming the live backlog item that will settle it.
-See `AGENTS.md` → *Obstacles and owed decisions*.
+Decisions still owed, each naming the backlog item that will settle it. See `AGENTS.md` → *Obstacles
+and owed decisions*.
 
-- **Number and date display formatting**, and the free-text parse bucket behind it. The ledger-currency
-  half shipped; what remains is cosmetic except for the ledger search's date/amount ambiguity, which is the
-  only correctness risk in it. → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
-- **Account type as a filtering and search axis.** It exists as a rule scope; generalizing it to
-  structured filters — and to an `accttype:` / `acctname:` free-text grammar, the harder half — has not
-  been done. → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
-- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, and an
-  incremental chain. The credentials half is settled.
+- **Number and date display formatting**, and the free-text parse bucket behind it. The correctness
+  risk is the ledger search's date/amount ambiguity.
+  → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
+- **Account type as a filtering and search axis.** It exists as a rule scope only.
+  → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
+- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, an
+  incremental chain, and carrying more than one member's slot in a credentials backup.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
-- **`cash_date` — a second date for cash-basis timing.** Deferred with its attribution method worked
-  out; what decides whether it is worth building is the drill-through question, since an attributed node
-  lists purchases dated outside the displayed period.
+- **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:
+  an attributed node lists purchases dated outside the displayed period.
   → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)
-- **Attachment tiers 2 and 3** — OCR, and itemized lines from a document. Tier 2 is also the named
-  precondition for automatic multi-payment suggestion.
+- **Document text beyond a PDF's text layer**: OCR, and itemized lines from a document. OCR is also the
+  precondition for suggesting multi-payment purchases.
   → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
-- **A data source's account map is invisible and uneditable.** It *is* persisted — `autoSaveProfile`
-  writes `account_assignments` / `account_skips` / `account_new` into the source's `column_map` after
-  every import, and the next import restores them — but only as a side effect of importing, so it can be
-  inspected and corrected nowhere. A watched folder now depends on it (see *Watched import folders*),
-  which makes a mapping nobody can see the thing standing between a parked file and a fixed one. The one
-  thing that keeps it from silting up is that removing an account rewrites it — following the account the
-  transactions went to, or dropping the entry outright, never leaving a blank behind (*Removing an
-  account*). No backlog item — this section owns it.
-- **Marketplace enrichment remainder**: AZAD ingestion ergonomics, enrich re-derive from stored raw
-  values, and the column-centric mapping rework.
+- **A data source's account map cannot be viewed or edited.** It is stored in the source's `column_map`
+  as a side effect of importing, and a watched folder depends on it. Removing an account rewrites it.
+  No backlog item; this section owns it.
+- **Marketplace enrichment remainder**: AZAD ingestion ergonomics, re-deriving enrichment from stored
+  raw values, and the column-centric mapping rework.
   → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)
-- **Import-source field registry remainder**: user-selectable report columns drawn from the registry,
-  and structured `(field, op, value)` rule matchers in place of the shipped "anywhere in the source
-  text" form. Both inherit the no-new-capture constraint and the categorizer's perf contract.
+- **Import-source field registry remainder**: report columns drawn from the registry, and structured
+  `(field, op, value)` rule matchers.
   → [`backlog/import-source-field-registry.md`](backlog/import-source-field-registry.md)
-- **Folding money-movement recognition into the generic rule-suggestion engine**, so a captured
-  categorical field clusters candidates the way a merchant name already does. The account-type scoping
-  this once waited on shipped with migration v13.
+- **Folding money-movement recognition into the rule-suggestion engine.**
   → [`backlog/paypal-money-movement-recognition.md`](backlog/paypal-money-movement-recognition.md)
-- **The recurring pool-load optimization.** The payee filter is applied after a full pool load, so a
-  scoped scan costs what a full one does — now on the path of every category edit. Revisit threshold is
-  roughly 50,000 rows. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
-- **Dedupe follow-ups**, including the prefix-stripping item whose precondition is now met — the open
-  question there is the 4-character prefix floor.
+- **Recurring detection**: the pool-load cost of a scoped scan, the long-cadence bias on stale series,
+  and showing a transfer pair that is not a series.
+  → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+- **Dedupe follow-ups**, including the prefix-stripping item and auto-restore after an undo.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
-- **An online merchant categorizer**, terminating in the existing rule store ("the rule is the cache").
-  Parked design. → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
-- **`clean_name` / merchant-rename: keep or drop.** Dormant code awaiting a decision rather than a
-  design. → [`backlog/merchant-rename-fate.md`](backlog/merchant-rename-fate.md)
-- **The invariants a semantic checker would assert.** A structural database check answers "is the file
-  corrupt" and never "is the data coherent"; which invariants are worth asserting, and whether any can be
-  repaired rather than only reported, is unstarted design.
+- **Rule amount overlaps**: substring containment is compared between matchers only.
+  → [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+- **An online merchant categorizer**, ending in the existing rule store.
+  → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
+- **`clean_name` / merchant rename: keep or drop.**
+  → [`backlog/merchant-rename-fate.md`](backlog/merchant-rename-fate.md)
+- **The invariants a semantic database checker would assert.**
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

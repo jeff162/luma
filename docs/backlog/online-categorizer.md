@@ -2,7 +2,7 @@
 
 > **Status: parked exploratory design, not implemented.** Two related but independent features. Parked
 > 2026-06-16; flagged to resume when rules are in focus. Distinct from the shipped **source-text rule
-> matching** (`match_source_text`, see `docs/data-model.md` → the rule action list) and from the
+> matching** (`match_source_text`, see `docs/data-model.md` → *The matcher*) and from the
 > existing data-driven **Generate Rules** suggester — this is about *cold-start* categorization with no
 > history to learn from.
 

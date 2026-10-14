@@ -2,7 +2,7 @@
 
 > **Status: backlog, and no longer blocked.** The review-model work it waited on has landed: the page's
 > action orchestration moved server-side and its id-parsed grouping is gone, so what is left here to
-> extract is smaller than this file describes (see `docs/data-model.md` → the rule-suggestion sections).
+> extract is smaller than this file describes (see `docs/data-model.md` → *Rule suggestions*).
 > This is otherwise the one remaining piece of the import/export size refactor (backend `import_export/`
 > package; `ImportExport.jsx` 7,595 → 4,354; this file's top-level extractions). Reconciled 2026-06-24.
 
