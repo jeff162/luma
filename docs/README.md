@@ -8,17 +8,6 @@ This lists what is in each document. For which one to read for a given question,
 in the [README](../README.md) and the list in [`AGENTS.md`](../AGENTS.md). Parked work has its own
 index in [`backlog/README.md`](backlog/README.md).
 
-## Using Luma
-
-### [Getting Data into Luma](getting-data-into-luma.md)
-
-- [Choosing how to bring data in](getting-data-into-luma.md#choosing-how-to-bring-data-in)
-- [How imports fit together](getting-data-into-luma.md#how-imports-fit-together)
-- [Keeping the ledger up to date](getting-data-into-luma.md#keeping-the-ledger-up-to-date)
-- [Adding purchase detail from Amazon and PayPal](getting-data-into-luma.md#adding-purchase-detail-from-amazon-and-paypal)
-- [Situations → what to use](getting-data-into-luma.md#situations--what-to-use)
-- [Tags (cross-cutting reporting)](getting-data-into-luma.md#tags-cross-cutting-reporting)
-
 ## Notes for Agents
 
 ### [Agent Profile](agent-profile.md)

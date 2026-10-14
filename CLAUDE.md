@@ -68,7 +68,6 @@ branch state from the injected snapshot.
   capability declarations & the traits that turned out to be Plaid-specific
 - `docs/ui-patterns.md` — UI conventions shared across surfaces. It does not describe or specify any one
   surface, so it is never a reason not to change one; update it only when a convention itself changes
-- `docs/getting-data-into-luma.md` — the *user-facing* "situation → which tool" guide
 - `docs/mechanism-index.md` — the "which mechanism is this?" domain lookup; **consult before recording
   a relationship between transactions** (splits vs multi-payment vs recurring vs reimbursable vs
   `txn_link` vs `exclude_from_totals`) — picking wrong puts bad data in the ledger quietly
