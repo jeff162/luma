@@ -36,6 +36,7 @@ import StoredDocumentsDialog from '../components/StoredDocumentsDialog.jsx'
 import TagsDialog from '../components/TagsDialog.jsx'
 import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx'
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
+import { sessionStore } from '../lib/browserStorage.js'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 
@@ -104,39 +105,29 @@ function loadTransactionsSessionState() {
   if (!transactionsSessionInitialized) {
     transactionsSessionInitialized = true
     if (getTransactionsNavigationType() === 'reload') {
-      try {
-        window.sessionStorage.removeItem(TXN_SESSION_STATE_STORAGE_KEY)
-      } catch { }
+      sessionStore.remove(TXN_SESSION_STATE_STORAGE_KEY)
       return null
     }
   }
-  try {
-    const raw = window.sessionStorage.getItem(TXN_SESSION_STATE_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    return {
-      quickFilter: typeof parsed?.quickFilter === 'string' ? parsed.quickFilter : '',
-      // The amount filter is a page-local slice (like quickFilter) — session-scoped so it survives
-      // navigation but resets on next launch. normalizeAmountFilter drops an inactive/no-op draft.
-      amountFilter: normalizeAmountFilter(parsed?.amountFilter),
-      sortState: normalizeTransactionSortState(parsed?.sortState),
-      attributeFilter: normalizeAttributeFilter(parsed?.attributeFilter),
-    }
-  } catch {
-    return null
+  const parsed = sessionStore.getJson(TXN_SESSION_STATE_STORAGE_KEY)
+  if (!parsed) return null
+  return {
+    quickFilter: typeof parsed.quickFilter === 'string' ? parsed.quickFilter : '',
+    // The amount filter is a page-local slice (like quickFilter) — session-scoped so it survives
+    // navigation but resets on next launch. normalizeAmountFilter drops an inactive/no-op draft.
+    amountFilter: normalizeAmountFilter(parsed.amountFilter),
+    sortState: normalizeTransactionSortState(parsed.sortState),
+    attributeFilter: normalizeAttributeFilter(parsed.attributeFilter),
   }
 }
 
 function saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter }) {
-  if (typeof window === 'undefined') return
-  try {
-    window.sessionStorage.setItem(TXN_SESSION_STATE_STORAGE_KEY, JSON.stringify({
-      quickFilter: quickFilter || '',
-      amountFilter: normalizeAmountFilter(amountFilter),
-      sortState: normalizeTransactionSortState(sortState),
-      attributeFilter: normalizeAttributeFilter(attributeFilter),
-    }))
-  } catch { }
+  sessionStore.setJson(TXN_SESSION_STATE_STORAGE_KEY, {
+    quickFilter: quickFilter || '',
+    amountFilter: normalizeAmountFilter(amountFilter),
+    sortState: normalizeTransactionSortState(sortState),
+    attributeFilter: normalizeAttributeFilter(attributeFilter),
+  })
 }
 
 function defaultColumnConfig() {

@@ -4,16 +4,12 @@
 import { useState } from 'react'
 import { api } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
+import { localStore, sessionStore } from '../../lib/browserStorage.js'
 import { Card, Button, AppConfirmDialog } from '../ui.jsx'
 
 function clearBrowserStoredState() {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.clear()
-  } catch { }
-  try {
-    window.sessionStorage.clear()
-  } catch { }
+  localStore.clear()
+  sessionStore.clear()
 }
 
 export default function DeveloperOptionsSection({ authEnabled }) {

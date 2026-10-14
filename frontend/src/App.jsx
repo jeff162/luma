@@ -63,6 +63,7 @@ import {
   APP_VERSION,
   SUPPORTED_DATA_PROVIDERS,
 } from './lib/appConfig.js'
+import { localStore } from './lib/browserStorage.js'
 
 // Shown in two places that cannot share a component: the dialog below, which renders inside the app,
 // and the error boundary's fallback, which renders in place of it. Sharing the words is what keeps the
@@ -353,13 +354,8 @@ function clampNavPaneWidth(value) {
 }
 
 function readStoredNavPaneWidth() {
-  try {
-    const raw = window.localStorage.getItem(NAV_PANE_WIDTH_STORAGE_KEY)
-    if (!raw) return NAV_PANE_DEFAULT_WIDTH
-    return clampNavPaneWidth(Number(raw))
-  } catch {
-    return NAV_PANE_DEFAULT_WIDTH
-  }
+  const raw = localStore.get(NAV_PANE_WIDTH_STORAGE_KEY)
+  return raw ? clampNavPaneWidth(Number(raw)) : NAV_PANE_DEFAULT_WIDTH
 }
 
 function getLocalProfileStorageKey(dbInstanceId) {
@@ -1213,8 +1209,7 @@ export default function App() {
           // shape the picker/nav already use by folding display_name -> name.
           const profiles = (identsResp?.identities || []).map(i => ({ id: i.id, name: i.display_name }))
           setLocalProfiles(profiles)
-          const storageKey = getLocalProfileStorageKey(status.db_instance_id || '')
-          const rememberedId = storageKey ? window.localStorage.getItem(storageKey) : ''
+          const rememberedId = localStore.get(getLocalProfileStorageKey(status.db_instance_id || ''))
           // An already-established (pwless) session — status.user — means an identity is picked; adopt it
           // without re-selecting. Otherwise auto-select a remembered/only identity (which establishes the
           // session), else stop on the chooser. "No anonymous default": nothing is active without a pick.
@@ -1431,9 +1426,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(NAV_PANE_WIDTH_STORAGE_KEY, String(navPaneWidth))
-    } catch { }
+    localStore.set(NAV_PANE_WIDTH_STORAGE_KEY, String(navPaneWidth))
   }, [navPaneWidth])
 
   function startNavPaneResize(event) {
@@ -1524,12 +1517,7 @@ export default function App() {
     setNavProfileMenu(null)
     setBootPreferences(null)
     setBootPreferenceSubjectId('')
-    const storageKey = getLocalProfileStorageKey(dbInstanceId)
-    if (storageKey) {
-      try {
-        if (profile?.id) window.localStorage.setItem(storageKey, profile.id)
-      } catch { }
-    }
+    if (profile?.id) localStore.set(getLocalProfileStorageKey(dbInstanceId), profile.id)
     hydrateStartupRoute(profile?.id || '', {
       forceFromRoot: forceStartupRoute,
       preferenceSubjectIdOverride: profile?.id || '',
@@ -1638,10 +1626,7 @@ export default function App() {
     const deletedCurrentProfile =
       activeLocalProfile?.id === profile.id || previousLocalProfile?.id === profile.id
     if (deletedCurrentProfile) {
-      const storageKey = getLocalProfileStorageKey(dbInstanceId)
-      if (storageKey) {
-        try { window.localStorage.removeItem(storageKey) } catch { }
-      }
+      localStore.remove(getLocalProfileStorageKey(dbInstanceId))
       setActiveLocalProfile(null)
       setPreviousLocalProfile(null)
       setLocalProfilePickerDismissible(false)

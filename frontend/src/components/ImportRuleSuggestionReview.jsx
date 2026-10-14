@@ -52,6 +52,7 @@ import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal, MatchingTransactionsReport } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
 import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
+import { localStore, sessionStore } from '../lib/browserStorage.js'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
 // Bulk-selection persistence. Deliberately sessionStorage, NOT the durable ui_preference store: the
@@ -67,36 +68,21 @@ function bulkSelectionScopeId(persistKey, selectedOwnerIds, reviewFilter) {
 }
 
 function loadStoredBulkSelection(scopeId) {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.sessionStorage.getItem(BULK_SELECTION_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!parsed || parsed.scopeId !== scopeId) return null
-    return Array.isArray(parsed.ids) ? parsed.ids.map(String) : null
-  } catch {
-    return null
-  }
+  const stored = sessionStore.getJson(BULK_SELECTION_STORAGE_KEY)
+  if (!stored || stored.scopeId !== scopeId) return null
+  return Array.isArray(stored.ids) ? stored.ids.map(String) : null
 }
 
 function saveStoredBulkSelection(scopeId, ids) {
-  if (typeof window === 'undefined') return
-  try {
-    window.sessionStorage.setItem(BULK_SELECTION_STORAGE_KEY, JSON.stringify({ scopeId, ids }))
-  } catch { }
+  sessionStore.setJson(BULK_SELECTION_STORAGE_KEY, { scopeId, ids })
 }
 
 // Scope-aware clear: only drops the slot when it belongs to this context, so entering bulk mode in one
 // context never wipes a selection saved for another.
 function clearStoredBulkSelection(scopeId) {
-  if (typeof window === 'undefined') return
-  try {
-    const raw = window.sessionStorage.getItem(BULK_SELECTION_STORAGE_KEY)
-    if (!raw) return
-    const parsed = JSON.parse(raw)
-    if (scopeId && parsed?.scopeId && parsed.scopeId !== scopeId) return
-    window.sessionStorage.removeItem(BULK_SELECTION_STORAGE_KEY)
-  } catch { }
+  const stored = sessionStore.getJson(BULK_SELECTION_STORAGE_KEY)
+  if (scopeId && stored?.scopeId && stored.scopeId !== scopeId) return
+  sessionStore.remove(BULK_SELECTION_STORAGE_KEY)
 }
 
 // Small text-style buttons (Select all / Clear) used inside the bulk-actions bar.
@@ -237,9 +223,7 @@ export default function ImportRuleSuggestionReview({
   // Migrate the pre-preferences sort choice forward once so existing users keep
   // their review ordering after the setting moved into user preferences.
   const legacySortOrderRef = useRef(
-    typeof window === 'undefined'
-      ? 'row_count'
-      : (normalizeImportRuleSortOrder(window.localStorage.getItem(IMPORT_RULE_SORT_STORAGE_KEY)) || 'row_count'),
+    normalizeImportRuleSortOrder(localStore.get(IMPORT_RULE_SORT_STORAGE_KEY)) || 'row_count',
   )
   const availableOwners = owners
   const showOwnerFilter = availableOwners.length > 1
@@ -637,8 +621,7 @@ export default function ImportRuleSuggestionReview({
   }, [selectedOwnerIds, onOwnerFilterOpenChange])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(IMPORT_RULE_SORT_STORAGE_KEY, sortOrder)
+    localStore.set(IMPORT_RULE_SORT_STORAGE_KEY, sortOrder)
   }, [sortOrder])
 
   function handleSortOrderChange(nextSortOrder) {

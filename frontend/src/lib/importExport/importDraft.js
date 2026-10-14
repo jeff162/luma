@@ -22,6 +22,7 @@ import {
   extractImportedCategorySettings,
 } from './importedCategorySettings.js'
 import { inferFilenamePattern } from '../importColumnInference.js'
+import { localStore } from '../browserStorage.js'
 
 export function getBlankImportSnapshot() {
   return {
@@ -119,17 +120,8 @@ export function getImportDraftStorageKey(instanceId, subjectId) {
 }
 
 export function loadSavedImportDraftRecord(instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return null
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return null
-    const saved = JSON.parse(raw)
-    if (!saved?.snapshot) return null
-    return saved
-  } catch {
-    return null
-  }
+  const saved = localStore.getJson(getImportDraftStorageKey(instanceId, subjectId))
+  return saved?.snapshot ? saved : null
 }
 
 export function loadSavedImportDraft(previewLike, instanceId, subjectId) {
@@ -140,38 +132,25 @@ export function loadSavedImportDraft(previewLike, instanceId, subjectId) {
   return saved.snapshot
 }
 
+// Both saves answer with the record only when it was stored, so a caller never shows as saved a draft
+// that a reload would not bring back.
 export function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return
-  try {
-    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
-    const record = {
-      headerFingerprint,
-      filenamePattern,
-      templateFilename: previewLike?.filename || '',
-      templateFileHash: previewLike?.file_content_hash || '',
-      snapshot,
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(record))
-    return record
-  } catch { }
+  const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+  return saveImportDraftRecord({
+    headerFingerprint,
+    filenamePattern,
+    templateFilename: previewLike?.filename || '',
+    templateFileHash: previewLike?.file_content_hash || '',
+    snapshot,
+  }, instanceId, subjectId)
 }
 
 export function saveImportDraftRecord(record, instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return null
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(record))
-    return record
-  } catch { }
+  return localStore.setJson(getImportDraftStorageKey(instanceId, subjectId), record) ? record : null
 }
 
 export function clearSavedImportDraft(instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return
-  try {
-    window.localStorage.removeItem(storageKey)
-  } catch { }
+  localStore.remove(getImportDraftStorageKey(instanceId, subjectId))
 }
 
 export function buildProfileBodyFromSnapshot(name, draftRecord) {

@@ -16,6 +16,8 @@
  * reconciles the cache to it.
  */
 
+import { localStore } from './browserStorage.js'
+
 export const THEME_PREF_KEY = 'ui.appearance.theme'
 export const THEME_CACHE_KEY = 'luma.theme'
 // Records which backend database the cached choice belongs to (see reconcileThemeCacheForDb).
@@ -68,9 +70,7 @@ export function applyTheme(choice) {
   if (typeof document !== 'undefined') {
     document.documentElement.setAttribute('data-theme', effective)
   }
-  try {
-    window.localStorage.setItem(THEME_CACHE_KEY, normalized)
-  } catch { /* private mode: skip the cache, first paint just uses the OS default next time */ }
+  localStore.set(THEME_CACHE_KEY, normalized)
   return effective
 }
 
@@ -84,15 +84,8 @@ export function applyTheme(choice) {
 // resetting, so existing setups keep their theme.
 export function reconcileThemeCacheForDb(dbInstanceId) {
   const dbId = dbInstanceId || ''
-  let cachedDbId = null
-  try {
-    cachedDbId = window.localStorage.getItem(THEME_CACHE_DB_KEY)
-  } catch {
-    return
-  }
+  const cachedDbId = localStore.get(THEME_CACHE_DB_KEY)
   if (cachedDbId === dbId) return
   if (cachedDbId) applyTheme(THEME_SYSTEM)
-  try {
-    window.localStorage.setItem(THEME_CACHE_DB_KEY, dbId)
-  } catch { /* private mode: best-effort; the cache just stays untagged */ }
+  localStore.set(THEME_CACHE_DB_KEY, dbId)
 }

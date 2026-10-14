@@ -19,6 +19,7 @@ import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
+import { localStore, sessionStore } from '../lib/browserStorage.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -1728,12 +1729,12 @@ export default function Accounts() {
   const [tab, setTabState] = useState(() => {
     const fromUrl = searchParams.get('tab')
     if (ACCOUNT_TABS.some(([id]) => id === fromUrl)) return fromUrl
-    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(ACCOUNTS_TAB_STORAGE_KEY) : null
+    const stored = sessionStore.get(ACCOUNTS_TAB_STORAGE_KEY)
     return ACCOUNT_TABS.some(([id]) => id === stored) ? stored : 'accounts'
   })
   function setTab(next) {
     setTabState(next)
-    try { sessionStorage.setItem(ACCOUNTS_TAB_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+    sessionStore.set(ACCOUNTS_TAB_STORAGE_KEY, next)
   }
   // Honor a `?tab=` deep-link, then strip it so it doesn't linger in the URL or override later manual tab
   // switches. Runs on arrival and also if a new `?tab=` link is followed while the page is already mounted.
@@ -1742,7 +1743,7 @@ export default function Accounts() {
     if (!fromUrl) return
     if (ACCOUNT_TABS.some(([id]) => id === fromUrl)) {
       setTabState(fromUrl)
-      try { sessionStorage.setItem(ACCOUNTS_TAB_STORAGE_KEY, fromUrl) } catch { /* sessionStorage unavailable — non-fatal */ }
+      sessionStore.set(ACCOUNTS_TAB_STORAGE_KEY, fromUrl)
     }
     const next = new URLSearchParams(searchParams)
     next.delete('tab')
@@ -1881,20 +1882,12 @@ export default function Accounts() {
   })
 
   useEffect(() => {
-    const storageKey = getAccountsSectionsStorageKey(dbInstanceId, userId)
     const prefValue = preferences?.[ACCOUNTS_SECTIONS_PREF_KEY]
     const nextSectionState = isObjectLike(prefValue) ? prefValue : {}
 
-    if (!isObjectLike(prefValue) && storageKey) {
-      try {
-        const raw = window.localStorage.getItem(storageKey)
-        const parsed = raw ? JSON.parse(raw) : null
-        if (isObjectLike(parsed)) {
-          Object.assign(nextSectionState, parsed)
-        }
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
+    if (!isObjectLike(prefValue)) {
+      const stored = localStore.getJson(getAccountsSectionsStorageKey(dbInstanceId, userId))
+      if (isObjectLike(stored)) Object.assign(nextSectionState, stored)
     }
 
     if (nextSectionState.accountOwners === undefined) {
@@ -1902,15 +1895,8 @@ export default function Accounts() {
       if (typeof legacyPrefValue === 'boolean') {
         nextSectionState.accountOwners = legacyPrefValue
       } else {
-        const legacyStorageKey = getLegacyAccountOwnersStorageKey(dbInstanceId, userId)
-        if (legacyStorageKey) {
-          try {
-            const raw = window.localStorage.getItem(legacyStorageKey)
-            if (raw !== null) nextSectionState.accountOwners = raw === 'true'
-          } catch {
-            // Ignore storage failures in restricted environments.
-          }
-        }
+        const raw = localStore.get(getLegacyAccountOwnersStorageKey(dbInstanceId, userId))
+        if (raw !== null) nextSectionState.accountOwners = raw === 'true'
       }
     }
 
@@ -1919,32 +1905,20 @@ export default function Accounts() {
 
     // Load collapsed group state (which parent accounts have their children hidden).
     const collapsedPrefValue = preferences?.[ACCOUNTS_COLLAPSED_PREF_KEY]
-    const collapsedStorageKey = getAccountsCollapsedStorageKey(dbInstanceId, userId)
     let savedCollapsed = Array.isArray(collapsedPrefValue) ? collapsedPrefValue : null
-    if (!savedCollapsed && collapsedStorageKey) {
-      try {
-        const raw = window.localStorage.getItem(collapsedStorageKey)
-        const parsed = raw ? JSON.parse(raw) : null
-        if (Array.isArray(parsed)) savedCollapsed = parsed
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
+    if (!savedCollapsed) {
+      const stored = localStore.getJson(getAccountsCollapsedStorageKey(dbInstanceId, userId))
+      if (Array.isArray(stored)) savedCollapsed = stored
     }
     setCollapsedGroups(new Set(savedCollapsed || []))
     setCollapsedGroupsLoaded(true)
 
     // Load sort preference — active key plus each column's last-used direction.
     const sortPrefValue = preferences?.[ACCOUNTS_SORT_PREF_KEY]
-    const sortStorageKey = getAccountsSortStorageKey(dbInstanceId, userId)
     let savedSort = isObjectLike(sortPrefValue) ? sortPrefValue : null
-    if (!savedSort && sortStorageKey) {
-      try {
-        const raw = window.localStorage.getItem(sortStorageKey)
-        const parsed = raw ? JSON.parse(raw) : null
-        if (isObjectLike(parsed)) savedSort = parsed
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
+    if (!savedSort) {
+      const stored = localStore.getJson(getAccountsSortStorageKey(dbInstanceId, userId))
+      if (isObjectLike(stored)) savedSort = stored
     }
     if (savedSort?.key) {
       const nextSortKey = ACCOUNT_SORT_KEYS.includes(savedSort.key) ? savedSort.key : 'type'
@@ -1969,14 +1943,7 @@ export default function Accounts() {
   // Accounts-page section collapse state is profile-scoped UI state, so one person's workspace shape restores cleanly without affecting others.
   useEffect(() => {
     if (!sectionStateLoaded) return
-    const storageKey = getAccountsSectionsStorageKey(dbInstanceId, userId)
-    if (storageKey) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(sectionExpandedState))
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
-    }
+    localStore.setJson(getAccountsSectionsStorageKey(dbInstanceId, userId), sectionExpandedState)
     setPreference(ACCOUNTS_SECTIONS_PREF_KEY, sectionExpandedState)
   }, [dbInstanceId, userId, sectionExpandedState, sectionStateLoaded, setPreference])
 
@@ -1984,14 +1951,7 @@ export default function Accounts() {
   useEffect(() => {
     if (!collapsedGroupsLoaded) return
     const collapsed = [...collapsedGroups]
-    const storageKey = getAccountsCollapsedStorageKey(dbInstanceId, userId)
-    if (storageKey) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(collapsed))
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
-    }
+    localStore.setJson(getAccountsCollapsedStorageKey(dbInstanceId, userId), collapsed)
     setPreference(ACCOUNTS_COLLAPSED_PREF_KEY, collapsed)
   }, [dbInstanceId, userId, collapsedGroups, collapsedGroupsLoaded, setPreference])
 
@@ -2001,14 +1961,7 @@ export default function Accounts() {
   useEffect(() => {
     if (!sortLoaded) return
     const value = { key: sortKey, dir: sortDir, directions: sortDirections }
-    const storageKey = getAccountsSortStorageKey(dbInstanceId, userId)
-    if (storageKey) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(value))
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
-    }
+    localStore.setJson(getAccountsSortStorageKey(dbInstanceId, userId), value)
     setPreference(ACCOUNTS_SORT_PREF_KEY, value)
   }, [dbInstanceId, userId, sortDirections, sortKey, sortDir, sortLoaded, setPreference])
 

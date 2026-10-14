@@ -26,16 +26,17 @@ import {
   RAIL_LETTERS, emptyRulesFacets, activeRulesFacetCount, filterRules,
   buildSectionedRuleItems, presentSectionLetters, ruleSectionLetter, sectionHeaderIndexByLetter,
 } from '../lib/rulesFilter.js'
+import { sessionStore } from '../lib/browserStorage.js'
 
 // Search text + facet selections are session-scoped (persist while the app is open, reset on next launch)
 // — deliberately independent of the app-wide, cross-page FilterContext. Mirrors the Transactions
 // quickFilter's session persistence.
 const RULES_SESSION_KEY = 'rules.viewState'
 function loadRulesSession() {
-  try { return JSON.parse(sessionStorage.getItem(RULES_SESSION_KEY)) || {} } catch { return {} }
+  return sessionStore.getJson(RULES_SESSION_KEY) || {}
 }
 function saveRulesSession(state) {
-  try { sessionStorage.setItem(RULES_SESSION_KEY, JSON.stringify(state)) } catch { /* storage may be unavailable */ }
+  sessionStore.setJson(RULES_SESSION_KEY, state)
 }
 
 function describeRule(rule, owners, accounts) {

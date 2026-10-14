@@ -41,6 +41,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
+import { sessionStore } from '../lib/browserStorage.js'
 
 const CADENCE_LABELS = {
   weekly: 'Weekly',
@@ -785,7 +786,7 @@ export default function Recurring() {
   const [signalData, setSignalData] = useState(null)
   const [signalKind, setSignalKind] = useState('all')
   const [view, setViewState] = useState(() => {
-    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(VIEW_STORAGE_KEY) : null
+    const stored = sessionStore.get(VIEW_STORAGE_KEY)
     return VIEW_IDS.includes(stored) ? stored : VIEW_SERIES
   })
   const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
@@ -909,7 +910,7 @@ export default function Recurring() {
 
   const setView = useCallback((next) => {
     setViewState(next)
-    try { sessionStorage.setItem(VIEW_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+    sessionStore.set(VIEW_STORAGE_KEY, next)
   }, [])
 
   // Signals recompute from the ledger on every read, so anything that could change one — an action on a

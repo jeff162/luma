@@ -27,6 +27,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+import { localStore } from '../lib/browserStorage.js'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -713,11 +714,10 @@ export default function Categories() {
   // Left-panel width is seeded from the saved preference (with localStorage as a legacy fallback).
   useEffect(() => {
     const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
-    const widthStorageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
     if (Number.isFinite(widthPref) && widthPref > 0) {
       setLeftPanelWidth(widthPref)
-    } else if (widthStorageKey) {
-      const savedWidth = Number(JSON.parse(window.localStorage.getItem(widthStorageKey) || 'null'))
+    } else {
+      const savedWidth = Number(localStore.getJson(getLeftPanelWidthStorageKey(dbInstanceId, userId)))
       if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
     }
   }, [dbInstanceId, preferences, userId])
@@ -871,14 +871,7 @@ export default function Categories() {
 
   // Persist only on drag-end (not on every move) so a resize is one preference write, not hundreds.
   function persistLeftPanelWidth(width) {
-    const storageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
-    if (storageKey) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(width))
-      } catch {
-        // Ignore storage failures in environments that block localStorage.
-      }
-    }
+    localStore.setJson(getLeftPanelWidthStorageKey(dbInstanceId, userId), width)
     setPreference(LEFT_PANEL_WIDTH_PREF_KEY, width)
   }
 

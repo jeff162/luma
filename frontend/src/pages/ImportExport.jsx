@@ -121,6 +121,7 @@ import {
 } from '../lib/importExport/importedCategorySettings.js'
 import { mergePreviewAmounts, usePreviewAmounts } from '../lib/importExport/previewAmounts.js'
 import { runImportWithProgress } from '../lib/importExport/importRunProgress.js'
+import { sessionStore } from '../lib/browserStorage.js'
 import {
   guessNewAccountTypeFromName,
   findExactAccountNameMatch,
@@ -4370,12 +4371,12 @@ export default function ImportExport() {
   const [tab, setTabState] = useState(() => {
     const fromUrl = tabFromLink(searchParams.get('tab'))
     if (fromUrl) return fromUrl
-    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(IMPORT_TAB_STORAGE_KEY) : null
+    const stored = sessionStore.get(IMPORT_TAB_STORAGE_KEY)
     return IMPORT_TABS.some(([id]) => id === stored) ? stored : 'import'
   })
   const setTab = useCallback((next) => {
     setTabState(next)
-    try { sessionStorage.setItem(IMPORT_TAB_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+    sessionStore.set(IMPORT_TAB_STORAGE_KEY, next)
   }, [])
   // What the import history is being opened *on*: `{ batchIds, connectionIds }` naming the cards a
   // finished import, a sync, or a "to review" pill is about, which the Data Import tab opens, scrolls to
