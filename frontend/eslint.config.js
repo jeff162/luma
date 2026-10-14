@@ -1,4 +1,4 @@
-// Flat-config ESLint setup (eslint 9+). The previous .eslintrc was never run by any
+// Flat-config ESLint setup (eslint 9). The previous .eslintrc was never run by any
 // npm script; `lint:frontend` now invokes eslint here in addition to the custom
 // comment-quality checker (scripts/check-comments.js).
 //
@@ -6,6 +6,9 @@
 // (catches stale-closure / missing-dep bugs in useEffect, useMemo, etc. — the very bug
 // that hid the Tasks nav badge) and react-refresh (warns when a non-component export
 // in a .jsx module would break Vite HMR).
+//
+// eslint stays on 9 until eslint-plugin-react and eslint-plugin-jsx-a11y list eslint 10 in their
+// peer ranges; check with `npm view <plugin> peerDependencies.eslint` before bumping it.
 
 import js from '@eslint/js'
 import react from 'eslint-plugin-react'
