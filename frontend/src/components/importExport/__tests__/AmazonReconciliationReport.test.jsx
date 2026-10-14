@@ -67,8 +67,8 @@ const PAYLOAD = {
   duplicate_review: [{ link_id: 'L-dr', order: txn('o-dr', '2026-03-04', 17, 'Order Dup Review', 'Amazon'), mergeable: true,
     charges: [txn('c-f1', '2026-03-01', 17, 'AMZN E'), txn('c-f2', '2026-03-12', 17, 'AMZN F')] }],
   amazon_unmatched: [
-    { link_id: 'L-u', order: txn('o-u', '2026-03-20', 25, 'Order Unmatched', 'Amazon'), reviewed: false },
-    { link_id: 'L-u2', order: txn('o-u2', '2026-03-01', 26, 'Order Acknowledged', 'Amazon'), reviewed: true },
+    { link_id: 'L-u', order: { ...txn('o-u', '2026-03-20', 25, 'Order Unmatched', 'Amazon'), item_count: 1 }, reviewed: false },
+    { link_id: 'L-u2', order: { ...txn('o-u2', '2026-03-01', 26, 'Order Acknowledged', 'Amazon'), item_count: 1, is_split: true }, reviewed: true },
   ],
   payment_unmatched: [
     { ...txn('p-far', '2026-02-01', 11, 'AMZN far'), reviewed: false },
@@ -196,6 +196,12 @@ describe('Amazon reconciliation report — row actions', () => {
     renderReport()
     await userEvent.click(within(rowFor('Order Matched')).getByRole('button', { name: 'Split…' }))
     expect(await screen.findByText('Split editor for Order Matched')).toBeTruthy()
+  })
+
+  it('offers no split on a one-item order unless it is already split', () => {
+    renderReport()
+    expect(within(rowFor('Order Unmatched')).queryByRole('button', { name: 'Split…' })).toBeNull()
+    expect(within(rowFor('Order Acknowledged')).getByRole('button', { name: 'Edit split…' })).toBeTruthy()
   })
 })
 

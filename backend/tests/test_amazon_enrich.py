@@ -295,6 +295,8 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertTrue(all(c["matched"] is False for c in entry["charges"]))
         # The order side carries provenance from its own import file.
         self.assertEqual(entry["order"]["source"]["filename"], "amazon.csv")
+        # Item lines, not units: the second line's quantity of two is still one thing to categorize.
+        self.assertEqual(entry["order"]["item_count"], 2)
         # The duplicated copies are not double-shown as unaccounted charges.
         self.assertEqual([c["id"] for c in report["payment_unmatched"] if c["id"] in (c1, c2)], [])
 

@@ -94,7 +94,8 @@ The steps are the same for both:
    transaction that paid for it, and that transaction is moved out of the totals so the purchase counts
    once. The import's card says when a match needs a decision.
 4. **Use the detail.** The order or PayPal transaction is the one to categorize. An Amazon order with
-   item detail opens in the split editor with one line per item already filled in.
+   item detail opens in the split editor with one line per item, and **Use items** fills them in from
+   the order's items.
 
 Overlapping exports are safe, and so is importing before the card or bank account that paid: matching
 runs again when that side arrives.

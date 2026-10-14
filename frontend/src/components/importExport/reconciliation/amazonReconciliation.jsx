@@ -105,9 +105,12 @@ function DuplicateCharges({ charges, disabled, onDiscard }) {
 // The per-row way into the split editor. Named for the row's state, like the row menu's equivalent:
 // an order already split is being adjusted, not divided again. Offered on the two kinds where the
 // order is settled enough that classifying it is the next job — a duplicate or a pending suggestion
-// wants resolving first, and a reverse-scan charge is not an order at all.
+// wants resolving first, and a reverse-scan charge is not an order at all. Not offered on an order known
+// to hold one item, which has nothing to divide — the register's Split… still covers the rare exception.
+// An order with no item detail (`item_count` 0) keeps it, since its contents are unknown.
 function SplitAction({ order, busy, onOpen }) {
   if (!order?.id) return null
+  if (!order.is_split && order.item_count === 1) return null
   return (
     <Button
       small

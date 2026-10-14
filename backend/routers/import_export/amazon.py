@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from backend.app_logging import log_error
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
+from backend.json_utils import safe_json_dict
 from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.categorizer import category_lock_for
@@ -57,6 +58,7 @@ from backend.services.amazon_import import (
     OrderDisposition,
     classify_order,
     merge,
+    parse_item_evidence,
     parse_item_rows,
     parse_order_rows,
     read_export,
@@ -1353,6 +1355,10 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
         order_ids = txn_links.member_txn_ids(conn, lk["id"], role="order")
         charge_ids = txn_links.member_txn_ids(conn, lk["id"], role="charge")
         order = _txn_summary(conn, order_ids[0]) if order_ids else None
+        if order:
+            # How many item lines the order's evidence carries (0 when only the orders file was imported),
+            # so the report can tell a one-item order — nothing to divide — from one worth splitting.
+            order["item_count"] = len(parse_item_evidence(safe_json_dict(order["import_evidence_json"])))
         if order and order["date"]:
             order_dates.append(order["date"])
         for cid in charge_ids:

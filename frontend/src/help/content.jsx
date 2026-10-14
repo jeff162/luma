@@ -962,7 +962,8 @@ export const HELP_TOPICS = [
         <p>
           Where the transaction came from a marketplace order whose per-item detail was imported
           (an Amazon order with its <HelpLink to="/help/amazon-import">Items file</HelpLink>), the
-          editor opens with one line per item already filled in. It is opened on the order&apos;s own
+          editor opens with one line per item, below a list of the items and each one&apos;s share of what
+          was paid. It is opened on the order&apos;s own
           transaction, the one in the Amazon account, with <strong>Split&hellip;</strong> like any
           other.
           Each item's list price differs from the item's share of the transaction, because a
@@ -3090,8 +3091,8 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>Use the detail.</strong> The order or PayPal transaction is the one to categorize.
-            An Amazon order with item detail opens in the split editor with one line per item already
-            filled in &mdash; see{' '}
+            An Amazon order with item detail opens in the split editor with one line per item, and{' '}
+            <strong>Use items</strong> fills them in &mdash; see{' '}
             <HelpLink to="/help/transaction-splits#imported-order">splitting an imported
               order</HelpLink>.
           </li>
@@ -3162,7 +3163,7 @@ export const HELP_TOPICS = [
               available when splitting the order across categories, so the individual items can be
               categorized rather than the whole order carrying a single category. When item detail is
               present the <HelpLink to="/help/transaction-splits#imported-order">split editor</HelpLink> opens with
-              one line per item and the amounts filled in from the items file.
+              one line per item, and <strong>Use items</strong> fills in the amounts from the items file.
             </p>
           </li>
           <li>Repeat for each year you want to bring in.</li>
