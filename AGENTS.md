@@ -147,7 +147,7 @@ A reference doc describes the system as it is and the reason for each design cho
 
 Two kinds of fact still need a home, and where they go depends on which of two shapes the doc is.
 
-**A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`). It ends with both sections below.
+**A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`, `scale-and-limits.md`). It ends with both sections below.
 
 **A multi-topic reference doc collects many** (`data-model.md`, `architecture.md`). There, an **obstacle stays inline, beside the subject it is about**, and the doc carries **only an `## Open` section**, because a decision still owed has no natural inline home and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*).
 

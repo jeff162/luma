@@ -421,8 +421,8 @@ def _build_tasks(request: Request | None) -> list[dict]:
             })
 
         # Amazon imports whose reconciliation has actionable items — a duplicate charge to merge/discard, or a
-        # split-shipment suggestion to accept/dismiss. Computed from the on-demand reconciliation per Amazon
-        # batch (few in practice); plain "No charge found" is intentionally excluded (nothing to resolve).
+        # split-shipment suggestion to accept/dismiss. One count per Amazon batch, cached against the
+        # reconciliation epoch; plain "No charge found" is intentionally excluded (nothing to resolve).
         from backend.routers.import_export.amazon import BATCH_SOURCE_KIND, reconciliation_attention_count
         amazon_batches = conn.execute(
             "SELECT id FROM import_batch WHERE source_kind = ? AND status = 'completed'",

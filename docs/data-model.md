@@ -989,8 +989,8 @@ finding.
 - **`ignored_count`**: rows turned away as this source restating its own earlier import, which is what
   an overlapping re-export mostly is. They are counted and not written to the duplicate report
   (`is_settled_source_restatement`, `prune_source_restatements`), because the transaction each
-  duplicates is already the record and storing them dominated the report's size
-  (`scale-and-limits.md`). It is kept apart from `deduped_count` so that count's contract holds.
+  duplicates is already the record and storing them dominated the report's size. It is kept apart
+  from `deduped_count` so that count's contract holds.
 - **`updated_count`**: rows that corrected a transaction already held. The corrected row does not say it
   moved, so the card is the only record.
 - **`rejected_count`**: rows refused for a reason other than duplication (see

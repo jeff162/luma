@@ -443,7 +443,8 @@ export function detailRangeStableKey(mode, selectedMonth) {
 //   year  → the anchor's calendar year
 //   all   → the full span the chart is showing (its first..last month), so the list, the footer
 //           count/total (summed from the same trend rows), and the chart always agree — even where the
-//           trend itself is capped (category 36mo / account 60mo) below the account's true history.
+//           trend itself is capped below the true history (the category drawer's month window; an
+//           account's trend is its full history).
 // Month-end upper bounds use `${month}-31`: transaction dates compare lexically, so it includes every
 // day of that month without needing the real last day.
 export function computeDetailRange(mode, selectedMonth, trend) {

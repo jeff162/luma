@@ -4731,7 +4731,7 @@ def list_batches():
         # Cardinality is one row per imported *file* (not per transaction), so returning all of them is
         # tolerable: the *rendered* history is bounded per source by the client's recency window and its
         # by-year archive. Re-bounding the fetch itself waits on the consumers that read this list as an
-        # aggregate over all history — see docs/scale-and-limits.md -> Import history: retention.
+        # aggregate over all history — see docs/scale-and-limits.md -> Obstacles.
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count,

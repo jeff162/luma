@@ -314,7 +314,7 @@ asked **before** the provider call because a claim is single-use — see `buildi
 ### 5. Streaming backup — export *and* restore  ✅ *done 2026-08-23, less the documents phase*
 
 The settled design is in `data-model.md` → *Backups* (the envelope) and `scale-and-limits.md` →
-*Bulk operations must not accumulate* (the measurement that shaped it).
+*Bulk operations must not accumulate* (the finding that shaped it).
 
 The export assembles the whole payload as a Python structure, serializes it to one JSON string, zips that
 into a `BytesIO` and returns it as a single yield; restore is the same defect mirrored — read whole,

@@ -1,12 +1,9 @@
 # Scale, limits and behavior at volume
 
-What breaks as a ledger grows, what is deliberately capped, and which limits were accepted rather than
-fixed. A personal ledger accumulates for years — hundreds of thousands of rows is an ordinary end
-state, not a stress case — so "it works on my data" is never the question. The question is what the
-cost is *proportional to*.
+Which caps exist on purpose, what each costs, and when to revisit it. A personal ledger accumulates for
+years, so the question about any cost is what it is proportional to.
 
-**This document is the register, not the mechanism.** Each bound is implemented somewhere that owns its
-own design, and those places are not repeated here:
+The mechanism behind each bound is owned elsewhere:
 
 | Bound | Owned by |
 | --- | --- |
@@ -14,11 +11,7 @@ own design, and those places are not repeated here:
 | Provider request budgets, pacing and pausing | `building-a-connector.md` → *Request budgets and pausing* |
 | Backup/restore streaming and the NDJSON layout | `data-model.md` → *Backups* |
 | The list `limit` contract | `data-model.md` → *Totals come from the server* |
-| Windowing rules a list must not break | `ui-patterns.md` |
-
-What has no other home is the part below: **which caps exist on purpose, what each costs, and under
-what condition it should be revisited.** That question is unfindable when its answers are distributed,
-which is why it is collected.
+| Windowing and paging rules for a list | `ui-patterns.md` → *Tables and lists* |
 
 ## Contents
 
@@ -37,318 +30,145 @@ which is why it is collected.
 
 ## Three independent bounds, and the rule they share
 
-A dataset can overwhelm the app in three separate places, and fixing one does nothing for the others:
+A dataset can overwhelm the app in three places, and bounding one does nothing for the others:
 
-- **The fetch** — how many rows leave the database. Bounded by pagination with server-side sort.
-- **The DOM** — how many rows become real nodes. Bounded by render windowing.
-- **Working memory** — how much a bulk operation holds at once. Bounded by streaming.
+- **The fetch**: how many rows leave the database. Bounded by pagination with server-side sort.
+- **The DOM**: how many rows become real nodes. Bounded by render windowing.
+- **Working memory**: how much a bulk operation holds at once. Bounded by streaming.
 
-They are genuinely independent: a paginated list can still mount every loaded row, and a windowed list
-can still be fed by an unbounded fetch. What connects them is one rule.
-
-> **Nothing may accumulate a whole dataset** — not as a SQL result, not as DOM nodes, not as a Python
-> list. Every one of the three defects below was an accumulation that looked bounded because the data
-> was small when it was written.
+> **Nothing may accumulate a whole dataset**: not as a SQL result, not as DOM nodes, not as a Python
+> list, and not as a stored per-row record that grows with the ledger.
 
 ## Fetch limits, and the caps that remain on purpose
 
-**The 200-row default page is a safety rail, and it stays.** `txn` has no inherent size bound, so an
-unbounded *default* would be the worse failure — a memory and render blowup rather than a bounded page
-whose `total` tells the caller the real size. Unbounded is only ever the explicit `limit=0` opt-in, and
-only for scopes the caller already knows are small.
+`/transactions` returns a bounded default page because `txn` has no inherent size bound; `limit=0` is
+the explicit opt-in for a scope known to be small. `getTransactions` (`lib/api.js`) warns in development
+when a call that omitted `limit` comes back truncated, so no periodic audit of callers is owed.
 
-**The standing audit is a runtime warning, not a review.** A `getTransactions` call that omits `limit`
-and receives a truncated page warns in development. That is deliberately the whole audit: a silent
-truncation regression is caught while it is being written rather than found later by inspection, so no
-periodic sweep is owed.
-
-**Accepted caps.** Each of these truncates something on purpose. They are listed with what the user
-actually loses and what would have to be observed before revisiting:
+Each cap below truncates something on purpose.
 
 | Cap | What it costs | Revisit when |
 | --- | --- | --- |
-| Detail-drawer trend windows — **36 months** (category), **60 months** (account) | The drawer's **"All time"** range derives its window from the charted span, so on a scope older than 3 or 5 years "All time" means "the last 36 or 60 months", and the footer count and total reflect only that window. **The label over-promises.** The transaction *list* is not truncated — it pages the fetched window. | Somebody actually reads "All time" as lifetime and is misled. The fix is true-lifetime aggregates at the cost of a full-history scan — a design decision, not a bug fix. |
-| Trend-length server caps — **120 months** (monthly-trend), **240 months** (monthly-by-group) | Mostly theoretical: the rolling clause applies only to a *no-scope* trend request, and the Dashboard's own "all time" passes an explicit ancient start date, bypassing it. Only the generic no-date, no-account trend is bounded. | A trend view longer than ten years with no scope is ever surfaced. |
-| Money-movement Type preview — **1000 rows** | A source with more than 1000 transactions of one type shows a **preview undercount**. Informational only — the panel does not perform the recategorization — and it passes an explicit limit, so the dev warning correctly exempts it. | It needs one account with 1000+ transactions of a single type. Fix path: paginate, or compute the affected/not-affected split server-side. |
-| Trashed-transaction list — **200 rows per Trash section** | A larger trash is not visible all at once; the section heading states the whole count and the list says when it is showing only the most recent. Still recoverable; trash is transient. | Low stakes throughout. Fix path: paginate, or "load more". |
-
-**Server-side sort is not optional on a paginated list.** A client-side sort cannot reach rows past the
-fetch cursor, so reversing the sort on a long list silently sorts the wrong subset. Every scoped list
-therefore folds `sort_by`/`sort_dir` into each page.
+| Category detail drawer: the trend window `CategoryDetail` requests | With no date filter from the page, the drawer's *All time* range is that many months ending at the category's latest activity, and its footer count and total cover only that window. The transaction list pages the same window. | Someone reads *All time* as lifetime and is misled. Lifetime aggregates cost a full-history scan. |
+| The `months` ceiling on `monthly-by-group` | The endpoint always applies its rolling window, so the Trends view reaches back no further than the ceiling. | A ledger outgrows the ceiling. |
+| The `months` ceiling on `monthly-trend` and `monthly-cash-flow` | It bounds only the rolling window, which applies when a request has no dates. An explicit date range bypasses it, and `monthly-trend` also skips it for an account or payee scope. | A view needs an undated trend longer than the ceiling. |
+| Money-movement Type preview: the limit `MoneyMovementTypeReportPanel` passes | An account with more rows of one type than the limit shows an undercount in the preview. The preview does not perform the recategorization. | It is reported. Paginate, or compute the affected and not-affected split on the server. |
+| Trash: the default `limit` of `list_trashed_transactions`, per section | A larger section lists only its most recently trashed rows. The heading states the whole count and the list says it is partial. | Low stakes. Paginate or add "load more". |
 
 ## Render windowing: the one list left unwindowed
 
-Every long list renders through the shared windowing component **except
-`ImportRuleSuggestionReview`**, which is excluded deliberately. It is the hard case with the weakest
-payoff, and the exclusion is recorded because the absence otherwise reads as an oversight.
+The transaction lists, the Rules page and the match reports render through `WindowedRows`. The lists
+that do not are capped or small, except `ImportRuleSuggestionReview`. Windowing it is a restructure and
+not a drop-in, for four reasons:
 
-Four obstacles stand in the way, and none is a blocker alone — together they make it a restructure
-rather than a drop-in:
+- its items are grouped and heterogeneous, and range from about 80px to over 1500px
+- it scrolls with the page and has no bounded viewport of its own, which is the structural blocker
+- it reads its own rows out of the DOM to restore scroll position
+- its cards change height in place as their primary interaction
 
-- **The list is grouped and heterogeneous.** Top-level items are any of four shapes and range from
-  ~80px to 1500px+. A virtualizer tolerates variable heights, but variance this extreme wrecks the
-  total-size estimate and reintroduces exactly the scroll jitter windowing exists to prevent.
-  *Handling:* window at the **merchant-group** granularity — the stable top-level unit — with a
-  per-item size estimate derived from each group's member count rather than one global constant. Bulk
-  mode is already flat and could be windowed independently first.
-- **It does not own a scroll container; it scrolls with the page.** Every windowed surface so far has a
-  dedicated bounded viewport with a sticky header inside it. **This is the structural blocker**: the
-  honest prerequisite is giving the page a real bounded scroll region, which changes its scroll model
-  and its sticky-panel arithmetic and deserves its own decision. A document-scroller mode in the shared
-  component is the alternative and was deliberately not built — new surface area for one consumer.
-- **It reads its own rows out of the DOM.** Bulk-anchor scroll restoration finds a card by query
-  selector; after windowing the target is usually not mounted. *Handling:* scroll by index against the
-  data, not by DOM query — and audit the whole file for other row-reading measurements first, because
-  there is likely more than one.
-- **Cards mutate height in place**, and that is the *primary* interaction here rather than a rare event.
-  Re-measurement copes, but each in-place growth can shift scroll position mid-edit. *Handling:* make
-  sure the expand animation does not fight the observer, and either accept the nudge or pin the edited
-  card as the scroll anchor.
-
-**If it ever does get slow, reach for memoization first.** Memoizing the card render so a single edit
-stops re-rendering every card is the same class of win as the two fixes that actually resolved the
-original slowness, and is far less risky than fighting the grouping, the page-level scroll and the
-DOM-reading scroll restoration at once.
+If the list gets slow, memoize the card render first, so that one edit stops re-rendering every card.
 
 ## Import history: retention
 
-**The lossy global cap is gone.** The completed-history query returned the newest 50 rows overall,
-which was a *silent* window: older imports vanished from the interface with no indication, while their
-records and transactions stayed in the database. Worse, because the cap was global, an actively-fed
-source could push another source's cards out of the window entirely — so that source displayed "0
-imported files" while its history was intact underneath. The display query is now unbounded.
-Cardinality is one row per imported *file*, not per transaction, which is what makes that tolerable in
-the interim.
+- **The history fetch is unbounded** (`list_batches`). That is tolerable because cardinality is one row
+  per imported file, not per transaction.
+- **The rendered history is bounded per source**: an expanded data source shows its recent cards and
+  files the rest into a by-year archive (`lib/importExport/importHistoryWindow.js`). The window is per
+  source because a global one lets an actively fed source push a quiet one's cards out of view.
+- **The reconcile pass on the same endpoint is capped to recent batches**, because it writes on every
+  load and running it over all history would rewrite every batch on each call.
+- **Duplicate reports are the largest thing the history stores.** Two things hold them down. A source
+  restating its own earlier import is counted and not recorded (`data-model.md` → *What a batch
+  counts*). And Settings → *Import storage* clears a card's stored detail on request (`data-model.md` →
+  *Clearing a card's stored detail*).
+- **Nothing sweeps stored detail on a schedule.** The clearing cannot be undone, so it is always a
+  selection someone made on that screen.
+- **Rejected rows are capped per batch** (`MAX_STORED_REJECTED_ROWS`), since one wrong column choice
+  refuses every row of a file. The cap is safe because the exact counts survive it and the report says
+  it is showing a slice (`data-model.md` → *Rejected rows*).
 
-**The best-effort reconcile pass on the same endpoint stays capped to a recent window**, and that
-asymmetry is deliberate: it *writes* on every load, so running it over all history would rewrite every
-batch on each call and worsen lock contention.
-
-**The list is windowed per source rather than globally**: an expanded data source shows its recent
-cards and files the rest into a reachable by-year archive (`lib/importExport/importHistoryWindow.js`). That is what bounds the *rendered* history; the fetch is still unbounded behind it.
-
-**The largest thing the history stores is the duplicate reports**, not the cards: one row per refused
-row, each holding the raw values, the matched transaction and the payload that would have been inserted.
-Measured on a real ledger that was **34 MB of JSON against a 73 MB database** — more than every
-transaction put together — and it rides every backup. A maintenance screen (Settings → *Import storage*,
-served by `services/import_detail_storage.py`) attributes that space per source and clears it on request,
-leaving the cards, their counts, their coverage claims and their file hashes in place. There is
-deliberately no retention *policy* over what it offers: an automatic sweep would be the silent cap again,
-and the clearing cannot be undone. Choosing by age is a selection on the screen (*Select imports over a
-year old*), never a schedule. See `data-model.md` → *Import batches and profiles*.
-
-**What stopped that growing back is a decision about what to write, not a sweep over what is held.** The
-population above was overwhelmingly one thing: a source restating its own prior import, which is what a
-re-export with an overlapping window is. On the measured ledger that was **89% of the report's bytes**,
-and of those rows only 172 — fewer than one in 150 — were ever flagged as wanting a look. Those refusals are now counted
-(`import_batch.ignored_count`) and not recorded (`is_settled_source_restatement`,
-`prune_source_restatements`), because there is nothing in such a record to read — the transaction each
-one duplicates is in the ledger and *is* the record. The distinction from a retention policy is the
-whole of why this is allowed: no sweep runs on its own over anything someone might want, and a refusal
-that asks anything of anyone — a covered date that paired with nothing, a twin two days out, any claim
-from a *different* source — still writes its row and keeps its place in the report.
-
-**Reports written before that change were brought into line by a migration, which is the one removal
-not asked for.** Migration v72 (`import_detail_storage.remove_batch_restatements`) applies the same test
-after the fact to every card, and is replayed after restoring an older backup, so a database loaded
-before the change ends in the shape it would have had if loaded after. It is allowed for the same reason
-the import-time decision is: what it takes holds nothing — it is not a retention judgement about records
-someone might still want. It needs one thing the report has no column for — the source label each stored
-row was mapped under — and reads it back out of the row's own stored cells via the batch's
-`config_snapshot.column_map`, which is exact rather than approximate: an aggregator export maps many
-accounts in one file, and a looser test would mistake a second source's claim for the card's own. A card
-whose snapshot carries no column map (a single-account file, or a sync card) is left alone rather than
-guessed about. Measured on a real ledger it removed 27,299 of 30,745 rows in under a second, and the
-upgrade's one-time compaction took the file from 88.4 MB to 27.6 MB. What was left — 3,446 rows — is
-mostly other sources' claims on the same account (different exporters label one account differently),
-plus the rows flagged for review and the records enrichments are undone from: the part worth a choice.
-
-**The clear compacts the file afterwards, and so does the upgrade across v72** (`db.database.compact_database`). SQLite keeps freed pages
-on a free list and reuses them, so without this a large deletion changes nothing anyone can check: the
-file stays the size it was, and a screen named *Free up import space* has freed none that is visible.
-VACUUM cannot run inside a transaction, so it runs on a connection of its own after the write commits;
-it needs roughly twice the file's size in free disk while it rebuilds, and it is cheap enough not to
-need offering as a choice (0.16s on an 88 MB database). A failure is logged and swallowed, because the
-deletion it follows has already committed and compaction only decides whether the filesystem hears
-about it today. On the measured ledger the removal plus compaction took the file from 84.3 MB to
-26.3 MB — more than the reports themselves, since the free list had also accumulated slack from every
-earlier delete, undo and restore.
-
-**The other bulk deletions compact too, but only when it is worth it** (`compact_if_worthwhile`): emptying
-the transaction trash, undoing an import, removing an account with its transactions, removing a
-connection's synced history, clearing the demo data, a restore, and every startup, which catches whatever
-a path without the call left behind. Each checks the free list first and rebuilds only when it holds at
-least 10 MB *and* a fifth of the file (`COMPACT_MIN_FREE_BYTES`, `COMPACT_MIN_FREE_FRACTION`), since a
-rebuild rewrites the whole file and smaller slack is reused by the next writes anyway. There is no button
-for it: none of this needs anyone to know what a free list is. Two things hold for every compaction. It
-is **checkpointed with the write-ahead log truncated**, because with another connection open — a running
-server's normal state — VACUUM leaves a copy of the rebuilt database in the `-wal` file, and the disk gets
-nothing back. And it writes a line to `luma.log` **before it starts** (what asked for it, and how much is
-on the free list) and another when it finishes (what was freed, and how long the lock was held), so a
-stall that coincides with one can be attributed. The free list is a floor on what comes back: it counts
-only wholly empty pages, and the rebuild also packs partly empty ones.
-
-**Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
-no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
-it has. The second is less obvious and is the larger half: **four consumers of `GET /import-export/batches`
-read the whole list as an aggregate rather than as a page of history** — the Rules page's pending
-rule-suggestion count, the per-connection suspect rollup on the Import page's Connections tab, and the
-data-source manager's lifetime per-profile totals *and its set of known template hashes*, which guards
-against re-importing a file already imported. Page the endpoint and each of those silently answers from
-the first page; the hash guard becomes wrong rather than merely stale. They need their own aggregate
-endpoints before the list response can change shape. See *Open*.
-
-**The rows a file left behind are capped per batch, and the cap is visible rather than silent** — the
-distinction the paragraph above turns on. `import_batch_rejected_row` keeps what an import refused
-(`MAX_STORED_REJECTED_ROWS`, `import_export/core.py`), which a badly mapped file can make as large as
-the file itself: one wrong column choice refuses every row, and nothing about that is worth a permanent
-per-row record. What makes a cap acceptable here and not there is that the exact counts survive it — the
-report compares the rows it holds against the batch's own totals and says plainly that it is showing a
-slice. Which rows survive is chosen by kind, not by position, so the diagnostic ones outlast a deliberate
-account skip; see `data-model.md` → *Import batches and profiles*.
+Revisit the unbounded fetch when watched folders are in real use: unattended imports add cards at a
+rate no longer limited by how often someone sits down to import.
 
 ## A watched folder is listed often and read rarely
 
-A watched import folder is scanned on every app load past the interval, on every visit to Import /
-Export, and whenever someone presses *Check now* — so the listing has to be cheap enough that nobody
-ever notices it, while the reading does not have to be.
+A scan lists the folder and opens only the entries whose `(size, mtime)` moved; the mechanism is in
+`architecture.md` → *Watched import folders*. Two bounds belong here:
 
-**`os.scandir` returns each entry's name, size and mtime for about the cost of the syscall**, so listing
-a folder with a few hundred files in it is immaterial. The expensive part is reading, hashing and
-parsing, and that is what the per-file `(size, mtime)` watermark in `import_watch_file` gates: only an
-entry that is new, or has moved since the last pass, is opened at all. A steady folder therefore costs
-one directory listing per trigger and nothing else.
-
-**Comparing a file *count* would be cheaper and wrong** — a replacement that keeps the count is missed,
-and a file edited in place is exactly the case a monthly re-export produces.
-
-**A file is read into memory whole**, as every import is, so an unattended path that picks its own files
-needs its own ceiling: `MAX_WATCHED_FILE_BYTES` parks anything larger rather than reading it. The
-interactive import needs no such cap because a person chose the file.
-
-**The nav badge and the Tasks list never scan.** Both read the persisted count in `import_watch_file`,
-which is a table read; a badge that stat-ed a network share on every page load would put the whole
-interface behind whatever that share was doing. The same reasoning as *The Tasks list is recomputed on
-every mutation* below, one step further out — the filesystem is slower and less predictable than the
-database, so it is kept off the poll entirely rather than merely made fast.
-
-**Unattended imports make the unwindowed import history worse**, because cards now accumulate with
-nobody present to notice. That does not change the cost of any single load — cardinality is still one
-row per imported file — but it removes the assumption the interim rests on, that the rate is bounded by
-how often someone sits down to import something. See *Import history: retention* above.
+- **The nav badge and the Tasks list never touch the filesystem.** Both read the persisted count in
+  `import_watch_file`, because a network share is slower and less predictable than the database and
+  these are read on every page load.
+- **An unattended import has a file-size ceiling** (`MAX_WATCHED_FILE_BYTES`). A file is read into
+  memory whole, and here nobody chose it; a larger file is parked.
 
 ## Bulk operations must not accumulate
 
-Export and restore were both written to assemble the whole payload in memory, and both scaled with the
-ledger before documents existed to make it acute. The measurement is worth keeping because it is
-counter-intuitive:
-
-| Stage | Peak, on a ~18,500-transaction ledger producing a 4.9 MB artifact |
-| --- | --- |
-| baseline | 80 MB |
-| payload assembled as a Python structure | 251 MB |
-| serialized to JSON | 315 MB |
-| zipped | 354 MB |
-
-**The dominant term is the Python structure — larger than the JSON string and the zip combined.** That
-is why "stream the export to a temp file", the obvious reading of the defect, recovers only about a
-third of the cost. **Bounded memory requires that rows never accumulate as lists at all**, in either
-direction. Pretty-printing was worth dropping but was ~9% of the serialized size, not the problem.
-
-The figures are transient allocation during the operation, not resting footprint. What they cost is an
-operation that dies on a small machine — and fixing only the export would have been half an answer,
-since **a ledger that can be backed up and not restored has no backup.**
+Backup export and restore stream in both directions, and neither holds rows as a list. The Python
+structure is the dominant memory term, larger than the serialized JSON and the zip together, so
+streaming only the output to a file recovers about a third of the peak. The cost of getting it wrong is
+an operation that dies on a small machine.
 
 ## The Tasks list is recomputed on every mutation
 
-`/tasks` has no cache and no timer. It is fetched on every route change *and* on every successful
-mutation anywhere in the app (the `luma:data-mutated` broadcast), so each of its conditions runs at that
-cadence. Two of them are not constant-time, and both were accepted on the same reasoning:
+`/tasks` has no timer. It is fetched on every route change and on every successful mutation anywhere in
+the app (the `luma:data-mutated` broadcast), so each of its conditions runs at that cadence. Two do
+work that is not constant-time:
 
-- **Amazon reconciliation** reconciles each completed Amazon batch on demand — bounded by the number of
-  such batches, which is small in practice.
+- **Amazon reconciliation** runs a whole report per completed Amazon batch. Its count is cached against
+  `recon_epoch` (`services/reconciliation_attention.py`), so the report reruns only after a write to a
+  table it reads.
 - **Reimbursement reminders** load the whole outstanding report: every transaction holding money in the
-  receivable group, plus roughly four queries per open reimbursement record. The per-record half is
-  bounded by how many the user is tracking at once, which is tens rather than thousands.
+  receivable group, plus several queries per open reimbursement record.
 
-**A user who does not use the feature pays two queries.** The receivable group is seeded for everyone
-but ships empty, so `reimbursable_leaf_ids` returns nothing and the whole computation exits before
-touching `txn`. That is what makes the cost proportional to use rather than to ledger size, and it is
-the property to preserve if either condition is extended.
+Someone who does not use reimbursements pays a few small lookups, because the receivable group ships
+empty and `outstanding` returns before touching `txn`. Keep that property when extending either condition: the
+cost should follow use, not ledger size.
 
-The half that does grow with time is the set of transactions holding receivable money, which **includes
-the members of completed reimbursements** — those deliberately stay in the group, since the two sides
-cancel there. Their portions are fully claimed, so they are excluded before the expensive per-row work,
-but they are still scanned. Revisit if a ledger accumulates enough resolved reimbursements for that scan
-to show up in a mutation's latency; the fix would be a leaner due-query that never assembles the report.
+The transactions holding receivable money include the members of completed reimbursements, which stay
+in the group. They are excluded before the per-row work but are still scanned. Revisit if that scan
+shows up in a mutation's latency; the fix is a due-query that never assembles the report.
 
 ## Measuring performance
 
-**Re-baseline on a production build with the DevTools Components panel closed.** A development build
-amplifies render cost enough to change conclusions — in the trace that started the windowing work the
-DevTools hook was ~55% of busy time. The underlying per-node cost was real, but its size in that trace
-was not.
-
-**Attribute before optimizing.** The same trace's "closing the report is slow" turned out not to be
-unmount cost at all (~160 ms) but two full re-renders of the entire row list, triggered by a drag-handle
-state flag living in consumer scope so that every consumer re-rendered on a plain header click. The
-windowing was still needed — for initial mount and to make sort, filter and select-all proportional to
-the visible rows — but it would not have fixed the symptom that prompted it.
-
-**A virtualizer under a unit runner needs geometry stubbed.** jsdom performs no layout, so a windowed
-list renders nothing until the scroll element and rows report sizes. The existing harness stubs the
-observer and the size properties keyed off each row's index — keyed, specifically, so that a row never
-reports the *viewport's* height, which would make one row appear to fill the screen and silently defeat
-every assertion.
+Take a baseline on a production build with the React DevTools Components panel closed. A development
+build and the DevTools hook each inflate render cost enough to change which cost looks largest.
 
 ---
 
 ## Obstacles
 
 - **True incremental backup needs `updated_at` on every table plus delete tombstones**, with every write
-  site maintaining them — a schema change with a permanent maintenance burden. The decomposition that
-  avoids it: the **ledger** is mutable anywhere in history but small once zipped, so it is always sent
-  in full; **documents** are immutable once written but grow forever, so only they need a delta, and
-  "which files does the target lack" is answerable by id alone with no change tracking. Both
-  prerequisites — id-addressed members and a digest per document — already exist.
-- **Restoring a chain is unsolved even so.** The compatibility guard's checks would have to apply across
-  files, and restore is wipe-and-rebuild with **no merge mode** — "restore on top" today means restoring
-  into a non-empty database, which still replaces it.
-- **Re-bounding a list before its archive exists recreates the lossy cap.** This is the general shape,
-  not just the import-history case: a bound is only safe once what falls outside it is reachable.
-- **A windowed list cannot be fed by anything that reads rows from the DOM.** Only mounted rows exist,
-  so any selection, copy, or scroll-restoration path built on DOM queries breaks silently — it keeps
-  working on short lists.
-- **Sharing one column-preference key across different column sets silently merges them**, because
-  unknown keys are dropped and defaults appended. Each windowed report needs its own key; one dialog
-  keys per tab for the same reason.
-- **A `'loaded'` select-all strategy assumes every row is in memory**, which windowing breaks. Verify it
-  wherever it is still used.
-- **The browser is the last hop that still holds a whole backup, and documents are what make it matter.**
-  Both server directions stream, but `downloadUrl` (`lib/api.js`) fetches the artifact into a Blob before
-  saving, so the client holds all of it. That is irrelevant for a ledger-only backup — 4.9 MB at ~18,500
-  transactions, roughly 50 MB extrapolated to 200k — and binds only once documents dominate the size.
-  Browsers page large blobs to disk, so the curve is sluggish before it is fatal; a tab dying while saving
-  a backup is *broken* rather than merely slow. **The blob is deliberate and "just navigate instead" is
-  not the fix**: a plain navigation hands the response to the browser, so an error status renders as raw
-  JSON with the app gone from under it, which is why the fetch-and-save exists at all. The way out is to
-  *preflight* what the endpoint can fail on (no enabled recipients being the main one) and then navigate,
-  letting the browser stream to disk with its own progress UI — or to pipe the body through the File
-  System Access API, which is better and Chromium-only. Until one of those lands, the `Content-Length`
-  the export sends buys nothing visible: saving a finished blob gives the browser no download to draw a
-  progress bar for.
+  site maintaining them. The decomposition that avoids it: the ledger is mutable anywhere in history but
+  small once zipped, so it is always sent in full; documents are immutable once written but grow
+  forever, so only they need a delta, and "which files does the target lack" is answerable by id alone.
+  Both prerequisites, id-addressed members and a digest per document, exist.
+- **Restoring a chain is unsolved.** The compatibility guard's checks would have to apply across files,
+  and restore is wipe-and-rebuild with no merge mode.
+- **A bound is safe only once what falls outside it is reachable.** Paging a list before its archive
+  exists hides rows with no way back to them.
+- **Paging `GET /import-export/batches` breaks the callers that read it as an aggregate over all
+  history.** Each would answer from the first page: the Rules page's pending rule-suggestion count, the
+  Connections tab's per-connection rollup, the import-storage dialog's per-source attribution, the
+  rule-suggestions page's lookup of a batch and its source's other batches, and the data-source
+  manager's per-source totals and known template hashes. The hash set guards against re-importing a
+  file, so it would become wrong and not merely stale. Each needs its own endpoint first.
+- **The browser holds a whole backup while saving it.** `downloadUrl` (`lib/api.js`) fetches into a Blob
+  so that an error stays in the app. That is irrelevant for a ledger-only backup and binds once
+  documents dominate the size. The way out is to preflight what the endpoint can fail on and then
+  navigate, letting the browser stream to disk, or to pipe the body through the File System Access API,
+  which is Chromium-only.
 
 ## Open
 
-- **Re-bounding the import-history fetch**, now that the archive exists — which means moving the four
-  aggregate consumers above off the whole-list payload first.
+- **Re-bounding the import-history fetch**, which means moving the aggregate consumers above off the
+  whole-list payload first.
   → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
-- **Whether the document delta is worth building**, now that both its prerequisites exist. The ledger
-  half needs nothing; the open part is restoring a chain.
+- **Whether the document delta is worth building.** The ledger half needs nothing; the open part is
+  restoring a chain.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
-- **Dependency-based cache invalidation**, if transaction-derived views ever proliferate enough that the
+- **Dependency-based cache invalidation**, if transaction-derived views proliferate enough that the
   hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
-- **A structural database check does not answer whether the data is *coherent*** — a cursor ahead of a
-  restored ledger, a coverage claim disagreeing with its rows, a mapping pointing at a merged account all
-  read as `ok`. What a semantic checker should assert is unstarted design.
+- **A structural database check does not answer whether the data is coherent**: a cursor ahead of a
+  restored ledger, a coverage claim disagreeing with its rows and a mapping pointing at a merged account
+  all read as `ok`. What a semantic checker should assert is unstarted design.
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

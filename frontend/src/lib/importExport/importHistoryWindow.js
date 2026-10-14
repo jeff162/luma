@@ -11,8 +11,8 @@
 //
 // A source fed monthly accumulates one card per file for years, so the list also keeps only its recent
 // cards and files the rest into a by-year archive. The window is per *source*: a global one lets an
-// actively-fed source crowd out a quiet neighbour's recent cards, which is what the old global fetch cap
-// did (`docs/scale-and-limits.md` → *Import history: retention*).
+// actively-fed source crowd out a quiet neighbour's recent cards
+// (`docs/scale-and-limits.md` → *Import history: retention*).
 
 import { endOfMonth, format, parseISO } from 'date-fns'
 
