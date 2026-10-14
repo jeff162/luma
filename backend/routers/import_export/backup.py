@@ -1488,6 +1488,9 @@ _RESTORE_NULLIFY = (
     # The row a duplicate was matched against. A pointer at a row the backup no longer holds names nothing,
     # which is how the dangling-pointer sweep after an undo treats it too.
     ("txn", "suspect_duplicate_of", "txn"),
+    # The orders import that took a parked Amazon item. Without that import nothing holds the order, so the
+    # item is waiting again, as undoing the import would leave it.
+    ("amazon_pending_item", "consumed_batch_id", "import_batch"),
 )
 
 # Parents first: most of these children declare ON DELETE CASCADE, so dropping an orphaned rule or

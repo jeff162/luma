@@ -294,13 +294,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # older report reads as one written today, and compacts the file once afterwards. v73 adds
 # `recurring_signal_dismissal.one_off`, an Amount changed finding dismissed as "fine this time". v74 adds
 # `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner. v75
-# removes from every stored rule-suggestion review the transactions that no longer exist.
+# removes from every stored rule-suggestion review the transactions that no longer exist. v76 adds
+# `amazon_pending_item.consumed_batch_id`, so undoing an orders import returns the parked items it attached.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 75
+CURRENT_VERSION = 76
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2373,6 +2374,18 @@ def _drop_deleted_rule_suggestion_rows(conn):
     _release_missing_rule_suggestion_rows(conn)
 
 
+@migration(76)
+def _add_amazon_pending_item_consumed_batch(conn):
+    """`amazon_pending_item.consumed_batch_id` — the orders import that attached a parked item, so undoing
+    that import returns the item to waiting instead of losing it. Nothing to backfill: an item attached
+    before this column was deleted on attachment and cannot be recovered here. Guarded like v65-v74."""
+    if "amazon_pending_item" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(amazon_pending_item)")}
+    if "consumed_batch_id" not in columns:
+        conn.execute("ALTER TABLE amazon_pending_item ADD COLUMN consumed_batch_id TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3153,14 +3166,17 @@ def init_db(db_path: str | None = None):
             -- Per-item detail from an Amazon items file imported *before* its orders file: parked here
             -- (keyed by order id) instead of being discarded, so importing the matching orders file later
             -- auto-attaches it. `parked_batch_id` ties the row to the orphan import that created it, so
-            -- undoing that import removes its parked items. See routers/import_export/amazon.py.
+            -- undoing that import removes its parked items. `consumed_batch_id` names the orders import that
+            -- attached them (NULL while they wait), so undoing *that* import returns them to waiting. See
+            -- routers/import_export/amazon.py.
             CREATE TABLE IF NOT EXISTS amazon_pending_item (
-                order_id         TEXT PRIMARY KEY,
-                items_json       TEXT NOT NULL,
-                source_file      TEXT,
-                source_file_hash TEXT,
-                parked_batch_id  TEXT,
-                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+                order_id          TEXT PRIMARY KEY,
+                items_json        TEXT NOT NULL,
+                source_file       TEXT,
+                source_file_hash  TEXT,
+                parked_batch_id   TEXT,
+                consumed_batch_id TEXT,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             -- Non-sensitive UI/layout preferences, keyed by scope_id (auth user id or local

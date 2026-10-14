@@ -534,9 +534,9 @@ import-batch and undo contracts as a CSV. Matching rules, report buckets and lin
   `_import_group_to_batch`), so dropping several periods at once behaves as if each file were imported
   alone, with its own coverage, undo and reconciliation. An orders file and its items file fold into one
   card. An items file without its orders becomes its own card whose detail is parked
-  (`amazon_pending_item`) and attached when the orders arrive (`_take_parked_items`); once fully
-  consumed, that card is folded into the single orders card that took it
-  (`_merge_items_card_into_orders`), in either import order.
+  (`amazon_pending_item`) and attached when the orders arrive (`_take_parked_items`), reversibly: undoing
+  the orders import returns them to waiting. Once every item is taken by a single orders card, the items
+  card is folded into it (`_merge_items_card_into_orders`), in either import order.
 - **Order rows go through `_insert_imported_transaction`**, so they carry batch linkage, `needs_review`
   and provenance like any imported row.
 - **The linked card charge lives outside the batch**, so `reverse_batch_amazon_links` restores its prior

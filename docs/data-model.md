@@ -1585,9 +1585,13 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   transaction's `import_evidence`, once. Amazon's own categories are not used.
 - **Items with no imported order are parked** in `amazon_pending_item` (keyed by `order_id`, upserted,
   with `parked_batch_id` naming the import that parked them) and attached when the orders file arrives
-  (`_take_parked_items`). A parked row is cleared when its parking import is undone. A fully matched
-  items-only card is folded into the orders card (`_merge_items_card_into_orders`), so importing the two
-  files together or apart, in either order, ends in the same card. A partly matched card's "no matching
+  (`_take_parked_items`). A parked row is cleared when its parking import is undone. Attaching marks the
+  row with the orders import that took it (`consumed_batch_id`) rather than deleting it, so undoing that
+  import returns the items to waiting and importing the orders again re-attaches them. An items-only card
+  whose items were all taken by one orders card is folded into it (`_merge_items_card_into_orders`), so
+  importing the two files together or apart, in either order, ends in the same card; its parked rows go
+  with it, since undoing that card undoes both files. One whose items went to two orders cards stays
+  separate, so either can be undone back into it. A partly matched card's "no matching
   order" count is derived from the ledger (`unmatched_parked_order_count`).
 - **An order funded only by points or gift-card balance** is recorded in the excluded category, since
   the export gives no cash figure. An order whose card is not tracked counts as the sole record.

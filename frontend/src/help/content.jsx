@@ -3546,7 +3546,9 @@ export const HELP_TOPICS = [
             file), and the pill flips to <strong>attached to orders</strong> once that happens. When every
             waiting item has attached, the items file&apos;s card folds into the orders card, which then lists
             both files &mdash; the same single card as importing the two together. A card with items still
-            waiting stays until their orders arrive. Undoing the items import discards the saved detail.</li>
+            waiting stays until their orders arrive. Undoing an orders import puts the items it took back to
+            waiting, ready for the next import of those orders; undoing a card that holds both files undoes
+            both. Undoing the items import discards the saved detail.</li>
           <li><strong>Duplicates</strong> are orders a previous import already brought in &mdash; the file added
             nothing new. <strong>Already enriched</strong> is the items-file flavor of the same thing.</li>
           <li><strong>Payments</strong> tallies the matched card charges by the account they landed on.</li>

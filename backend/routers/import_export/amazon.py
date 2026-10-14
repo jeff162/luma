@@ -476,7 +476,8 @@ def _park_items(conn: sqlite3.Connection, order: AmazonOrder, batch_id: str) -> 
     """Retain an items-only order's per-item detail (its orders file hasn't been imported yet), keyed by order
     id, so importing the matching orders file later auto-attaches it instead of the user re-importing the items
     file. Upsert by order id so a re-imported items file refreshes the parked detail rather than duplicating
-    it. See :func:`_take_parked_items` (the consume side) and ``amazon_pending_item``."""
+    it, and is waiting again whatever it was before. See :func:`_take_parked_items` (the consume side) and
+    ``amazon_pending_item``."""
     if not order.items:
         return
     payload = [{f: getattr(item, f, None) for f in _PENDING_ITEM_FIELDS} for item in order.items]
@@ -486,23 +487,29 @@ def _park_items(conn: sqlite3.Connection, order: AmazonOrder, batch_id: str) -> 
            ON CONFLICT(order_id) DO UPDATE SET
                items_json       = excluded.items_json,
                source_file      = excluded.source_file,
-               source_file_hash = excluded.source_file_hash,
-               parked_batch_id  = excluded.parked_batch_id""",
+               source_file_hash  = excluded.source_file_hash,
+               parked_batch_id   = excluded.parked_batch_id,
+               consumed_batch_id = NULL""",
         (order.order_id, json.dumps(payload), order.source_file, order.source_file_hash, batch_id),
     )
 
 
-def _take_parked_items(conn: sqlite3.Connection, order_id: str) -> tuple[list[AmazonItem], Optional[dict]]:
-    """Pop any items parked for this order id (an items file imported before this orders file), rebuilt as
-    ``AmazonItem``s, and remove the parked row — consumed. Returns ``(items, source)`` where ``source`` is the
-    parked row's ``{batch_id, source_file, source_file_hash}`` (so the caller can fold that items-file card
-    into the orders card), or ``([], None)`` when none are parked."""
+def _take_parked_items(conn: sqlite3.Connection, order_id: str,
+                       batch_id: str) -> tuple[list[AmazonItem], Optional[dict]]:
+    """Take any items waiting for this order id (an items file imported before this orders file), rebuilt as
+    ``AmazonItem``s, and mark the parked row consumed by ``batch_id``. The row is kept rather than deleted
+    because the attachment has to be reversible: undoing that orders import returns the items to waiting
+    (see :func:`reverse_batch_amazon_links`), where deleting them would leave the items card claiming orders
+    it no longer holds detail for. Returns ``(items, source)`` where ``source`` is the parked row's
+    ``{batch_id, source_file, source_file_hash}`` (so the caller can fold that items-file card into the
+    orders card), or ``([], None)`` when none are waiting."""
     row = conn.execute(
-        "SELECT items_json, source_file, source_file_hash, parked_batch_id FROM amazon_pending_item WHERE order_id = ?",
+        """SELECT items_json, source_file, source_file_hash, parked_batch_id FROM amazon_pending_item
+           WHERE order_id = ? AND consumed_batch_id IS NULL""",
         (order_id,)).fetchone()
     if not row:
         return [], None
-    conn.execute("DELETE FROM amazon_pending_item WHERE order_id = ?", (order_id,))
+    conn.execute("UPDATE amazon_pending_item SET consumed_batch_id = ? WHERE order_id = ?", (batch_id, order_id))
     source = {"batch_id": row["parked_batch_id"], "source_file": row["source_file"],
               "source_file_hash": row["source_file_hash"]}
     try:
@@ -570,7 +577,7 @@ def apply_amazon_order(
     # already enriched. A same-drop items file (order already carries item detail) supersedes them, but the
     # obsolete parked row is still consumed. `parked_source` (which items-file card parked them) is reported
     # whenever a parked row was consumed — used to fold that card into this orders card.
-    parked_items, parked_source = _take_parked_items(conn, order.order_id)
+    parked_items, parked_source = _take_parked_items(conn, order.order_id, batch_id)
     attached_from_parked = False
     if parked_items and not order.items:
         order.items = parked_items
@@ -1007,8 +1014,15 @@ def _merge_items_card_into_orders(conn: sqlite3.Connection, *, items_card_id: st
     or not a marketplace batch, or the two are the same card)."""
     if not orders_card_id or items_card_id == orders_card_id:
         return None
-    if conn.execute("SELECT 1 FROM amazon_pending_item WHERE parked_batch_id = ? LIMIT 1", (items_card_id,)).fetchone():
-        return None   # still has items waiting — not fully resolved, keep its own card
+    # Every item this card parked must have been taken by *this* orders card. One still waiting means the
+    # card is not resolved; one taken by another orders card means undoing that card must find the items
+    # card again to return them to, so it is kept, as an items file enriching two orders cards is.
+    if conn.execute(
+        """SELECT 1 FROM amazon_pending_item
+           WHERE parked_batch_id = ? AND (consumed_batch_id IS NULL OR consumed_batch_id != ?) LIMIT 1""",
+        (items_card_id, orders_card_id),
+    ).fetchone():
+        return None
     items_card = conn.execute(
         "SELECT row_count, source_kind, config_snapshot FROM import_batch WHERE id = ?", (items_card_id,)).fetchone()
     if (not items_card or items_card["source_kind"] != BATCH_SOURCE_KIND or (items_card["row_count"] or 0) > 0
@@ -1037,6 +1051,9 @@ def _merge_items_card_into_orders(conn: sqlite3.Connection, *, items_card_id: st
     _merge_enrichment_summary(snap, _summary_of(items_card["config_snapshot"]))
     conn.execute("UPDATE import_batch SET filename = ?, config_snapshot = ? WHERE id = ?",
                  (merged_filename, json.dumps(snap), orders_card_id))
+    # The orders card now carries both files, so undoing it undoes the items file too: its parked rows have
+    # no card to return to and go with the one they were parked by.
+    conn.execute("DELETE FROM amazon_pending_item WHERE parked_batch_id = ?", (items_card_id,))
     conn.execute("DELETE FROM import_batch WHERE id = ?", (items_card_id,))
     return merged_filename
 
@@ -2451,8 +2468,11 @@ def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
                 )
         txn_links.delete_link(conn, link_id)
     # An items-only import parks its per-item detail for a later orders file; undoing that import must remove
-    # what it parked (an orphan/parking batch creates no links, so this is its only undo effect).
+    # what it parked (an orphan/parking batch creates no links, so this is its only undo effect). Undoing the
+    # orders import that took parked items returns them to waiting, so importing those orders again
+    # attaches them again.
     conn.execute("DELETE FROM amazon_pending_item WHERE parked_batch_id = ?", (batch_id,))
+    conn.execute("UPDATE amazon_pending_item SET consumed_batch_id = NULL WHERE consumed_batch_id = ?", (batch_id,))
     return len(link_ids)
 
 

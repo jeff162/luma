@@ -775,7 +775,58 @@ class AmazonOrdersTests(unittest.TestCase):
             cards = conn.execute(
                 "SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall()
             self.assertEqual(sorted(c["filename"] for c in cards), ["items.csv", "orders.csv"])   # both remain
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM amazon_pending_item").fetchone()[0], 1)   # A-2 waits
+            self.assertEqual(conn.execute(
+                "SELECT order_id FROM amazon_pending_item WHERE consumed_batch_id IS NULL").fetchall()[0][0], "A-2")
+
+    def test_undoing_orders_returns_the_items_it_took_to_waiting(self):
+        # The orders import that took parked items can be undone, and the items wait again: importing those
+        # orders a second time attaches the same detail. Were taking them to delete them, the second import
+        # would come back without item detail while the items card still counted the orders as waiting.
+        from backend.routers.import_export.core import undo_batches
+        items_by_order = {
+            "A-1": [AmazonItem(description="Widget One", asin="B01", source_file="items.csv", source_file_hash="H-I")],
+            "A-2": [AmazonItem(description="Widget Two", asin="B02", source_file="items.csv", source_file_hash="H-I")],
+        }
+
+        def order_one():
+            order = _cash_order(order_id="A-1"); order.items = []; order.has_item_detail = False
+            order.source_file = "orders.csv"; order.source_file_hash = "H-O"
+            return order
+
+        def waiting(conn):
+            return sorted(r[0] for r in conn.execute(
+                "SELECT order_id FROM amazon_pending_item WHERE consumed_batch_id IS NULL"))
+
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="items.csv")
+            first = run_amazon_import(conn, [order_one()], account_id="amazon", filename="orders.csv")
+            self.assertEqual(waiting(conn), ["A-2"])
+            undo_batches(conn, [first["batch_id"]])
+            self.assertEqual(waiting(conn), ["A-1", "A-2"])
+            again = run_amazon_import(conn, [order_one()], account_id="amazon", filename="orders.csv")
+            self.assertEqual(again["counts"]["items_attached_from_parked"], 1)
+            evidence = conn.execute(
+                "SELECT import_evidence_json FROM txn WHERE import_batch_id = ?", (again["batch_id"],)).fetchone()[0]
+            self.assertIn("B01", evidence)
+
+    def test_items_taken_by_two_orders_cards_stay_separate(self):
+        # An items card whose orders arrived in two separate imports is not folded into the second: undoing
+        # the first must find the items card again to return its items to.
+        items_by_order = {
+            "A-1": [AmazonItem(description="Widget One", asin="B01", source_file="items.csv", source_file_hash="H-I")],
+            "A-2": [AmazonItem(description="Widget Two", asin="B02", source_file="items.csv", source_file_hash="H-I")],
+        }
+        order1 = _cash_order(order_id="A-1"); order1.items = []; order1.has_item_detail = False
+        order1.source_file = "orders-1.csv"; order1.source_file_hash = "H-O1"
+        order2 = _cash_order(order_id="A-2"); order2.items = []; order2.has_item_detail = False
+        order2.source_file = "orders-2.csv"; order2.source_file_hash = "H-O2"
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="items.csv")
+            run_amazon_import(conn, [order1], account_id="amazon", filename="orders-1.csv")
+            run_amazon_import(conn, [order2], account_id="amazon", filename="orders-2.csv")
+            cards = conn.execute(
+                "SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall()
+            self.assertEqual(sorted(c["filename"] for c in cards), ["items.csv", "orders-1.csv", "orders-2.csv"])
 
     def test_orders_then_items_folds_into_one_card(self):
         # The mirror of the parked case: orders imported first, then a *separate* items file that enriches
