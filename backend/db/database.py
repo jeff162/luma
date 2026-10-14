@@ -293,13 +293,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # every duplicate report the rows v69 stopped writing — a source restating its own prior import — so an
 # older report reads as one written today, and compacts the file once afterwards. v73 adds
 # `recurring_signal_dismissal.one_off`, an Amount changed finding dismissed as "fine this time". v74 adds
-# `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner.
+# `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner. v75
+# removes from every stored rule-suggestion review the transactions that no longer exist.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 74
+CURRENT_VERSION = 75
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2350,6 +2351,28 @@ def _add_owner_review_flagging(conn):
         )
 
 
+def _release_missing_rule_suggestion_rows(conn):
+    """Take from every stored rule-suggestion review the ids of transactions that no longer exist, removing
+    the entries left with none. Deletions now do this as they happen
+    (`services/rule_suggestion_review.py`); reviews written before that still name rows an undone import, an
+    emptied trash or a removed account took away. Replayed after a restore, since an older backup carries
+    the same entries. Guarded like v65-v74."""
+    tables = _table_names(conn)
+    if not {"txn", "import_batch", "csv_import_profile", "import_workflow_state"} <= tables:
+        return
+    # Imported here rather than at module scope, like v72's service.
+    from backend.services.rule_suggestion_review import release_missing_rule_suggestion_rows
+
+    changed = release_missing_rule_suggestion_rows(conn)
+    if changed:
+        log_info(f"[db] removed deleted transactions from {changed} rule-suggestion reviews", keep_in_file=True)
+
+
+@migration(75)
+def _drop_deleted_rule_suggestion_rows(conn):
+    _release_missing_rule_suggestion_rows(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2391,6 +2414,7 @@ POST_RESTORE_DATA_INIT = {
     65: _backfill_import_batch_coverage,
     71: _namespace_plaid_transaction_ids,
     72: _remove_stored_source_restatements,
+    75: _release_missing_rule_suggestion_rows,
 }
 
 

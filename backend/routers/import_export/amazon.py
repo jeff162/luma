@@ -49,6 +49,7 @@ from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
 from backend.services.review_flagging import flags_new_transactions
+from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 from backend.services.txn_summaries import txn_summaries
 from backend.services.amazon_import import (
     AmazonItem,
@@ -2767,6 +2768,7 @@ def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
             )
     # Delete the link first so its members' FK rows go, then the order transaction itself.
     txn_links.delete_link(conn, link_id)
+    release_rule_suggestion_rows(conn, order_ids)
     for order_id in order_ids:
         conn.execute("DELETE FROM txn WHERE id = ?", (order_id,))
     return {"status": "reversed", "orders_removed": len(order_ids), "charges_restored": len(charge_ids)}

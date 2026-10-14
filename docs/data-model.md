@@ -1492,6 +1492,10 @@ ordinary generation.
   threshold use full history.
 - Clearing a settled pile stores its entries as one restorable set. Clear and restore change no rule
   and no transaction.
+- **A hard-deleted transaction leaves every review that names it**, in the delete's own transaction
+  (`release_rule_suggestion_rows`, called by `delete_transactions`, `undo_batches` and the Amazon order
+  removal). An entry left with no rows goes, with its decision: its count, report and undo all read
+  those ids. A rule it created stays. Trashing a transaction is not a delete.
 
 ### Rejected rows
 

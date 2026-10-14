@@ -13,6 +13,7 @@ import { useMemo, useRef, useState } from 'react'
 import CategoryPicker from '../CategoryPicker.jsx'
 import CategoryDisplay from '../CategoryDisplay.jsx'
 import PillGridTable from '../PillGridTable.jsx'
+import WindowedRows from '../WindowedRows.jsx'
 import { Spinner, Tooltip } from '../ui.jsx'
 import { MerchantOriginHoverCard, OriginFieldList } from '../OriginFields.jsx'
 import { getTxnMerchantOriginRows, hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
@@ -42,6 +43,7 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
   // refs let us ignore that stray close so entering edit mode doesn't instantly cancel (the "blink").
   const rowPickerOpenedRef = useRef(false)
   const bulkPickerOpenedRef = useRef(false)
+  const scrollRef = useRef(null)
   const [pinnedOriginRow, setPinnedOriginRow] = useState(null)
   // Client-side column sort for the (fully-loaded) match rows. Seeded to the order the backend already
   // returns the rows in (date descending — see the /rule-suggestions/matches ORDER BY) so the Date pill
@@ -535,7 +537,7 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
             }}>
               {/* Single outer scroll container; PillGridTable's header pins via position: sticky. A
                   nested body scroll would consume width from the last column under this grid model. */}
-              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                 <PillGridTable
                   columns={cols.map(col => ({
                     ...col,
@@ -553,23 +555,29 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
                   }}
                   renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
                     <div style={{ fontSize: 12.5 }}>
-                      {sortedRows.map(row => (
-                        <div
-                          key={row.id}
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns,
-                            alignItems: 'start',
-                            borderBottom: '1px solid var(--border)',
-                          }}
-                        >
-                          {activeColumns.map(col => (
-                            <div key={`${row.id}:${col.key}`} style={{ padding: '8px 8px', minWidth: 0 }}>
-                              {renderCell(col, row)}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
+                      <WindowedRows
+                        scrollRef={scrollRef}
+                        items={sortedRows}
+                        getItemKey={row => row.id}
+                        estimateSize={48}
+                        measureKey={gridTemplateColumns}
+                        renderRow={row => (
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns,
+                              alignItems: 'start',
+                              borderBottom: '1px solid var(--border)',
+                            }}
+                          >
+                            {activeColumns.map(col => (
+                              <div key={`${row.id}:${col.key}`} style={{ padding: '8px 8px', minWidth: 0 }}>
+                                {renderCell(col, row)}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      />
                     </div>
                   )}
                 />

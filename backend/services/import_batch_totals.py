@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from backend.json_utils import safe_json_dict
+from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 
 IMPORT_SUMMARY_KEY = "import_summary"
 # The statement header a PDF statement import records (`routers/import_export/paypal_statement.py`),
@@ -152,6 +153,7 @@ def delete_transactions(conn, where_sql: str, params=(), *, drop_emptied_sync_ca
         """,
         params,
     ).fetchall()
+    release_rule_suggestion_rows(conn, [row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE {where_sql}", params)])
     removed = conn.execute(f"DELETE FROM txn WHERE {where_sql}", params).rowcount or 0
     for row in released:
         conn.execute(

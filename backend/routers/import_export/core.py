@@ -128,6 +128,12 @@ from backend.services.import_enrichment import enrich_duplicate_row, undo_duplic
 from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
 from backend.services.review_flagging import owners_not_flagging
+from backend.services.rule_suggestion_review import (
+    RULE_SUGGESTION_REVIEW_KEY,
+    SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY,
+    release_rule_suggestion_rows,
+    summarize_rule_suggestion_review,
+)
 from backend.services.paypal_funding import card_counts as paypal_card_counts
 from backend.services.money_movement import (
     suppress_batch_funding_legs,
@@ -167,13 +173,11 @@ REJECTED_ROW_KIND_PRIORITY = (
     ACCOUNT_SKIPPED_KIND,
 )
 
-RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
 RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
 # Id formats a review's partitions are minted with, and read back only by _assign_rule_suggestion_review_groups.
 RULE_SUGGESTION_FOLLOWUP_ID_MARKER = ":followup:"
 RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX = ":refined"
 UNKNOWN_SOURCE_FALLBACK_KEY = "unknown_source_fallback"
-SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY = "system_rule_suggestion_review"
 SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY = "system_category_workspace_draft"
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
 IMPORTED_CATEGORY_SETTINGS_KEY = "imported_category_settings"
@@ -1052,39 +1056,6 @@ def get_rule_suggestion_review_state(snapshot: dict) -> dict:
     review_state["statuses"] = statuses if isinstance(statuses, dict) else {}
     review_state["trash_sets"] = trash_sets if isinstance(trash_sets, list) else []
     return review_state
-
-
-def summarize_rule_suggestion_review(review_state: dict) -> dict:
-    suggestions = review_state.get("suggestions") or {}
-    statuses = review_state.get("statuses") or {}
-
-    accepted_count = 0
-    skipped_count = 0
-    discarded_count = 0
-    pending_count = 0
-
-    for suggestion_id in suggestions:
-        status = (statuses.get(suggestion_id) or {}).get("status")
-        if status == "accepted":
-            accepted_count += 1
-        elif status == "discarded":
-            discarded_count += 1
-        elif status == "skipped":
-            skipped_count += 1
-        else:
-            pending_count += 1
-
-    summary = {
-        "total_count": len(suggestions),
-        "reviewed_count": accepted_count + skipped_count + discarded_count,
-        "discarded_count": discarded_count,
-        "accepted_count": accepted_count,
-        "skipped_count": skipped_count,
-        "pending_count": pending_count,
-        "trash_set_count": len(review_state.get("trash_sets") or []),
-    }
-    review_state["summary"] = summary
-    return summary
 
 
 def _public_rule_suggestion_trash_sets(review_state: dict) -> list[dict]:
@@ -5539,6 +5510,9 @@ def undo_batches(conn, batch_ids) -> dict:
         ids,
     ).rowcount or 0
 
+    release_rule_suggestion_rows(conn, [
+        row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE import_batch_id IN ({placeholders})", ids)
+    ])
     deleted = conn.execute(
         f"DELETE FROM txn WHERE import_batch_id IN ({placeholders})", ids
     ).rowcount or 0
