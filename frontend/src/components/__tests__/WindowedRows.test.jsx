@@ -34,7 +34,7 @@ beforeAll(() => {
 
 afterEach(cleanup)
 
-function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize = ROW_HEIGHT, apiRef, onTopIndexChange }) {
+function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize = ROW_HEIGHT, apiRef, onTopIndexChange, onRangeChange }) {
   const scrollRef = useRef(null)
   return (
     <div ref={scrollRef} style={{ overflow: 'auto', height: VIEWPORT_HEIGHT }}>
@@ -45,6 +45,7 @@ function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize 
         estimateSize={estimateSize}
         apiRef={apiRef}
         onTopIndexChange={onTopIndexChange}
+        onRangeChange={onRangeChange}
         renderRow={renderRow ?? (item => <div>{item.label}</div>)}
       />
     </div>
@@ -120,5 +121,27 @@ describe('WindowedRows', () => {
     expect(onTopIndexChange.mock.calls.every(call => typeof call[0] === 'number')).toBe(true)
     // At rest (scrollOffset 0) the topmost item is index 0.
     expect(onTopIndexChange.mock.calls[0][0]).toBe(0)
+  })
+
+  it('reports the viewport range, without overscan, via onRangeChange', () => {
+    const onRangeChange = vi.fn()
+    render(<Harness items={makeItems(200)} onRangeChange={onRangeChange} />)
+
+    expect(onRangeChange).toHaveBeenCalledTimes(1)
+    expect(onRangeChange.mock.calls[0][0]).toEqual({ startIndex: 0, endIndex: VIEWPORT_HEIGHT / ROW_HEIGHT - 1 })
+  })
+
+  it('draws a placeholder for an unloaded item and nothing for an empty one, never handing either to the caller', () => {
+    const items = [{ id: 'r0', label: 'Row 0' }, undefined, null]
+    const renderRow = vi.fn(item => <div>{item.label}</div>)
+    const getItemKey = vi.fn(item => item.id)
+    const { container } = render(<Harness items={items} getItemKey={getItemKey} renderRow={renderRow} />)
+
+    expect(rows(container)).toHaveLength(3)
+    expect(container.textContent).toBe('Row 0')
+    expect(rows(container)[1].firstChild).not.toBeNull()
+    expect(rows(container)[2].firstChild).toBeNull()
+    expect(renderRow.mock.calls.every(call => call[0])).toBe(true)
+    expect(getItemKey.mock.calls.every(call => call[0])).toBe(true)
   })
 })

@@ -496,7 +496,7 @@ function RemovedSection({ excluded, onAddBack }) {
 // docked panel), but its *content* sits in the same column as the list above — otherwise the panel's
 // title and table start at the page edge while the cards start at the column, and the page reads as
 // three different left margins stacked on each other.
-function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, onMembershipChange, scrollRef, sortState, onSort }) {
+function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, onMembershipChange, paging, sortState, onSort }) {
   // The column goes on an element *inside* the padding, never on the padded element itself — putting a
   // maxWidth on a padded box measures the column inside the padding and shifts it by that amount.
   const column = { maxWidth: PAGE_COLUMN, margin: '0 auto', width: '100%' }
@@ -542,7 +542,7 @@ function ReportPanel({ series, rows, excluded, total, categories, loading, onClo
             onMembershipChange={onMembershipChange}
             showMerchantReport={false}
             emptyMessage="No linked transactions. Run a scan to (re)link matches."
-            scrollRef={scrollRef}
+            paging={paging}
             sortState={sortState}
             onSort={onSort}
           />
@@ -1494,7 +1494,7 @@ export default function Recurring() {
             onTrashed={txnId => { membersPaged.setTotal(prev => Math.max(0, prev - 1)); setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev)) }}
             onAddBack={addBackToSeries}
             onMembershipChange={applyMembershipChange}
-            scrollRef={membersPaged.listRef}
+            paging={membersPaged.paging}
             sortState={membersPaged.sortState}
             onSort={membersPaged.onSort}
           />

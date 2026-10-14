@@ -123,15 +123,15 @@ export default function AccountDetail({ account, categories = [], onClose, force
   ), [listParams])
   const {
     rows: monthTxns,
+    setRows: setMonthTxns,
     loading: txnLoading,
     reload,
     reloading,
-    listRef,
+    paging,
     sortState,
     onSort,
     copy,
   } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
-  const [localMonthTxns, setLocalMonthTxns] = useState([])
   // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
   // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
   // registry and closes with this account panel; edits made inside it reconcile back into the month list.
@@ -166,13 +166,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
     })
   }
 
-  useEffect(() => {
-    setLocalMonthTxns(monthTxns)
-  }, [monthTxns])
-
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
-    applyCategoryChange(txnId, cat, (patch, id) => setLocalMonthTxns(prev => prev.map(t => (
+    applyCategoryChange(txnId, cat, (patch, id) => setMonthTxns(prev => prev.map(t => (
       t.id === id ? { ...t, ...patch } : t
     ))))
   }
@@ -212,9 +208,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // params + account + any source-account narrowing) so "select all matching" resolves the whole window
   // even when the list is paged; the count comes from the same trend sum.
   const bulk = useBulkTransactionEditing({
-    rows: localMonthTxns,
-    setRows: setLocalMonthTxns,
-    total: range.count || localMonthTxns.length,
+    rows: monthTxns,
+    setRows: setMonthTxns,
+    total: range.count || monthTxns.length,
     filterParams: listParams,
     categories,
   })
@@ -321,24 +317,24 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
-                    rows={localMonthTxns}
+                    rows={monthTxns}
                     categories={categories}
                     {...bulk.tableProps}
                     onCategorySave={saveCategory}
                     onCategoryOpenDetail={setCategoryDetail}
                     onTransactionOpenDetail={setPayeeDetail}
                     onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
-                    onRowsChange={setLocalMonthTxns}
+                    onRowsChange={setMonthTxns}
                     showAccount={false}
                     showSourceAccount={isMerged}
                     markExcludedFromTotals
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
-                    scrollRef={listRef}
+                    paging={paging}
                     sortState={sortState}
                     onSort={onSort}
                   />
@@ -357,11 +353,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
                         view. range.total already carries that sign; the local-sum fallback negates the
                         raw stored amounts (expense positive, income negative) to the same convention so
                         the two branches agree. */}
-                    Total: {formatSignedMoneyAmount(range.count ? range.total : -localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                    Total: {formatSignedMoneyAmount(range.count ? range.total : -monthTxns.reduce((s, t) => s + t.amount, 0))}
                     {/* The total (and the chart above) omit excluded-from-totals rows like transfers; the
                        rows stay listed and marked, so name the gap here rather than letting the count look wrong. */}
-                    {localMonthTxns.some(t => t.excluded_from_totals)
-                      ? ` · ${localMonthTxns.filter(t => t.excluded_from_totals).length} excluded`
+                    {monthTxns.some(t => t.excluded_from_totals)
+                      ? ` · ${monthTxns.filter(t => t.excluded_from_totals).length} excluded`
                       : ''}
                   </div>
                 </div>
@@ -374,7 +370,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
         txn={payeeDetail}
         categories={categories}
         onClose={() => setPayeeDetail(null)}
-        onReconcile={makeRowReconciler(setLocalMonthTxns)}
+        onReconcile={makeRowReconciler(setMonthTxns)}
         forceFloating
         stackIndex={stackIndex + 1}
         dateStart={dateStart}

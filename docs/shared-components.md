@@ -22,6 +22,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `TransactionListTable` | Any list of transactions. | `components/TransactionListTable.jsx` |
 | `TransactionRow.jsx` cells | A surface that draws its own rows: `CategoryCell`, `MerchantCell`, `TransactionAmountCell`, the name helpers (`getTxnMerchantLabel`, `getTxnName`, `NamelessMerchant`) and the right-click `ContextMenu`. | `components/TransactionRow.jsx` |
 | `usePagedTransactions` | A transaction list that loads in pages. It sorts on the server, and its `copy` goes to the list's copy button so a copy reaches past the loaded pages. | `components/detailShared.jsx` |
+| `usePagedRowSlots` | A paged list that isn't a `TransactionListTable`. | `lib/usePagedRowSlots.js` |
 | `useTransactionTableLayout` | The column order and widths of a `TransactionListTable`. | `lib/transactionTablePreferences.js` |
 | `TransactionListToolbar` | The copy and bulk-edit row above a transaction list, with `BulkEditChrome` below it. | `components/TransactionListToolbar.jsx` |
 | `CopyTransactionsButton` | Copying one transaction or a list for sharing. A partly loaded list passes `loadRows` and `total`. | `components/CopyTransactionsButton.jsx`, `contexts/TransactionShareContext.jsx` |

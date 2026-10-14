@@ -17,7 +17,7 @@
  *     to-focus work across panels rendered in different parts of the tree (e.g., the App-
  *     level duplicate dialog and route-mounted batch/account panels coordinate via one stack).
  *
- *   - `usePagedTransactions` backs lists that infinite-scroll as the user nears the bottom.
+ *   - `usePagedTransactions` backs lists paged by position: drawn whole, fetched where scrolled to.
  *     `activeKey` resets pagination — consumers include filters (date range, search) in the
  *     key so changing a filter starts over at page 1.
  */
@@ -35,6 +35,8 @@ import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from '
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 import { isEditableTarget } from '../lib/uiInteractions.js'
 import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMatchingTransactions.js'
+import { leadingRows } from '../lib/rowSlots.js'
+import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -406,16 +408,6 @@ export function usePanelReveal(panelRef, dataReady) {
   return revealed
 }
 
-// Defensive append for paged lists: drop any incoming row whose id is already present so a stray
-// double-fetch can never render duplicate React keys. The in-flight ref guard should prevent that in
-// the first place; this keeps the rendered list correct even if one slips through.
-function mergeUniqueById(prev, next) {
-  if (!next || next.length === 0) return prev
-  const seen = new Set(prev.map(row => row.id))
-  const added = next.filter(row => !seen.has(row.id))
-  return added.length ? [...prev, ...added] : prev
-}
-
 // The detail panels drill from a monthly trend chart into a scoped transaction list. By default the
 // list shows the one month whose bar is selected, but the user can widen it to the selected bar's
 // calendar year or the whole charted span via DetailRangeControl. These helpers turn (mode, anchor
@@ -524,124 +516,77 @@ function detailInitialSortDir(key) {
   return key === 'date' || key === 'amount' ? 'desc' : 'asc'
 }
 
-// Backs the detail panels' transaction lists: infinite-scroll pagination (DETAIL_PAGE_SIZE per page) with
-// **server-side sort**. `loadPage(offset, limit, sort)` does the fetch and must forward `sort` to the API
-// (`sort_by`/`sort_dir`) — sorting has to happen server-side because a client-side sort over an
-// infinite-scroll list is broken by construction: a reversed sort puts the un-loaded rows past the fetch
-// cursor at the *top* of the list, where scrolling to the bottom (what triggers the next page) can never
-// reach them. Changing the sort re-pages from offset 0 in the new order. `activeKey` resets pagination —
-// consumers include their filters (date range, search) in the key so changing a filter starts over.
-// `total`/`sumAmount` are the server aggregates over the whole filtered set (first-page response), for a
-// header count/total that stays correct past the loaded page; consumers that derive those from a trend
-// (category/account) ignore them. Feed `sortState`/`onSort` straight into TransactionListTable's
-// controlled-sort props so its header clicks drive this.
+// Backs the detail panels' transaction lists: paged by position (DETAIL_PAGE_SIZE per page, see
+// lib/usePagedRowSlots.js) with **server-side sort**. `loadPage(offset, limit, sort)` does the fetch and must
+// forward `sort` to the API (`sort_by`/`sort_dir`) — sorting has to happen server-side because a client-side
+// sort over a partly loaded list orders only the rows that happen to be loaded. Changing the sort re-pages
+// from the first row in the new order. `activeKey` starts the list over — consumers include their filters
+// (date range, search) in the key so changing a filter starts over.
+// `total`/`sumAmount` are the server aggregates over the whole filtered set, for a header count/total that
+// stays correct past the loaded pages; consumers that derive those from a trend (category/account) ignore
+// them. `rows` are the loaded rows and `setRows` edits them as a plain list would be edited. Feed
+// `sortState`/`onSort` into TransactionListTable's controlled-sort props and `paging` into its `paging` prop,
+// which draws the whole list and fetches the pages scrolled to.
 export function usePagedTransactions({ activeKey, loadPage, exportParams = null }) {
-  const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
-  const [offset, setOffset] = useState(0)
-  const [hasMore, setHasMore] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [total, setTotal] = useState(0)
   const [sumAmount, setSumAmount] = useState(0)
   const [sortState, setSortState] = useState(DETAIL_SORT_DEFAULT)
-  // `reload()` bumps this to re-run the first-page fetch for the query already on screen — the Refresh
-  // affordance every list that lets rows linger owes the user (`ui-patterns.md` →
-  // *Transaction lists*). It is separate from `activeKey` because the query has not changed: what changed
-  // is the ledger under it.
+  // `reload()` bumps this to re-run the query already on screen — the Refresh affordance every list that
+  // lets rows linger owes the user (`ui-patterns.md` → *Transaction lists*). It is separate from
+  // `activeKey` because the query has not changed: what changed is the ledger under it.
   const [reloadNonce, setReloadNonce] = useState(0)
   const [reloading, setReloading] = useState(false)
   const reload = useCallback(() => setReloadNonce(n => n + 1), [])
-  // The query the last first-page fetch ran for. A fetch for the same one is a reload, and a reload must
-  // not blank the list: hosts render a spinner in place of the table while `loading`, so reusing that flag
-  // would replace the rows the user is looking at with a spinner and lose their scroll position.
+  // The query the last load ran for. A load of the same one is a reload, and a reload must not blank the
+  // list: hosts render a spinner in place of the table while `loading`, so reusing that flag would replace
+  // the rows the user is looking at with a spinner. A reload also keeps the reader's place.
   const loadedQueryRef = useRef(null)
-  const listRef = useRef(null)
-  // Synchronous re-entry guard (see comment above): blocks a same-offset double-fetch that would append
-  // a page twice and produce duplicate React keys while scrolling.
-  const loadingMoreRef = useRef(false)
 
-  // Header clicks pass a column key; re-clicking the same key flips direction. The first-page effect
-  // depends on sortState, so a sort change transparently re-pages from offset 0 in the new server order.
+  // Header clicks pass a column key; re-clicking the same key flips direction. The load effect depends on
+  // the page fetch, which closes over sortState, so a sort change re-pages from the first row.
   const onSort = useCallback(key => {
     setSortState(prev => (prev && prev.key === key
       ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
       : { key, dir: detailInitialSortDir(key) }))
   }, [])
 
+  const fetchPage = useCallback((offset, limit) => loadPage(offset, limit, sortState), [loadPage, sortState])
+  const paged = usePagedRowSlots({ fetchPage, pageSize: DETAIL_PAGE_SIZE })
+  const { rows, slots, total, setRows, setTotal, reset, clear, paging } = paged
+
   useEffect(() => {
     if (!activeKey) {
-      setRows([])
-      setOffset(0)
-      setHasMore(false)
+      clear()
       setLoading(false)
       setReloading(false)
-      setTotal(0)
       setSumAmount(0)
       loadedQueryRef.current = null
       return
     }
-    let cancelled = false
     const query = `${activeKey}\u0000${sortState.key}\u0000${sortState.dir}`
     const isReload = loadedQueryRef.current === query
     loadedQueryRef.current = query
     if (isReload) setReloading(true)
     else setLoading(true)
-    setOffset(0)
-    loadPage(0, DETAIL_PAGE_SIZE, sortState).then(result => {
-      if (cancelled) return
-      const nextRows = result?.transactions || []
-      const resultTotal = Number(result?.total || 0)
-      setRows(nextRows)
-      setOffset(nextRows.length)
-      setHasMore(nextRows.length < resultTotal)
-      setTotal(resultTotal)
-      setSumAmount(Number(result?.sum_amount || 0))
-      setLoading(false)
-      setReloading(false)
-    }).catch(() => {
-      if (cancelled) return
-      setRows([])
-      setOffset(0)
-      setHasMore(false)
-      setTotal(0)
-      setSumAmount(0)
+    reset({ fromTop: !isReload }).then(({ status, response }) => {
+      if (status === 'stale') return
+      if (status === 'ok') setSumAmount(Number(response?.sum_amount || 0))
+      // A new query that failed must not leave the previous one's rows under its heading.
+      else if (!isReload) { clear(); setSumAmount(0) }
       setLoading(false)
       setReloading(false)
     })
-    return () => { cancelled = true }
-  }, [activeKey, loadPage, sortState, reloadNonce])
-
-  useEffect(() => {
-    if (!activeKey || !listRef.current) return
-    function onScroll() {
-      const el = listRef.current
-      if (!el || loadingMoreRef.current || loading || !hasMore) return
-      if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
-      loadingMoreRef.current = true
-      setLoadingMore(true)
-      loadPage(offset, DETAIL_PAGE_SIZE, sortState).then(result => {
-        const nextRows = result?.transactions || []
-        const resultTotal = Number(result?.total || 0)
-        setRows(prev => mergeUniqueById(prev, nextRows))
-        setOffset(prev => prev + nextRows.length)
-        setHasMore(offset + nextRows.length < resultTotal)
-      }).finally(() => { loadingMoreRef.current = false; setLoadingMore(false) })
-    }
-    const el = listRef.current
-    el.addEventListener('scroll', onScroll)
-    onScroll()
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [activeKey, offset, hasMore, loading, loadingMore, loadPage, sortState])
+  }, [activeKey, sortState.key, sortState.dir, reset, clear, reloadNonce])
 
   // What the list's copy button takes (`CopyTransactionsButton`'s loadRows / total / onDownload), so a copy
   // reaches past the pages scrolled to. Further rows come through the same `loadPage`, in the list's sort.
   // The download needs the filter itself: `exportParams` is the object the host fetches with — the one it
   // already hands bulk edit — and without it the copy dialog offers no download.
   const loadRows = useCallback(({ limit } = {}) => {
-    const wanted = Math.min(limit ?? Infinity, total)
-    if (rows.length >= wanted) return Promise.resolve(rows.slice(0, wanted))
+    const leading = leadingRows(slots, Math.min(limit ?? Infinity, total))
+    if (leading) return Promise.resolve(leading)
     return walkTransactionPages((pageOffset, pageLimit) => loadPage(pageOffset, pageLimit, sortState), { maxRows: limit })
-  }, [rows, total, loadPage, sortState])
+  }, [slots, total, loadPage, sortState])
   const copy = useMemo(() => ({
     loadRows,
     total,
@@ -654,10 +599,9 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
     rows,
     setRows,
     loading,
-    loadingMore,
     reload,
     reloading,
-    listRef,
+    paging,
     total,
     setTotal,
     sumAmount,

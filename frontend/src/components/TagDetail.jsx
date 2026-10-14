@@ -85,7 +85,7 @@ export default function TagDetail({
     loading,
     reload,
     reloading,
-    listRef,
+    paging,
     sortState,
     onSort,
     copy,
@@ -163,7 +163,7 @@ export default function TagDetail({
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
             maxHeight={DETAIL_LIST_MAX_HEIGHT}
-            scrollRef={listRef}
+            paging={paging}
             sortState={sortState}
             onSort={onSort}
           />

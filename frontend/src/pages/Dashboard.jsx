@@ -3269,7 +3269,7 @@ export default function Dashboard() {
                                 onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
                                 columnConfig={categoryTxnColumns}
                                 onColumnConfigChange={setCategoryTxnColumns}
-                                scrollRef={catTxnPaged.listRef}
+                                paging={catTxnPaged.paging}
                                 sortState={catTxnPaged.sortState}
                                 onSort={catTxnPaged.onSort}
                               />
@@ -3565,7 +3565,7 @@ export default function Dashboard() {
                       columnConfig={groupTxnColumns}
                       onColumnConfigChange={setGroupTxnColumns}
                       maxHeight={320}
-                      scrollRef={groupTxnPaged.listRef}
+                      paging={groupTxnPaged.paging}
                       sortState={groupTxnPaged.sortState}
                       onSort={groupTxnPaged.onSort}
                     />

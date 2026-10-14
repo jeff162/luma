@@ -184,7 +184,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     loading: txnLoading,
     reload,
     reloading,
-    listRef,
+    paging,
     sortState,
     onSort,
     copy,
@@ -713,7 +713,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
-                    scrollRef={listRef}
+                    paging={paging}
                     sortState={sortState}
                     onSort={onSort}
                     getRowStyle={row => (

@@ -161,6 +161,10 @@ export default function TransactionListTable({
   markExcludedFromTotals = false,
   emptyMessage = 'No transactions found.',
   scrollRef = null,
+  // A host paging its rows by position (usePagedTransactions) passes its `paging`: the table then draws
+  // `paging.slots`, the whole result with placeholders where pages have not arrived, and reports the rows
+  // in view so the host fetches them. `rows` stays the loaded rows, for everything but drawing.
+  paging = null,
   fillHeight = false,
   columnConfig = null,
   onColumnConfigChange = null,
@@ -175,8 +179,8 @@ export default function TransactionListTable({
   bulkSelection = null,
   bulkTotal = 0,
 }) {
-  // The wrapper below is both the scroll viewport the rows window against and the element callers
-  // attach infinite-scroll to, so it needs a ref whether or not the caller passed one.
+  // The wrapper below is the scroll viewport the rows window against, and a caller may want it too, so it
+  // needs a ref whether or not the caller passed one.
   const internalScrollRef = useRef(null)
   const attachScrollRef = useCallback(node => {
     internalScrollRef.current = node
@@ -422,8 +426,8 @@ export default function TransactionListTable({
   return (
     <>
       {/* This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
-        horizontal scroll feeds the wide grid. scrollRef lands here so caller-side infinite
-        scroll hooks can attach to the same element the rows scroll inside. It is intentionally
+        horizontal scroll feeds the wide grid. scrollRef lands here so a caller can reach the same
+        element the rows scroll inside. It is intentionally
         NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
         and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
         which subtly changes the wrapper's measured size and throws off the floating detail
@@ -452,10 +456,12 @@ export default function TransactionListTable({
           renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
             <WindowedRows
               scrollRef={internalScrollRef}
-              items={visibleRows}
+              items={paging ? paging.slots : visibleRows}
               getItemKey={transactionRowKey}
               estimateSize={41}
               measureKey={activeColumns.map(col => col.width).join(',')}
+              onRangeChange={paging?.onRangeChange}
+              apiRef={paging?.apiRef}
               renderRow={txn => renderRow(activeColumns, gridTemplateColumns, txn)}
             />
           )}

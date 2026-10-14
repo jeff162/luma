@@ -43,6 +43,11 @@ export default function WindowedRows({
   // Optional: reports the index of the topmost item at the viewport edge as the user scrolls, so a caller
   // can highlight the current section. Fired only when the top index changes.
   onTopIndexChange = null,
+  // Optional: reports `{ startIndex, endIndex }`, the items in the viewport (overscan excluded), whenever
+  // that range changes, so a caller holding a partly loaded list can fetch the rows being looked at. In
+  // such a list an item not loaded yet is `undefined`, drawn as a placeholder `estimateSize` high, and an
+  // item that is `null` is drawn as nothing (lib/rowSlots.js); neither reaches `getItemKey` or `renderRow`.
+  onRangeChange = null,
 }) {
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -50,7 +55,7 @@ export default function WindowedRows({
     estimateSize: () => estimateSize,
     // Item identity, not list position, so a re-sort or a filter change re-keys the measurement cache
     // instead of reusing whatever row previously sat at that index.
-    getItemKey: index => getItemKey(items[index], index),
+    getItemKey: index => (items[index] == null ? `unloaded:${index}` : getItemKey(items[index], index)),
     overscan,
   })
 
@@ -81,6 +86,16 @@ export default function WindowedRows({
     }
   })
 
+  const lastRangeRef = useRef(null)
+  useEffect(() => {
+    if (!onRangeChange || !virtualizer.range) return
+    const { startIndex, endIndex } = virtualizer.range
+    const last = lastRangeRef.current
+    if (last && last.startIndex === startIndex && last.endIndex === endIndex) return
+    lastRangeRef.current = { startIndex, endIndex }
+    onRangeChange(lastRangeRef.current)
+  })
+
   return (
     // The spacer carries the full scroll height so the scrollbar reflects the whole list; the inner
     // wrapper is offset to the first mounted row so each row can be measured at its natural height.
@@ -95,10 +110,28 @@ export default function WindowedRows({
       }}>
         {virtualRows.map(virtualRow => (
           <div key={virtualRow.key} data-index={virtualRow.index} ref={virtualizer.measureElement}>
-            {renderRow(items[virtualRow.index], virtualRow.index)}
+            {items[virtualRow.index] === undefined
+              ? <UnloadedRow height={estimateSize} />
+              : items[virtualRow.index] === null ? null : renderRow(items[virtualRow.index], virtualRow.index)}
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// A row whose data has not arrived: the row's height and rule, so nothing shifts when it does.
+function UnloadedRow({ height }) {
+  return (
+    <div style={{
+      height,
+      boxSizing: 'border-box',
+      padding: '0 14px',
+      display: 'flex',
+      alignItems: 'center',
+      borderBottom: '1px solid var(--border)',
+    }}>
+      <div style={{ width: '40%', height: 10, borderRadius: 4, background: 'var(--surface2)' }} />
     </div>
   )
 }

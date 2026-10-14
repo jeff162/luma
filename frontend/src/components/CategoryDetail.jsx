@@ -63,10 +63,11 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   ), [listParams])
   const {
     rows: monthTxns,
+    setRows: setMonthTxns,
     loading: txnLoading,
     reload,
     reloading,
-    listRef,
+    paging,
     sortState,
     onSort,
     copy,
@@ -98,27 +99,22 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   // regardless of any one month's count); month mode sizes to its busiest bar.
   const monthSectionHeight = getDetailMonthSectionHeight(rangeMode === 'month' ? trend : [{ count: 999 }])
 
-  const [localMonthTxns, setLocalMonthTxns] = useState([])
   const [payeeDetail, setPayeeDetail] = useState(null)
-
-  useEffect(() => {
-    setLocalMonthTxns(monthTxns)
-  }, [monthTxns])
 
   // Bulk edit over the current window's rows for this category. The filter mirrors the list fetch
   // (window params + category) so "select all matching" resolves the whole window even when the list is
   // paged; the count comes from the same trend sum.
   const bulk = useBulkTransactionEditing({
-    rows: localMonthTxns,
-    setRows: setLocalMonthTxns,
-    total: range.count || localMonthTxns.length,
+    rows: monthTxns,
+    setRows: setMonthTxns,
+    total: range.count || monthTxns.length,
     filterParams: listParams,
     categories,
   })
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
-    applyCategoryChange(txnId, cat, (patch, id) => setLocalMonthTxns(prev => prev.map(t => (
+    applyCategoryChange(txnId, cat, (patch, id) => setMonthTxns(prev => prev.map(t => (
       t.id === id ? { ...t, ...patch } : t
     ))))
   }
@@ -186,16 +182,16 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${category.name}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${category.name}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
-                    rows={localMonthTxns}
+                    rows={monthTxns}
                     categories={categories}
                     {...bulk.tableProps}
                     onCategorySave={saveCategory}
                     onTransactionOpenDetail={setPayeeDetail}
                     onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
-                    onRowsChange={setLocalMonthTxns}
+                    onRowsChange={setMonthTxns}
                     // This list is scoped to one category, so its rows are expanded allocations — a
                     // split transaction arrives as the part that matched. A rewritten split can move a
                     // row to another category or out of the window entirely, which no row patch can
@@ -204,7 +200,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
-                    scrollRef={listRef}
+                    paging={paging}
                     sortState={sortState}
                     onSort={onSort}
                   />
@@ -227,7 +223,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     Total: {formatSignedMoneyAmount(range.count
                       ? range.total
                       : ((category.category_type ?? categories.find(c => c.id === category.id)?.category_type) === 'income' ? -1 : 1)
-                        * localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                        * monthTxns.reduce((s, t) => s + t.amount, 0))}
                   </div>
                 </div>
               )}
@@ -239,7 +235,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
         txn={payeeDetail}
         categories={categories}
         onClose={() => setPayeeDetail(null)}
-        onReconcile={makeRowReconciler(setLocalMonthTxns)}
+        onReconcile={makeRowReconciler(setMonthTxns)}
         forceFloating
         stackIndex={stackIndex + 1}
         dateStart={dateStart}

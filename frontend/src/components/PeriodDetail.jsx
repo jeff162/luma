@@ -80,7 +80,7 @@ export default function PeriodDetail({
     loading,
     reload,
     reloading,
-    listRef,
+    paging,
     total: txnTotal,
     setTotal: setTxnTotal,
     sumAmount: txnSum,
@@ -164,7 +164,7 @@ export default function PeriodDetail({
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
             fillHeight
-            scrollRef={listRef}
+            paging={paging}
             sortState={sortState}
             onSort={onSort}
           />

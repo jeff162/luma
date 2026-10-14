@@ -39,6 +39,8 @@ import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import { sessionStore } from '../lib/browserStorage.js'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
+import { leadingRows } from '../lib/rowSlots.js'
+import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
 
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
@@ -55,20 +57,11 @@ const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'tags', 'amoun
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
 const TXN_SESSION_STATE_STORAGE_KEY = 'luma:txn-session-state'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
-const TRANSACTIONS_BASE_PAGE_SIZE = 500
-const TRANSACTIONS_MAX_PAGE_SIZE = 1000
-const TRANSACTIONS_PAGE_GROWTH_STEP = 250
-const TRANSACTIONS_PAGE_GROWTH_INTERVAL = 1500
-const TRANSACTIONS_SCROLL_BUFFER_PX = 1600
+const TRANSACTIONS_PAGE_SIZE = 500
+// Rows past the viewport, either way, that are fetched before they scroll into view.
+const TRANSACTIONS_PREFETCH_ROWS = 200
+const TRANSACTIONS_ROW_ESTIMATE = 38
 let transactionsSessionInitialized = false
-
-function getTransactionsPageSize(loadedCount = 0) {
-  const growthSteps = Math.floor(Math.max(0, loadedCount) / TRANSACTIONS_PAGE_GROWTH_INTERVAL)
-  return Math.min(
-    TRANSACTIONS_MAX_PAGE_SIZE,
-    TRANSACTIONS_BASE_PAGE_SIZE + (growthSteps * TRANSACTIONS_PAGE_GROWTH_STEP),
-  )
-}
 
 
 function normalizeTransactionSortState(value) {
@@ -211,9 +204,7 @@ export default function Transactions() {
   const { filters, clearDate, removeSelections, getRawDate } = useFilters()
   const location = useLocation()
   const [categories, setCategories] = useState([])
-  const [data, setData] = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
   const [initialLoading, setInitialLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [detailPanels, setDetailPanels] = useState([])
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
   const [editId, setEditId] = useState(null)
@@ -251,26 +242,18 @@ export default function Transactions() {
   // place, trash drops it (decrementing the total) and closes any open detail panel for that row.
   const rowActions = useTransactionRowActions({
     onOpenDetail: txn => openDetailPanel('txn', txn),
-    reconcileRow: (txnId, patch) => setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t => (t.id === txnId ? { ...t, ...patch } : t)),
-    })),
+    reconcileRow: (txnId, patch) => patchRow(txnId, patch),
     removeRow: txnId => {
-      setData(prev => ({
-        ...prev,
-        transactions: prev.transactions.filter(t => t.id !== txnId),
-        total: Math.max(0, (prev.total || 0) - 1),
-      }))
+      removeRow(txnId)
       setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === txnId)))
     },
-    onRuleSaved: ({ applyToExisting }) => { if (applyToExisting) { isFirstLoad.current = true; load() } },
+    onRuleSaved: ({ applyToExisting }) => { if (applyToExisting) reload() },
     categories,
     onAddCategory: addCategory,
   })
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
   const categoryHeaderMenuRef = useRef(null)
-  const loadSeqRef = useRef(0)
   // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
   // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
   // load effect / localStorage — the setter persists straight through the context.
@@ -383,103 +366,66 @@ export default function Transactions() {
     saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter })
   }, [quickFilter, amountFilter, sortState, attributeFilter])
 
-  const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
-    // The chip row becomes parameters through the shared facet registry, which splits each facet by
-    // mode — include drives the plain param, exclude ('is not') the parallel exclude_* mirror.
-    const facetParams = selectionsToParams(filters.selections)
-    const offset = append ? offsetOverride : 0
-    const pageSize = getTransactionsPageSize(offset)
-    // Requests can resolve out of order; keep only the newest one so the grid never snaps back to stale
-    // results after fast typing or toggling.
-    //
-    // **The ticket counts calls, not queries, and that distinction is the whole rule.** This used to
-    // compare a key built from the resolved filter params, which answers "did the filters change while
-    // this was in flight" — and is blind to the case where they did not. Two loads for the *same* query
-    // can overlap (StrictMode runs the mount effect twice in dev; in production `useAfterLedgerSync`,
-    // the refresh button and `bulk.onReload` all re-load with unchanged filters), they produced an
-    // identical key, and so both committed: whichever response landed last won, by arrival order rather
-    // than recency. Against a ledger being written to at the same time the two answers differ, and the
-    // grid silently took the older one. A counter cannot collide, needs no knowledge of which facets
-    // exist, and subsumes what the key was for.
-    const seq = ++loadSeqRef.current
+  // One page of the list by position, in the list's own filter and sort. The filter is the same object bulk
+  // edit resolves "select all matching" from, so the two cannot disagree about which rows are listed.
+  const fetchPage = useCallback((offset, limit) => api.getTransactions({
+    ...currentFilterParams,
+    sort_by: sortState.key,
+    sort_dir: sortState.dir,
+    limit,
+    offset,
+  }), [currentFilterParams, sortState])
 
-    if (append) setLoadingMore(true)
-    else if (isFirstLoad.current) setInitialLoading(true)
+  // A transaction panel open on a row shows the row as last fetched.
+  function refreshOpenPanels(rows) {
+    setDetailPanels(current => current.map(panel => (
+      panel.type === 'txn'
+        ? { ...panel, item: rows.find(t => t.id === panel.item?.id) || panel.item }
+        : panel
+    )))
+  }
 
-    const response = await api.getTransactions({
-      date_start: getRawDate()?.start || undefined,
-      date_end: getRawDate()?.end || undefined,
-      ...facetParams,
-      require_all_attribute_ids: activeAttribute,
-      quick_filter: debouncedQuickFilter || undefined,
-      ...amountFilterParams(amountFilter),
-      sort_by: sortState.key,
-      sort_dir: sortState.dir,
-      limit: pageSize,
-      offset,
-    })
+  const paged = usePagedRowSlots({
+    fetchPage,
+    pageSize: TRANSACTIONS_PAGE_SIZE,
+    prefetchRows: TRANSACTIONS_PREFETCH_ROWS,
+    onRowsLoaded: refreshOpenPanels,
+  })
+  const { rows: shownRows, total, reset: resetList } = paged
 
-    if (loadSeqRef.current !== seq) return
-
-    setData(prev => {
-      const transactions = append
-        ? [...prev.transactions, ...response.transactions]
-        : response.transactions
-      setDetailPanels(current => current.map(panel => (
-        panel.type === 'txn'
-          ? { ...panel, item: transactions.find(t => t.id === panel.item?.id) || panel.item }
-          : panel
-      )))
-      return {
-        ...response,
-        transactions,
-      }
-    })
+  // A new query (`fromTop`) starts at its first row; anything else (the refresh button, a sync, a reload
+  // after an edit) keeps the reader on the row they were on. Never rejects.
+  const load = useCallback(async ({ fromTop = false } = {}) => {
+    if (isFirstLoad.current) setInitialLoading(true)
+    const { status } = await resetList({ fromTop })
+    if (status === 'stale') return
     setInitialLoading(false)
-    setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, getRawDate, activeAttribute, amountFilter, debouncedQuickFilter, sortState])
+  }, [resetList])
+
+  const reload = useCallback(() => load(), [load])
 
   useEffect(() => {
     isFirstLoad.current = true
-    setLoadingMore(false)
-    load({ append: false }).catch(() => {
-      setInitialLoading(false)
-      setLoadingMore(false)
-      isFirstLoad.current = false
-    })
+    load({ fromTop: true })
   }, [load])
 
   // A sync lands rows on the server, where no mutation signal on this page can see them. The same in-place
   // re-query as the refresh button, so edited rows left in place for correction drop out here as they do there.
-  useAfterLedgerSync(() => { load({ append: false }).catch(() => {}) })
+  useAfterLedgerSync(reload)
 
   const bulk = useBulkTransactionEditing({
-    rows: data.transactions,
-    total: data.total,
+    rows: shownRows,
+    total,
     filterParams: currentFilterParams,
     categories,
-    onReload: async () => { isFirstLoad.current = true; await load() },
+    onReload: reload,
   })
   // Aliases so the page's custom PillGridTable select-column wiring (header + per-row checkbox) reads
   // from the controller without restating `bulk.` at every site.
   const selection = bulk.selection
   const bulkMode = bulk.bulkMode
   const bulkSelectedCount = bulk.selectedCount
-
-  const maybeLoadMore = useCallback(() => {
-    if (initialLoading || loadingMore) return
-    if (data.transactions.length >= data.total) return
-    const root = listScrollRef.current
-    if (!root) return
-    const remaining = root.scrollHeight - root.scrollTop - root.clientHeight
-    if (remaining > TRANSACTIONS_SCROLL_BUFFER_PX) return
-    load({ append: true, offsetOverride: data.transactions.length }).catch(() => setLoadingMore(false))
-  }, [data.total, data.transactions.length, initialLoading, loadingMore, load])
-
-  useEffect(() => {
-    maybeLoadMore()
-  }, [data.transactions.length, maybeLoadMore])
 
   // When the ledger settles to *no* rows, quietly check whether a subtractive filter (the date window
   // or an exclude chip) is what's hiding the user's matches — rather than there genuinely being none.
@@ -488,8 +434,8 @@ export default function Transactions() {
   // would surface, we say nothing — the note never claims the filter is hiding what it isn't.
   const [hidingCause, setHidingCause] = useState(null)
   useEffect(() => {
-    if (initialLoading || loadingMore) return
-    if (data.transactions.length > 0) { setHidingCause(null); return }
+    if (initialLoading) return
+    if (total > 0) { setHidingCause(null); return }
     const probes = planHidingProbes(currentFilterParams)
     if (probes.length === 0) { setHidingCause(null); return }
     let cancelled = false
@@ -508,7 +454,7 @@ export default function Transactions() {
         }
       })()
     return () => { cancelled = true }
-  }, [data.transactions.length, initialLoading, loadingMore, currentFilterParams])
+  }, [total, initialLoading, currentFilterParams])
 
   function clearHidingCause(cause) {
     if (cause === 'date' || cause === 'filters') clearDate()
@@ -523,12 +469,7 @@ export default function Transactions() {
   // on. The row is pruned only when the user re-queries with the Refresh button. Shared by inline edits
   // and by edits made inside an open transaction detail panel.
   function reconcileCategorizedRow(txnId, patch) {
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, ...patch } : t
-      ),
-    }))
+    patchRow(txnId, patch)
   }
 
   function saveCategory(txnId, catId, catObj) {
@@ -548,59 +489,42 @@ export default function Transactions() {
 
   // Single reconcile callback for a TransactionDetail panel: it persisted through txnMutations (which
   // already invalidated the derived counts), so just merge its patch into the page list — or drop the
-  // row and decrement the total when the panel reports a trash (patch === null). The ledger lives in
-  // nested state (`{ transactions, total }`), so this can't use the flat makeRowReconciler helper.
+  // row and decrement the total when the panel reports a trash (patch === null). The ledger holds row
+  // slots rather than a flat list, so this can't use the flat makeRowReconciler helper.
   function reconcilePanelEdit(txnId, patch) {
-    setData(prev => ({
-      ...prev,
-      transactions: patch === null
-        ? prev.transactions.filter(t => t.id !== txnId)
-        : prev.transactions.map(t => (t.id === txnId ? { ...t, ...patch } : t)),
-      ...(patch === null ? { total: Math.max(0, (prev.total || 0) - 1) } : {}),
-    }))
+    if (patch === null) removeRow(txnId)
+    else patchRow(txnId, patch)
+  }
+
+  // Every in-place edit of a loaded row goes through these two.
+  function patchRow(txnId, patch) {
+    paged.setRows(prev => prev.map(t => (t.id === txnId ? { ...t, ...patch } : t)))
+  }
+
+  function removeRow(txnId) {
+    paged.setRows(prev => prev.filter(t => t.id !== txnId))
+    paged.setTotal(prev => Math.max(0, prev - 1))
   }
 
   function updateNote(txnId, notes) {
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, notes } : t
-      ),
-    }))
+    patchRow(txnId, { notes })
   }
 
   // `blockedTags` arrives from the row tag picker (inherited/rule opt-out); it's absent when called
   // from TransactionDetail's onTagsChanged, so only patch it through when supplied.
   function updateTags(txnId, tags, blockedTags) {
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === txnId
-          ? { ...t, tags, ...(blockedTags !== undefined ? { blocked_tags: blockedTags } : {}) }
-          : t
-      ),
-    }))
+    patchRow(txnId, { tags, ...(blockedTags !== undefined ? { blocked_tags: blockedTags } : {}) })
   }
 
   // The row's purchase marker reports the summary after an edit or an ungroup (null when the payments
   // were ungrouped), so the marker follows without re-fetching the page.
   function updatePurchase(txnId, purchase) {
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, purchase } : t
-      ),
-    }))
+    patchRow(txnId, { purchase })
   }
 
   // An edited text document comes back under a new id, which the row's marker opens from.
   function updateDocuments(txnId, documents) {
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, documents } : t
-      ),
-    }))
+    patchRow(txnId, { documents })
   }
 
   function addCategory(cat) {
@@ -697,22 +621,21 @@ export default function Transactions() {
    */
   const [linkingPurchase, setLinkingPurchase] = useState(null)
   const selectedRowsForPurchase = useMemo(
-    () => (selection.allMatching ? [] : data.transactions.filter(txn => selection.isSelected(txn.id))),
-    [selection, data.transactions],
+    () => (selection.allMatching ? [] : shownRows.filter(txn => selection.isSelected(txn.id))),
+    [selection, shownRows],
   )
 
   // Every row the list is showing, including the pages not scrolled to yet, in the list's own filter and
   // sort — so a copy comes out in the order on screen. Once every page is loaded those rows are the answer.
   // `limit` asks for only the first that many (the copy dialog's "Copy first 500").
   const loadAllShownTransactions = useCallback(({ limit } = {}) => {
-    if (data.transactions.length >= (limit ? Math.min(limit, data.total) : data.total)) {
-      return Promise.resolve(limit ? data.transactions.slice(0, limit) : data.transactions)
-    }
+    const leading = leadingRows(paged.slots, limit ? Math.min(limit, total) : total)
+    if (leading) return Promise.resolve(leading)
     return fetchAllMatchingTransactions(
       { ...currentFilterParams, sort_by: sortState.key, sort_dir: sortState.dir },
       { maxRows: limit },
     )
-  }, [currentFilterParams, data.total, data.transactions, sortState])
+  }, [currentFilterParams, total, paged.slots, sortState])
 
   // The same set as a CSV file, for a list past the copy limit. The export takes the list feed's own filter
   // and sort, so the file holds exactly the rows a copy would have.
@@ -729,7 +652,7 @@ export default function Transactions() {
       // In all-matching mode the selection reaches past the loaded pages, so re-resolve it from the
       // server using the same filter *and sort* the list is showing — otherwise the CSV would come out
       // in a different order than what the user is looking at.
-      const candidates = selection.allMatching ? await loadAllShownTransactions() : data.transactions
+      const candidates = selection.allMatching ? await loadAllShownTransactions() : shownRows
 
       const selected = candidates.filter(txn => selection.isSelected(txn.id))
       const csvText = selected
@@ -750,7 +673,7 @@ export default function Transactions() {
     } finally {
       setCopying(false)
     }
-  }, [cols, data.transactions, loadAllShownTransactions, selection, showSourceInCategorySlot])
+  }, [cols, shownRows, loadAllShownTransactions, selection, showSourceInCategorySlot])
 
   // Clear the transient status so it doesn't linger next to a selection it no longer describes.
   useEffect(() => {
@@ -783,10 +706,7 @@ export default function Transactions() {
           <MerchantCell
             txn={txn}
             onOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
-            onRename={(id, name) => setData(prev => ({
-              ...prev,
-              transactions: prev.transactions.map(t => t.id === id ? { ...t, display_name: name } : t),
-            }))}
+            onRename={(id, name) => patchRow(id, { display_name: name })}
             onUpdateNote={updateNote}
           />
         )
@@ -931,7 +851,7 @@ export default function Transactions() {
           // page is still arriving, which would only start the same query again.
           refresh={(
             <RefreshButton
-              onRefresh={() => (initialLoading ? undefined : load({ append: false }))}
+              onRefresh={() => (initialLoading ? undefined : reload())}
               title="Refresh — re-query the list and drop transactions that no longer match"
             />
           )}
@@ -992,12 +912,12 @@ export default function Transactions() {
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, color: 'var(--muted)' }}>
               <CopyTransactionsButton
                 loadRows={loadAllShownTransactions}
-                total={data.total}
+                total={total}
                 onDownload={downloadShownTransactions}
                 title="Transactions"
                 tooltip="Copy the transactions shown"
               />
-              {data.total} transaction{data.total === 1 ? '' : 's'}
+              {total} transaction{total === 1 ? '' : 's'}
             </span>
           </div>
         </div>
@@ -1044,20 +964,17 @@ export default function Transactions() {
               bulk.selection.clear()
               // The rows' purchase summaries come from the list feed, so the markers and the panel's
               // section follow from a reload — the same route a bulk edit on this page already takes.
-              isFirstLoad.current = true
-              await load()
+              await reload()
             }}
           />
         ) : null}
 
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
-            so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore
-            stay on the scroll viewport so infinite-scroll fires from the same element
-            the rows scroll inside. */}
+            so the sticky PillTableHeader inside pins to it, and the windowed rows measure
+            the viewport from the same element. */}
         <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <div
             ref={listScrollRef}
-            onScroll={maybeLoadMore}
             style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
           >
             <PillGridTable
@@ -1073,7 +990,7 @@ export default function Transactions() {
               }}
               renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
                 <div>
-                  {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
+                  {initialLoading ? <Spinner /> : total === 0 ? (
                     <>
                       <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
                       {hidingCause && (
@@ -1093,10 +1010,12 @@ export default function Transactions() {
                     // intrinsic-size placeholder would feed the virtualizer a wrong measurement.
                     <WindowedRows
                       scrollRef={listScrollRef}
-                      items={data.transactions}
+                      items={paged.paging.slots}
                       getItemKey={transactionRowKey}
-                      estimateSize={40}
+                      estimateSize={TRANSACTIONS_ROW_ESTIMATE}
                       measureKey={activeColumns.map(col => col.width).join(',')}
+                      onRangeChange={paged.paging.onRangeChange}
+                      apiRef={paged.paging.apiRef}
                       renderRow={txn => (
                         <div
                           onContextMenu={e => rowActions.onContextMenu(e, txn)}
@@ -1129,15 +1048,6 @@ export default function Transactions() {
                       )}
                     />
                   )}
-                  {!initialLoading && data.transactions.length > 0 ? (
-                    <div style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>
-                      {loadingMore
-                        ? 'Loading more transactions…'
-                        : data.transactions.length < data.total
-                          ? 'Scroll for older transactions'
-                          : 'All matching transactions loaded'}
-                    </div>
-                  ) : null}
                 </div>
               )}
             />
@@ -1256,10 +1166,7 @@ export default function Transactions() {
             onSaved={({ applyToExisting }) => {
               // Applying the rule to existing rows is done through txnMutations.applyRule, which
               // already refreshed the Tasks count; here we just reload the visible list.
-              if (applyToExisting) {
-                isFirstLoad.current = true
-                load()
-              }
+              if (applyToExisting) reload()
             }}
             onDismiss={() => setRulePrompt(null)}
           />
@@ -1273,7 +1180,7 @@ export default function Transactions() {
             // A reload rather than an optimistic insert: the new row has to land in the current sort
             // and filter, which only the query knows — and the server may have categorized it by rule
             // on the way in, so what comes back is not what was sent.
-            onCreated={() => { isFirstLoad.current = true; load() }}
+            onCreated={reload}
           />
         )}
 
@@ -1290,7 +1197,7 @@ export default function Transactions() {
             onClose={({ changed }) => {
               setTagsOpen(false)
               // The rows carry each tag's name and colour, so an edit to one is refetched.
-              if (changed) load({ append: false }).catch(() => {})
+              if (changed) reload()
             }}
           />
         )}
@@ -1306,7 +1213,7 @@ export default function Transactions() {
             onClose={() => setReimbursementsOpen(false)}
             // Completing or editing one can move a transaction's allocations, so the ledger behind is
             // refetched rather than patched — the change is not confined to the rows on screen.
-            onChanged={() => { isFirstLoad.current = true; load() }}
+            onChanged={reload}
           />
         )}
 

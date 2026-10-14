@@ -184,7 +184,7 @@ export default function ImportBatchDetail({
     rows,
     setRows,
     loading,
-    listRef,
+    paging,
     sortState,
     onSort,
   } = usePagedTransactions({
@@ -386,7 +386,7 @@ export default function ImportBatchDetail({
               columnConfig={columnConfig}
               onColumnConfigChange={setColumnConfig}
               fillHeight
-              scrollRef={listRef}
+              paging={paging}
               sortState={sortState}
               onSort={onSort}
               emptyMessage={isSyncCard ? 'No synced transactions remain on this card.' : 'No imported transactions remain for this file.'}

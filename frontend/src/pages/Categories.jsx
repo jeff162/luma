@@ -1679,12 +1679,14 @@ export default function Categories() {
     ? `${matchingTxnsBaseKey}|${matchingReloadNonce}`
     : null
 
-  const loadMatchingTxnPage = useCallback((offset, limit) => (
+  const loadMatchingTxnPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
       category_id: selectedCategoryFilter,
       category_ids: selectedCategoryIdsFilter || undefined,
       limit,
       offset,
+      sort_by: sort.key,
+      sort_dir: sort.dir,
     })
   ), [selectedCategoryFilter, selectedCategoryIdsFilter])
 
@@ -1692,8 +1694,9 @@ export default function Categories() {
     rows: pagedMatchingTxns,
     setRows: setPagedMatchingTxns,
     loading: matchingTxnsLoading,
-    loadingMore: matchingTxnsLoadingMore,
-    listRef: matchingTxnsListRef,
+    paging: matchingTxnsPaging,
+    sortState: matchingTxnsSortState,
+    onSort: onMatchingTxnsSort,
   } = usePagedTransactions({
     activeKey: matchingTxnsKey,
     loadPage: loadMatchingTxnPage,
@@ -2423,7 +2426,7 @@ export default function Categories() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                        {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
+                        {matchingTxnsTotal} total
                       </div>
                       {showReimbursements ? (
                         <Button
@@ -2475,17 +2478,14 @@ export default function Categories() {
                       // allocations. A rewritten split changes which categories those parts are in and
                       // for how much — which no row patch can restate — so the scope is fetched again.
                       onSplitSaved={() => setMatchingReloadNonce(n => n + 1)}
-                      scrollRef={matchingTxnsListRef}
+                      paging={matchingTxnsPaging}
+                      sortState={matchingTxnsSortState}
+                      onSort={onMatchingTxnsSort}
                       fillHeight={true}
                       columnConfig={matchingTxnColumns}
                       onColumnConfigChange={setMatchingTxnColumns}
                     />
                   )}
-                  {matchingTxnsLoadingMore ? (
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-                      Loading more transactions…
-                    </div>
-                  ) : null}
                 </div>
               </div>
             )}

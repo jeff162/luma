@@ -97,9 +97,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Long lists are windowed** with `WindowedRows`. Column widths must come from the shared grid template
   rather than from browser table auto-sizing, or the columns jump while scrolling. Sort and selection
   stay driven from the full list, never the mounted rows.
-- **A paged list sorts on the server.** A client-side sort over a partly loaded list hides the unloaded
-  rows where scrolling cannot reach them. `usePagedTransactions` owns paging and sort for transaction
-  lists; a one-shot capped fetch silently drops rows.
+- **A paged list sorts on the server.** A client-side sort over a partly loaded list orders only the rows
+  that happen to be loaded. `usePagedTransactions` owns paging and sort for transaction lists; a one-shot
+  capped fetch silently drops rows.
 - **In a dialog, one outer container scrolls both axes** with the header pinned by `position: sticky`.
   A nested vertical scroll clips the last column when its scrollbar appears.
 - **Two-line rows suit content that is variable-length on both sides.** Keep a table only when the
