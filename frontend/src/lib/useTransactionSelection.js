@@ -57,16 +57,6 @@ export function useTransactionSelection() {
     setExcluded(new Set())
   }, [])
 
-  // Explicit-ids "select all" for surfaces whose visible rows are a client-side subset that no server
-  // filter can re-resolve (e.g. TagDetail's exact tag-signature list). The rows are already fully in
-  // memory, so "all" simply means every loaded id — ids mode, not all-matching. `toSelectionPayload`
-  // then ships them as `{ mode: 'ids' }` and the backend chunks the list.
-  const selectAll = useCallback(allIds => {
-    setAllMatching(false)
-    setExcluded(new Set())
-    setIds(new Set(allIds))
-  }, [])
-
   const selectedCount = useCallback(
     total => (allMatching ? Math.max(0, (total || 0) - excluded.size) : ids.size),
     [allMatching, excluded, ids],
@@ -90,7 +80,6 @@ export function useTransactionSelection() {
     toggle,
     clear,
     selectAllMatching,
-    selectAll,
     selectedCount,
     toSelectionPayload,
   }

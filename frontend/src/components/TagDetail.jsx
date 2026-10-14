@@ -28,10 +28,6 @@ const TAG_DETAIL_TABLE_PREF_KEY = 'ui.tagDetail.transactions.columns'
  * carries — so an "Alice + Essential" wedge shows transactions tagged with both,
  * a single-tag wedge shows transactions with that one tag only, and the "Other /
  * Untagged" wedge shows transactions that match none of the selected report tags.
- *
- * The backend tag filter is OR-only, so we fetch any transactions matching at least
- * one report tag (or, for the Other signature, fetch all view-scoped transactions
- * for the period) and post-filter on the frontend by exact signature match.
  */
 export default function TagDetail({
   signature,

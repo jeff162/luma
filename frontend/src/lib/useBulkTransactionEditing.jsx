@@ -13,13 +13,9 @@
  * (placement/style is page-contextual) and spreads `tableProps` onto its `TransactionListTable`; the
  * `<BulkEditChrome>` companion renders the action bar plus the panel/confirm/notice dialogs.
  *
- * Select-all has two strategies, because not every visible list maps to a server filter:
- *   - 'filter' (default): the header checkbox flips to "all matching the current filter"; the bulk API
- *     resolves the set server-side from `filterParams`, so it covers rows past the loaded page. Used by
- *     every list whose scope is a server-expressible filter (date / category / group / account / batch…).
- *   - 'loaded': the visible rows are a client-side subset no server filter can re-resolve (TagDetail's
- *     exact tag-signature list). The rows are already fully in memory, so select-all just checks every
- *     loaded id (ids mode) — see `selectAll` in useTransactionSelection.
+ * Select-all means "all matching the current filter": the bulk API resolves the set server-side from
+ * `filterParams`, so it covers rows past the loaded page. A host's list must therefore be expressible
+ * as a server filter.
  *
  * Apply reconciliation: hosts that hold their rows in local state pass `setRows` (+ optional
  * `onRowsTrashed` to decrement a separately-tracked total) for in-place patching; a host whose source of
@@ -32,7 +28,7 @@
  * narrow looks exactly like one that worked until the result lands.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTags } from './useTags.js'
 import { useTransactionSelection } from './useTransactionSelection.js'
 import { categoryReconcilePatch, reconcileRowsAfterRuleApply, txnMutations } from './txnMutations.js'
@@ -67,7 +63,6 @@ export function useBulkTransactionEditing({
   onReload = null,
   total = 0,
   filterParams = {},
-  selectAllStrategy = 'filter',
   categories = [],
   availableTags = [],
   getRowId = row => row.id,
@@ -88,19 +83,7 @@ export function useBulkTransactionEditing({
   const { tags: sharedTags } = useTags()
   const effectiveTags = availableTags.length ? availableTags : sharedTags
 
-  const loadedIds = useMemo(() => rows.map(getRowId), [rows, getRowId])
-
-  // For the 'loaded' strategy the table header's select-all must check every loaded id (ids mode), not
-  // flip to server all-matching. Wrap the selection so TransactionListTable's header hook, which calls
-  // selectAllMatching(), routes to selectAll(loadedIds) instead.
-  const tableSelection = useMemo(() => (
-    selectAllStrategy === 'loaded'
-      ? { ...selection, selectAllMatching: () => selection.selectAll(loadedIds) }
-      : selection
-  ), [selection, selectAllStrategy, loadedIds])
-
-  const bulkTotal = selectAllStrategy === 'loaded' ? rows.length : total
-  const selectedCount = selection.selectedCount(bulkTotal)
+  const selectedCount = selection.selectedCount(total)
 
   const toggle = useCallback(() => {
     setBulkMode(v => !v)
@@ -184,7 +167,7 @@ export function useBulkTransactionEditing({
     // Snapshot which loaded rows the selection covers *before* clearing it, so the in-place patch
     // reconciles exactly those. Works in both modes: isSelected() is true for every non-excluded loaded
     // row when "all matching" is active.
-    const affectedIds = new Set(rows.filter(txn => tableSelection.isSelected(getRowId(txn))).map(getRowId))
+    const affectedIds = new Set(rows.filter(txn => selection.isSelected(getRowId(txn))).map(getRowId))
     try {
       const result = await txnMutations.bulkUpdate(selection.toSelectionPayload(filterParams), actions)
       selection.clear()
@@ -211,12 +194,12 @@ export function useBulkTransactionEditing({
     } finally {
       setApplying(false)
     }
-  }, [rows, setRows, tableSelection, getRowId, selection, selectedCount, filterParams, onReload, reconcile])
+  }, [rows, setRows, getRowId, selection, selectedCount, filterParams, onReload, reconcile])
 
   return {
     bulkMode,
     toggle,
-    tableProps: { bulkActive: bulkMode, bulkSelection: tableSelection, bulkTotal },
+    tableProps: { bulkActive: bulkMode, bulkSelection: selection, bulkTotal: total },
     selectedCount,
     selection,
     // Consumed by <BulkEditChrome>.
