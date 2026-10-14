@@ -454,7 +454,7 @@ cosmetic and shows up only when cleaning the list out. `APP_NAME` is a display s
 where data lives (the data directory name is a fixed literal for exactly that reason), which makes it the
 cheap discriminator: `APP_NAME=Luma Demo` turns the entries into `name (Luma Demo vault)`. The instance
 identifier is deliberately not used — it is long, opaque, and tells the user nothing at the moment they
-are choosing. `security-model.md` → *Do not couple them* covers the labelling rules themselves.
+are choosing. `security-model.md` → *Passkeys and the second factor* covers the labelling rules themselves.
 
 **A watched import folder is a directory on the server, not on the browser's machine.** A data source
 may name one, and the path is resolved by the backend process — so on Desktop it is the user's own

@@ -106,8 +106,7 @@ def _reverified_here(raw: str | None) -> str:
     It answered on its first firing, and the answer was `expired` at a *negative* age — the host clock
     stepping backwards, which is now handled (`backend/session_signing.py`). The instrument stays: it is
     what would name the next cause as quickly, and a diagnostic for a 1-in-11 failure that has silently
-    rotted costs another eleven runs to discover. See `docs/security-model.md` → *Identity and the
-    network perimeter*.
+    rotted costs another eleven runs to discover.
     """
     if not raw or raw == "null":
         return "-"

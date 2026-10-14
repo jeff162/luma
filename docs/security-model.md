@@ -13,15 +13,8 @@ backups — including "I am only adding a provider".
 | `SECURITY.md` | someone reporting a vulnerability | reporting route, supported versions, what is in scope, and the deliberate design properties that are **not** vulnerabilities |
 | `architecture.md` → *Identity, access & deployment model* / *Token vault & transport security* | someone changing the code | the mechanism **as built** — tables, endpoints, constants, call order |
 
-What this document records is the reasoning underneath: why provider credentials are encrypted while the
-ledger beside them is not, which risks are accepted rather than defended and what each one costs, what
-the perimeter assumes about the network it sits on, where each secret lives and who can reach it, and
-what recovery looks like when a passphrase is lost or a host is compromised. Its purpose is to put that
-reasoning in front of whoever changes the design next, so a premise is abandoned deliberately rather than
-by accident.
-
-Where a fact is about *how it works*, this document links to `architecture.md` rather than repeating it:
-two copies of a mechanism drift, and the copy that goes stale is the one nobody runs.
+This document holds the reasoning underneath, so a premise is abandoned deliberately rather than by
+accident. Where a fact is about *how it works*, it links to `architecture.md` rather than repeating it.
 
 ## Contents
 
@@ -52,672 +45,406 @@ else holds an account on or a route to satisfies it just as well, while a shared
 published to the internet does not.
 
 - **The ledger is plaintext at rest, and that is accepted.** Transactions, categories, rules, tags,
-  mappings and import history sit unencrypted in SQLite. Anyone with the database files or disk access
-  can read them. Protecting the ledger at rest is explicitly not a goal: it would need pervasive field
-  encryption or whole-database encryption, and both are out of scope.
-- **The login perimeter is network-access control.** It governs who can reach a
-  *running* instance.
+  mappings and import history sit unencrypted in SQLite. Protecting them at rest would need pervasive
+  field encryption or whole-database encryption, and both are out of scope.
+- **The login perimeter is network-access control.** It governs who can reach a *running* instance.
 - **The server is trusted, and the crypto runs server-side.** The unlock secret reaches the backend,
-  which derives the KEK, unseals the DEK and uses it. This defends **theft of the data at rest**. It does
-  not defend a compromised *running* host — and that is the correct trade here, because "someone owns the
-  box this runs on" is a state in which the ledger is readable off disk anyway. **What is given up is
-  more than the ledger, though:** while a user is unlocked the DEK sits in process memory, on a sliding
-  idle window sized for a working day, so an attacker on the box reaches the provider credentials too.
-  Nothing here defends that, and no passphrase floor can.
-- **The app reads and writes only its own data directory, with one declared exception.** A watched import
-  folder is a directory an administrator names and the server reads on a trigger, and may delete from —
-  see *Reading and deleting outside the data directory*.
+  which derives the KEK, unseals the DEK and uses it. This defends **theft of the data at rest**, not a
+  compromised *running* host — someone who owns the box can read the ledger off disk anyway. **What is
+  given up is more than the ledger, though:** while a user is unlocked the DEK sits in process memory, on
+  a sliding idle window sized for a working day, so an attacker on the box reaches the provider
+  credentials too. No passphrase floor defends that.
+- **The app reads and writes only its own data directory, with one declared exception**: a watched import
+  folder (*Reading and deleting outside the data directory*).
 - **The backend is assumed not to be public-internet facing.** If an operator exposes it, the app
-  password becomes far more load-bearing than this model assumes. That is the operator's call, and the
-  onboarding copy says so.
+  password becomes far more load-bearing than this model assumes. That is the operator's call.
 
-The property the vault does buy is narrow and worth stating exactly: **a leaked database is not a leaked
-credential.** No live unlock secret ⇒ no KEK ⇒ nothing opens.
+The property the vault does buy is narrow: **a leaked database is not a leaked credential.** No live
+unlock secret ⇒ no KEK ⇒ nothing opens.
 
 ## Reading and deleting outside the data directory
 
-Everything else the app touches on disk is its own: the two databases, the document store beside them,
-and whatever a browser uploads. **A watched import folder is the one exception** — a data source names a
-directory, and the server lists it, reads the CSVs in it and, if the source says so, deletes the ones it
-imported. That is a new capability class rather than a new feature of an old one, so what is and is not
-being defended is stated here rather than assumed.
+Everything else the app touches on disk is its own. **A watched import folder is the one exception** — a
+data source names a directory, and the server lists it, reads the CSVs in it and, if the source says so,
+deletes the ones it imported. That is a new capability class, so what is defended is stated here.
 
-**What is defended.** Setting the path is admin-or-local
-(`PATCH /import-export/profiles/{id}/watch` behind `require_admin_or_local`), on the same line
-`authorization.py` already draws: a directory on the server is global app configuration, not ledger data
-that any member edits. The delete is the narrower capability of the two and is constrained accordingly —
-only a file this app recorded as importing is eligible, and its recorded content hash is re-checked
-against the bytes on disk immediately before the unlink, so a file swapped in under the same name is
-never removed. A failed delete is reported rather than swallowed. And a restore from another instance
-switches watching off rather than carrying another machine's paths onto this one, where a path that
-resolves means something else (`data-model.md` → *Watched import folders*).
+**What is defended.** Setting the path is admin-or-local (`require_admin_or_local`): a directory on the
+server is global app configuration, not ledger data a member edits. The delete is constrained further —
+only a file this app recorded importing is eligible, and its recorded content hash is re-checked against
+the bytes on disk immediately before the unlink, so a file swapped in under the same name is never
+removed. A restore from another instance switches watching off rather than carrying another machine's
+paths onto this one (`data-model.md` → *Watched import folders*).
 
-**What is not.** There is no allow-list of permissible directories and no confinement: an administrator
-may name any path the server process can reach, and the process runs as whoever started it. Nothing here
-defends an administrator against themselves, and nothing would — the premise this whole model rests on
-is an operator-controlled machine, and an operator who can name a directory can already read it. The
-consequences worth naming plainly rather than bounding: a CSV in a named folder is read into the ledger,
-and a purge setting deletes files from a folder outside the app's own data. Both are what the feature is
-for; neither is a path an *unprivileged* member can reach.
+**What is not.** There is no allow-list of directories and no confinement: an administrator may name any
+path the server process can reach. Nothing here defends an administrator against themselves — on an
+operator-controlled machine, an operator who can name a directory can already read it.
 
 **The condition to reopen this.** If the login perimeter ever admits an account class that is neither
 administrator nor trusted operator — a guest, a read-only sharer, an API token with narrowed scope —
-then "admin-or-local" stops being a sufficient description of who can point the server at a directory,
-and the delete in particular needs re-grading before that class exists.
+"admin-or-local" stops describing who can point the server at a directory, and the delete in particular
+needs re-grading before that class exists.
 
 ## Why provider credentials are the only things encrypted
 
 **The credential's reach is not known, and cannot be.** Luma only reads transaction data, but what the
-credential is *authorized* for is the provider's to decide and is not visible from here — it may, and often does, reach
-account and routing numbers, identity, or the ability to move money.
-
-**So every provider credential is treated as though it carries full account and identity access**, and
-protected accordingly with one unconditional passphrase floor.
+credential is *authorized* for is the provider's to decide — it may, and often does, reach account and
+routing numbers, identity, or the ability to move money. **So every provider credential is treated as
+though it carries full account and identity access**, and protected with one unconditional passphrase
+floor.
 
 Exactly two columns are encrypted under the workspace DEK — the per-connection credential and the
-app-level provider secret. **The second is the wider of the two**: an app-level secret is not scoped to
-one connection, so its loss reaches every connection made under it and the ability to authorize more.
-They are registered in `crypto_service.ENCRYPTED_COLUMNS`, and that registry is an invariant rather than
-a convenience: rotation, reset and the backup paths are all driven off it, so
-**a third encrypted column that is not registered is silently unreachable by all three**. A test fails if
-one is added without being listed. Add the registration in the same change as the column.
+app-level provider secret. **The second is the wider of the two**: it is not scoped to one connection, so
+its loss reaches every connection made under it and the ability to authorize more. Both are registered in
+`crypto_service.ENCRYPTED_COLUMNS`, and rotation, reset and the backup paths are all driven off that
+registry, so **an encrypted column that is not registered is silently unreachable by all three.** Add
+the registration in the same change as the column.
 
 ## Revocation, in both directions
 
-**Whether disconnect actually revokes is a per-provider fact the app has to state rather than hide.**
-Adapters declare `revokes_on_disconnect` and the disconnect confirmation reads it, because **a user who
-believes access ended when it did not is worse off than one who knows to go and revoke it.** A provider
-with no revocation call is an ordinary supported case — one live provider is exactly this — and the remedy
-is unremarkable once known: revoke the token at the provider, rotate the vault passphrase and key, then
-re-link.
+**Whether disconnect actually revokes is a per-provider fact the app states rather than hides.** Adapters
+declare `revokes_on_disconnect` and the disconnect confirmation reads it, because **a user who believes
+access ended when it did not is worse off than one who knows to go and revoke it.** A provider with no
+revocation call is an ordinary supported case; the remedy is to revoke the token at the provider, rotate
+the vault passphrase and key, then re-link.
 
 ### Responding to an exposure
 
 **How a leaked credential is retired is the provider's to define, so each step follows that provider's
-documentation on how its credentials are deactivated.** Nothing here generalizes from one provider to the
-next: whether a credential can be replaced without the user authorizing again, and whether an old secret
-dies when a new one is issued, are facts read from the provider, recorded as adapter capabilities where
-code acts on them. A new provider's exposure handling is designed from its own documentation, never by
-analogy with an existing one.
+documentation.** Whether a credential can be replaced without the user authorizing again, and whether an
+old secret dies when a new one is issued, are read from the provider and recorded as adapter capabilities
+where code acts on them. A new provider's exposure handling is designed from its own documentation, never
+by analogy with an existing one.
 
-**A provider with an app credential holds two levels of authorization**, and they are retired separately.
-Plaid's are the app's client id and secret, and the per-connection access token the bank login produced;
-a token is usable only together with the secret. As its documentation describes them:
+**A provider with an app credential holds two levels of authorization**, retired separately. Plaid's are
+the app's client id and secret, and the per-connection access token; a token is usable only together with
+the secret.
 
-- **The token** can be replaced with no bank login (`/item/access_token/invalidate`: a new token, the old
-  one dead at once), which the adapter declares as `reissues_credential`. Revoking it (`/item/remove`)
-  retires it just as surely but ends the Item, so the connection has to be linked again.
-- **The app secret** is not per-connection, and nothing done to a connection touches it. It is rotated on
-  the provider's dashboard, and **the old one keeps working until it is deleted there** — so the step is
-  rotate, enter the new one with Configure, then delete the old one. Rotating alone retires nothing.
+- **The token** can be replaced with no bank login (`/item/access_token/invalidate`), which the adapter
+  declares as `reissues_credential`. Revoking it (`/item/remove`) ends the Item, so the connection has to
+  be linked again.
+- **The app secret** is rotated on the provider's dashboard, and **the old one keeps working until it is
+  deleted there** — so the step is rotate, enter the new one with Configure, then delete the old one.
+  Deleting the old secret stops existing Items syncing as well as new links; once the new secret is
+  entered they sync again without being re-linked.
 
-**With the vault open, the response replaces rather than revokes.** *Vault settings → Respond to an
-exposure* (`POST /auth/vault/reissue-credentials`, `services/exposure_response.py`) reissues each
-connection's credential where the provider declares it can, so the copied credentials die while every
-connection keeps syncing, and lists what is left: connections whose provider cannot reissue (revoke at the
-provider, then reconnect), each stored app secret, a fresh credentials backup when an older one exists (it
-would restore the retired credentials), and then the passphrase change and key replacement, which protect
-the newly issued credentials. It is refused while a sync is running, since that pull holds the credential
-being replaced, and it stores each replacement the moment it is issued, because the old one is already
-dead. It does not replace the vault reset, which remains the only route for a **forgotten** passphrase:
-there nothing can be decrypted, so nothing can be sent to a provider.
+**With the vault open, the response replaces rather than revokes** (*Respond to an exposure*,
+`services/exposure_response.py`): each connection's credential is reissued where the provider declares it
+can, so the copied credentials die while every connection keeps syncing, and the rest is returned as steps
+for the user (`architecture.md` has the list). It does not replace the vault reset, which remains the only
+route for a **forgotten** passphrase: there nothing can be decrypted, so nothing can be sent to a provider.
 
-**The app secret is always left to the user, on either path.** The reset's *exposed* result lists each
-stored secret under *Still to do at the provider* too. Both read the list from what is stored
-(`exposure_response.app_secrets_to_rotate`) rather than from a capability, since a secret never saved was
-never exposed. An ordinary disconnect exposes nothing and asks for none of this.
-
-**Checked in the sandbox (2026-09-19): Items survive a secret rotation, and deleting the old secret stops
-syncing as well as linking.** With the old secret deleted, both a sync of an existing Item and a new link
-were refused (`INVALID_API_KEYS`). Once the new secret was entered with Configure, the same Item synced
-again without being linked again. A copy holding the old secret therefore loses its existing connections
-too, not only the ability to link new ones.
+**The app secret is always left to the user, on either path**, read from what is stored rather than from a
+capability, since a secret never saved was never exposed.
 
 **The reverse direction — the user revokes at the provider — is not symmetric either.** Nothing announces
 it; Luma finds out only when a request is refused. A refused credential raises
 `ProviderCredentialRejected` and sets `reauth_required`, so the card reads **reconnect needed** rather
-than accumulating generic sync failures. This matters *more* for a provider with no revocation call: where
-revocation normally happens through Luma the connection is simply gone, but where it happens elsewhere
-this refusal is the only notice there will ever be, and a connection left counting failures after a
-deliberate revocation reads as broken rather than as closed.
+than accumulating generic sync failures. For a provider with no revocation call this refusal is the only
+notice there will ever be.
 
 ## Identity and the network perimeter
 
 **Login is an authentication perimeter, not an authorization system.** Its only job is to keep *non-users*
-out. Once inside, every user sees and edits the same data with no row- or scope-level restriction, and no
-data route checks role. **Admin gates the install and the perimeter, not the ledger** — user management,
-provider/environment settings, and the operations that replace the workspace wholesale: every restore
-path, and the backup keys that decide who can read a backup. A restore is not a data edit. It swaps out
-every row, the connections and the provider configuration at once, so it is a settings-scale act somebody
-has to be able to authorize, and before it was gated any signed-in member could replace the global
-provider configuration through the legacy credentials restore. Creating a backup (`GET /backup`,
-`GET /backup/credentials`) is held to the same gate so the server agrees with the page that offers it.
-The guards live in `backend/authorization.py`; with sign-in protection off there is no role to hold, and
-they pass. Do not add an authorization check at the data layer expecting it to mean something; there is
-no scoping model behind it for it to enforce.
+out. Once inside, every user sees and edits the same data, and no data route checks role. **Admin gates
+the install and the perimeter, not the ledger** — user management, provider and environment settings, and
+the operations that replace the workspace wholesale: every restore path, and the backup keys that decide
+who can read a backup. A restore swaps out every row, the connections and the provider configuration at
+once, so it is a settings-scale act. Creating a backup is held to the same gate. The guards live in
+`backend/authorization.py`; with sign-in protection off there is no role to hold, and they pass. An
+authorization check at the data layer would have no scoping model behind it to enforce.
 
-**The gate is also what sorts the interface.** Everything a member may do is on Settings and everything
-behind `require_admin_or_local` is on Administration, whose navigation entry is absent for anyone else.
-The update check under Settings → About is
-the one item that straddles the line, and its admin half is hidden in place.
+**The same gate sorts the interface**: what a member may do is on Settings, what is behind
+`require_admin_or_local` is on Administration.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity
 has a password and another does not, anyone on the LAN picks the passwordless one and reads the same
-ledger — the password would have protected only that person's *preferences*. A per-user perimeter over
-shared data is incoherent, so the optionality lives one level up.
+ledger. A per-user perimeter over shared data is incoherent.
+
+**A protection that can be switched off must not destroy the state needed to switch it back on.**
+Enabling and disabling sign-in are flag flips: disabling leaves password hashes dormant rather than
+discarding them, so re-enabling is never a migration.
 
 **Three concepts look like one and are not. Do not couple them.**
 
 - *A user identity* scopes **per-person UI preferences** and carries that person's own **app-access
-  credential**. Those are its only two jobs; it confers nothing about the vault.
-- *A vault access grant* is what lets a person open the vault at all. The data sources themselves are
-  shared and visible to everyone; what the grant confers is the ability to **use** them — connect one,
-  sync it, refresh its accounts, disconnect it, reveal an app secret — because every one of those has to
-  decrypt a stored credential first. A user without a grant sees the same connections as everyone else
-  and can operate none of them.
+  credential**. It confers nothing about the vault.
+- *A vault access grant* is what lets a person open the vault. The data sources are shared and visible to
+  everyone; the grant confers the ability to **use** them — connect, sync, refresh, disconnect, reveal an
+  app secret — because each has to decrypt a stored credential first.
 - *An app password* is **network-access control** — it establishes who is at the browser, never authority
   over encrypted data.
 
-**An unlock belongs to the browser session that presented the secret, not to the identity.** Picking an
-identity takes no credential while sign-in protection is off, so an unlock filed under the user alone was
-inherited by anyone who picked that name on another browser while its owner was unlocked — and inside the
-five-minute proof window, with it the authority to add a passkey of their own to the owner's slot, which is
-durable access. The unlock cache and the proof stamp are therefore keyed by user *and* the browser's
-sign-in session id (`crypto_service` → the unlock cache; the id is described below), and selecting an
-identity, signing in and signing out each start a new one. Each browser unlocks for itself and tabs share. Signing out or
-locking affects only that browser; revoking someone's access, or re-enrolling them, ends it in every
-session; a key rotation locks every session but the one that ran it, since the key they hold opens nothing
-afterwards. The same keying applies with sign-in on, where sharing would let a stolen app password reach the
-vault while its owner was unlocked elsewhere.
-
 A trusting household can therefore be entirely passwordless and still need vault grants, so **no design
-may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
-passwordless install can hold vault-encrypted credentials, and an authenticated one can have no vault.
+may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions.
 
-**A session is a row the server can delete, not only a cookie it can verify.** The cookie is signed, and
-a signature says only that the server once issued it; with nothing stored, a copy taken earlier stayed
-good for the cookie's whole two-week life, whatever its owner did. Each sign-in now records a
-`sign_in_session` row in the control DB and puts its id in the cookie, and a cookie whose row is gone is
-signed out (`services/sign_in_sessions.py`). Signing out deletes the browser's row, so it ends every copy of
-the cookie at once. Setting an account's password or disabling it deletes all of that account's rows in
-the same transaction as the change (`control_database.update_user`), because both are how somebody else's
-access to an account is ended. The one exception is the session making the change when it is the account's
-own, so changing a password does not sign out the browser it was changed from. **The row holds a SHA-256 of the id,
-never the id.** Unless `SESSION_SECRET` is set, the signing secret is stored in the same database, so a
-copy of the file lets anyone sign a cookie; the digest is what stops that copy also supplying an id a row
-would accept. A signed cookie that names a user and no live row — one forged with a leaked secret, or one
-issued before sessions were recorded — is refused like any other. **Every sign-in path goes through
-`sign_in_sessions.start`**, and one that set `user_id` on the session directly would produce exactly that
-refused cookie.
+**An unlock belongs to the browser session that presented the secret, not to the identity.** Picking an
+identity takes no credential while sign-in protection is off, so an unlock filed under the user alone
+would be inherited by anyone picking that name on another browser — and with it, inside the proof window,
+the authority to add a passkey of their own to the owner's slot. With sign-in on, sharing would let a
+stolen app password reach the vault while its owner was unlocked elsewhere. The unlock cache and the proof
+stamp are therefore keyed by user *and* sign-in session id.
 
-**Every secret a person types is limited against guessing** (`services/attempt_limiter.py`). The
-perimeter is optional, and a networked deployment is where it has to hold up. A six-digit authenticator
-code is strong only because an attacker gets a handful of tries: three codes are accepted at any moment,
-and each blind guess lands with about a 3-in-a-million chance whichever code is current, so rotation does
-nothing to an unlimited stream of guesses. The rules are per account. Attempts are at least two seconds
-apart, a spacing claimed before the secret is checked, so a burst of simultaneous requests is refused
-rather than tried. Five wrong secrets in a row pause the account for five minutes, and the pause refuses
-the *right* secret too, since answering it differently would tell a guesser which one it was. Together
-they hold a guesser to about one attempt a minute. **A limited attempt is refused at once with the wait
-(429, `Retry-After`), never held open**, because a held request occupies a server thread and enough of
-them would lock everyone out. Counts live in process memory, which a restart clears and an attacker
-cannot trigger.
+**A session is a row the server can delete, not only a cookie it can verify.** A signature says only that
+the server once issued the cookie, so without a stored row a copy taken earlier stays good whatever its
+owner does (`services/sign_in_sessions.py`). **The row holds a SHA-256 of the id, never the id**: unless
+`SESSION_SECRET` is set, the signing secret is in the same database, so a copy of the file lets anyone sign
+a cookie, and the digest is what stops it also supplying an id a row would accept. **Every sign-in path
+goes through `sign_in_sessions.start`**; one that set `user_id` directly would produce a cookie that is
+refused.
 
-The limit covers:
-
-- **Sign-in passwords**, keyed by the name as typed, so a name with no account is limited exactly like a
-  real one. A refusal with no password to check spends the same key stretching a real check would
-  (`control_database.spend_password_check`), so the response time does not say which names are real
-  either. A signed-in user changing their own password (`POST /auth/password`) proves the current one
-  first, since a session left open is not proof of who is at it, and a wrong one there counts against
-  the same limit as a wrong one at sign-in.
-- **Authenticator and 2FA recovery codes**, at sign-in and on the signed-in changes to two-factor itself
-  (turning it off, replacing the recovery codes), so a stolen session cannot guess its way to switching
-  the second factor off. A pause at sign-in also drops the pending challenge, so continuing needs the
-  password again, and the pause is the account's, so proving the password again does not restart the
-  count. A code is accepted **once**: the step it belongs to is recorded, and a code from that step or an
-  earlier one is refused, which closes the minute and a half in which a code read off a screen could be
-  replayed.
-- **The vault passphrase and the vault recovery code**, on unlock, on a passphrase change (the old one is
-  checked) and on recovery. The main threat to a vault passphrase is still an offline attack on a copied
-  control DB, which no online limit reaches; this closes the online route for a session left open.
+**Every secret a person types is limited against guessing** (`services/attempt_limiter.py`) — sign-in
+passwords, authenticator and 2FA recovery codes, and the vault passphrase and recovery code. The perimeter
+is optional, and a networked deployment is where it has to hold up. Limits are **per account**, because
+behind a reverse proxy every request arrives from one address. A limited attempt is **refused at once,
+never held open**, since held requests occupy server threads. A refusal for an unknown name costs the same
+as a real check (`control_database.spend_password_check`), so timing does not reveal which names exist.
 
 Left out, each for a reason:
 
-- **Passkeys**, for sign-in and for the vault. Neither can be guessed: sign-in verifies a signature, and a
-  vault passkey presents a 32-byte PRF output. Sign-in by passkey also stays open while the account's
-  password is paused, which is what gives its owner a way in while someone else keeps it paused.
+- **Passkeys**, which verify a signature or a 32-byte PRF output and cannot be guessed. Sign-in by passkey
+  stays open while the password is paused, which gives the owner a way in.
 - **The code that confirms two-factor setup**, checked against a secret the same session was just given.
-  Guessing it gains nothing a caller does not already hold.
-- **The passphrase that opens a credentials backup file.** Whoever holds the file can attack it offline.
-- **Guessing across many names.** The limit is per account, so each name guessed gets its own five
-  attempts. A limit across all accounts would let one caller pause everyone's sign-in, and a
-  per-address limit is no limit at all behind the reverse proxy a networked install sits behind, where
-  every request arrives from the proxy's address.
+- **The passphrase that opens a credentials backup file**, which whoever holds the file attacks offline.
+- **Guessing across many names.** A global limit would let one caller pause everyone's sign-in.
 
-**Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** That is
-the price of keying by account, and a registered passkey is the way around it.
+**Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** A
+registered passkey is the way around it.
 
 **A lost sign-in is recovered from the files, with no other credential.** `--reset-password`
-(`backend/account_recovery.py`) sets a password from a console and never serves. Asking for nothing more
-is correct rather than lax: sign-in is a perimeter around data the files hold in the clear, so whoever can
-run it against the databases can already read the ledger, and it grants nothing they lacked. It clears
-everything else that could keep the account out — the second factor and its recovery codes, a disabled
-status, a member role that cannot reach the settings — and ends the account's sessions, in one
-transaction (`control_database.restore_admin_access`). **The vault is the boundary it does not cross**:
-a slot opens only with its own secret, so the reset reaches the perimeter and nothing behind it. Nor can
-it reach a running server's memory, where an attempt-limiter pause lives — that still runs out, or ends
-with a restart.
+(`backend/account_recovery.py`) runs from a console and never serves. Sign-in is a perimeter around data
+the files hold in the clear, so whoever can run it against the databases can already read the ledger. It
+clears everything else that could keep the account out (`control_database.restore_admin_access`). **The
+vault is the boundary it does not cross**: a slot opens only with its own secret.
 
 ## Passkeys and the second factor
 
 **A passkey signs in, and it also stands in for the authenticator code.** The ceremony runs with user
-verification *required*, so the authenticator itself demands a biometric or a PIN before it will produce
-an assertion — which establishes possession of the device **and** something inherent or known. That is
-what the TOTP prompt after a password exists to establish, so asking for a code as well would charge
-twice for the same guarantee. `_USER_VERIFICATION` in `services/app_passkey.py` is therefore the
-load-bearing setting in that file rather than a hardening default: relax it and the sign-in silently
-becomes possession alone, with the factor it replaced already gone.
+verification *required*, so the authenticator demands a biometric or a PIN — possession **and** something
+inherent or known, which is what the TOTP step establishes. `_USER_VERIFICATION` in
+`services/app_passkey.py` is therefore load-bearing: relax it and sign-in silently becomes possession
+alone.
 
-**The convenience is the security argument, not a trade against it.** The perimeter is optional — see
-*"Password optional" is a workspace property* above — and what pushes a household into turning sign-in
-off is friction. A login that costs a fingerprint makes keeping the perimeter **on** cheaper than
-switching it off, which is a real gain delivered through adoption rather than through credential
-strength. An argument that measures only the strength of the credential cannot see it, which is how an
-earlier rejection reached the wrong answer: *"a passkey would be security theater over a plaintext
-ledger"* is sound about whether it is a *stronger* credential and says nothing about whether it is a
-better way to sign in.
+**The convenience is the security argument.** What pushes a household into turning sign-in off is
+friction, so a login that costs a fingerprint makes keeping the perimeter **on** cheaper than switching it
+off. Measuring only credential strength misses this.
 
-**A passkey is never the only credential.** A bare-IP host can never register one however it is served
-(*Obstacles*), so an install reached at `192.168.x.x` would otherwise have no way in at all. The password
-remains the floor, every account keeps one, and the passkey is strictly additional.
+**A passkey is never the only credential.** A bare-IP host can never register one (*Obstacles*), so the
+password remains the floor and every account keeps one.
 
-**The two passkey features must not become one.** The vault's passkeys and these look identical on
-screen and mean entirely different things — one opens encrypted data-source credentials, the other
-crosses the login perimeter — so they keep separate endpoints, separate storage (`app_passkey` versus
-`vault_slot`) and separate copy. Merging the ceremonies is the tempting shortcut and it is the exact
-coupling *Do not couple them* forbids: signing in would imply vault authority. A user who holds both is
-prompted twice, deliberately.
+**The two passkey features must not become one.** The vault's passkeys open encrypted credentials; these
+cross the login perimeter. They keep separate endpoints, storage (`app_passkey` versus `vault_slot`) and
+copy. Merging the ceremonies would make signing in imply vault authority — the coupling *Do not couple
+them* forbids. A user who holds both is prompted twice, deliberately.
 
-**Keeping them apart has to hold on the device, not only on the server.** A device keeps one passkey list
-per *host* — not per install, per port or per feature — so the vault's passkeys, the sign-in passkeys and
-those of every other Luma database served on the same host all sit in one list. Three rules follow, each
-learned from a chooser that offered four identical entries of which one worked:
+**Keeping them apart has to hold on the device too.** A device keeps one passkey list per *host*, so the
+vault's passkeys, the sign-in passkeys and those of every other Luma database on the same host share it:
 
-- **A sign-in passkey has its own user handle**, derived from the account id rather than equal to it
-  (`sign_in_user_handle`); the vault's passkeys keep the account id. The handle is how an authenticator
-  decides two passkeys are the same account, and the authenticator protocol lets it replace a stored
-  passkey when a new one arrives for the same site and handle — the synced password managers do exactly
-  that. A shared handle would let adding one kind silently delete the other from the device. Sign-in also
-  refuses an assertion whose returned handle is not its owner's, which is the WebAuthn verification
-  procedure's owner check and the one the library leaves to the caller.
-- **Sign-in names its credentials.** The sign-in ceremony's `allowCredentials` lists every sign-in passkey
-  in the workspace, so the device offers only those, and with one registered skips the chooser entirely.
-  This reverses a first choice to send no list, made so an unauthenticated caller could not learn how many
-  sign-in passkeys exist. That is still what the list reveals — a count and some opaque ids, neither of
-  which can produce an assertion — and hiding the size of the household is not what the perimeter is for;
-  keeping non-users out is. An empty list is never sent: to a browser it means *any* passkey, which is the
-  whole-host chooser the list exists to prevent.
-- **Each kind is labelled as what it is** ("name (Luma sign-in)", "name (Luma vault)"), since the device's
-  chooser and its saved-passkey list show that label and nothing else.
+- **A sign-in passkey has its own user handle** (`sign_in_user_handle`). An authenticator may replace a
+  stored passkey that arrives for the same site and handle, so a shared handle would let adding one kind
+  delete the other.
+- **Sign-in names its credentials** in `allowCredentials`, so the device offers only those. What that
+  reveals — a count and opaque ids — is not what the perimeter protects. An empty list is never sent: to a
+  browser it means *any* passkey.
+- **Each kind is labelled as what it is**, since the device's chooser shows nothing else.
 
-**Their reach differs in the direction people expect least.** Sign-in needs only a plain assertion,
-while a vault slot needs the PRF extension — so an authenticator that cannot hold a vault slot at all can
-still sign in, and the *login* feature is the one that works on more devices.
+**Their reach differs in the direction people expect least.** Sign-in needs only a plain assertion, while
+a vault slot needs the PRF extension, so the *login* feature works on more devices.
 
-**Removing a login passkey takes no proof, and that is not an inconsistency.** Stripping a vault slot is
-gated because it can strand encrypted credentials; nothing is stranded here, the password still opens the
-account, and the likeliest reason anyone reaches this screen is a device they no longer have — so a gate
-demanding the missing authenticator would fire exactly when it must not.
-
-**A session's *timestamp* is not part of what secures it, and a clock is not a trustworthy witness.**
-The session cookie is secured by its signature; the timestamp inside it is signed data, unforgeable
-without the secret, and its only job is to bound how long a session lives. `itsdangerous` nonetheless
-rejects a stamp in the **future** (`age < 0`) exactly as it rejects a stale one, and Starlette's
-`SessionMiddleware` answers *either* failure with `session = {}` — which downstream is indistinguishable
-from having sent no cookie at all, so the user is silently signed out with no explanation. A wall clock
-that steps backwards therefore invalidates every session signed in the window it skipped, for exactly as
-long as the step: a laptop resuming from sleep, a VM restored from a snapshot, any NTP correction. This
-was live for months and was found only because the browser suite failed on it about one run in eleven.
-
-`ClockSkewTolerantSigner` (`backend/session_signing.py`) accepts a stamp up to five minutes ahead, which
-costs only that much extra session life and no security property whatsoever. Two things about it are
-worth carrying rather than rediscovering: **the fix cannot be made by adjusting `get_timestamp`**, which
-supplies both sides of the age subtraction and so cancels itself out — only the comparison can be
-widened; and **`max_age=None` is not the cheap alternative**, because Starlette derives the browser's
-own `Max-Age` attribute from the same parameter, so disabling the server-side check also surrenders the
-cookie's declared lifetime.
-
-**A diagnostic on the rejection path must use the same primitives as the path it explains.** The reason
-this took eleven runs is that "no `user_id` on the session" named three unrelated causes at once — no
-cookie, an unverifiable one, and one that verified but carried no identity — and reported them
-identically. What resolved it was a verdict logged from *this process, with its own secret*
-(`_reverified_here` in `backend/main.py`), and it answered on its first firing. It signs with the
-middleware's signer for that reason: a diagnostic holding a different signer would report an expiry the
-app never acted on.
-
-**A protection that can be switched off must not destroy the state needed to switch it back on.**
-Enabling and disabling sign-in are both flag flips: a user with no password is the same row as one with
-a password, holding a deliberately unusable sentinel, so disabling leaves hashes dormant rather than
-discarding them and re-enabling is never a migration. Anything else with an on state and an off state
-inherits this — the off path may not consume what the on path needs.
+**Removing a login passkey takes no proof.** Nothing is stranded and the password still opens the account,
+and the likeliest reason to remove one is a lost device — a gate demanding it would fire exactly when it
+must not.
 
 ## Secret custody
 
 The mechanism is in `architecture.md`. What belongs here is why the shape is what it is, and the rules a
 change has to respect.
 
-**A slot holds a keypair, not a wrapped DEK.** Wrapping the DEK directly under each slot's KEK works for
-unlocking and for nothing else, because a wrap made from someone's own secret can only ever be made *by*
-them. Two things follow, and both are the reason the indirection exists:
+**A slot holds a keypair, not a wrapped DEK.** A wrap made from someone's own secret can only ever be made
+*by* them, so under direct wrapping:
 
-- **Rotation is impossible under direct wrapping.** Re-wrapping a new DEK for every *remaining* member
-  needs each of their secrets, which the rotating user does not have. It could only ever have destroyed
-  every other slot and forced everyone to re-enroll.
-- **Access cannot be granted.** Every hand-over scheme then has to move a *secret* between two people
-  instead, which is where bearer codes, expiries, single-use and revoke paths come from.
+- **Rotation is impossible.** Re-wrapping a new DEK for every remaining member needs each of their secrets.
+- **Access cannot be granted** without moving a *secret* between two people.
 
-Sealing the DEK to a slot's public key dissolves both. Anyone holding the DEK can seal it for anyone else
+Sealing the DEK to a slot's public key dissolves both: anyone holding the DEK can seal it for anyone else
 from their public key alone, so **nothing secret ever moves between people.**
 
-**The passphrase floor is unconditional — there is no weak tier and no test-mode exemption.** An earlier
-design keyed strength to provider mode, on the reasoning that a throwaway passphrase costs nothing when
-the credentials are fake. Two things killed it. A conditional floor has to be right at *every* gate that
-guards it and stay right as providers are added — the connect path, the environment switch, and each
-adapter's judgment about whether its own credentials are live — while an unconditional floor cannot be got
-wrong. And the tier's removal is what lets the model *say* something a user can hold: "a strong passphrase
-protects your data-source credentials" is a rule; "your requirements depend on which environment your
-provider is pointed at" is not, and it invited the exact confusion where sandbox credentials feel like a
-rehearsal for the real thing. The consequence is deliberate: **connecting a live data source always
-requires a vault passphrase, even on a passwordless install.** "Store real bank credentials with zero
-secrets" is precisely what must be impossible.
+**The passphrase floor is unconditional — there is no weak tier and no test-mode exemption.** A
+conditional floor has to be right at every gate that guards it and stay right as providers are added; an
+unconditional one cannot be got wrong. It is also a rule a user can hold. So **connecting a live data
+source always requires a vault passphrase, even on a passwordless install.**
 
-**One stored secret is readable back on request; the other never is, and the asymmetry is the point.**
-An app-level credential is one the operator *owns and can already read on the provider's dashboard*,
-and the only question a reveal answers — does what Luma holds match what the dashboard shows — is a real
-diagnostic nothing else can settle. A per-connection credential has no such counterpart: it is live bank
-access with no dashboard to compare against and no reason a human would ever read it. So there is a
-reveal for one and there must never be one for the other.
+**One stored secret is readable back on request; the other never is.** An app-level credential is one the
+operator already reads on the provider's dashboard, and a reveal answers a real diagnostic: does what Luma
+holds match it. A per-connection credential has no such counterpart and no reason a human would read it.
+Three properties keep that exception narrow:
 
-Three properties keep that exception narrow, and a change that breaks any of them widens it:
+- It is a **separate call**, never a field on a status payload.
+- It **reuses the decryption path a sync takes**, so there is one way a stored credential becomes
+  plaintext.
+- It takes **no second challenge when the vault is already unlocked** — sync, disconnect and refresh all
+  ride the same boundary.
 
-- It is a **separate call**, never a field on a status payload, so plaintext can only appear in a
-  response that explicitly asked for it.
-- It **reuses the same decryption path a sync takes**, so there is exactly one way a stored credential
-  becomes plaintext.
-- It takes **no second challenge when the vault is already unlocked** — an unlocked vault is this app's
-  authorization boundary and sync, disconnect and refresh all ride it, so re-prompting only here would
-  add friction without raising the bar.
-
-**The vault is only as strong as its weakest slot**, which is why the floor is an all-slots property and
-why a high-entropy recovery code does not compensate for a weak passphrase. A generated code adds a path;
-it does not raise the floor.
+**The vault is only as strong as its weakest slot**, which is why the floor is an all-slots property and a
+high-entropy recovery code does not compensate for a weak passphrase.
 
 **There is no escrow and no required fallback.** Losing every way in costs the data-source connections,
-which are re-linkable; the ledger is untouched. No slot exists purely as an escrow. But **"no escrow" is
-not "no exit"**: what is unrecoverable is the *keys*, and that says nothing about what the app owes a user
-who reaches that state. Conflating the two yields a vault that shuts permanently with nothing on screen to
-say so, and "re-link" as advice the UI offers no way to act on. See *Recovery and compromise response*
-below.
+which are re-linkable; the ledger is untouched. But **"no escrow" is not "no exit"**: the app still owes
+that user a way forward (*Recovery and compromise response*).
 
 ## Enrollment, grant, revocation and rotation
 
-**The order is inverted from an invite.** The person who wants access acts first — enrolling writes their
-keypair with no sealed DEK — and a member who holds the DEK approves. A grant addressed to an
-already-published public key has **no window in which a third party could claim it**, which any
-bearer-code scheme has to accept and then bound with expiry and single-use.
+**The order is inverted from an invite.** The person who wants access enrolls first — writing their
+keypair with no sealed DEK — and a member who holds the DEK approves. A grant addressed to a published
+public key has **no window in which a third party could claim it**, so there are no bearer codes,
+expiries or single-use rules. Standing at the same machine and approving later are the same flow.
 
-**"Co-present" and "invite" are not two mechanisms.** They were two answers to "how does the secret get
-there", and no secret travels. What remains is one flow at two tempos: standing at the same machine, or
-approving later from anywhere.
-
-**Removing a slot is not enough for a hostile departure.** A departing member may have seen the DEK while
-the vault was unlocked, and removing their slot cannot un-see it. The response is **remove access, then
-rotate**, in that order, because rotation re-seals for whatever slots are present when it runs. Rotation
-cannot undo *past* access, so a genuinely hostile departure also implies re-linking the affected sources.
+**Removing a slot is not enough for a hostile departure.** The member may have seen the DEK while
+unlocked. The response is **remove access, then rotate**, in that order, because rotation re-seals for the
+slots present when it runs. Rotation cannot undo past access, so a hostile departure also implies
+re-linking the affected sources.
 
 **Rotation crosses two databases, so it cannot be a transaction.** Slots live in the control DB and the
-ciphertext in the data DB, and no transaction spans both. A failure between the two writes would strand
-every credential under a key no slot can produce — the total loss the whole design exists to avoid. The
-three-phase order (seal the new key into every slot while retaining the outgoing one, rewrite the
-ciphertext, then clear the previous seals) leaves every row readable under one of two keys at every
-instant. **An interrupted rotation is resumed, never restarted:** starting fresh would push the key the
-ciphertext is actually under off the end of the two a slot can hold, converting a recoverable state into
-the unrecoverable one.
+ciphertext in the data DB. The three-phase order leaves every row readable under one of two keys at every
+instant (*Obstacles*).
 
 ## Authorizing a change to how the vault opens
 
 > Any method that opens the vault must also be able to set a new passphrase, and **only a method that
 > proves itself at that moment** may add or replace one.
 
-This rule was arrived at late and reverses an earlier deliberate decision, so it is worth stating why an
-unlocked vault is *not* sufficient authority. Several operations mint a **durable** unlock method — a
-passphrase, a passkey, a recovery code, a grant to somebody else. Each seals the real DEK into a new slot,
-which converts **transient** access (someone at an unlocked machine, or holding the session) into
-**durable, independent** access that survives lock, relock, and the owner's own attempts to get back in.
-The DEK is unchanged, so every stored credential opens under the new secret.
-
-**The safe/unsafe line is not the state of the passphrase slot.** The line is whether authority is being
-**derived from a cached DEK** rather than proven.
-
-Two further findings generalize past the vault:
+An unlocked vault is *not* sufficient authority. Minting a passphrase, a passkey, a recovery code or a
+grant seals the real DEK into a new slot, converting **transient** access (someone at an unlocked machine)
+into **durable, independent** access that survives lock and the owner's own attempts to get back in.
+**The line is whether authority is derived from a cached DEK rather than proven.**
 
 - **Removals need the same gate as additions.** Stripping every passkey and the recovery code grants
-  nothing, so it sat outside the rule as first written — but it leaves the owner one forgotten passphrase
-  from rebuilding every connection. A rule with a carve-out is the one that gets forgotten at the next
-  call site.
-- **Proof has to have a life, or it will be answered by weakening the secret.** Demanding a secret at
-  every boundary is answered the way such prompts always are: by choosing something shorter, or by
-  resenting the feature. A five-minute window (`PROOF_TTL_SECONDS`) covers a run of related actions in one
-  sitting while leaving an unattended session two orders of magnitude less exposed than the unlock cache's
-  own eight hours.
-- **The stamp belongs to the session that presented the secret**, exactly like the unlock (see *Identity
-  and the network perimeter*): a proof earned in one browser authorizes nothing in another, including a
-  browser that has picked the same identity.
-- **The stamp must be absolute, not sliding.** The unlock cache's TTL is pushed out on every read, so a
-  proof stamp riding on it would be renewed by ordinary decryption and never expire at all. This is the
-  property the whole control rests on.
+  nothing, but it leaves the owner one forgotten passphrase from rebuilding every connection.
+- **Proof has a life** (`PROOF_TTL_SECONDS`, five minutes), because a secret demanded at every boundary
+  gets answered by choosing a shorter one.
+- **The stamp belongs to the session that presented the secret**, exactly like the unlock.
+- **The stamp is absolute, not sliding.** The unlock cache's TTL slides on every read, so a proof riding
+  on it would be renewed by ordinary decryption and never expire.
 
 ## Transport security
 
 **TLS is a property of the deployment topology, not a mode the app toggles.** The backend always speaks
-plain HTTP; whether that HTTP is wrapped is decided at the edge. Loopback needs no TLS and gains nothing
-from it but self-signed warnings. A networked deployment terminates TLS at a reverse proxy. "The
-deployment is HTTPS" and "the app is HTTP" are both true at once.
+plain HTTP; a networked deployment terminates TLS at a reverse proxy, and loopback needs none.
 
-**Topology is detected per request, not chosen.** Standalone versus client-server is just *"did this
-request arrive over loopback or over the network?"* — which is strictly more correct than a stored preset,
-because the same install is loopback from its own box and networked from another.
+**Topology is detected per request, not chosen**, because the same install is loopback from its own box
+and networked from another. **Where a request came from is read from the connection, never from what the
+request says** — the `Host` header is the client's to write (`backend/transport.py`).
 
-**Where a request came from is read from the connection, never from what the request says.** Loopback
-is the client's address: the peer the server accepted, or the address a proxy on the same machine
-forwarded for it. The server honors a forwarded address from a loopback peer only, so a device on the
-network cannot name itself local, and the `Host` header — which the client writes and a proxy may rewrite
-— is not consulted. A client with no readable address counts as the network. One question is answered
-from the host instead, and deliberately: whether the *browser* will treat a page as a secure context for
-a passkey is a rule it applies to the origin it was given, so a browser on the server itself that opened
-the machine's network name over HTTP is a loopback client and still cannot run a ceremony. Nothing is
-granted on that reading; it only lets a refusal the browser would make anyway be explained.
+**The permissible-HTTP rule.** Plain HTTP on a non-loopback bind is coherent **only when both** hold: no
+data provider is configured, **and** the instance is passwordless. The reason to run a perimeter is
+distrust of who can reach the box, and that same distrust makes a sniffable **session cookie**
+unacceptable — protecting only the login exchange protects nothing, since the cookie is a bearer token on
+every request.
 
-**Nothing about the topology is asked of anyone, and nothing is recommended.** Administration →
-*Network access* states the reading that applies to the browser in hand — on the server's own machine,
-over the network with HTTPS, or over the network without — and what follows from it. Beside it sits
-the one fact that is about the installation and not the request: whether any other device can open it
-at all, which is what sign-in protection is described against — on an installation only its own machine
-can open it keeps out the other people who use that machine, and on one the network can open it keeps
-out the network. That fact has two witnesses (`transport.reachable_from_network`). The launcher states
-what it started, counting server mode as reachable even on a loopback bind, since a proxy is then what
-the network reaches; with no launcher it is read from the two address settings the start scripts pass
-on. Either is overridden by a request that has actually arrived from another device, which covers a
-proxy put in front by hand and a server started on an address no setting names. No intent to connect a data provider is
-declared ahead of time either: the server refuses the secret itself over an unprotected link, and the
-refusal names both ways forward at the moment the question is real, which a warning in advance could
-only approximate.
+**Only the provider secret is enforced; the rest is recommended.** Running plain HTTP on a network is a
+statement of trust in that network, so the app states what it costs where it is met — passkeys report
+themselves unavailable, and a dismissible *Set up HTTPS* task appears once there is a sign-in to protect —
+and refuses nothing else. Nothing about the topology is asked ahead of time.
 
-**The permissible-HTTP rule.** Plain HTTP on a non-loopback bind is an acceptable operator choice **only
-when both** hold: no data provider is configured (no live credential on the wire), **and** the instance is
-passwordless (no login credential or session cookie to steal). The coupling is the point — the reason to
-run a perimeter is distrust of who can reach the box, and that same distrust makes a sniffable, replayable
-**session cookie** unacceptable. Protecting only the login exchange protects nothing, because the cookie
-is a bearer token on every authenticated request. So HTTP is coherent only where there is no perimeter to
-defeat; enabling sign-in or connecting a source implies HTTPS.
-
-**Recommendation is split from enforcement, deliberately.** Sign-in over a cleartext network link
-raises a *recommendation* — the *Set up HTTPS* task, dismissible, shown to whoever could act on it and
-gone the moment a request arrives over HTTPS. Only the provider secret is *enforced*, and by what the
-request actually is, never by anything declared.
-
-**What is enforced is the provider secret, and it is enforced by the server.** A request from another
-device over plain HTTP is refused — `transport.require_protected_link` — wherever it would carry a
-provider's secret in either direction: saving an app secret, revealing one, connecting a source (the
-pasted token, or the exchange that ends a Link session), and opening the Link session that leads to
-one. The same request from a browser on the server, or over HTTPS, goes through, and the refusal says
-so, because both ways out are ordinary. The interface refuses first for the sake of the explanation;
+**What is enforced is enforced by the server.** `transport.require_protected_link` refuses a request from
+another device over plain HTTP wherever it would carry a provider's secret: saving an app secret,
+revealing one, connecting a source (the pasted token, or the exchange that ends a Link session), and
+opening the Link session that leads to one. The interface refuses first for the sake of the explanation;
 the server's refusal is the rule.
 
-**What the gate leaves out, and why each is a decision rather than a gap:**
+**What the gate leaves out:**
 
-- **The vault passphrase** — setting, changing, unlocking, recovering. It does cross the wire, and on a
-  cleartext network it can be read there. It is left to the operator for the reason the sign-in password
-  is: running plain HTTP on a network is a statement of trust in that network, and refusing the unlock
-  would stop an install that made that choice from syncing at all. What a captured passphrase cannot do
-  from the network is reach a provider secret through the app, which is exactly what the gate holds.
-- **Sign-in.** Recommended, never required, as above.
-- **The credentials backup, in both directions.** Its payload is ciphertext under the vault key, so it
-  is no more exposed crossing the network than the passphrase that opens it.
-- **Finishing a Link repair, syncing, refreshing accounts, disconnecting.** No secret travels between
-  the browser and the server in any of them; the server talks to the provider.
+- **The vault passphrase.** Refusing the unlock would stop an install that chose plain HTTP from syncing
+  at all, and a captured passphrase still cannot reach a provider secret through the app from the network.
+- **Sign-in.** Recommended, never required.
+- **The credentials backup, in both directions.** Its payload is ciphertext under the vault key.
+- **Finishing a Link repair, syncing, refreshing accounts, disconnecting.** No secret travels between the
+  browser and the server.
 
-**Recommended versus required is a real distinction and the UI must keep it.** For plain client-server
-HTTPS is only recommended — it protects the login credential, which is the operator's call on their own
-network — so that reminder can be dismissed from Tasks without configuring anything, and it mentions that
-passkeys need HTTPS too. Where a data source is involved it is required and never dismissible.
+**Passkeys make the host name load-bearing, and the failure is silent.** WebAuthn needs a secure context
+and an RP id must be a **domain**:
 
-**Passkeys make the host name load-bearing, and the failure is silent.** WebAuthn needs a secure context,
-and an RP id must be a **domain**. Two consequences that look like packaging trivia and are not:
+- Hand the browser `localhost`, **never** `127.0.0.1`, or every passkey vault slot is disabled with
+  nothing visible to explain why. The RP id is the host alone, so a changing port does not invalidate a
+  registered passkey.
+- On a LAN, **mDNS and HTTPS are the pair that makes passkeys reachable** — neither works without the
+  other (*Obstacles*).
 
-- Hand the browser `localhost`, **never** `127.0.0.1`. An address is not a domain, so the numeric form
-  disables every passkey vault slot with nothing visible to explain why. The RP id is the host alone, so a
-  dynamically chosen port does not invalidate a registered passkey.
-- On a LAN, an address like `192.168.x.x` can never host passkeys however it is served, and a hostname
-  alone still fails the secure-context check. **mDNS and HTTPS are the pair that makes passkeys reachable
-  over the LAN** — neither is optional polish and neither works without the other.
-
-Both are detected server-side and returned as *stated reasons*, because the answer to each is "use a
-passphrase on this connection" and a raw browser exception would never say so.
+Both are detected server-side and returned as *stated reasons*, because the answer is "use a passphrase on
+this connection" and a raw browser exception would never say so.
 
 **Every way of running the app listens to its own machine unless told otherwise.** A backend run from
-source serves the built interface as well as the API, so a wide bind there is the whole application on
-the network over plain HTTP — a configuration someone may want, and one they should have chosen
-(`BACKEND_HOST`). The frontend dev server binds loopback for an unrelated reason that is **not** about
-Luma's perimeter at all: a known esbuild advisory (**GHSA-67mh-4wv8-2f99**) lets any page the developer
-visits reach the Vite dev server and read the responses. That is a third-party toolchain hole on the
-developer's machine, not fixable short of a major upgrade, so narrowing the bind is the mitigation.
-Testing from another device stays available as one environment value (`FRONTEND_HOST`) rather than an
-edit. The networked half of this model does not need a wide socket to be testable: it is a property of
-the request, and the test harness states where a request comes from.
+source serves the whole application, so a wide bind should be chosen (`BACKEND_HOST`). The frontend dev
+server stays on loopback because of a toolchain advisory (`frontend/vite.config.js`), with
+`FRONTEND_HOST` for testing from another device.
 
-**Trusting the proxy's certificate is trusting the server machine, not one address.** The proxy issues
-the server's certificate from an authority of its own, and a device made to trust that authority's root
-accepts anything it signs — any site name, not only the server's. Whoever holds the authority's private
-key, which sits in the proxy's data on the server, could therefore impersonate any HTTPS site to every
-device that installed the root. That is the cost of a certificate nobody outside the network had to
-issue, and it is why the hand-out says so, offers the steps to remove the root again, and gives a
-fingerprint to check on a device's first visit: the one time the root arrives over a connection nothing
-vouches for (`services/proxy_certificate.py`). A publicly issued certificate for an owned domain avoids
-the trade and needs nothing different from the app.
-
-**Plain HTTP on a network is supported where someone configures it, and the app says what it costs.**
-The rule above is the whole policy; nothing refuses the configuration itself. What follows from it is
-reported where it is met rather than in a setup step: passkeys report themselves unavailable with the
-reason, the *Set up HTTPS* task appears once there is a sign-in to protect, and the provider-secret
-operations are refused from other devices with the two ways to do them.
+**Trusting the proxy's certificate is trusting the server machine, not one address.** A device that
+trusts the proxy's authority accepts anything it signs, for any site name, and its private key sits on the
+server. That is the cost of a certificate nobody outside the network had to issue, which is why the
+hand-out says so and offers removal steps and a fingerprint (`services/proxy_certificate.py`). A publicly
+issued certificate for an owned domain avoids the trade.
 
 ## Secrets in backup and export
 
-**The vault's own design splits a backup in two, and this is a design requirement rather than a naming
-choice.** The credential ciphertext lives in the data DB; the key material that opens it lives in the
-control DB. That split *is* the leaked-DB-≠-leaked-credential property, and it means a data-only backup
-carries credentials that are **dead on arrival** anywhere else. A snapshot that can actually sync after
-restore needs the ciphertext, the vault slots, **and** someone who knows the passphrase that was in force.
+**The vault's design splits a backup in two.** The credential ciphertext lives in the data DB and the key
+material that opens it in the control DB. That split *is* the leaked-DB-≠-leaked-credential property, so a
+data-only backup carries credentials that are **dead on arrival** anywhere else. A snapshot that can sync
+after restore needs the ciphertext, the vault slots, **and** someone who knows the passphrase then in
+force.
 
-**The data backup carries each connection's non-secret half, and nothing in it opens anything.** It holds
-the provider handle, what the last sync did, and the resume point, so a restore can return a connection to
-its backed-up state (`data-model.md` → *Backups*). A handle and a resume point are positions, not access:
-every request to a provider needs the credential, which only the credentials backup carries — and only as
-ciphertext. So an unencrypted data backup reveals which institutions are linked, which its transactions
-already reveal, and grants no way to fetch more.
+**The data backup carries each connection's non-secret half, and nothing in it opens anything** — the
+provider handle, the last sync's result and the resume point (`data-model.md` → *Backups*). Every request
+to a provider needs the credential, which only the credentials backup carries, as ciphertext. So an
+unencrypted data backup reveals which institutions are linked, which its transactions already reveal.
 
-**A leaked secrets backup is a pair of offline brute-force exposures, and they reach different things.**
-Login password hashes gate the *perimeter*; they are not a path to the credentials. The credentials fall
-only if the **vault passphrase** is cracked through the wrapped key material. This is why the passphrase
-floor is where the strength requirement lives, and why a credentials export's security simply *is* that
-passphrase's strength — which is why the strength flag rides along in the payload.
+**A leaked secrets backup is a pair of offline brute-force exposures that reach different things.** Login
+password hashes gate the *perimeter*; the credentials fall only if the **vault passphrase** is cracked.
+That is why the strength requirement lives on the passphrase, and why the strength flag rides along in a
+credentials export.
 
-**A credentials export carries one slot — the exporter's.** Within the install that made it none of this
-matters, because the live DEK opens its own backups whoever exported them. Cross-install, only that
-person's passphrase opens the file. Whether it should carry every member's slot is **open** — see below.
+**A credentials export carries one slot — the exporter's.** Within the install that made it the live DEK
+opens it whoever exported it; cross-install, only that person's passphrase does. Whether it should carry
+every member's slot is **open**.
 
-**Restore must never cost the operator their way in.** When a restore includes identity data, the
-invariant is that *the operator always retains a working admin login*: the current admin is preserved and
-the backup's accounts are merged in. Overwriting the perimeter is an explicit, user-driven choice rather
-than a silent side effect of restoring data.
+**Restore must never cost the operator their way in.** When a restore includes identity data, the current
+admin is preserved and the backup's accounts are merged in. Overwriting the perimeter is an explicit
+choice, never a side effect.
 
-**An encrypted backup names its keys in the clear**, and that is load-bearing rather than a leak to fix —
-it is what lets someone restoring a backup work out *which* private key to go and find, before they hold
-one. The consequence is a disclosure rule: name keys for what they are, not for who or where. `SECURITY.md`
-states this as a scope item; `data-model.md` → *Backups* has the format.
+**An encrypted backup names its keys in the clear**, so someone restoring it can work out *which* private
+key to find before they hold one. Keys are therefore named for what they are, not for who or where.
+`SECURITY.md` states this as a scope item; `data-model.md` → *Backups* has the format.
 
 ## Recovery and compromise response
 
-**The ladder is ordered by cost, and the order is load-bearing** — the cheap rungs are free and the last
-one is irreversible, so the UI offers them in sequence rather than presenting destruction as the only
-answer. Another member re-enrolling the stuck user moves nothing. A recovery code re-keys the passphrase
-**against the same DEK**, so no ciphertext is rewritten and nothing is re-linked. A credentials backup
-opened with the passphrase *it* was made under is a complete recovery. Only then, reset.
+**The ladder is ordered by cost**, and the UI offers it in sequence rather than presenting destruction as
+the only answer. Another member re-enrolling the stuck user moves nothing. A recovery code re-keys the
+passphrase **against the same DEK**, so nothing is re-linked. A credentials backup opened with the
+passphrase *it* was made under is a complete recovery. Only then, reset.
 
-**A dialog that leads with destruction will read as "my data is gone"**, which is wrong and is the more
-likely reason someone abandons the app at that moment. Only two columns are ever encrypted: accounts,
-transactions, mappings, coverage, cursors, rules and tags are plaintext and survive untouched. Losing the
-passphrase costs *the ability to keep syncing*, not ledger data. Lead with that.
+**Losing the passphrase costs the ability to keep syncing, not ledger data**, and the reset dialog leads
+with that: only two columns are ever encrypted.
 
-**Reset must not delete connections.** Clearing the credential is the point; discarding the connection row
-would also discard account mappings, per-account coverage and sync history — the genuinely expensive state
-to rebuild, and none of it is lost with the credential. Clear the encrypted columns (driven off
-`ENCRYPTED_COLUMNS`, so a column added later is reached without anyone remembering) and flag every
-connection for reconnection.
+**Reset must not delete connections.** Mappings, per-account coverage and sync history are the expensive
+state to rebuild, and none of it is lost with the credential. Reset clears the encrypted columns (driven
+off `ENCRYPTED_COLUMNS`) and flags every connection for reconnection.
 
-**Reset asks *lost or compromised*, because the two paths can promise different things.** Revoking a
-credential requires decrypting it, which requires an open vault — so the original motivating case, a
-forgotten passphrase, is exactly the one where **no revocation is possible for any provider**. A
-compromised-but-known passphrase can revoke on the way out, driven by `revokes_on_disconnect`. The user
-knows which situation they are in, so the dialog asks rather than guessing — and its *exposed* option
-points at *Respond to an exposure* (above), which needs no reset at all when the vault can be opened.
+**Reset asks *lost or compromised*.** Revoking a credential requires decrypting it, so a forgotten
+passphrase is exactly the case where **no revocation is possible for any provider**. A
+compromised-but-known passphrase can revoke on the way out, driven by `revokes_on_disconnect` — and when
+the vault can still be opened, *Respond to an exposure* needs no reset at all.
 
-**A reset reports per-connection outcomes rather than aborting.** Disconnect deliberately *keeps* the
-local connection when revocation fails, so the user can retry rather than believe a credential is dead
-when it may still be live. Reset cannot honor that — clearing is the point — so it names the connections
-the user has to finish by hand instead.
+**A reset reports per-connection outcomes rather than aborting.** Disconnect keeps the local connection
+when revocation fails so the user can retry; reset cannot, since clearing is the point, so it names the
+connections the user has to finish by hand.
 
 **A reset ends every member's access**, because there is one DEK per workspace. It says so.
 
-**A single recovery code is safe because recovery is one request, not two.** The apparent hazard is the
-gap between entering the code and setting the replacement: a crash there would leave the code spent and
-the vault still shut. The answer is ordering rather than redundancy — the replacement slot is written
-*before* the recovery slot is deleted, so any failure before that point leaves the code live and the
-attempt repeatable, and a failure *at* it leaves the user holding both a working passphrase and a live
-code, which costs nothing. A fresh code is issued on the way out, so forgetting the *replacement* is not
-back at the dead end.
-
-**A vault recovery code must not reuse the sign-in code generator.** A 2FA code is checked against a hash
-by a server that can rate-limit and lock out; 40 bits is sound there. A vault slot is the opposite
-situation — its wrap is offline-attackable by anyone holding the control DB, which is the exact threat the
-vault exists to answer. A vault code needs its own generator at **≥ 128 bits**. Reusing the sign-in one
-would quietly reintroduce the weak wrap the passphrase floor was raised to eliminate.
+**A single recovery code is safe because recovery is one request.** The replacement slot is written
+*before* the recovery slot is deleted, so a failure leaves the code live, and a fresh code is issued on the
+way out.
 
 **Changing the passphrase and replacing the vault key are not interchangeable** — they retire different
 artifacts, and after a leaked file both are needed. `SECURITY.md` → *What a compromise would mean* is the
-statement of record; do not paraphrase it into a second copy.
+statement of record.
 
 ---
 
@@ -726,44 +453,35 @@ statement of record; do not paraphrase it into a second copy.
 What a second attempt hits, whether or not it is planned.
 
 - **A conditional passphrase floor has to be right at every gate and stay right as providers are added.**
-  This is why the floor is unconditional. Any proposal to reintroduce conditionality inherits the problem.
+  Any proposal to reintroduce conditionality inherits the problem.
 - **Revocation needs an unlocked vault**, because the credential must be decrypted before it can be
-  revoked. Anything that wants to "revoke on the way out" of a destructive path is constrained by this,
-  and the forgotten-passphrase case can never satisfy it.
+  revoked. The forgotten-passphrase case can never satisfy it.
 - **No transaction spans the control and data databases.** Rotation, reset, and any future operation that
-  must change key material and ciphertext together has to be ordered so every intermediate state is
-  readable. Assume no atomicity across the two files.
-- **A restore can leave state inconsistent across the split.** The same two-database seam that constrains
-  rotation applies to restore, which is why restore reconciles rather than overwrites.
+  changes key material and ciphertext together has to be ordered so every intermediate state is readable.
+- **A restore can leave state inconsistent across the same split**, which is why restore reconciles rather
+  than overwrites.
 - **WebAuthn's two preconditions are the browser's, not the app's.** A bare-IP host can never register a
-  passkey however it is served; no amount of TLS changes it. Any LAN passkey story needs a name *and*
-  HTTPS.
-- **Re-linking may land on a new connection row**, depending on how a provider derives its handle. What
-  survives and what is stranded differs by provider — see `building-a-connector.md` → where the connection
-  handle comes from, and check it before promising a user that a re-link is transparent.
+  passkey however it is served. Any LAN passkey story needs a name *and* HTTPS.
+- **Re-linking may land on a new connection row**, depending on how a provider derives its handle — see
+  `building-a-connector.md` → where the connection handle comes from, before promising a user that a
+  re-link is transparent.
 - **An interrupted rotation must be resumed, not restarted.** Restarting pushes the key the ciphertext is
-  under off the end of what a slot can hold.
+  under off the end of the two a slot can hold.
 
 ## Open
 
 Decisions owed. Each names the live backlog item that will feed this topic when it is picked up.
 
 - **Should a credentials backup carry every member's slot?** Only meaningful in a multi-member workspace
-  where the exporter is unavailable. The trade is real in both directions: one slot means the file is as
-  strong as its owner's passphrase, every member's slot means it is as strong as the least careful
-  member's — which no member can see or audit — while "the person who made the backup has left" is an
-  ordinary way to lose data. A middle option exists: let the exporter choose whose slots ride along.
-  → `backlog/backup-restore-scope-and-secrets.md`
+  where the exporter is unavailable. One slot makes the file as strong as its owner's passphrase; every
+  member's slot makes it as strong as the least careful member's, which no member can audit — while "the
+  person who made the backup has left" is an ordinary way to lose data. A middle option: let the exporter
+  choose whose slots ride along. → `backlog/backup-restore-scope-and-secrets.md`
 - **Whether `backup_recipient` belongs in an accounts-and-secrets backup** or stays machine-local.
   → `backlog/backup-restore-scope-and-secrets.md`
-- **The wider accounts-and-secrets artifact.** The credentials half is settled — the payload is ciphertext,
-  so there is no plaintext variant to permit and no encryption toggle. The wider artifact additionally
-  carries password hashes, which have no such wrapping, so the same reasoning does not simply carry over.
-  → `backlog/backup-restore-scope-and-secrets.md`
+- **The wider accounts-and-secrets artifact.** The credentials half is settled — its payload is
+  ciphertext, so there is no plaintext variant to permit. The wider artifact also carries password
+  hashes, which have no such wrapping. → `backlog/backup-restore-scope-and-secrets.md`
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
-  which is the ladder's first real rung and the only one nothing exercises end to end.
+  the ladder's first real rung and the only one nothing exercises end to end.
   → `backlog/test-coverage-gaps.md`
-- **The in-app Help topic `account-security`** predates the current custody framing — every credential
-  treated as though it carried full account and identity access — and may still describe provider access
-  as read-only. Reconcile it next time it is touched. (`data-and-backups` was reconciled when its backup
-  sections were rewritten.)

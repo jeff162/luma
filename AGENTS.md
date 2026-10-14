@@ -180,7 +180,7 @@ Read it before picking up work, and prefer it over `docs/backlog/` for what to d
 parked work, that is not.
 
 When a backlog item ships, retire its file rather than keeping it: fold the durable half into the topic
-doc that owns the question, repoint the code citations off the project filename, and record the path in
+doc that owns the question, leaving out what a comment at the code site already says, repoint the code citations off the project filename, and record the path in
 `docs/backlog/README.md` → *Ledger*, which states the ritual in full.
 
 ## For Claude / harness-based agents

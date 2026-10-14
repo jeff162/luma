@@ -10,26 +10,23 @@ This document is the checklist of those facts. **None of the failures below anno
 each one produces a plausible-looking result, so a test that does not already know what to look for
 will not find it.
 
-> Scope note: "connector" here means any **data source** that produces transactions. There are three
-> shapes — a provider connection (a `ProviderAdapter`), a file importer, and a marketplace importer —
-> and they do not share a base class, so some declarations live on the adapter class and some in a
-> registry (`services/source_capabilities.py`).
-
-**Which sections apply.** Most of the material below came from building
-provider adapters, so the connection sections are the longer ones — but the rules that survived turned
-out to be about *sources*, not about connections, and the other two shapes hit several of them unchanged.
+"Connector" here means any **data source** that produces transactions. There are three shapes — a
+provider connection (a `ProviderAdapter`), a file importer, and a marketplace importer — and they do not
+share a base class, so some declarations live on the adapter class and some in a registry
+(`services/source_capabilities.py`). The rules are about sources rather than connections, so the other
+two shapes hit several of them unchanged:
 
 | Section | Connection | File importer | Marketplace importer |
 | --- | --- | --- | --- |
 | The adapter interface · Capability declarations · Where the connection handle comes from | ✅ | — | — |
-| Adding a file importer | — | ✅ | partly (the downstream rules; not the CSV parse seam) |
+| Adding a file importer | — | ✅ | partly (not the CSV parse seam) |
 | Adding a marketplace importer | — | — | ✅ |
-| Transaction ids must be globally unique | ✅ | partly (a file's own row id is scoped to its data source, not the ledger — see the section's end) | — (an order id joins a vendor's own files; it is not a ledger identity) |
-| Zero-amount rows | ✅ | ✅ | ✅ (and the one current source that keeps $0 rows as genuine zeros) |
-| Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) | ✅ |
-| Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) | ✅ (the one-currency rule) |
+| Transaction ids must be globally unique | ✅ | partly (row ids are per source) | — |
+| Zero-amount rows | ✅ | ✅ | ✅ |
+| Dates a source does not have | ✅ | ✅ | ✅ |
+| Currency | ✅ | ✅ (not the `ledger_currency` argument) | ✅ (not the `ledger_currency` argument) |
 | The published guide is not the contract · Request budgets · Pages and commits | ✅ | — | — |
-| Coverage claims | ✅ | ✅ (an import writes `import_batch_account`; the over-claim rule is the same) | ✅ (per file card, not per account) |
+| Coverage claims | ✅ | ✅ | ✅ (per file card, not per account) |
 | Reporting what was refused | ✅ | ✅ | ✅ |
 
 ---
@@ -59,12 +56,8 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 
 ## The adapter interface
 
-`backend/services/providers/` exposes `get_adapter(provider)` over a `ProviderAdapter` — `connect`,
-`fetch_accounts`, `fetch_transactions`, `fetch_transactions_sync`, `remove` — normalized to
-provider-neutral dict keys (`external_account_id`, `external_transaction_id`, …). The connect and sync
-paths speak only the adapter plus the `connection` table, never a provider's own field names.
-
-Subclass `ProviderAdapter` rather than duck-typing the two methods a caller happens to use. The sync loop
+The seam itself is described in [`architecture.md`](architecture.md) → *Provider connections*. Subclass
+`ProviderAdapter` (`backend/services/providers/`) rather than duck-typing the two methods a caller happens to use. The sync loop
 reads capability declarations to decide how deep to fetch and whether a backfill finished, so a partial
 stand-in goes stale the moment the contract grows — silently, because an `AttributeError` inside the loop
 is swallowed by the per-connection error handler. Inheriting means each new declaration arrives with its
@@ -104,12 +97,11 @@ to be assumed rather than checked, because the Plaid answer is invisible until a
 | Derived from the credential (SimpleFIN hashes the access URL) | `False` | Produces a **new** handle, so the upsert would insert a second row and strand the first. |
 
 **`stable_external_id` is a claim about the app's own re-authorization path, not only about the
-provider.** This is the trap it is easiest to fall into, and this repo fell into it: Plaid's `item_id` is
-stable across an *update-mode* Link session, but a plain Link session creates a **new Item** with a new
-`item_id` and new per-account ids. Declared `True` while the app only ever opened plain Link, the flag was
-false in exactly the case it exists for — every "reconnect" produced a second connection, stranded the
-first, and left it wearing a `reauth_required` badge that nothing could ever clear, because nothing would
-ever sync it again. A provider declaring `True` must therefore implement `create_link_token`'s
+provider.** Plaid's `item_id` is stable across an *update-mode* Link session, but a plain Link session
+creates a **new Item** with a new `item_id` and new per-account ids. Declared `True` while the app opens
+only plain Link, the flag is false in exactly the case it exists for: every reconnect produces a second
+connection and strands the first under a `reauth_required` badge nothing can clear, because nothing syncs
+it again. A provider declaring `True` must therefore implement `create_link_token`'s
 `access_token` argument (or an equivalent re-authorize-in-place step); if re-authorizing can only mean
 "authorize again", the honest declaration is `False`.
 
@@ -164,17 +156,17 @@ mapping stage altogether (`routers/import_export/paypal_statement.py`).
 naming because none of them announces itself — each fails as wrong data rather than as an error — and
 `ParsedFile` is where each is answered:
 
-* **The file hash.** It drives re-import recognition and profile matching, so `content_hash` is the
+- **The file hash.** It drives re-import recognition and profile matching, so `content_hash` is the
   front end's to define. A CSV hashes its text; a format with none hashes what it parsed, and it must be
   stable across a re-export of the same data, or every re-import looks like a new file. A PayPal
   statement is hashed over its account, period and rows, so the same month downloaded again — a
   different file — is still recognized.
-* **Header detection** scans lines, because exports carry preamble rows above the real header. It is
+- **Header detection** scans lines, because exports carry preamble rows above the real header. It is
   the CSV front end's own step; any tabular container needs the same over *cell* rows.
-* **Downstream parsers expect strings.** The amount and date parsers exist to interpret *human* text, so
+- **Downstream parsers expect strings.** The amount and date parsers exist to interpret *human* text, so
   a front end hands them strings (the statement reader keeps amounts as printed). A spreadsheet's floats
   and datetimes are normalized at the boundary rather than teaching each parser a second input type.
-* **The file viewer has no analog** for a binary container. `lines` holds the text the viewer shows
+- **The file viewer has no analog** for a binary container. `lines` holds the text the viewer shows
   around a bad row; a format with none leaves it empty, and the import then reports the row without
   opening a viewer with nothing in it.
 
@@ -209,8 +201,7 @@ anything that cannot measure a file must stamp the role deliberately (a file fro
 
 **Capture what is helpful.** A captured field is stored on every synced row, and every evidence field
 feeds the ledger's search text whatever its role, so a provider field nothing is likely to use is better
-left out. Plaid's `merchant_entity_id` was dropped on that basis: an opaque id that appeared on a handful of
-rows and was only ever matched by search.
+left out — Plaid's `merchant_entity_id`, for example, an opaque id present on few rows.
 
 **Where a file importer's declarations go.** With no class to hold a class attribute, a non-adapter
 source registers by name in `services/source_capabilities.py` and every consumer reads through one
@@ -242,16 +233,16 @@ is a different feature, not a thinner version of this one.
 
 Three more questions are specific to this shape, and none is answered elsewhere in this document:
 
-* **What funds an order that moved no cash.** Points and gift-card balances are redeemed at spend time
+- **What funds an order that moved no cash.** Points and gift-card balances are redeemed at spend time
   with nothing leaving an account, and the export routinely gives no dollar figure for them. Such an
   order is recorded **excluded** rather than as spending — counting it invents money the ledger never
   saw, and dropping it makes reconciliation report an order whose charge was not found.
-* **What joins the vendor's files, and whether it survives a re-export.** A vendor typically exports
+- **What joins the vendor's files, and whether it survives a re-export.** A vendor typically exports
   orders and items separately, joined on an order id. That id is a *within-vendor* key, not a ledger
   identity — see [Transaction ids](#transaction-ids-must-be-globally-unique) for why it is not one. The
   key that has to be stable is the **content hash** of each file, since that is what makes a re-import
   recognize itself rather than land as a second copy.
-* **Refunds and returns.** A partly refunded order is one net figure against one charge; a separately
+- **Refunds and returns.** A partly refunded order is one net figure against one charge; a separately
   refunded one is a second ledger row the reconciliation has to not mistake for a duplicate.
 
 **What still binds, from the rest of this page.** A marketplace source states a zero-amount policy like
@@ -280,24 +271,19 @@ than a second parser.
    with a header sniff mirrored client-side (`lib/amazonDetect.js`), so a file dropped on the generic
    importer is recognized and routed to the vendor's flow instead of column mapping.
 3. **The shared ledger substrate.** The `txn_link` primitive and the order engine
-   (`routers/import_export/amazon.py`): one spending transaction per order; match, exclude and link the
-   funding card charge; a reconciliation report over the result; reversal through the batch-undo hook. A
-   vendor that fits "one row per order, link the funding charge" reuses it. The engine carries
-   Amazon-specific names (`apply_amazon_order`, `LINK_KIND = 'amazon_order'`), to be generalized when a
-   second vendor shows what the neutral shape is.
+   (`routers/import_export/amazon.py`), which a vendor that fits "one row per order, link the funding
+   charge" reuses. The engine still carries Amazon-specific names (`apply_amazon_order`, `LINK_KIND`), to
+   be generalized when a second vendor shows what the neutral shape is.
 4. **A dedicated import form** — a dialog the Data Import drop zone opens when it recognizes the
    vendor's files, and a row in the File Sources tab's data-source list, which is the home for the
    vendor's setup help. The importer stamps each batch with `import_batch.source_kind =
    'marketplace:<vendor>'`, so the import history groups the batches under the vendor; they have no CSV
    profile.
 5. **A funding-source → account map**, only if the export names the paying card rather than which of the
-   user's accounts it hit. `amazon_funding_map` + `services/amazon_funding.py` key each payment
-   instrument (card last-4 + network) to the account it charges, so the importer can constrain its
-   charge search to that account; imported ledgers rarely carry masks, so this map is the real signal.
-   It is user-maintained, global by default with an optional per-account override
-   (`AmazonFundingSourcesSection`), and it accrues instruments as imports discover them. Resolution
-   order in `find_matching_charge` is override → global → last-4 → no match; see `data-model.md` →
-   *Transaction links and Amazon order import*.
+   user's accounts it hit. A user-maintained map keys each payment instrument to the account it charges,
+   so the importer can constrain its charge search to that account; imported ledgers rarely carry masks,
+   so this map is the real signal (`services/amazon_funding.py`; `data-model.md` → *Transaction links and
+   Amazon order import*).
 
 ## Transaction ids must be globally unique
 
@@ -313,11 +299,10 @@ account as well: `simplefin:<account>:<bank id>`, mirroring how `external_accoun
 prefix is not something to add later — every id an adapter compares (`removed`, a pending row's
 predecessor) has to carry it too, and ids already stored need a migration.
 
-This was not hypothetical. The Bridge's demo server derives ids from the posting instant and runs every
-account on one schedule, so two accounts issued byte-identical ids — the second account's rows matched the
-first's on the unscoped lookup and were dropped as already held. The account imported **nothing** while
-the sync reported success. Namespace at the adapter boundary, which is the layer that knows; do not weaken
-the lookups. The signature of this regression is `added == skipped` exactly, with one account empty
+A source whose ids repeat across accounts (the Bridge's demo server does) has the second account's rows
+match the first's on the unscoped lookup and dropped as already held: that account imports **nothing**
+while the sync reports success. Namespace at the adapter boundary, which is the layer that knows; do not
+weaken the lookups. The signature is `added == skipped` exactly, with one account empty
 (`test_two_accounts_issuing_the_same_transaction_ids_both_import`).
 
 **A file importer's ids are the other case, and deliberately not this column.** Some exports give each
@@ -333,18 +318,10 @@ evidence; a recognized format can read it without a mapping, as the PayPal impor
 
 ## Zero-amount rows
 
-A source may publish a transaction with **no amount**. The declaration and the rule live in
-`backend/services/source_capabilities.py`.
-
-**A $0 row is worth recording only when the zero is genuine** — a finished record such as a fully
-gift-carded or promotional order, or a refund that nets out. A pending placeholder is not worth recording
-for itself; the transaction it stands for is recorded when it settles.
-
-**Keep placeholders only where refusing them would lose the settlement.** That is a provider that revises
-the row in place — a change feed's `modified`, keyed on the provider's transaction id — and ignores a
-revision naming a row that was never inserted. Anywhere the settled charge arrives as a row of its own,
-refusing the placeholder loses nothing, and inserting it would leave dead weight that duplicate detection
-cannot pair with the settled row, since their amounts differ.
+A source may publish a transaction with **no amount**. Such a row is worth recording when the zero is
+genuine (a finished record); a pending placeholder is kept only where refusing it would lose the
+settlement — a provider that revises the row in place and ignores a revision naming a row never inserted.
+The full rule is in `backend/services/source_capabilities.py`, which holds the declarations.
 
 | Source | Policy | Why |
 | --- | --- | --- |
@@ -377,21 +354,20 @@ well-formed 1970-01-01. Nothing errors, nothing is logged, and the row lands in 
 every other transaction, inside no report period, unreachable by every date test in the duplicate ladder,
 and filed on a sync card labelled "January 1970".
 
+A simulator written from what the source *documents* gives every row a real value, so the whole class
+stays invisible to a suite that otherwise covers pending rows well.
+
 So an adapter must decide, per date field, **which values mean "absent"** — not only a missing key. Then:
 
-* Date the row by when the charge was made (`transacted_at`) and **fall back** to the other date the
+- Date the row by when the charge was made (`transacted_at`) and **fall back** to the other date the
   source publishes (`posted`) rather than to nothing; carry the posting as `posted_date`, absent while the
   charge is pending. See `docs/data-model.md` → `date` for why the transaction date is the ledger's.
-* Never synthesize a date from the import time or a window bound. A fabricated date is indistinguishable
+- Never synthesize a date from the import time or a window bound. A fabricated date is indistinguishable
   from a real one; a dropped row is at least honest, and a row with no usable date anywhere is dropped.
-* Where the settled version of a row can arrive later, the sync must **re-stamp** the provider-owned
+- Where the settled version of a row can arrive later, the sync must **re-stamp** the provider-owned
   fields, `posted_date` among them, not merely clear the pending flag — see `_refresh_provider_fields` in
   `routers/sync.py`. A field written from a
   provisional version of a row is provisional until the row is superseded.
-
-The corresponding trap on the fixture side is that a simulator is written from what a source *documents*.
-The captured demo data and the first version of `_simplefin_sim.py` gave every pending row a real posting
-timestamp, so the entire class was invisible to a test suite that otherwise covered pending rows well.
 
 ## Currency
 
@@ -408,9 +384,8 @@ duplicate detection reject genuine rows later.
 **Declare what the provider states a currency on** (`currency_scope`), because it decides what dropping
 means. A provider that names a currency per account (SimpleFIN) drops a mismatched account whole: it can
 never fill, so the user is warned from its recorded currency on every sync. A provider that names one per
-transaction (Plaid) drops only the mismatched rows while the account goes on filling, so the account-level
-warning is false there — one foreign subscription in a dollar wallet read as "held in GBP, so its
-transactions were not imported". Its notice names the rows instead, and only on a pull that dropped some.
+transaction (Plaid) drops only the mismatched rows while the account goes on filling, so an account-level
+warning would be false there; its notice names the rows instead, and only on a pull that dropped some.
 
 **A file importer has no adapter to declare this on, and a file is per-row by nature.** The CSV mapper
 takes an optional currency column; a row it names in another currency is refused and listed with the
@@ -426,12 +401,12 @@ protocol will not function otherwise. The rest are about the **user's security p
 from the request and response shapes never reaches, and which is therefore the half that gets missed.
 Three kinds to look for, all of them present in SimpleFIN's list:
 
-* **What a failed claim on a single-use credential means.** The reassuring reading ("generate a new one")
+- **What a failed claim on a single-use credential means.** The reassuring reading ("generate a new one")
   and the alarming one (someone else spent it) rest on identical evidence, and only the alarming one is
   safe to act on.
-* **Which refusals are conditions of their own** rather than an outage — a 403 on a data call says
+- **Which refusals are conditions of their own** rather than an outage — a 403 on a data call says
   something a 500 does not, and collapsing the two loses it.
-* **What provider-supplied text may do when displayed.** Framework escaping covers injection, so the live
+- **What provider-supplied text may do when displayed.** Framework escaping covers injection, so the live
   risk is usually **volume** rather than markup, and the bound belongs at the adapter boundary rather than
   at each consumer.
 
@@ -444,12 +419,12 @@ trains the user to ignore both.
 load-bearing facts appear nowhere in its developer guide, and both were invisible to a suite that mocks
 the HTTP layer:
 
-* **The usable history window was narrower than the documented one.** The guide states 90 days; a 90-day
+- **The usable history window was narrower than the documented one.** The guide states 90 days; a 90-day
   request comes back with a deprecation notice warning that it "may be capped" later, while the width the
   server actually recommends is 45. A declaration like `max_history_days` is a claim about the *server*,
   so it is worth one real call to fill in — a value copied from a guide is a guess wearing a constant's
   clothing, and it fails as silently missing history rather than as an error.
-* **The transport in front of a provider is part of the provider.** The Bridge sits behind a CDN that
+- **The transport in front of a provider is part of the provider.** The Bridge sits behind a CDN that
   refuses unnamed HTTP clients: urllib's default user agent draws a bare `403 error code: 1010` with
   nothing in the body naming the cause. The same layer is what answers a burst with `429 error code:
   1015` (see below), so a CDN in the path is worth establishing early — it adds failure modes that belong
@@ -477,12 +452,12 @@ the column was always defined as an opaque resume token, not literally a cursor.
 writes through as it spends, persisted separately in `connection.provider_request_budget`. Two rules follow
 from the difference, and both are easy to get backwards:
 
-* **A resume checkpoint must roll back with a failed pull; spending must not.** A checkpoint claims data is
+- **A resume checkpoint must roll back with a failed pull; spending must not.** A checkpoint claims data is
   held, so a pull that inserted nothing must not advance it. A request that has already left the machine
   counts whether or not the call it belonged to returned. Sharing one field forces one persistence rule on
   both, and each one's correct rule is the other's bug — a budget that forgets a failed pull's requests
   overruns exactly when a user is retrying a broken connection hardest.
-* **Mutable, because a return value cannot escape an exception.** The sync layer writes the record back in
+- **Mutable, because a return value cannot escape an exception.** The sync layer writes the record back in
   a `finally`, so a failure mode added later cannot silently opt out of being metered.
 
 **Model a published limit as what it actually is.** A limit described as "N per day, replenished through
@@ -511,16 +486,10 @@ provider's count and this app's disagree, which is a bug with a real penalty beh
 `update_status` (`BUDGET_PAUSED` vs `RATE_LIMITED`).
 
 **If an adapter keeps more than one pool, the rule choosing between them is worth stating where a reader
-will look for it, because the choice is not the one they will guess.** SimpleFIN keeps a shared allowance
-plus one per account, and picks by the size of the *still-walking set* alone — a small set makes one
-filtered request per account and spends their own pools, a large one makes a single unfiltered request and
-spends the shared pool. It is deliberately **not** keyed on initial-vs-routine, which is the intuitive
-reading and the wrong one: a credential with only a few accounts filters throughout its first backfill,
-leaving the shared allowance untouched and available for the top-ups that keep the ledger current. That is
-correct behaviour and looks like a bug in the log — the same pull that spends dozens of per-account
-requests reports its shared bucket as full. Filtering buys no extra depth (every pool is the same size);
-it trades round trips for keeping the shared allowance free. State the trade, or the log's own numbers will
-be read as evidence against it.
+will look for it, because the choice is not the one they will guess** and correct behaviour can look like
+a bug in the log — a pull that spends dozens of per-account requests while reporting its shared pool as
+full. State the trade, or the log's own numbers will be read as evidence against it. SimpleFIN's rule and
+its reasoning are in the pool comments of `services/providers/simplefin.py`.
 
 Then report the allowance itself, via the optional `request_allowance` field on the page dict
 (`{capacity, refill_per_hour, pools:{pool key: tokens left}}`). This is easy to skip and the omission is
@@ -544,12 +513,12 @@ and is not sent.
 layer holds no write transaction across a provider call. Two things follow that an adapter has to
 cooperate with:
 
-* **Report `has_more` while work remains**, rather than draining everything into one call. A walking
+- **Report `has_more` while work remains**, rather than draining everything into one call. A walking
   adapter should return after a small number of windows — SimpleFIN uses one (`WINDOWS_PER_PAGE`), because
   a page boundary costs a commit (~1ms) and bounds a provider request (~1s), which is not a close call.
   Draining instead means the write lock is held for the length of the whole pull, which makes the rest of
   the app unusable, and a failure discards everything fetched.
-* **Report only what *this page* did.** `account_coverage` must describe the accounts the page actually
+- **Report only what *this page* did.** `account_coverage` must describe the accounts the page actually
   advanced — never pre-seeded from where they already stood. A page that ends early says nothing about the
   accounts it did not reach, and an adapter that reports them anyway claims depth nothing fetched.
 
@@ -591,21 +560,20 @@ a refusal the user cannot see is indistinguishable from a bug.
 Both reports write through the same writers as CSV import, so the existing card UI, the rejected-rows
 dialog, "Import anyway" and Restore all work on a sync card with no frontend changes:
 
-* **Duplicates** — `record_sync_duplicate` → `import_batch_duplicate`.
-* **Rejected rows** (today: $0 refusals) — `record_sync_zero_amount_rejection` →
+- **Duplicates** — `record_sync_duplicate` → `import_batch_duplicate`.
+- **Rejected rows** (today: $0 refusals) — `record_sync_zero_amount_rejection` →
   `import_batch_rejected_row` through `save_batch_rejected_rows`, with the counts in the card's
-  `config_snapshot` `import_summary`, as CSV import splits them. The row's own `date`/`description`/`amount`
-  fields are what the report's main columns read; an earlier version kept the rows in the snapshot with only
-  their raw values, so the report showed dashes there and pushed the detail into extra columns.
+  `config_snapshot` `import_summary`, as CSV import splits them. The report's main columns read the row's
+  own `date`/`description`/`amount` fields, so a row stored with only its raw values shows dashes there.
 
 Three details are easy to get wrong:
 
-* **Counts accumulate.** A CSV summarizes one file once; a monthly sync period card is added to by every
+- **Counts accumulate.** A CSV summarizes one file once; a monthly sync period card is added to by every
   top-up for the rest of the month. A summary that overwrites silently resets the count and reports only
   the most recent sync's refusals.
-* **A row number is an ordinal.** A sync has no file lines, but the reports are keyed by row, so arrivals
+- **A row number is an ordinal.** A sync has no file lines, but the reports are keyed by row, so arrivals
   are counted instead.
-* **A held duplicate is a row "Import anyway" will insert**, through the file importer's
+- **A held duplicate is a row "Import anyway" will insert**, through the file importer's
   `_insert_imported_transaction`, so its payload takes that function's shape — evidence as a dict under
   `import_evidence`, the account's owner — plus the provider id. A forced row that lost its provider id is
   added a second time the next time the provider re-sends it; one whose provider id another row already
@@ -613,13 +581,9 @@ Three details are easy to get wrong:
   no category decision, and a forced row with none is run through the rules on insert, as a hand-entered
   row is. Reports held in the older sync shape are read through `held_payload_evidence`.
 
-**Tentative decision — resolving a refusal-only sync.** A sync whose only content is refused rows still
-resolves (and therefore creates) its card, so the refusals have somewhere to be reported. This matches
-what duplicates already do. The cost is that a sync which imported nothing can leave a card showing only
-rejects. The alternative is CSV's rule — delete the batch when nothing was imported or deduped — which
-would keep the card list clean at the price of making the refusals invisible and of having rejects and
-duplicates behave differently on the same card. **This is expected to be revisited once the effect is
-visible in practice; it is not settled.**
+**A sync whose only content is refused rows still creates its card**, as one holding only duplicates
+does, so the refusals have somewhere to be reported. CSV import deletes a batch that imported and deduped
+nothing; a sync does not, because that would make the refusals invisible.
 
 ## What a failure says
 
@@ -652,23 +616,19 @@ another host. The list is the place to extend if SimpleFIN moves or adds a serve
 **Redirects are refused, not followed.** A followed redirect carries the `Authorization` header to an address
 no check has seen; `_RefuseRedirects` reports it as the HTTP error it is.
 
-**With the destination fixed, quoting a failed response back is safe, and it is kept.** Stripping the reply
-text was the other half of the original finding, but its danger was reading from an arbitrary host, which the
-list removes — while the text itself has been the only evidence of a cause (the CDN's `error code: 1010`).
+**With the destination fixed, quoting a failed response back is safe, and it is kept.** Its danger was
+reading from an arbitrary host, which the list removes, while the text itself has been the only evidence
+of a cause (the CDN's `error code: 1010`).
 
 A provider whose addresses come only from its SDK's own environment settings, as Plaid's do, takes no
 address from outside and needs no list.
 
 ## Obstacles
 
-- **A marketplace vendor whose export does not name the paying instrument cannot be linked at all**, only
-  created — which makes every order double-count. No amount of matching effort recovers it, because
-  amount and date alone match coincidental charges on any account. The check belongs before the design,
-  not after the parser.
-- **The connect question for a provider with an unstable handle must be asked before the provider call**,
-  because a claim or exchange is single-use. By the time the new handle is known the authorization is
-  spent, so the server has to absorb a stale answer rather than refuse it.
-  See [Where the connection handle comes from](#where-the-connection-handle-comes-from).
+- **A marketplace vendor whose export does not name the paying instrument cannot be linked**, so every
+  order double-counts — see [Adding a marketplace importer](#adding-a-marketplace-importer).
+- **The connect question for a provider with an unstable handle must be asked before the provider call** —
+  see [Where the connection handle comes from](#where-the-connection-handle-comes-from).
 - **A provider's list of environments is the provider's, and it changes without telling anyone.** The
   offered set, the accepted set, and the set the client library can actually reach are three separate
   places, and nothing fails when they disagree: an environment map keyed by name resolves an unknown one

@@ -175,8 +175,9 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
 
 ### Environment
 
-- Timestamps are not reliable for determining order, because on WSL the clock can step backwards by one
-  to three seconds between reads; a test that means "the newest row" orders by `rowid`.
+- Under WSL the wall clock has been seen to step backwards by one to three seconds between reads, so use
+  `time.monotonic()` or `performance.now()` for timing, and order by `rowid` when a test means "the newest
+  row".
 
 - Use `LUMA_ENV_FILE` pointed at a scratch file to isolate an ad-hoc script, because every entry point
   loads `.env` with `override=True` and it beats a shell `DATA_DIR`. Print the resolved paths before

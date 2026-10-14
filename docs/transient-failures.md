@@ -157,8 +157,7 @@ backwards (entry 1 above), and every question here is a question about ordering.
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise
-re-open it. **All of it is fixed** (`backend/session_signing.py`); the durable half is in
-`security-model.md` → *Identity and the network perimeter*.
+re-open it. **All of it is fixed**; the durable half is in `backend/session_signing.py`.
 
 The one bug wore three masks, none of which named it: `cash-flow.spec.js` failing with `Money out · `
 never visible (the frame switched correctly and its data request returned 401), a
