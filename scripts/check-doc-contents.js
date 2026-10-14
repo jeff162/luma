@@ -36,7 +36,7 @@ const ROOT_DOCUMENTS = ['README.md', 'CONTRIBUTING.md']
 // headings can say, so it is stated here; a document missing from this table fails the check, which is
 // what stops a new one from landing in the index unclassified.
 const AUDIENCES = [
-  { title: 'Using Luma', files: ['import-reconciliation-playbook.md'] },
+  { title: 'Using Luma', files: ['getting-data-into-luma.md'] },
   { title: 'Notes for Agents', files: ['agent-profile.md', 'collaboration-notes.md'] },
   {
     title: 'Changing the code',

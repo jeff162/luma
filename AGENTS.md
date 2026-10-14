@@ -103,6 +103,8 @@ The `docs/` directory captures the **intent** of the system: what it does, **why
 
 When working on the codebase:
 
+- A change is finished only when every description of what it touched is still true — code comments, the in-app help (`frontend/src/help/content.jsx`), the README and the docs below. Update them in the same change.
+
 - Follow the commenting style in `docs/code-commenting-style.md`.
 
 - If your work introduces a system, alters one, shifts an invariant, or settles a design decision that future readers would need to know to understand the code, update the relevant doc in the same change:
@@ -121,7 +123,7 @@ When working on the codebase:
 
   - `docs/ui-patterns.md` — UI conventions shared across surfaces (not a description of any one surface)
 
-  - `docs/import-reconciliation-playbook.md` — the user-facing "when situation X arises, reach for tool Y" guide, and the content source of truth for the in-app help topics. Changing an import or reconciliation tool means updating the situation here first, then reconciling the matching help topic so the in-app copy does not drift
+  - `docs/getting-data-into-luma.md` — the user-facing "when situation X arises, reach for tool Y" guide
 
   - `docs/mechanism-index.md` — the "which mechanism is this?" domain lookup; consult **before recording a relationship between transactions**, or building anything that groups, divides, offsets or hides money. Several of these look alike and are not interchangeable; the wrong one fails quietly rather than loudly
 
@@ -163,7 +165,7 @@ The two sections, in a topic doc:
 
 **Audience decides whether a topic doc takes the tail at all.** The two sections serve a *developer*
 changing the code. A topic doc written for the person **using** the app —
-`import-reconciliation-playbook.md`, whose prose is also the source for the in-app help copy — takes
+`getting-data-into-luma.md` — takes
 neither, and the owed decisions about its subject live in the developer doc that owns the mechanism. Do not add empty sections to such a file to make it match the shape; the shape
 follows from who is reading.
 

@@ -265,8 +265,6 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   explains one control sits beside that control.
 - **Guidance that applies only in a recognized situation uses `ContextualExplainer`**: a dismissible tip
   that collapses to a `?`. The host decides when the situation is live.
-- Import and reconciliation topics are authored from
-  [`import-reconciliation-playbook.md`](import-reconciliation-playbook.md).
 
 ## Floating panels
 

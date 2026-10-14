@@ -391,39 +391,46 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: 'Choosing how to bring data in',
     surfaces: ['Getting started'],
-    summary: 'Transactions arrive from a data provider, from files, or from both. A provider saves the exporting; files cost nothing and reach further back. Amazon and PayPal exports add the purchase detail neither one carries.',
+    summary: 'Transactions come from files, from a data connection, or from both, depending on what is available, what it costs and who sees the data. Amazon and PayPal exports add the purchase detail neither one carries.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          Transactions arrive one of two ways, and most ledgers end up using both.
+          Transactions come from files, from a data connection, or from both. Which suits depends on
+          what is available, what it costs, how much downloading is tolerable, and who else gets to see
+          the transactions.
         </p>
         <ul>
           <li>
-            A <HelpLink to="/help/data-providers">data provider</HelpLink> fetches transactions from
-            the bank directly, so there is no file to export. It needs an account with the provider
-            (a subscription, or developer credentials) and a vault passphrase to protect the stored
-            credential. A sync is started by hand, and history reaches back only as far as the bank
-            and the provider allow.
+            <strong>Downloading from each bank.</strong> Most banks and card issuers offer a CSV
+            export. It costs nothing and no one else sees the data, but staying current means a fresh
+            file from each one: trivial for two accounts, a chore for a dozen. Moving from another tool
+            usually starts with a file too, since its export often holds the whole history, further
+            back than a connection can reach.
           </li>
           <li>
-            <strong>Files</strong> cost nothing and reach back as far as the bank&apos;s own export
-            does. The price is the repeated download. A{' '}
-            <HelpLink to="/help/unknown-data-source">saved data source</HelpLink> takes the mapping
-            out of every later file, and a{' '}
-            <HelpLink to="/help/watched-folders">watched folder</HelpLink> takes out the trip to the
-            Import page as well.
+            <strong>An aggregated view&apos;s export.</strong> Some budgeting apps, and a growing number
+            of banks and brokerages, can link accounts held elsewhere and show them in one place, often
+            at no charge. Where one can export everything as a single CSV, many downloads become one.
+            In exchange, that service sees every transaction from the linked accounts.
+          </li>
+          <li>
+            <strong>A <HelpLink to="/help/data-providers">data provider</HelpLink>.</strong> Where one
+            operates, a paid provider connects {APP_NAME} to the accounts directly. New transactions
+            arrive with each sync, started by hand, and nothing is downloaded. The price varies by
+            country, and the provider sees the transactions.
           </li>
         </ul>
         <p>
+          None of this is fixed. Free tiers end, prices change and providers come and go, so the choice
+          is worth revisiting, and mixing routes is normal: files once for the older history and a
+          connection from then on is a common shape. Switching or overlapping is safe, because every
+          import is compared against the ledger and history that arrives by two routes is not counted
+          twice, provided each bank account maps to the same account in {APP_NAME} from both.
+        </p>
+        <p>
           Which accounts are worth bringing in at all is covered
           under <HelpLink to="/help/page-accounts">the Accounts page</HelpLink>.
-        </p>
-        <h4>Using both</h4>
-        <p>
-          A common shape is files once for the older history and a connection from then on. The
-          overlap is safe, because every import is compared against the ledger, provided the
-          same bank account maps to the same account in {APP_NAME} from both.
         </p>
         <h4>Sources worth adding either way</h4>
         <p>
@@ -913,12 +920,15 @@ export const HELP_TOPICS = [
 
         <h4>Adding the split transaction details</h4>
         <p>
-          The editor opens four ways -- from the row's right-click menu
+          The editor opens five ways -- from the row's right-click menu
           (<strong>Split&hellip;</strong>, or <strong>Edit split&hellip;</strong> on one already split),
           from the <strong>Split (N)</strong> marker that a split row shows in its category column,
           from the <strong>Split&hellip;</strong> button beside the category in the transaction detail
-          panel, or from the same button on the <strong>+New</strong> panel while a transaction is being
-          entered by hand. All four land in the same dialog.
+          panel, from the same button on the <strong>+New</strong> panel while a transaction is being
+          entered by hand, or from <strong>Split&hellip;</strong> on a <strong>Matched</strong> or{' '}
+          <strong>No charge found</strong> row of the{' '}
+          <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink>. All five land in
+          the same dialog.
         </p>
         <p>
           On <strong>+New</strong> the amount comes first &mdash; a split divides it, so the button waits
@@ -1516,11 +1526,17 @@ export const HELP_TOPICS = [
     summary: "Tags are cross-cutting labels applied at the transaction, category, group, or account level. A transaction's effective tags are the union of all four sources.",
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           Tags are lightweight labels separate from the category tree. Use them for any cross-cutting
           dimension to report by &mdash; <em>Essential</em> vs everything else, who an
           expense belongs to in a household, business vs personal, vacation buckets, and so on. Tags can also be
           used as placeholders to build complicated expressions which cannot be expressed in the filter.
+        </p>
+        <p>
+          Categories and groups belong to no one &mdash; one tree serves everyone in the ledger, while an
+          account has an owner. So a dimension like personal vs shared, or business vs personal, is a tag
+          rather than a second branch of the category tree or a split of an account.
         </p>
         <p>
           A tag can be attached at four levels, and a transaction's <strong>effective
@@ -3350,11 +3366,11 @@ export const HELP_TOPICS = [
               <li>
                 <strong>Discard</strong> on a stacked duplicate row works per-copy.
                 Discarded rows land in Settings → Trash's <strong>Duplicate transactions</strong>.
-                Useful when a charge is just a purchase the export didn't cover (nothing to fix).
               </li>
               <li>
                 <strong>Mark reviewed</strong> acknowledges it so it drops out of the attention
-                count (Undo restores it). Works per row or on a bulk selection.
+                count (Undo restores it) &mdash; for a charge that is just a purchase the export
+                didn&apos;t cover, with nothing to fix. Works per row or on a bulk selection.
               </li>
             </ul>
           </li>
@@ -3365,10 +3381,39 @@ export const HELP_TOPICS = [
             restored and the order returns to <strong>No charge found</strong>, where <strong>Link charges…</strong>
             can pair it correctly. An unlinked charge is never matched to that order again automatically.</li>
         </ul>
+        <p>*needs review*</p>
+        <p>
+          <strong>Matched</strong> and <strong>No charge found</strong> rows also offer{' '}
+          <strong>Split&hellip;</strong> (<strong>Edit split&hellip;</strong> once split), so an order can be
+          divided across categories while it is being reviewed, without finding it again in the ledger &mdash;
+          see <HelpLink to="/help/transaction-splits#imported-order">splitting an imported order</HelpLink>.
+          An order with a single item has nothing to divide and doesn&apos;t offer it; the ledger&apos;s own{' '}
+          <strong>Split&hellip;</strong> still does.
+        </p>
         <p>
           Hover any order or charge for its <strong>origin detail</strong> (source file, captured fields,
           imported category), and use the <strong>↗</strong> beside an order to open the Amazon page for
           that order.
+        </p>
+        <h4>How an order&apos;s charge is found</h4>
+        <p>*needs review*</p>
+        <p>
+          An order is matched to a charge of the same amount within three days of it, and only when exactly
+          one such charge qualifies. Which accounts qualify depends on what the order says about how it was
+          paid. A card mapped to an account on the{' '}
+          <HelpLink to="/help/amazon-funding-sources">Amazon import form</HelpLink> limits the search to
+          that account, and the mapping follows the card if its account is later merged into another.
+          Without a mapping, the card&apos;s last four digits rule out accounts whose card number
+          disagrees. An order that names no card at all (a digital order, or one paid off-card) has
+          neither, so the charge must at least read as Amazon (<em>AMZN</em> or <em>AMAZON</em>);
+          otherwise any same-amount charge nearby, on any account, would do.
+        </p>
+        <p>
+          The cost of that rule is a miss: an off-card order whose charge reads as something else &mdash;
+          paid through PayPal, so the card says <em>PAYPAL</em> &mdash; lands in{' '}
+          <strong>No charge found</strong>, and <strong>Link charges&hellip;</strong> pairs it by hand. A
+          miss is easy to see and fix; a wrong match would quietly exclude an unrelated charge from the
+          totals.
         </p>
         <p>
           For batch cleanup, filter with the pills, tick the row checkboxes (or the select-all header), and the
@@ -3486,6 +3531,7 @@ export const HELP_TOPICS = [
     summary: 'The outcome pills on an Amazon file card open a report of what that import actually did: the orders it created, items matched into orders, items with no matching order yet, duplicates, and payments.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           Each Amazon file card carries outcome pills &mdash; <strong>orders</strong>, <strong>items
             matched</strong>, <strong>already enriched</strong>, <strong>no matching order</strong>,{' '}
@@ -3497,7 +3543,10 @@ export const HELP_TOPICS = [
           <li><strong>No matching order</strong> &mdash; the items had no order to attach to, usually because
             the items file was imported before its orders file. Their detail is <em>saved</em>, not lost:
             importing the matching orders file later attaches it automatically (no need to re-import the items
-            file), and the pill flips to <strong>attached to orders</strong> once that happens.</li>
+            file), and the pill flips to <strong>attached to orders</strong> once that happens. When every
+            waiting item has attached, the items file&apos;s card folds into the orders card, which then lists
+            both files &mdash; the same single card as importing the two together. A card with items still
+            waiting stays until their orders arrive. Undoing the items import discards the saved detail.</li>
           <li><strong>Duplicates</strong> are orders a previous import already brought in &mdash; the file added
             nothing new. <strong>Already enriched</strong> is the items-file flavor of the same thing.</li>
           <li><strong>Payments</strong> tallies the matched card charges by the account they landed on.</li>
@@ -3662,7 +3711,13 @@ export const HELP_TOPICS = [
           <li><strong>Rejected &middot; review</strong> &mdash; the date is covered but nothing paired with
             it at all, anywhere in the window or across accounts. That makes it the row to actually
             investigate: it is usually present in one source and genuinely missing from the other, in which
-            case <strong>Import anyway</strong> keeps it.</li>
+            case <strong>Import anyway</strong> keeps it. A row with a payee name gets one more check first:
+            when the same payment &mdash; the same amount and a distinctive part of the name &mdash; already
+            sits on another account within a couple of weeks, the row stays rejected and reads{' '}
+            <strong>Matched another account</strong>; when nothing does, it is a payment the earlier source
+            never saw (a subscription paid from a wallet balance, say) and it imports. What is left here is
+            mostly money movement with no payee &mdash; deposits, withdrawals, currency conversions,
+            holds.</li>
         </ul>
 
         <p>
@@ -3681,7 +3736,14 @@ export const HELP_TOPICS = [
             another one, a few days apart: a wallet deposit whose funding charge is already recorded. Two
             legs of one movement, and the other leg is on the books, so this one is correctly not
             re-imported. Because the twin is the <em>other</em> leg rather than the same transaction, its
-            detail is never folded into it.</li>
+            detail is never folded into it.
+            <p>
+              The account&apos;s name is looked for in the other row&apos;s name, its original statement
+              name and any text captured from its file, so renaming a row never hides it from this match.
+              Renaming can help: a bank&apos;s card-payment row renamed to name the card it pays off lets
+              that payment pair the way a wallet&apos;s funding leg does. A rename affects later imports and
+              a reopened report, not a rejection already recorded.
+            </p></li>
         </ul>
         <p>
           Neither settled outcome is a verdict of its own: the coverage rule had already rejected the row,

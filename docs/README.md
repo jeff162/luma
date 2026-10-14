@@ -10,15 +10,14 @@ index in [`backlog/README.md`](backlog/README.md).
 
 ## Using Luma
 
-### [Import / Reconciliation Playbook](import-reconciliation-playbook.md)
+### [Getting Data into Luma](getting-data-into-luma.md)
 
-- [Mental model](import-reconciliation-playbook.md#mental-model)
-- [Choosing how to bring data in](import-reconciliation-playbook.md#choosing-how-to-bring-data-in)
-- [Keeping the ledger up to date](import-reconciliation-playbook.md#keeping-the-ledger-up-to-date)
-- [Adding purchase detail from Amazon and PayPal](import-reconciliation-playbook.md#adding-purchase-detail-from-amazon-and-paypal)
-- [Situations → what to use](import-reconciliation-playbook.md#situations--what-to-use)
-- [Tags (cross-cutting reporting)](import-reconciliation-playbook.md#tags-cross-cutting-reporting)
-- [In-app surfacing](import-reconciliation-playbook.md#in-app-surfacing)
+- [Choosing how to bring data in](getting-data-into-luma.md#choosing-how-to-bring-data-in)
+- [How imports fit together](getting-data-into-luma.md#how-imports-fit-together)
+- [Keeping the ledger up to date](getting-data-into-luma.md#keeping-the-ledger-up-to-date)
+- [Adding purchase detail from Amazon and PayPal](getting-data-into-luma.md#adding-purchase-detail-from-amazon-and-paypal)
+- [Situations → what to use](getting-data-into-luma.md#situations--what-to-use)
+- [Tags (cross-cutting reporting)](getting-data-into-luma.md#tags-cross-cutting-reporting)
 
 ## Notes for Agents
 

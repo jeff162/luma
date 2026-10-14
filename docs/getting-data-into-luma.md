@@ -1,40 +1,32 @@
-# Import / Reconciliation Playbook
+# Getting Data into Luma
 
-**Audience & purpose.** This is the *user-facing* "when situation X arises, reach for tool Y" guide
-for building one clean ledger from several data sources over time — where some sources identify
-accounts or categories better than others, and the same activity often arrives more than once.
-
-It is deliberately separate from the developer docs: `architecture.md` and `data-model.md` record the
-*why* and the invariants behind these tools; this file records the *when/how* for the person using
-the app. It is also the **content source** for the in-app version of this guidance (see
-[in-app surfacing](#in-app-surfacing) — the Help/FeatureExplainer registry is its home). Examples are
-generic on purpose so they can be reused as help copy.
-
-## Mental model
-
-- A **data source** is a saved mapping template; each **import batch** is one imported file, grouped
-  under its data source (or under *unknown data source* / a *temporary draft* if none).
-- Reconciliation is mostly about deciding, per attribute, **which source wins**: one source may carry
-  the correct *account*, another the better *categorization*, a third the cleaner *description*.
-- The dedupe engine settles the easy, high-confidence cases automatically and **surfaces the
-  judgment calls** in the per-file duplicate-detection report (the `↗` / report on each file). The
-  tools below are mostly about resolving those surfaced cases.
+Luma works from a ledger of transactions. This guide covers how to get them loaded, keeping the
+ledger current, adding purchase detail from <em>marketplace</em> vendors (Amazon and PayPal), and, under *Situations → what to use*,
+what to reach for when an import needs a decision. Luma works the same whichever way transactions
+arrive, and the ways can be mixed or changed at any time.
 
 ## Choosing how to bring data in
 
-Transactions arrive one of two ways, and most ledgers end up using both.
+Transactions come from files, from a data connection, or from both. Which suits depends on what is
+available, what it costs, how much downloading is tolerable, and who else gets to see the transactions.
 
-- **A data provider** fetches transactions from the bank directly, so there is no file to export. It
-  needs an account with the provider (a subscription, or developer credentials) and a vault passphrase
-  to protect the stored credential. A sync is started by hand, and history reaches back only as far as
-  the bank and the provider allow.
-- **Files** cost nothing and reach back as far as the bank's own export does. The price is the repeated
-  download. A saved data source takes the mapping out of every later file, and a watched folder takes
-  out the trip to the Import page as well.
+- **Downloading from each bank.** Most banks and card issuers offer a CSV export. It costs nothing and no
+  one else sees the data, but staying current means a fresh file from each one: trivial for two
+  accounts, a chore for a dozen. Moving from another tool usually starts with a file too, since its
+  export often holds the whole history, further back than a connection can reach.
+- **An aggregated view's export.** Some budgeting apps, and a growing number of banks and brokerages,
+  can link accounts held elsewhere and show them in one place, often at no charge. Where one can export
+  everything as a single CSV, many downloads become one. In exchange, that service sees every
+  transaction from the linked accounts.
+- **A data provider.** Where one operates, a paid provider connects Luma to the accounts directly. New
+  transactions arrive with each sync, started by hand, and nothing is downloaded. The price varies by
+  country, and the provider sees the transactions.
 
-**Using both.** A common shape is files once for the older history and a connection from then on. The
-overlap is safe, because every import is compared against the ledger — provided the same bank account
-maps to the same account here from both.
+None of this is fixed. Free tiers end, prices change and providers come and go, so the choice is worth
+revisiting, and mixing routes is normal: files once for the older history and a connection from then on
+is a common shape. Switching or overlapping is safe, because every import is compared against the
+ledger and history that arrives by two routes is not counted twice, provided each bank account maps to
+the same account in Luma from both.
 
 **Sources worth adding either way.** A card or bank account records where money went, not always what
 it bought:
@@ -53,6 +45,18 @@ card or bank transactions whichever side arrives first.
 Noting that the categories are present in the data, during the import or afterwards on the file's
 card, lets **Group imported categories** bring them in and **Generate rules** propose rules that file
 future imports the same way. That is a quicker start than the starter categories or categorizing from nothing.
+
+## How imports fit together
+
+- Each file loaded is kept as its own entry in the import history, filed under the **data source** it
+  was read with. A data source is a saved description of a bank's export layout, so the next file from
+  the same place needs no setup. A file read without one is listed under *unknown data source* or
+  *temporary draft*.
+- When the same activity arrives from more than one place, each source tends to be better at something.
+  One names the account correctly, another carries better categories, a third has a cleaner
+  description. Settling an overlap is mostly choosing which source to trust for each.
+- Clear duplicates are settled automatically. The ones that need a judgment are listed in each file's
+  duplicate report (the **↗** on its card), and most of the situations below are about resolving those.
 
 ## Keeping the ledger up to date
 
@@ -138,9 +142,9 @@ overlaps the first, puts every overlapping row through this, and most of them pa
 **Worth a look:**
 
 - **Matched · review** — a same-account counterpart turned up only after the window widened past the
-  exact day; each row states the gap. The window reaches `CROSS_ACCOUNT_DATE_WINDOW_DAYS` (7), sized from
-  settlement skew measured on a real ledger, and is ordered closest-day-first so a nearer candidate is
-  never displaced. The further apart a pair sits, the more it is worth a glance before clearing.
+  exact day; each row states the gap. The window reaches a week, closest day first, so a nearer
+  candidate is never passed over for a further one. The further apart a pair sits, the more it is worth a
+  glance before clearing.
   Posting dates drift between sources for several reasons — pending-vs-posted timing, weekend or holiday
   settlement, and time-zone differences on foreign charges — so the same transaction can sit several
   days apart in two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears
@@ -148,8 +152,8 @@ overlaps the first, puts every overlapping row through this, and most of them pa
   **import both**.
 - **Rejected · review** (no specific match) — the date is covered but nothing paired at all, anywhere in
   the window or across accounts. **A *named* payment that reaches this point is auto-rescued:** the
-  importer checks whether the same payment already sits in the ledger as a charge elsewhere (matched by a
-  distinctive merchant token + the same signed amount within ±14 days). If none does, the payment is
+  importer checks whether the same payment already sits in the ledger as a charge elsewhere (the same
+  amount and a distinctive part of the name, within a couple of weeks). If none does, the payment is
   genuinely new — a balance-funded subscription or P2P send the covering aggregator never saw, since it
   never hit a card or bank — and it **imports** instead of being buried here; if a corroborating charge
   *does* exist, the row stays rejected and reads *Matched another account* below. So this bucket is
@@ -171,8 +175,7 @@ overlaps the first, puts every overlapping row through this, and most of them pa
   Deposit" / funding legs have no twin on the wallet itself — their twin is the funding charge on the
   bank or card that paid it (named "PAYPAL…"), already in the ledger. Two legs of one movement, so this
   one is correctly not re-imported. The match is by amount + date + the account name, searched across the
-  cleaned merchant name, the **raw statement name**, and the captured source text (e.g. Mint's
-  `Original Description`) — the bank's clean descriptor often drops "PayPal" while the raw statement keeps
+  cleaned merchant name, the **raw statement name**, and the text captured from the file — the bank's clean descriptor often drops "PayPal" while the raw statement keeps
   it, so searching only the name misses most of these. All three are read, which is what makes **renaming
   safe**: a rename rule writes the clean name and leaves the raw one alone, so cleaning up a cryptic
   descriptor can only add a name to search for, never take one away. Renaming a bank's `CRD AUTOPAY` row
@@ -195,10 +198,9 @@ Some exports list the same purchase twice (often a day apart). The importer **in
 within-file duplicates** (it can't tell a real repeat purchase from an export artifact), so this is a
 source-quality problem to fix *before* import.
 
-- Use a **one-off, review-first CSV de-duplication script** (`data/clean_mint_csv.py` is the example
-  built for this) that writes a cleaned copy plus an audit file of what it dropped; tune the day
-  window / cross-account scope. Tiny fixed-amount recurring items (vending, parking meters) are
-  acceptable false positives — they don't move totals.
+- Clean the file before importing it: work on a copy, keep a record of what was dropped, and treat rows
+  a day or two apart with the same amount and merchant as duplicates. Small fixed-price repeats (a
+  vending machine, a parking meter) are acceptable false positives — they don't move totals.
 
 ### A file held more rows than the import brought in
 
@@ -323,11 +325,9 @@ The file-ledger and Transactions search boxes accept date and amount, not just m
 ### An Amazon order shows "Duplicate detected" on the reconciliation report
 
 Two or more identical same-amount charges **on the same account** made the order's auto-match
-ambiguous — usually the same charge imported twice (e.g. two Mint syncs). Same-amount charges on
-*different* accounts are never grouped as duplicates: two imports of one charge always land on the
-same account, so cross-account matches are distinct transactions (this matters because an order whose
-payments string names no card has no last-4/account constraint at all, making every same-amount charge
-in the window a candidate — without the guard a Merge could trash a real transaction elsewhere). If it's one purchase with redundant copies, use
+ambiguous — usually the same charge imported twice. Same-amount charges on *different* accounts are
+never grouped as duplicates: two imports of one charge always land on the same account, so charges on
+different accounts are distinct transactions. If it's one purchase with redundant copies, use
 **Merge → keep one**: the richest copy survives (any distinguishing detail from the others folds into
 it), the rest go to Trash, and the order matches the survivor. When *other* unmatched orders share the
 amount, the copies are distinct purchases, not redundant — Merge isn't offered; use **Not duplicates**
@@ -335,10 +335,8 @@ to mark the group distinct (it never re-flags; the order falls back to the unmat
 dated on the order itself is re-suggested for review), or the per-copy **Discard** to remove only the
 copies you know are double imports. Filter to one kind with the pills, select rows with the checkboxes,
 and the bulk bar applies Merge/Accept/Dismiss/Unlink/Move-to-trash to everything selected that supports
-it. Because the report's rows are heterogeneous — each kind has its own valid resolutions — a mixed
-selection is allowed and each button shows the count of selected rows it actually applies to, rather
-than restricting the selection to one kind. Only row-level actions get a bulk form: the per-copy
-**Discard** on a stacked duplicate row names *which* copy to remove, so its bulk equivalent is Merge.
+it; each button shows how many of the selected rows it applies to. The per-copy **Discard** has no bulk
+form, since it names *which* copy to remove; its bulk equivalent is Merge.
 
 ### An Amazon order shows "Duplicate · review" (same amount, dates don't line up)
 
@@ -354,19 +352,16 @@ one step.
 
 ### Two "Unaccounted charges" are copies of each other
 
-Copies of one real charge (a bank's post date vs. an aggregator's date, e.g. Mint) land on the same
+Copies of one real charge (a bank's post date vs. an aggregator's date) land on the same
 account with the same amount a day or three apart — and when no order accounts for either, the general
 dedupe can't catch them (different dates / payee text). The report groups these as
 **Unaccounted · duplicate**: **Merge → keep one** keeps the richest copy (folding in the others'
 detail) and returns it to the unaccounted list, **Discard** a copy by hand, or **Not duplicates**
-asserts they're distinct purchases — persisted (`amazon_charge_distinct`), so the group never
-re-flags. Same-amount-nearby without an order is weaker evidence (repeated same-price purchases are
+asserts they're distinct purchases, so the group never re-flags. Same-amount-nearby without an order is weaker evidence (repeated same-price purchases are
 real), so check each group's origin detail first — then Merge per row, or bulk-Merge the selected
 groups. A plain **Unaccounted charge** row offers **Trash** as the escape hatch for a duplicate the
-grouping failed to pair. It is named Trash rather than Discard because it acts on the whole row (that
-row owns one charge) — which is also what lets it work in bulk as **Move to trash**, where the per-copy
-**Discard** on a stacked duplicate row can't, since that one names *which* copy to remove. The two also
-file differently in Settings → Trash: a per-copy **Discard** is a dedupe resolution and lands under
+grouping failed to pair. It acts on the whole row, so it also works in bulk as **Move to trash**. The
+two file differently in Settings → Trash: a per-copy **Discard** is a dedupe resolution and lands under
 *Duplicate transactions*, while **Trash** is an ordinary delete and lands under *Transactions* with
 everything else you removed by hand.
 
@@ -396,7 +391,7 @@ card's **last-4** rules out accounts whose mask disagrees. A funding source foll
 merge — if the card it names is later merged into another account (a reissued card, or a CSV-imported
 account merged into the synced one), the mapping keeps pointing at the same physical card and charges
 arriving on the surviving account still match. An order whose payments string names **no
-card at all** (a digital `D01` order, or one paid off-card) has neither — so the payee becomes the only
+card at all** (a digital order, or one paid off-card) has neither — so the payee becomes the only
 remaining signal and the charge must at least *look* like Amazon (`AMZN`/`AMAZON`). Without that rule,
 amount + date alone would match any coincidental same-amount charge in the window, on any account.
 
@@ -415,8 +410,7 @@ charge is never matched to that order again automatically.
 
 To investigate what an order actually was, hover it for its origin detail (source file, captured
 fields) or click the **↗** to open the order's own page on Amazon — often the only place the detail
-exists for a thin digital (D01) order, whose export row may carry no item text at all. The Amazon link
-is captured at import, so it is present on orders imported after that capture was added.
+exists for a digital order, whose export row may carry no item text at all.
 
 ### An Amazon order shows "No charge found"
 
@@ -427,6 +421,13 @@ are matched by the import's own rule (the order's only candidate, and no other o
 less clear-cut shows up here as a suggestion. **Link charges…** opens a
 picker over the unaccounted charges with a running sum against the order total: check the charge(s)
 that paid for it (several, if it was split) and link them. A mismatched sum warns but doesn't block.
+
+### An Amazon order should be split across categories
+
+Matched and No charge found rows on the reconciliation report offer **Split…** (**Edit split…** once
+split), so an order can be divided across categories while it is being reviewed, without finding it again
+in the ledger. An order with a single item has nothing to divide and doesn't offer it; the ledger's own
+**Split…** still does.
 
 ### I imported the Amazon items file before its orders file
 
@@ -521,18 +522,3 @@ Accounts have owners; **categories/groups do not**. The dimensions you report by
 essential/discretionary, business/personal — are **tags**, attached at whichever level fits
 (transaction, leaf category, or group), and they're additive. Use tags rather than trying to encode
 those dimensions in the account or category tree.
-
-## In-app surfacing
-
-The situations above are surfaced inside the app through the Help/FeatureExplainer registry
-(`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help* for
-the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
-pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
-reconciliation and import-detail report headers, the PayPal reconciliation header, the amount-convention picker, the Group Imported
-Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search, the
-not-imported view, the watched-folders panel and the removed-as-duplicates line), and a context-triggered
-"explain this" tip that appears only when the app recognizes the situation (cross-account matches,
-covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
-
-**This doc remains the content source of truth.** When a reconciliation tool changes, update the
-situation here first, then reconcile the matching help topic so the in-app copy doesn't drift.
