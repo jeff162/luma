@@ -16,6 +16,7 @@
     "ui:smoke": "playwright test --config=playwright.smoke.config.js",
     "ui:test:a11y": "playwright test --config=playwright.config.js --project a11y --no-deps",
     "ui:test:all": "playwright test --config=playwright.config.js",
+    "ui:stress": "node ../scripts/stress-lane.js",
     "ui:test:headed": "playwright test --config=playwright.config.js --project app --project import --project marketplace --headed",
     "ui:test:debug": "playwright test --config=playwright.config.js --debug",
     "ui:test:file": "playwright test --config=playwright.config.js",

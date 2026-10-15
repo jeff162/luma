@@ -80,6 +80,10 @@ export default defineConfig({
   projects: [
     {
       name: 'app',
+      // Every session shares one backend process, and past about three at once its requests slow each
+      // other down until pages miss their deadlines: docs/scale-and-limits.md → "Many sessions on one
+      // server". `npm run ui:stress` raises it to 10 through PLAYWRIGHT_APP_WORKERS to measure exactly that.
+      workers: Number(process.env.PLAYWRIGHT_APP_WORKERS) || 3,
       testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|watched-folders|reconciliation-report|paypal-statement-import)\.spec\.js/,
     },
     {

@@ -157,6 +157,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [A watched folder is listed often and read rarely](scale-and-limits.md#a-watched-folder-is-listed-often-and-read-rarely)
 - [Bulk operations must not accumulate](scale-and-limits.md#bulk-operations-must-not-accumulate)
 - [The Tasks list is recomputed on every mutation](scale-and-limits.md#the-tasks-list-is-recomputed-on-every-mutation)
+- [Many sessions on one server](scale-and-limits.md#many-sessions-on-one-server)
 - [Measuring performance](scale-and-limits.md#measuring-performance)
 - [Obstacles](scale-and-limits.md#obstacles)
 - [Open](scale-and-limits.md#open)
@@ -208,5 +209,4 @@ index in [`backlog/README.md`](backlog/README.md).
 
 - [1. Two documents on one transaction list in the wrong order](transient-failures.md#1-two-documents-on-one-transaction-list-in-the-wrong-order)
 - [2. A row marked reviewed does not settle: the marker returns, or the row leaves the list](transient-failures.md#2-a-row-marked-reviewed-does-not-settle-the-marker-returns-or-the-row-leaves-the-list)
-- [3. Pages stuck loading in the browser lane](transient-failures.md#3-pages-stuck-loading-in-the-browser-lane)
 - [Not an entry: the cash-flow frame, and the 401 burst behind it](transient-failures.md#not-an-entry-the-cash-flow-frame-and-the-401-burst-behind-it)

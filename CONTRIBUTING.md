@@ -251,7 +251,9 @@ npm run ui:codegen
 `npm run ui:test` is the routine UI regression lane and skips the opt-in
 browser accessibility audits. Run `npm run ui:test:a11y` when you want the
 focused form-label/id sweep, or `npm run ui:test:all` to run both lanes
-together.
+together. `npm run ui:stress` runs the lane with ten sessions instead of three
+and reports how the server held up; `docs/scale-and-limits.md` → *Many sessions
+on one server* says when to run it and how to read it.
 
 The Playwright config pins its own ports (frontend 5199, backend 8099) and
 runs against an isolated backend with throwaway databases, so it is unaffected

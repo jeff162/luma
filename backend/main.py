@@ -59,6 +59,7 @@ from backend.app_logging import log_warning
 from backend.db.control_database import (
     auth_required, get_user_by_id, init_control_db, reconcile_workspace_db_path,
 )
+from backend.db import contention_trace
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service, sign_in_sessions
@@ -315,28 +316,8 @@ app.add_middleware(
     https_only=config.session_cookie_secure,
 )
 
-# TEMPORARY DIAGNOSTIC — remove with `database._TracedConnection`. Logs every request slower than a second
-# while `LUMA_DB_WRITE_TRACE` is set, so a page stuck loading can be matched to the request it waited on.
-if __import__("os").getenv("LUMA_DB_WRITE_TRACE"):
-    import time as _trace_time
-    from backend.app_logging import log_info
-
-    _trace_in_flight = [0]
-
-    @app.middleware("http")
-    async def _trace_slow_requests(request, call_next):
-        started = _trace_time.monotonic()
-        _trace_in_flight[0] += 1
-        at_start = _trace_in_flight[0]
-        try:
-            response = await call_next(request)
-        finally:
-            _trace_in_flight[0] -= 1
-        elapsed = _trace_time.monotonic() - started
-        if elapsed >= 1.0:
-            log_info(f"[slow-request] {elapsed:.2f}s {request.method} {request.url.path} "
-                     f"in-flight {at_start}", keep_in_file=True)
-        return response
+# Off unless `TRACE_DB_CONTENTION` is set; `npm run ui:stress` sets it (`backend/db/contention_trace.py`).
+contention_trace.install(app)
 
 # Empty by default, which disables cross-origin access entirely: every shipped topology serves the SPA
 # and the API on one origin — dev proxies `/api` through Vite, and a downloaded build or a

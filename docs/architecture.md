@@ -1023,6 +1023,24 @@ the browser sends with the upload and by tenant, which the browser polls at `GET
 /import-export/run-progress/{id}`. The endpoint does its work via `run_in_threadpool`, because work in
 an `async def` body would hold the event loop and the poll could not be answered.
 
+**Every request shares one interpreter lock.** Python lets only one thread run Python code at a time;
+the lock that enforces this is the GIL. The `sqlite3` module lets go of it while SQLite works and has to
+take it back afterwards, once for each call and once for each row it fetches. While other requests are
+busy in Python, each of those take-backs waits its turn, so a request that fetches thousands of rows can
+take many times longer than it does alone, even when the machine and the database are mostly idle. The
+effect grows with the number of requests in flight, which is why the browser lane runs a limited number
+of sessions (`scale-and-limits.md` → *Many sessions on one server*). So a request should make few calls
+and fetch few rows:
+
+- **Let SQL do the counting and filtering.** Ask for `COUNT`, `SUM`, a `WHERE` clause or a `LIMIT`
+  rather than fetching rows to count or filter them in Python.
+- **One query for a set, never one per item.** Load what a list of rows needs with `IN (…)` in a single
+  query, not in a loop that queries for each row. A loop of queries grows with the data and goes
+  unnoticed on a small ledger; `backend/tests/test_query_budget.py` is there to catch it.
+- **Work every page triggers must stay cheap.** The Tasks poll runs on every page change and after every
+  edit. Anything it computes should cost about the same on a large ledger as on a small one. Where that
+  is impossible, compute it once and keep the result until the data changes.
+
 **An expression in a predicate needs an index on that same expression.** SQLite matches the expression
 textually, so a function around a column opts the query out of every index on the column.
 `idx_txn_amount_round` exists because the cross-account duplicate sweep joins on `ROUND(amount, 2)`.

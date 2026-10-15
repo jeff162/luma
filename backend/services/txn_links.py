@@ -95,20 +95,39 @@ def _members(conn: sqlite3.Connection, link_id: str) -> list[dict]:
 
 
 def get_link(conn: sqlite3.Connection, link_id: str) -> Optional[dict]:
-    row = conn.execute(
-        "SELECT id, kind, external_ref, metadata_json, created_at FROM txn_link WHERE id = ?",
-        (link_id,),
-    ).fetchone()
-    if not row:
-        return None
-    return {
-        "id": row["id"],
-        "kind": row["kind"],
-        "external_ref": row["external_ref"],
-        "metadata": _parse_metadata(row["metadata_json"]),
-        "created_at": row["created_at"],
-        "members": _members(conn, link_id),
-    }
+    return get_links(conn, [link_id]).get(link_id)
+
+
+def get_links(conn: sqlite3.Connection, link_ids: Iterable[str]) -> dict[str, dict]:
+    """The given links with their members, keyed by id; an id with no link is absent.
+
+    Two queries per chunk however many links are asked for, so a caller summarizing a page or a report
+    never pays a query per link.
+    """
+    ids = [link_id for link_id in dict.fromkeys(link_ids) if link_id]
+    links: dict[str, dict] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        places = ",".join("?" * len(chunk))
+        for row in conn.execute(
+            f"SELECT id, kind, external_ref, metadata_json, created_at FROM txn_link WHERE id IN ({places})",
+            chunk,
+        ):
+            links[row["id"]] = {
+                "id": row["id"],
+                "kind": row["kind"],
+                "external_ref": row["external_ref"],
+                "metadata": _parse_metadata(row["metadata_json"]),
+                "created_at": row["created_at"],
+                "members": [],
+            }
+        for row in conn.execute(
+            f"SELECT link_id, txn_id, role FROM txn_link_member WHERE link_id IN ({places}) ORDER BY rowid",
+            chunk,
+        ):
+            if row["link_id"] in links:
+                links[row["link_id"]]["members"].append({"txn_id": row["txn_id"], "role": row["role"]})
+    return links
 
 
 def find_link(conn: sqlite3.Connection, kind: str, external_ref: Optional[str]) -> Optional[dict]:

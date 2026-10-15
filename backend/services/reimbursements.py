@@ -94,10 +94,11 @@ from backend.services.txn_links import (
     create_link,
     delete_link,
     get_link,
+    get_links,
     remove_member,
     set_metadata,
 )
-from backend.services.txn_splits import SplitValidationError, get_split_parts, save_split
+from backend.services.txn_splits import SplitValidationError, get_split_parts, get_split_parts_map, save_split
 
 # The `txn_link.kind` this feature owns, and the two roles its members carry.
 REIMBURSEMENT_LINK_KIND = "reimbursement"
@@ -268,20 +269,34 @@ def receivable_parts(conn: sqlite3.Connection, txn_id: str) -> list[dict]:
     entries carry no durable identity on purpose: they are a way to *choose* an amount, and what gets
     stored is the amount (see the module docstring).
     """
+    return receivable_parts_map(conn, [txn_id]).get(txn_id, [])
+
+
+def receivable_parts_map(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[str, list[dict]]:
+    """`receivable_parts` for many transactions in three queries, keyed by id; every id is present."""
+    ids = _unique(txn_ids)
     leaves = set(reimbursable_leaf_ids(conn))
-    if not leaves:
-        return []
-    parts = get_split_parts(conn, txn_id)
-    if parts:
-        return [
+    if not ids or not leaves:
+        return {txn_id: [] for txn_id in ids}
+    split_parts = get_split_parts_map(conn, ids)
+    parts: dict[str, list[dict]] = {
+        txn_id: [
             {"amount": round(float(part["amount"]), 2), "label": part["label"] or part["category_name"]}
-            for part in parts
+            for part in split_parts[txn_id]
             if part["category_id"] in leaves
         ]
-    row = conn.execute("SELECT amount, category_id FROM txn WHERE id = ?", (txn_id,)).fetchone()
-    if not row or row["category_id"] not in leaves:
-        return []
-    return [{"amount": round(float(row["amount"]), 2), "label": None}]
+        for txn_id in ids
+        if split_parts.get(txn_id)
+    }
+    unsplit = [txn_id for txn_id in ids if txn_id not in parts]
+    for start in range(0, len(unsplit), 500):
+        chunk = unsplit[start:start + 500]
+        for row in conn.execute(
+            f"SELECT id, amount, category_id FROM txn WHERE id IN ({','.join('?' for _ in chunk)})", chunk,
+        ):
+            if row["category_id"] in leaves:
+                parts[row["id"]] = [{"amount": round(float(row["amount"]), 2), "label": None}]
+    return {txn_id: parts.get(txn_id, []) for txn_id in ids}
 
 
 def _claims_by_txn(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[str, list[dict]]:
@@ -508,56 +523,69 @@ def _metadata(
 # Reading a reimbursement
 # ---------------------------------------------------------------------------
 
-def _member_rows(conn: sqlite3.Connection, link: dict) -> list[dict]:
-    """The link's transactions, oldest first, each carrying **this link's claim** rather than the row's
-    whole receivable — which is the difference that lets one charge serve two reimbursements."""
-    claims = _read_claims(link.get("metadata"))
-    txn_ids = [member["txn_id"] for member in link.get("members", [])]
+def _member_rows(conn: sqlite3.Connection, links: Sequence[dict]) -> dict[str, list[dict]]:
+    """Each link's transactions, oldest first, keyed by link id — each carrying **that link's claim**
+    rather than the row's whole receivable, which is the difference that lets one charge serve two
+    reimbursements.
+
+    Read for all the links at once: the outstanding report and a ledger page each summarize many
+    reimbursements, and a few queries per link made the Tasks poll issue one round of them per
+    receivable.
+    """
+    txn_ids = _unique(member["txn_id"] for link in links for member in link.get("members", []))
     if not txn_ids:
-        return []
-    places = ",".join("?" for _ in txn_ids)
-    rows = conn.execute(
-        f"""
-        SELECT t.id AS txn_id, t.date, t.amount, t.trashed_at, t.owner_id,
-               COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
-               COALESCE(a.display_name, a.name, '') AS account_name,
-               o.name AS owner_name, o.color AS owner_color
-        FROM   txn t
-        LEFT   JOIN account a ON a.id = t.account_id
-        LEFT   JOIN owner   o ON o.id = t.owner_id
-        WHERE  t.id IN ({places})
-        ORDER  BY t.date, t.id
-        """,
-        txn_ids,
-    ).fetchall()
+        return {link["id"]: [] for link in links}
+    rows: dict[str, sqlite3.Row] = {}
+    for start in range(0, len(txn_ids), 500):
+        chunk = txn_ids[start:start + 500]
+        places = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+            f"""
+            SELECT t.id AS txn_id, t.date, t.amount, t.trashed_at, t.owner_id,
+                   COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
+                   COALESCE(a.display_name, a.name, '') AS account_name,
+                   o.name AS owner_name, o.color AS owner_color
+            FROM   txn t
+            LEFT   JOIN account a ON a.id = t.account_id
+            LEFT   JOIN owner   o ON o.id = t.owner_id
+            WHERE  t.id IN ({places})
+            """,
+            chunk,
+        ):
+            rows[row["txn_id"]] = row
     receivable = receivable_amounts(conn, txn_ids)
-    members = []
-    for row in rows:
-        claim = claims.get(row["txn_id"])
-        if not claim:
-            continue
-        members.append({
-            "txn_id": row["txn_id"],
-            "date": row["date"],
-            "amount": row["amount"],
-            "payee": row["payee"],
-            "account_name": row["account_name"],
-            # `txn.owner_id`, not a join through to the account's: the transaction's own owner is what
-            # every owner filter in the app reads, and it is stamped from the account when the row is
-            # created. Reading the account here instead would disagree with the ledger the moment an
-            # owner had been corrected on a single row.
-            "owner_id": row["owner_id"],
-            "owner_name": row["owner_name"],
-            "owner_color": row["owner_color"],
-            "trashed": row["trashed_at"] is not None,
-            "claim": claim["amount"],
-            "claim_label": claim.get("label"),
-            # What the whole row holds, so the panel can say "$250 of this $750 charge" without a
-            # second request — and so a claim that has outgrown its row is visible rather than silent.
-            "receivable": receivable.get(row["txn_id"], 0.0),
-            "role": _role_for(claim["amount"]),
-        })
-    return members
+    by_link: dict[str, list[dict]] = {}
+    for link in links:
+        claims = _read_claims(link.get("metadata"))
+        linked = [rows[txn_id] for txn_id in _unique(m["txn_id"] for m in link.get("members", [])) if txn_id in rows]
+        members = []
+        for row in sorted(linked, key=lambda r: (r["date"] or "", r["txn_id"])):
+            claim = claims.get(row["txn_id"])
+            if not claim:
+                continue
+            members.append({
+                "txn_id": row["txn_id"],
+                "date": row["date"],
+                "amount": row["amount"],
+                "payee": row["payee"],
+                "account_name": row["account_name"],
+                # `txn.owner_id`, not a join through to the account's: the transaction's own owner is what
+                # every owner filter in the app reads, and it is stamped from the account when the row is
+                # created. Reading the account here instead would disagree with the ledger the moment an
+                # owner had been corrected on a single row.
+                "owner_id": row["owner_id"],
+                "owner_name": row["owner_name"],
+                "owner_color": row["owner_color"],
+                "trashed": row["trashed_at"] is not None,
+                "claim": claim["amount"],
+                "claim_label": claim.get("label"),
+                # What the whole row holds, so the panel can say "$250 of this $750 charge" without a
+                # second request — and so a claim that has outgrown its row is visible rather than silent.
+                "receivable": receivable.get(row["txn_id"], 0.0),
+                "role": _role_for(claim["amount"]),
+            })
+        by_link[link["id"]] = members
+    return by_link
 
 
 def _summarize(link: dict, members: Sequence[dict]) -> dict:
@@ -598,10 +626,17 @@ def _summarize(link: dict, members: Sequence[dict]) -> dict:
 
 
 def _load(conn: sqlite3.Connection, link_id: str) -> dict:
-    link = get_link(conn, link_id)
-    if not link or link["kind"] != REIMBURSEMENT_LINK_KIND:
+    loaded = _load_many(conn, [link_id])
+    if link_id not in loaded:
         raise ReimbursementError("No such reimbursement.")
-    return _summarize(link, _member_rows(conn, link))
+    return loaded[link_id]
+
+
+def _load_many(conn: sqlite3.Connection, link_ids: Iterable[str]) -> dict[str, dict]:
+    """The reimbursements among `link_ids`, summarized and keyed by id; an id that is not one is absent."""
+    links = [link for link in get_links(conn, link_ids).values() if link["kind"] == REIMBURSEMENT_LINK_KIND]
+    members = _member_rows(conn, links)
+    return {link["id"]: _summarize(link, members[link["id"]]) for link in links}
 
 
 def get_reimbursement(conn: sqlite3.Connection, link_id: str) -> dict:
@@ -619,7 +654,8 @@ def reimbursements_for_txn(conn: sqlite3.Connection, txn_id: str) -> list[dict]:
            ORDER  BY l.created_at, l.rowid""",
         (txn_id, REIMBURSEMENT_LINK_KIND),
     ).fetchall()
-    return [_load(conn, row["id"]) for row in rows]
+    loaded = _load_many(conn, [row["id"] for row in rows])
+    return [loaded[row["id"]] for row in rows if row["id"] in loaded]
 
 
 # ---------------------------------------------------------------------------
@@ -1240,7 +1276,8 @@ def outstanding(conn: sqlite3.Connection) -> dict:
         for claim in claims:
             if claim["link_id"] not in link_ids:
                 link_ids.append(claim["link_id"])
-    reimbursements = [_load(conn, link_id) for link_id in link_ids]
+    loaded = _load_many(conn, link_ids)
+    reimbursements = [loaded[link_id] for link_id in link_ids if link_id in loaded]
     reimbursements = [item for item in reimbursements if not item["completed"]]
     reimbursements.sort(key=lambda item: item.get("created_at") or "")
 
@@ -1408,6 +1445,7 @@ def _loose_rows(
         list(txn_ids),
     ).fetchall()
     receivable = receivable_amounts(conn, [row["txn_id"] for row in rows])
+    parts = receivable_parts_map(conn, [row["txn_id"] for row in rows])
     return [
         {
             "txn_id": row["txn_id"],
@@ -1420,7 +1458,7 @@ def _loose_rows(
             "owner_color": row["owner_color"],
             "receivable": receivable.get(row["txn_id"], 0.0),
             "unclaimed": unclaimed.get(row["txn_id"], 0.0),
-            "parts": receivable_parts(conn, row["txn_id"]),
+            "parts": parts[row["txn_id"]],
             "role": _role_for(unclaimed.get(row["txn_id"], 0.0)),
         }
         for row in rows
@@ -1442,7 +1480,7 @@ def reimbursement_map_for(conn: sqlite3.Connection, txn_ids) -> dict[str, list[d
     if not by_txn:
         return {}
     wanted_links = {claim["link_id"] for claims in by_txn.values() for claim in claims}
-    summaries = {link_id: _load(conn, link_id) for link_id in wanted_links}
+    summaries = _load_many(conn, wanted_links)
     mapped: dict[str, list[dict]] = {}
     for txn_id, claims in by_txn.items():
         mapped[txn_id] = [

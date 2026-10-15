@@ -13,7 +13,6 @@ notes above `CURRENT_VERSION` say what the registered migrations do.
 """
 
 import json
-import os
 import sqlite3
 import time
 import uuid
@@ -22,7 +21,8 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from backend.app_logging import log_info, log_warning
-from backend.runtime_config import resolve_db_path, truthy
+from backend.db import contention_trace
+from backend.runtime_config import resolve_db_path
 
 DB_PATH = resolve_db_path()
 _current_db_path: ContextVar[str | None] = ContextVar("luma_current_db_path", default=None)
@@ -102,132 +102,6 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
 _BUSY_TIMEOUT_SECONDS = 15
 
 
-# TEMPORARY DIAGNOSTIC — remove once the browser lane's stall is understood (`docs/transient-failures.md`
-# entry 3, which says how to read its output).
-#
-# **The question is whether a block is *waiting* for the write lock or *holding* it**, and a trace
-# callback cannot tell them apart: it fires when a statement begins, so a slow statement and a slow
-# wait look identical. The first pass of this read a four-statement block as a seven-second "hold",
-# which is impossible as work — 1954 statements elsewhere committed in 1.8s.
-#
-# So each `execute` is timed individually, which splits the two cleanly:
-#   - a long *single execute* is that statement waiting its turn for the lock;
-#   - a long *gap between* executes, or many executes, is this block holding the lock while it works.
-# Reported together, so one line says which of the two a block was doing.
-#
-# Off unless `LUMA_DB_WRITE_TRACE` is set; without it no subclass is installed and nothing is timed.
-# `time.monotonic` because this host's wall clock has been seen to step backwards.
-_WRITE_TRACE_ENV = "LUMA_DB_WRITE_TRACE"
-# Below this a block is ordinary and not worth a line. The question is what reaches fifteen seconds.
-_WRITE_TRACE_FLOOR_SECONDS = 1.0
-# What counts as taking the write lock. `BEGIN` is absent: sqlite3 defers it to the first real write.
-_WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "DROP", "ALTER")
-
-
-def _write_trace_enabled() -> bool:
-    return truthy(os.getenv(_WRITE_TRACE_ENV))
-
-
-def _is_write(statement) -> bool:
-    return str(statement or "").lstrip().upper().startswith(_WRITE_VERBS)
-
-
-class _TracedConnection(sqlite3.Connection):
-    """A connection that times every statement, so a wait for the lock is distinguishable from a hold.
-
-    Subclassing is what makes the timing truthful: the duration has to come from around the `execute`
-    call itself, and a trace callback only sees statements start.
-    """
-
-    def _trace_init(self, resolved_path: str) -> None:
-        self._trace_path = resolved_path
-        self._trace_first_write_at = None
-        self._trace_writes = 0
-        self._trace_busy_seconds = 0.0
-        self._trace_read_seconds = 0.0
-        self._trace_reads = 0
-        self._trace_slowest = (0.0, None)
-        self._trace_first_statement = None
-
-    def _trace_block_init(self) -> None:
-        self._block_opened_at = time.monotonic()
-        self._block_sql_seconds = 0.0
-        self._block_stmts = 0
-        self._block_slowest = (0.0, None)
-
-    def trace_block_report(self) -> None:
-        span = time.monotonic() - self._block_opened_at
-        if span < 3.0:
-            return
-        slowest, statement = self._block_slowest
-        log_info(
-            f"[db-block-trace] span {span:.2f}s sql {self._block_sql_seconds:.2f}s stmts {self._block_stmts} "
-            f"slowest {slowest:.2f}s | {statement}",
-            keep_in_file=True,
-        )
-
-    def _trace_record(self, statement, elapsed: float) -> None:
-        self._block_sql_seconds += elapsed
-        self._block_stmts += 1
-        if elapsed > self._block_slowest[0]:
-            self._block_slowest = (elapsed, " ".join(str(statement).split())[:160])
-        if not _is_write(statement):
-            # Counted separately: a read inside a held write transaction keeps the lock just as a write
-            # does, and without timing it, slow reads are indistinguishable from a stalled thread.
-            if self._trace_first_write_at is not None:
-                self._trace_reads += 1
-                self._trace_read_seconds += elapsed
-            return
-        self._trace_writes += 1
-        self._trace_busy_seconds += elapsed
-        if self._trace_first_write_at is None:
-            self._trace_first_write_at = time.monotonic() - elapsed
-            self._trace_first_statement = " ".join(str(statement).split())[:160]
-        if elapsed > self._trace_slowest[0]:
-            self._trace_slowest = (elapsed, " ".join(str(statement).split())[:160])
-
-    def execute(self, statement, *args, **kwargs):
-        started = time.monotonic()
-        try:
-            return super().execute(statement, *args, **kwargs)
-        finally:
-            self._trace_record(statement, time.monotonic() - started)
-
-    def executemany(self, statement, *args, **kwargs):
-        started = time.monotonic()
-        try:
-            return super().executemany(statement, *args, **kwargs)
-        finally:
-            self._trace_record(statement, time.monotonic() - started)
-
-    def commit(self) -> None:
-        # A commit inside the block ends the hold, so it is reported and the tally starts over; otherwise
-        # reads after an early commit would be counted as time spent holding the lock.
-        super().commit()
-        self.trace_report()
-        self._trace_init(self._trace_path)
-
-    def trace_report(self) -> None:
-        if self._trace_first_write_at is None:
-            return
-        span = time.monotonic() - self._trace_first_write_at
-        if span < _WRITE_TRACE_FLOOR_SECONDS:
-            return
-        slowest, slowest_statement = self._trace_slowest
-        # `span` is first write to commit; `busy` is time actually inside execute calls. span minus busy
-        # is time the lock was held while this block did something other than write.
-        # `idle` is the part of the hold spent running no SQL at all — the thread not progressing.
-        idle = span - self._trace_busy_seconds - self._trace_read_seconds
-        log_info(
-            f"[db-write-trace] span {span:.2f}s write {self._trace_busy_seconds:.2f}s "
-            f"read {self._trace_read_seconds:.2f}s idle {idle:.2f}s "
-            f"slowest-stmt {slowest:.2f}s stmts {self._trace_writes}w/{self._trace_reads}r "
-            f"on {Path(self._trace_path).name} | first: {self._trace_first_statement} "
-            f"| slowest: {slowest_statement}",
-            keep_in_file=True,
-        )
-
-
 @contextmanager
 def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
     """Open a connection for the length of the block, committing on the way out.
@@ -245,27 +119,22 @@ def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
     """
     resolved_path = _normalize_db_path(db_path)
     Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
-    # TEMPORARY DIAGNOSTIC — see `_TracedConnection`. The factory is the only way to time the `execute`
-    # calls themselves, which is what separates waiting for the write lock from holding it.
-    traced = _write_trace_enabled()
+    traced = contention_trace.enabled()
     conn = sqlite3.connect(
         resolved_path, timeout=_BUSY_TIMEOUT_SECONDS, check_same_thread=not handed_between_threads,
-        **({"factory": _TracedConnection} if traced else {}),
+        **({"factory": contention_trace.TracedConnection} if traced else {}),
     )
     if traced:
-        conn._trace_init(resolved_path)
-        conn._trace_block_init()
+        conn.trace_start(resolved_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
-        if traced:
-            conn.trace_report()
     finally:
         if traced:
-            conn.trace_block_report()
+            conn.trace_finish()
         conn.close()
 
 

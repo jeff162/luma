@@ -344,6 +344,9 @@ cheapest runner, so macOS is not the first place it is ever exercised.
    If a page pictured in `docs/images/` has changed visibly since the last capture, also run
    `npm run screenshots` and review the new images. Not on every release: the demo ledger dates its rows
    from the day it loads, so each capture differs in pixels even when no page changed.
+   If `npm run ui:stress` has not been run since the last release, run it and compare its report with
+   the figures in `scale-and-limits.md` → *Many sessions on one server*. It runs here rather than in CI,
+   whose machines are too small for its figures to mean anything.
 2. `release.py --set-version X.Y.Z`, commit.
 3. `release.py --check` — version declarations agree, tree clean.
 4. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
