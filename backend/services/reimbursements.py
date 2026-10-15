@@ -315,6 +315,20 @@ def claimed_amounts(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[st
     }
 
 
+def claimed_txn_ids(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> set[str]:
+    """Which of these transactions have a reimbursement claim standing against them.
+
+    One query for the whole set (`_claims_by_txn`), so a bulk path can narrow to the rows that need the
+    per-row receivable question instead of asking it for every row it was handed — claimed rows are a
+    handful even in a ledger full of them, and a selection can be thousands.
+    """
+    return {
+        txn_id
+        for txn_id, claims in _claims_by_txn(conn, txn_ids).items()
+        if abs(round(sum(claim["amount"] for claim in claims), 2)) >= _CENT
+    }
+
+
 def links_claiming(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> set[str]:
     """The reimbursements holding a claim against any of these transactions, open or completed."""
     return {claim["link_id"] for claims in _claims_by_txn(conn, txn_ids).values() for claim in claims}
@@ -333,6 +347,76 @@ def unclaimed_amounts(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[
         txn_id: round(receivable.get(txn_id, 0.0) - claimed.get(txn_id, 0.0), 2)
         for txn_id in _unique(txn_ids)
     }
+
+
+def receivable_change_refusal(
+    conn: sqlite3.Connection, txn_id: str, receivable_after: Optional[float]
+) -> Optional[str]:
+    """Why this transaction's receivable may not become `receivable_after`, or None where it may.
+
+    **The claim invariant is checked when a claim is made, and the receivable can move afterwards.**
+    `_resolve_claims` holds every record's claims inside what the row has in the holding group, but what
+    the row has there is decided by its category or its allocations — and recategorizing it, re-splitting
+    it or un-splitting it changes that with the claims left standing. The failure is silent and it moves
+    money: a record claiming more than its row still holds reports a residual nobody owes, and a row with
+    no receivable left drops out of the outstanding report altogether while its record stays live, so the
+    headline figure reads as nothing owed. That figure is the whole feature.
+
+    This refuses the edits that would break it and only those. Reducing a receivable to a figure that
+    still covers every claim is an ordinary correction and passes, which is why the question is "what
+    would be left" rather than "is this row claimed" — the latter is what `_amount_edit_refusal` asks,
+    and it can afford to, because an amount is never legitimately corrected downward past a claim.
+
+    Phrased as sentences because they are what the editor shows, and stated here once so the write sites
+    cannot drift: a split save, an un-split, a single category edit, an uncategorize, and the bulk
+    category edit — which declines the row and counts it rather than refusing the whole batch.
+    """
+    claimed = claimed_amounts(conn, [txn_id]).get(txn_id, 0.0)
+    if abs(claimed) < _CENT:
+        return None
+    after = round(float(receivable_after or 0.0), 2)
+    owed = f"{abs(claimed):.2f}"
+    if abs(after) < _CENT:
+        return (
+            f"A reimbursement claims {owed} of this transaction. Leave that much in the Reimbursable "
+            "group, or detach it from the reimbursement first."
+        )
+    if not _same_direction(after, claimed):
+        return (
+            f"A reimbursement claims {owed} of this transaction in the other direction. Detach it from "
+            "the reimbursement before moving the money the other way."
+        )
+    if abs(claimed) - abs(after) > _CENT:
+        return (
+            f"A reimbursement claims {owed} of this transaction, and this would leave "
+            f"{abs(after):.2f} in the Reimbursable group. Reduce the claim first, or leave at least "
+            f"{owed} there."
+        )
+    return None
+
+
+def receivable_of_allocations(
+    conn: sqlite3.Connection, allocations: Sequence[dict]
+) -> float:
+    """How much of a proposed allocation set would sit in the holding group — the `receivable_after` a
+    split save is asking for, computed before anything is written."""
+    leaves = set(reimbursable_leaf_ids(conn))
+    return round(
+        sum(
+            float(part.get("amount") or 0.0)
+            for part in allocations
+            if part.get("category_id") in leaves
+        ),
+        2,
+    )
+
+
+def receivable_of_category(conn: sqlite3.Connection, category_id: Optional[str], amount) -> float:
+    """The receivable a *whole* transaction of `amount` filed at `category_id` would hold — the shape a
+    single category edit and an un-split ask about, where the row carries one category."""
+    if not category_id or category_id not in set(reimbursable_leaf_ids(conn)):
+        return 0.0
+    return round(float(amount or 0.0), 2)
 
 
 def _unique(txn_ids: Iterable[str]) -> list[str]:

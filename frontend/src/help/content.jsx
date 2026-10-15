@@ -1194,6 +1194,16 @@ export const HELP_TOPICS = [
           undo. Removing the last transaction dissolves the record too, since it would then describe
           nothing.
         </p>
+        <p>*needs review*</p>
+        <p>
+          While a record claims money in a transaction, that much has to stay in the{' '}
+          <em>Reimbursable</em> group. Raising the reimbursable portion of a split is always allowed,
+          and so is lowering it as far as what the record claims &mdash; anything below that, and
+          recategorizing or un-splitting the row outright, is refused, naming the amount claimed. A
+          record left claiming money its transaction no longer holds would report a balance owed that
+          nothing backs. Removing the transaction from the record first, with the{' '}
+          <strong>&times;</strong> above, releases the row to be categorized however suits.
+        </p>
 
         <h4>Being reminded about one</h4>
         <p>

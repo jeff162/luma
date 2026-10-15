@@ -58,6 +58,7 @@ from backend.services.reimbursements import (
     update_reimbursement,
 )
 from backend.services.txn_splits import get_split_parts, save_split
+from backend.tests._api_client import api_client
 
 
 class ReimbursementTestCase(unittest.TestCase):
@@ -1263,3 +1264,234 @@ class MoveClaimTests(ReimbursementTestCase):
             target = create_reimbursement(conn, self._claims(repayment), counterparty="B")
             with self.assertRaises(ReimbursementError):
                 move_claim(conn, target["id"], repayment, source["id"])
+
+
+class ClaimOutlivingItsReceivableTests(unittest.TestCase):
+    """A claim is checked when it is made; the receivable it claims can be moved afterwards.
+
+    Every one of these edits used to succeed and corrupt the outstanding report silently — a record
+    claiming more than its row still holds reports a residual nobody owes, and a row with nothing left
+    in the group drops out of the report entirely while its record stays live, so the headline reads as
+    nothing owed. Exercised through the API, because the refusal sits at the endpoints: the service's
+    own `save_split` calls are how a settlement rewrites allocations, and a guard inside it would refuse
+    the feature's own writes.
+    """
+
+    def _seed(self, path):
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        account = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO account (id, external_account_id, provider, name, display_name, type, "
+            "subtype, mask, owner_id) VALUES (?,?,'fixture_reimb_guard','Everyday','Everyday',"
+            "'checking','checking','0000',?)",
+            (account, f"acct_{account}", SHARED_OWNER_ID),
+        )
+        group = conn.execute(
+            "SELECT id FROM category WHERE name = 'Entertainment' AND parent_id IS NULL"
+        ).fetchone()["id"]
+        entertainment = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO category (id, parent_id, name, category_type, sort_order) VALUES (?,?,?,?,0)",
+            (entertainment, group, "Movies & Events", "expense"),
+        )
+        receivable_group = conn.execute(
+            "SELECT id FROM category WHERE system_key = ?", (REIMBURSABLE_SYSTEM_KEY,)
+        ).fetchone()["id"]
+        receivable = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals, sort_order) "
+            "VALUES (?,?,?,'expense',1,0)",
+            (receivable, receivable_group, "Concert tickets"),
+        )
+        conn.commit()
+        conn.close()
+        return {"account": account, "receivable": receivable, "entertainment": entertainment}
+
+    def _txn(self, path, account, amount, category=None):
+        txn_id = str(uuid.uuid4())
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, "
+            "display_name, raw_name, date, is_pending, category_overridden) "
+            "VALUES (?,?,?,?,?,'Concert Tickets','Concert Tickets','Concert Tickets','2026-02-14',0,0)",
+            (txn_id, account, SHARED_OWNER_ID, category, amount),
+        )
+        conn.commit()
+        conn.close()
+        return txn_id
+
+    def _claimed_whole_row(self, client, path):
+        """A $500 charge filed entirely in the holding group, claimed in full by one record."""
+        seeded = self._seed(path)
+        txn = self._txn(path, seeded["account"], 500.0, seeded["receivable"])
+        created = client.post(
+            "/api/reimbursements",
+            json={"claims": [{"txn_id": txn}], "counterparty": "Friends"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["residual"], 500.0)
+        return seeded, txn
+
+    def _claimed_split_row(self, client, path):
+        """A $500 charge split $125 / $375, with the $375 receivable portion claimed."""
+        seeded = self._seed(path)
+        txn = self._txn(path, seeded["account"], 500.0)
+        split = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+            {"category_id": seeded["entertainment"], "amount": 125.0},
+            {"category_id": seeded["receivable"], "amount": 375.0},
+        ]})
+        self.assertEqual(split.status_code, 200, split.text)
+        created = client.post(
+            "/api/reimbursements",
+            json={"claims": [{"txn_id": txn}], "counterparty": "Friends"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["residual"], 375.0)
+        return seeded, txn
+
+    def _outstanding(self, client):
+        return client.get("/api/reimbursements/outstanding").json()
+
+    def test_recategorizing_a_claimed_row_out_of_the_group_is_refused(self):
+        with api_client() as (client, path):
+            seeded, txn = self._claimed_whole_row(client, path)
+            response = client.patch(
+                f"/api/transactions/{txn}/category",
+                json={"category_id": seeded["entertainment"]},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("500.00", response.json()["detail"])
+            # The money is still where the record says it is, and the report still says so.
+            self.assertEqual(self._outstanding(client)["total"], 500.0)
+
+    def test_re_splitting_below_the_claim_is_refused_but_above_it_is_allowed(self):
+        with api_client() as (client, path):
+            seeded, txn = self._claimed_split_row(client, path)
+
+            too_small = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": seeded["entertainment"], "amount": 480.0},
+                {"category_id": seeded["receivable"], "amount": 20.0},
+            ]})
+            self.assertEqual(too_small.status_code, 400)
+            self.assertIn("375.00", too_small.json()["detail"])
+
+            # Correcting the portion *upward* is an ordinary edit and still works — the guard asks what
+            # would be left, not whether the row is claimed.
+            larger = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": seeded["entertainment"], "amount": 80.0},
+                {"category_id": seeded["receivable"], "amount": 420.0},
+            ]})
+            self.assertEqual(larger.status_code, 200, larger.text)
+            report = self._outstanding(client)
+            self.assertEqual(report["total"], 420.0)
+            # $375 of it is spoken for; the $45 the correction added is loose.
+            self.assertEqual(report["reimbursements"][0]["residual"], 375.0)
+            self.assertEqual(report["loose"][0]["unclaimed"], 45.0)
+
+    def test_un_splitting_a_claimed_row_is_refused(self):
+        with api_client() as (client, path):
+            _, txn = self._claimed_split_row(client, path)
+            response = client.delete(f"/api/transactions/{txn}/split")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("375.00", response.json()["detail"])
+            self.assertEqual(self._outstanding(client)["total"], 375.0)
+
+    def test_a_bulk_recategorize_declines_the_claimed_row_and_keeps_counting_honest(self):
+        # Bulk declines rather than refusing the batch: the user selected a set, and the rows it can act
+        # on are still correct to act on. The declined row must not be counted as updated.
+        with api_client() as (client, path):
+            seeded, claimed = self._claimed_whole_row(client, path)
+            plain = self._txn(path, seeded["account"], 40.0)
+
+            body = client.post("/api/transactions/bulk", json={
+                "selection": {"mode": "ids", "ids": [claimed, plain]},
+                "actions": [{"type": "set_category", "category_id": seeded["entertainment"]}],
+            }).json()
+
+            self.assertEqual(body["skipped_claimed"], 1)
+            self.assertEqual(body["skipped_splits"], 0)
+            self.assertEqual(body["updated_count"], 1)
+            self.assertEqual(self._outstanding(client)["total"], 500.0)
+
+    def test_a_bulk_recategorize_counts_a_declined_split_out_of_the_total_too(self):
+        # The contract the response comment already claimed and the count did not keep.
+        with api_client() as (client, path):
+            seeded, split_row = self._claimed_split_row(client, path)
+            plain = self._txn(path, seeded["account"], 40.0)
+
+            body = client.post("/api/transactions/bulk", json={
+                "selection": {"mode": "ids", "ids": [split_row, plain]},
+                "actions": [{"type": "set_category", "category_id": seeded["entertainment"]}],
+            }).json()
+
+            self.assertEqual(body["skipped_splits"], 1)
+            self.assertEqual(body["updated_count"], 1)
+
+    def test_uncategorizing_a_claimed_row_is_refused(self):
+        # The fifth write site: it clears `category_id` outright, so it empties the receivable the same
+        # way a recategorize does.
+        with api_client() as (client, path):
+            _, txn = self._claimed_whole_row(client, path)
+            response = client.patch(f"/api/transactions/{txn}/uncategorize")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("500.00", response.json()["detail"])
+            self.assertEqual(self._outstanding(client)["total"], 500.0)
+
+    def test_an_unclaimed_row_is_never_held_up(self):
+        # The guard asks about claims, not about the Reimbursable group: receivable money nobody has
+        # claimed is the ordinary state of a reimbursable between the purchase and the repayment, and
+        # recategorizing it has to stay free.
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            loose = self._txn(path, seeded["account"], 90.0, seeded["receivable"])
+            self.assertEqual(self._outstanding(client)["total"], 90.0)
+
+            moved = client.patch(
+                f"/api/transactions/{loose}/category",
+                json={"category_id": seeded["entertainment"]},
+            )
+            self.assertEqual(moved.status_code, 200, moved.text)
+            self.assertEqual(self._outstanding(client)["total"], 0.0)
+
+    def test_moving_between_two_receivable_categories_is_allowed(self):
+        # The money stays in the group, so the claim still has everything it needs behind it.
+        with api_client() as (client, path):
+            seeded, txn = self._claimed_whole_row(client, path)
+            conn = sqlite3.connect(path)
+            second = str(uuid.uuid4())
+            group = conn.execute(
+                "SELECT parent_id FROM category WHERE id = ?", (seeded["receivable"],)
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals, "
+                "sort_order) VALUES (?,?,'Work expenses','expense',1,0)",
+                (second, group),
+            )
+            conn.commit()
+            conn.close()
+
+            moved = client.patch(
+                f"/api/transactions/{txn}/category", json={"category_id": second}
+            )
+            self.assertEqual(moved.status_code, 200, moved.text)
+            self.assertEqual(self._outstanding(client)["total"], 500.0)
+
+    def test_detaching_the_claim_first_releases_the_edit(self):
+        # The refusal is a sequencing requirement, not a dead end: the message names detaching, so the
+        # path it points at has to work.
+        with api_client() as (client, path):
+            seeded, txn = self._claimed_whole_row(client, path)
+            link_id = self._outstanding(client)["reimbursements"][0]["id"]
+
+            removed = client.delete(f"/api/reimbursements/{link_id}/transactions/{txn}")
+            self.assertEqual(removed.status_code, 200, removed.text)
+
+            response = client.patch(
+                f"/api/transactions/{txn}/category",
+                json={"category_id": seeded["entertainment"]},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(self._outstanding(client)["total"], 0.0)
+

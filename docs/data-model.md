@@ -271,7 +271,10 @@ neither split nor part of a reimbursement.
 - **Not a row from a source.** A synced row's amount is re-stamped whenever the provider revises it,
   and `content_hash` digests the amount, so an edit would stop the row matching its own file.
 - **Not a split or a reimbursement.** A split's allocations are checked against the amount only when
-  the split is saved, and a claim against the receivable only when it is made.
+  the split is saved. A claim is checked against the receivable when it is made, and the edits that
+  could move the receivable afterwards are refused separately (see
+  [Reimbursement records](#reimbursement-records)); an amount is refused outright here, because unlike a
+  reallocation it is never legitimately corrected downward past a claim.
 
 The edit restamps the hash, re-runs the rules (a category set by hand stays), and triggers a recurring
 rescan.
@@ -748,8 +751,11 @@ which every automatic pass skips by source.
   reclaiming it would un-exclude the row and double-count the spend.
 - **`split`**: the row's categorization is its `txn_split` allocations, and `category_id` is the stashed
   pre-split value. A full-force apply and a bulk category edit refuse a split row and report how many
-  they declined, because the allocations exist nowhere else. `PATCH /transactions/{id}/category`
-  refuses outright. A rule's rename and tags still apply.
+  they declined, because the allocations exist nowhere else. `PATCH /transactions/{id}/category` and
+  `PATCH /transactions/{id}/uncategorize` refuse outright — the second matters because it also resets
+  `category_source` and the lock bit, which on a still-split row would take it out of
+  `FEATURE_OWNED_CATEGORY_SOURCES` and hand the prior slot to the next automatic pass. A rule's rename
+  and tags still apply.
 - **`refund`**: the row carries its payment's category and a trigger moves it with the payment (see
   [Refunds](#refunds)). A category deletion rewrites it like any row and ends the following.
 - **`cleared`** is a row whose file label the user discarded. It is rule-eligible and keeps its
@@ -2229,6 +2235,18 @@ once finished the **completion record**.
 - **A transaction's claims across all records may not exceed its receivable.** The remainder is
   **unclaimed**. Each claim is non-zero and has the sign of the row's receivable. A transaction
   allocating nothing to the group cannot join.
+- **The receivable cannot be moved out from under a standing claim.** It is decided by the row's
+  category or its allocations, so recategorizing, re-splitting or un-splitting the row would otherwise
+  leave the claims behind: a record claiming more than its row holds reports a residual nobody owes, and
+  a row left with nothing in the group drops out of the outstanding report while its record stays live,
+  so the headline reads as nothing owed. `receivable_change_refusal` asks what the edit would *leave*
+  and refuses only what would not cover the claims — raising a receivable, or lowering it to a figure
+  that still covers them, is an ordinary correction, and moving the money between two receivable leaves
+  changes nothing. It guards the single category edit, the uncategorize, the split save and the
+  un-split; the bulk category edit declines those rows and counts them (`skipped_claimed`), since the
+  user selected a set and the rest of it is still correct to act on; both counts are kept out of
+  `updated_count` and named in the notice, so the total is what changed and the difference is
+  accounted for. Detaching the claim is the way through, which is what the refusal names.
 - **One claim per transaction per record**, keyed by transaction id. Attaching again replaces it, so
   choosing several portions means one claim for their sum.
 - **Roles are derived from the claim's sign**: positive is an `expense`, negative a `repayment`.

@@ -13,7 +13,7 @@ Treat this file as two related contracts:
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import NamedTuple, Optional
 from datetime import datetime
 from decimal import Decimal
 import re
@@ -58,7 +58,11 @@ from backend.services.purchase_links import purchase_for_txn, purchase_map_for
 from backend.services.refund_links import following_refund_ids, refund_map_for
 from backend.services.txn_links import partners_map
 from backend.services.reimbursements import (
+    claimed_txn_ids,
     receivable_amounts,
+    receivable_change_refusal,
+    receivable_of_allocations,
+    receivable_of_category,
     receivable_parts,
     reimbursement_map_for,
     reimbursements_for_txn,
@@ -1587,7 +1591,7 @@ def update_amount(txn_id: str, body: AmountUpdate):
 def override_category(txn_id: str, body: CategoryOverride):
     with get_db() as conn:
         txn = conn.execute(
-            "SELECT id, is_split, category_id FROM txn WHERE id = ?", (txn_id,)
+            "SELECT id, is_split, category_id, amount FROM txn WHERE id = ?", (txn_id,)
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
@@ -1600,6 +1604,13 @@ def override_category(txn_id: str, body: CategoryOverride):
                 detail="This transaction is split across categories. Remove the split before setting a single category.",
             )
         _reject_group_category_assignment(conn, body.category_id)
+        # Moving the row out of the Reimbursable group takes the money a reimbursement has claimed with
+        # it; see `receivable_change_refusal` for why that fails silently rather than loudly.
+        refusal = receivable_change_refusal(
+            conn, txn_id, receivable_of_category(conn, body.category_id, txn["amount"])
+        )
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
 
         conn.execute(
             """
@@ -1652,8 +1663,16 @@ def save_transaction_split(txn_id: str, body: SplitSave):
     the user's terms — a remainder that has not reached zero, a repeated category, a part pointing the
     wrong direction — because every one of them is something the editor can show and the user can fix."""
     with get_db() as conn:
+        allocations = [p.model_dump() for p in body.parts]
+        # Reallocating may shrink what sits in the Reimbursable group. Raising the receivable, or
+        # lowering it to a figure that still covers every claim, is an ordinary correction and passes.
+        refusal = receivable_change_refusal(
+            conn, txn_id, receivable_of_allocations(conn, allocations)
+        )
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
         try:
-            parts = save_split(conn, txn_id, [p.model_dump() for p in body.parts])
+            parts = save_split(conn, txn_id, allocations)
         except SplitValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     return {"txn_id": txn_id, "is_split": True, "parts": parts}
@@ -1663,9 +1682,18 @@ def save_transaction_split(txn_id: str, body: SplitSave):
 def delete_transaction_split(txn_id: str):
     """Un-split a transaction, restoring the category it carried before the split."""
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, amount, category_id FROM txn WHERE id = ?", (txn_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        # Un-splitting returns the row to its stashed prior category, so its receivable becomes whatever
+        # that single category holds — nothing at all, unless the prior was itself a receivable leaf.
+        refusal = receivable_change_refusal(
+            conn, txn_id, receivable_of_category(conn, row["category_id"], row["amount"])
+        )
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
         clear_split(conn, txn_id)
     return {"ok": True}
 
@@ -1887,8 +1915,26 @@ def update_transaction_tag(txn_id: str, body: TransactionTagUpdate):
 @router.patch("/{txn_id}/uncategorize")
 def clear_override(txn_id: str):
     with get_db() as conn:
-        prior = conn.execute("SELECT category_id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        prior = conn.execute(
+            "SELECT category_id, is_split FROM txn WHERE id = ?", (txn_id,)
+        ).fetchone()
         had_category = prior is not None and prior["category_id"] is not None
+        # A split row's categorization is its allocations, and its `category_id` is the stashed prior —
+        # so there is no single category here to clear. Refused for the same reason
+        # `override_category` refuses it, and the clearing below is why it matters: it would reset
+        # `category_source` and the lock bit on a row that is still split, taking it out of
+        # FEATURE_OWNED_CATEGORY_SOURCES and handing the prior slot to the next automatic pass.
+        if prior is not None and prior["is_split"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This transaction is split across categories. Remove the split before clearing "
+                       "its category.",
+            )
+        # Clearing the category takes the row out of the Reimbursable group with it, so a standing claim
+        # is refused here exactly as the category edit refuses it.
+        refusal = receivable_change_refusal(conn, txn_id, 0.0)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
         # Clearing an override resets both the lock bit and the stored category so rule application can fully
         # re-derive the transaction instead of leaving a stale manual category behind.
         conn.execute(
@@ -2049,9 +2095,32 @@ def _apply_set_date(conn, ids: list[str], date: str) -> None:
             conn.executemany("UPDATE txn SET date = ?, content_hash = ? WHERE id = ?", restamped)
 
 
-def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
-    """Apply one bulk action to a set of rows. Returns how many rows it declined because they are
-    split — always 0 except for `set_category`, whose whole effect is the thing a split owns."""
+# What a bulk action declined, by reason. Two buckets rather than one total because they mean different
+# things to the person reading the result — allocation work kept, versus an edit that would have broken
+# a reimbursement — and a single "N skipped" is a number they would act on wrongly.
+#
+# Ids rather than counts, because a batch may carry several actions and the same row can be declined by
+# more than one of them. Counting per action would subtract it twice from the total; a union cannot.
+class BulkDeclines(NamedTuple):
+    splits: frozenset = frozenset()
+    claimed: frozenset = frozenset()
+
+    def __add__(self, other):
+        return BulkDeclines(self.splits | other.splits, self.claimed | other.claimed)
+
+    @property
+    def ids(self) -> frozenset:
+        return self.splits | self.claimed
+
+
+def _txn_amount(conn, txn_id: str):
+    row = conn.execute("SELECT amount FROM txn WHERE id = ?", (txn_id,)).fetchone()
+    return row["amount"] if row else 0.0
+
+
+def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> BulkDeclines:
+    """Apply one bulk action to a set of rows. Returns the rows it declined and why — always nothing
+    except for `set_category`, whose whole effect is the thing a split and a claim own."""
     kind = action.type
     if kind == "set_category":
         # None clears the category (a deliberate manual uncategorize); a real id must be a leaf.
@@ -2061,8 +2130,21 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
         # and counted for the caller to report — the same contract a full-force rule apply follows.
         skipped = split_txn_ids(conn, ids)
         ids = [i for i in ids if i not in skipped]
+        # And the same refusal the single-row edit makes, for the same reason: moving a row out of the
+        # Reimbursable group takes money a reimbursement has claimed with it, and nothing says so. The
+        # bulk path declines rather than refusing the batch, since the user selected a set and the rows
+        # it can act on are still correct to act on.
+        # Narrowed to the claimed rows first, in one query: the receivable question is per row, and a
+        # bulk selection can be thousands of them while the claimed ones are a handful.
+        claimed = {
+            txn_id for txn_id in claimed_txn_ids(conn, ids)
+            if receivable_change_refusal(
+                conn, txn_id, receivable_of_category(conn, action.category_id, _txn_amount(conn, txn_id))
+            )
+        }
+        ids = [i for i in ids if i not in claimed]
         if not ids:
-            return len(skipped)
+            return BulkDeclines(frozenset(skipped), frozenset(claimed))
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
             conn.execute(
@@ -2072,7 +2154,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
                 f"WHERE id IN ({placeholders})",
                 [action.category_id, *chunk],
             )
-        return len(skipped)
+        return BulkDeclines(frozenset(skipped), frozenset(claimed))
     elif kind in ("add_tags", "remove_tags"):
         present = kind == "add_tags"
         for tag_id in (action.tag_ids or []):
@@ -2127,7 +2209,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
             )
     else:
         raise HTTPException(status_code=400, detail=f"unknown bulk action: {kind}")
-    return 0
+    return BulkDeclines()
 
 
 # Bulk actions that can move a row between recurring series, or out of one: category is part of a
@@ -2148,20 +2230,27 @@ def bulk_update_transactions(body: BulkUpdateRequest):
         touches_recurring = bool(kinds & _RECURRING_RELEVANT_BULK_ACTIONS)
         # Captured before the writes, since a rename moves rows out of the payee group they are in now.
         prior_keys = payee_keys_for_ids(conn, target_ids) if "set_merchant" in kinds else frozenset()
-        skipped_splits = 0
+        declines = BulkDeclines()
         for action in body.actions:
-            skipped_splits += _apply_bulk_action(conn, target_ids, action)
+            declines += _apply_bulk_action(conn, target_ids, action)
         # Once for the whole batch, never per row: a scan loads the entire detection window before it
         # filters by payee, so a per-row call would repeat that load for every row selected.
         if touches_recurring:
             rescan_edited_transactions(conn, target_ids, prior_payee_keys=prior_keys)
         followed_ids = following_refund_ids(conn, target_ids) if "set_category" in kinds else []
-    # `skipped_splits` counts rows a set_category action left alone because they are split. Reported
-    # rather than folded into the total: "updated 40" when 3 of them kept their old categorization is
-    # a number the user would act on wrongly. `followed_ids` are the refunds that moved with a
-    # recategorized payment (services/refund_links.py) — not counted as updated, since the user did not
-    # select them, but named so the client can refresh them.
-    return {"updated_count": len(target_ids), "skipped_splits": skipped_splits, "followed_ids": followed_ids}
+    # `skipped_splits` counts rows a set_category action left alone because they are split, and
+    # `skipped_claimed` those it left alone because a reimbursement claims money in them. Both are
+    # reported *and* kept out of the total: "updated 40" when 3 of them kept their old categorization is
+    # a number the user would act on wrongly, and the client shows this count verbatim.
+    # `followed_ids` are the refunds that moved with a recategorized payment
+    # (services/refund_links.py) — not counted as updated, since the user did not select them, but named
+    # so the client can refresh them.
+    return {
+        "updated_count": len([i for i in target_ids if i not in declines.ids]),
+        "skipped_splits": len(declines.splits),
+        "skipped_claimed": len(declines.claimed),
+        "followed_ids": followed_ids,
+    }
 
 
 @router.post("/{txn_id}/restore")

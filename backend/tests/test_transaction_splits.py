@@ -814,6 +814,22 @@ class SplitProtectionTests(SplitFixtureMixin, unittest.TestCase):
             self.assertEqual(row["category_source"], "split")
             self.assertEqual(row["display_name"], "Split Store")
 
+    def test_uncategorizing_a_split_row_is_refused(self):
+        # The sibling of the category refusal above, and the one that was missing. It clears
+        # `category_id` *and* resets `category_source` / the lock bit, so on a split row it would take
+        # the row out of the feature-owned sources every automatic pass skips by — leaving a row with
+        # allocations that the next rule run is free to write a category onto.
+        with api_client() as (client, path):
+            _, _, txn = self._split_100(client, path)
+            response = client.patch(f"/api/transactions/{txn}/uncategorize")
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("split", response.json()["detail"].lower())
+            row = self._row(path, txn)
+            self.assertTrue(row["is_split"])
+            self.assertEqual(row["category_source"], "split")
+            self.assertEqual(row["category_overridden"], 1)
+
     def test_run_categorization_leaves_a_split_alone(self):
         with api_client() as (client, path):
             _, leaves, txn = self._split_100(client, path, name="SPLITSTORE 123")
