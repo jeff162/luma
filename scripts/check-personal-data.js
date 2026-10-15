@@ -79,12 +79,16 @@ let failed = false
 for (const file of files) {
   const rel = path.relative(REPO_ROOT, path.resolve(REPO_ROOT, file))
   if (allowed.some((prefix) => rel.startsWith(prefix))) continue
-  let contents
+  let bytes
   try {
-    contents = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')
+    bytes = fs.readFileSync(path.join(REPO_ROOT, rel))
   } catch {
-    continue // deleted, unreadable, or binary — nothing to scan
+    continue // deleted or unreadable — nothing to scan
   }
+  // Binary is skipped by git's own test, a NUL in the first 8 KB. Decoding it as text would match terms
+  // against compressed bytes, where a short term turns up by chance (it did, inside a screenshot's pixels).
+  if (bytes.subarray(0, 8000).includes(0)) continue
+  const contents = bytes.toString('utf8')
   contents.split(/\r?\n/).forEach((line, i) => {
     for (const { term, re } of patterns) {
       if (!re.test(line)) continue

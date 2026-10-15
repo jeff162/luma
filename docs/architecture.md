@@ -120,7 +120,9 @@ requirements, because popovers, inline editors and dismissal rules rebuilt per p
   receivable and its repayment, an attached receipt, a rule with an amount range, a multi-payment
   purchase — is layered on by `db/demo_examples.py` through the same services the endpoints call. Its tests assert
   through the feature (each recurring signal kind fires, a document's text was extracted) rather than by
-  row count, because the dataset exists to demonstrate features.
+  row count, because the dataset exists to demonstrate features. It is also what the README screenshots
+  are captured from (`npm run screenshots`), so it carries thirteen months of steady, household-sized
+  activity and only the last week arrives unreviewed.
 
 - **Demo mode blocks every path that brings data in.** Loading writes a marker (`demo_data` in the data
   DB's `import_workflow_state`). While it is present the backend answers 409 to CSV import, the Amazon

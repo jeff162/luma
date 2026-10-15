@@ -341,6 +341,9 @@ cheapest runner, so macOS is not the first place it is ever exercised.
 
 1. `npm run ui:smoke` in `frontend/` — the built bundle loads and routes. Cheap, and the one check
    nothing else in the pipeline performs (see `CONTRIBUTING.md` → *The smoke lane*).
+   If a page pictured in `docs/images/` has changed visibly since the last capture, also run
+   `npm run screenshots` and review the new images. Not on every release: the demo ledger dates its rows
+   from the day it loads, so each capture differs in pixels even when no page changed.
 2. `release.py --set-version X.Y.Z`, commit.
 3. `release.py --check` — version declarations agree, tree clean.
 4. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
@@ -422,8 +425,8 @@ to the registry.
 Open **Settings → General** and check the repository description, topics, homepage, and social preview.
 The description already states Luma's purpose; add concise discovery topics that accurately describe
 the project, such as `personal-finance`, `local-first`, `self-hosted`, `python`, and `react`. Leave the
-homepage blank unless there is a maintained project site distinct from this repository. Use a real,
-sanitized application screenshot for the social preview.
+homepage blank unless there is a maintained project site distinct from this repository. Upload
+`docs/images/social-preview.png` (1280×640, captured from the demo ledger) as the social preview.
 
 Keep **Issues** and **Discussions** enabled, and leave the wiki disabled unless it gains a clearly
 different purpose from `docs/`. Preserve the existing signed-commit acknowledgement requirement and

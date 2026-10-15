@@ -4,6 +4,8 @@
 
 Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized to answer the question: **what was spent, on what, and how does this period compare with others.** Luma exists because Mint is no longer and Monarch has some annoying issues. I had time so I decided to see if I could build a replacement.
 
+![The dashboard: a year of spending by group, with the monthly trend below](docs/images/dashboard.png)
+
 ## Contents
 
 - [What Luma is not](#what-luma-is-not)
@@ -26,7 +28,7 @@ Luma is a local-first personal finance tool. It collects transaction data from b
 
 ## What Luma is not
 
-Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that I had no reason to implement them:
+Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that I don't use them:
 
 - **No budgeting.** Nothing to allocate, no envelopes, no per-category targets, no alert when a category runs hot.
 
@@ -36,50 +38,61 @@ Anyone whose main requirement is either of these will be better served by some o
 
 **Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
-**Phones.** Luma is built for a laptop or desktop sized screen, and its pages do not adapt to a small one. A tablet is about the smallest device it is comfortable on.
+**Phones.** Luma is built for a laptop or desktop sized screen, and its pages do not adapt to a small one. A tablet is about the smallest device it is comfortable on although a device with a keyboard seem helpful.
 
 ## What Luma is good at
 
 - **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. An import needs no planning and no arithmetic about which dates are already covered, overlapping files sort themselves out, and a categorization made once is carried forward instead of being made again.
 
-- **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. They exist so that a question about a period can be answered without going through it row by row, and the work put into building rules keeps paying off on transactions that have not arrived yet.
+- **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. They exist so that a question about a period can be answered without going through it row by row. Rules exist to automate this for incoming transactions.
 
-- **Surfacing potential exceptions** — a subscription that quietly went up, a bill that has not turned up, a charge that no longer matches the rule that used to catch it. Noticing these is what the reports and the recurring detection are for, rather than waiting to be asked the right question.
+- **Surfacing potential exceptions** — a subscription that quietly went up, a bill that has not turned up, a charge that no longer matches the rule that used to catch it. Noticing these is what the reports and the recurring detection are for.
 
-- **Staying out of the way** — if something needs changing, it can usually be changed right there: a category, a merchant name, whether a transaction counts towards a total at all. Reports can be useful for cleaning the data as well as actual reporting.
+- **Staying out of the way** — if something needs changing, it can usually be changed right there: a category, a merchant name, whether a transaction counts towards a total at all.
 
 ## Quick start
 
-1. Download the build for the machine from the [releases page](https://github.com/jeff162/luma/releases) and run it. Luma opens in the browser. [Installing Luma](#installing-luma) has the detail for each platform.
+1. Download the build from the [releases page](https://github.com/jeff162/luma/releases), extract it to a directory, run `luma`and Luma will open in the browser.
 2. Enter a user name and choose **Load demo data**.
-3. Look around. Nothing done to the demo data matters.
-4. When ready, choose **Clear demo data** in the banner at the top and bring in real data — see [Getting started with real data](#getting-started-with-real-data).
+3. Look around. The demo data is crafted so most features can be explored.
+4. When ready, choose **Clear demo data** in the banner at the top and bring in real data — see [Getting started with real data](#getting-started-with-real-data). Load demo data is on the Import page if it gets cleared by accident.
+5. [Installing Luma](#installing-luma) has the detail for each platform.
 
 ## Features
 
 - **Showing where money went** — spending by category, merchant, account or owner, with drill-down to the individual transactions, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
 
+  ![The transaction register with a row's category picker open](docs/images/transactions.png)
+
 - **Comparing periods** — the same breakdown across months or years, so a change in spending is visible. Year-over-year and trend comparisons are built in.
 
-- **Analyzing cash flow** — a cash-flow view sits alongside the spending and income views and nets the two. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to; a run of months is drawn as money in against money out with the net over the top. Anything on either can be drilled into to reach the transactions behind it.
+- **Analyzing cash flow** — a cash-flow view sits alongside the spending and income views and nets the two. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to. The trend is displayed as a run money in against money out with the net over the top. All of the graphs can be drilled into to investigate what is behind them.
 
-- **Getting data in without ceremony** — a CSV file exported from a bank or card, or a connected data source (e.g. SimpleFIN Bridge) that brings transactions in on its own. A data source can also watch a folder, so a downloaded export is in the ledger the next time the app is open. Other input formats can be added as the need arises.
+  ![The cash-flow view: income on the left flowing out to spending groups and net saved on the right](docs/images/cash-flow.png)
 
-- **Filling in what a marketplace charge bought** — an Amazon or PayPal purchase typically arrives with just the marketplace name and an amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with detail information about the transaction. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending".
+  ![The cash-flow trend: each month's money in above the line and money out below it, with the net drawn across them](docs/images/cash-flow-trends.png)
+
+- **Getting data in without ceremony** — a CSV file exported from a bank or card, or a connected data source (e.g. SimpleFIN Bridge). Watch a folder is supported, so a downloaded file gets loaded the next time the app is open. Other input formats can be added as the need arises.
+
+- **Filling in what a marketplace charge bought** — an Amazon or PayPal purchase typically arrives with just the marketplace name (eg. Amazon), an amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with detail information about the transaction. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending". Charges which represent multiple purchases can be split into multiple items for categorization purposes.
+
+  ![The Amazon reconciliation report: each order matched to its card charge, and one charge no order accounts for](docs/images/amazon-reconciliation.png)
 
 - **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
 
-- **Re-importing just works.** A file that was already imported is recognized, and the rows an overlapping export or a re-downloaded statement repeats exactly are skipped, so no pre-planning of import windows is needed. Activity that arrives a second way without matching exactly — the same card from two sources, say — is flagged as a likely duplicate for review instead, and counts twice until that review resolves it.
+- **Re-importing just works.** A file that was already imported is recognized, and rows from an overlapping export or a statement in a different format are recognized and skipped. Activity that arrives from a different source for the same account but with slight differences is flagged as a likely duplicate for review.
 
 - **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data in addition to being created as part of categorizing transactions.
 
-- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them, and every report counts each part where it belongs rather than filing the whole amount under one category. Each part can be labelled with what it covered, and a charge matched to an imported Amazon order is offered a split already filled in from the item prices.
+- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them rather than filing the whole amount under one category. Each part can be labelled with what it covered. Charges matched to an imported Amazon order which contains multiple is offers to fill in the details from the item detail.
 
-- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule. The Recurring page also reports what looks off about them: a charge that has not turned up, a price that has moved, a series that has only just appeared, and a bill that has drifted outside the amount range its rule matches on. Each one can be dismissed once it has been looked at, and a separate tab lists what is expected next.
+- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule. The Recurring page also reports if something unexpected happens: a charge that has not turned up, a price that has moved, a series that has only just appeared, and a bill that has drifted outside the amount range its rule matches on.
+
+  ![The Recurring page's Needs attention view: a missing subscription charge and two price changes](docs/images/recurring.png)
 
 - **Searching the history** — filter and search across the whole ledger, including exclusion filters and cross-cutting tags.
 
-- **Reimbursables** — money that goes out and is expected back but is excluded from spending or income. The part that is owed is held in its own excluded category rather than counted as spending, and the repayment lands there too instead of arriving as income, so each month reports what it really spent and what is still outstanding is a running total. A repayment sometimes does not match the original purchase — tickets bought for one price and sold on for another — and what is left over gets categorized as either a real cost or gain. An expense can also be recorded before any repayment exists. Reimbursables can have reminders to alert if they are not completed within the expected timeframe.
+- **Reimbursable Expenses** — money that goes out and is expected back but is excluded from spending or income. The part that is owed is held in its own excluded category rather than counted as spending, and the repayment lands there too instead of arriving as income, so each month reports what it really spent and what is still outstanding is a running total. A repayment sometimes does not match the original purchase — tickets bought for one price and sold on for another — and what is left over gets categorized as either a real cost or gain. An expense can also be recorded before any repayment exists. Reimbursable expenses can have reminders to alert if they are not completed within the expected timeframe.
 
 ### Also included
 
@@ -136,7 +149,7 @@ Local-first also means the security model is easy to reason about — but it's w
 
   - **Vault passphrases** are best kept in a password manager: they are complex, and losing every way in means the vault has to be rebuilt (transactions are not lost, just access to the data providers).
   - **A passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need a secure connection. The desktop app's `localhost` address works or reaching Luma over a network uses HTTPS and a host name.)
-  - **A recovery code** can also be generated. It is worth keeping somewhere seperate from the vault passphrase as if stored together in one password manager, losing access to the manager loses both. Printed or kept in separate secure storage is what makes it useful to have. Recovery codes are single-use.
+  - **A recovery code** can also be generated. It is worth keeping somewhere separate from the vault passphrase as if stored together in one password manager, losing access to the manager loses both. Printed or kept in separate secure storage is what makes it useful to have. Recovery codes are single-use.
 
 - **If a database or backup is lost or copied by someone else** and data connections are configured, Luma's access should be revoked at each connected data source so the copied credentials cannot pull anything new or worse, be used to move money around if the credentials support money movement.. The place to start is **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked), which replaces the credentials where the provider allows it and lists the steps that remain. `SECURITY.md` has the full response.
 
@@ -158,7 +171,7 @@ That can be built around the same download or (for Linux) around a Docker contai
 | macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
 | macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
 
-**The builds are unsigned.** so Windows and macOS both generate warnings about untrused software on first run.
+**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run.
 
 ### Windows and Linux — portable
 
@@ -177,7 +190,7 @@ need glibc 2.39 or newer — Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie, or
 Pick the download matching the
 machine — Apple menu → **About This Mac** names which one it is. The two are not interchangeable. Open the downloaded disk image and drag **Luma** onto the Applications shortcut.
 
-Because the build is neither signed nor notarized, macOS refuses it on first launch. To mark the execuatable so it can be run:
+Because the build is neither signed nor notarized, macOS refuses it on first launch. To mark the executable so it can be run:
 
 1. Double-click **Luma**, and dismiss the warning.
 2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.

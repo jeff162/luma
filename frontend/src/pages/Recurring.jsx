@@ -1333,7 +1333,9 @@ export default function Recurring() {
                   Transfer &amp; payment review{reviewCount ? ` (${reviewCount})` : ''}
                 </Button>
               ) : null}
-              <Button variant="primary" onClick={scan} disabled={scanning}>
+              {/* Quiet: import, sync, edits and the app-load catch-up keep detection current, so this is
+                  a manual override rather than the page's main action. */}
+              <Button variant="ghost" onClick={scan} disabled={scanning}>
                 {scanning ? 'Scanning…' : 'Scan for recurring'}
               </Button>
             </div>
@@ -1443,7 +1445,7 @@ export default function Recurring() {
             ) : allSeries === null ? (
               <Spinner />
             ) : allSeries.length === 0 ? (
-              <EmptyState message='No recurring series yet. Click "Scan for recurring" to detect them from your transactions.' />
+              <EmptyState message="No recurring series found yet. Detection runs automatically as transactions arrive." />
             ) : visibleSections.length === 0 ? (
               <EmptyState message={selected.size === 0
                 ? 'No statuses are selected. Choose one above to see its series.'

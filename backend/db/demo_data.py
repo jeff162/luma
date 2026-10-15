@@ -7,8 +7,8 @@ Two consumers share this builder: a prospective user exploring the app before co
 data, and the Playwright E2E suite, which needs a populated, past-onboarding baseline. The data is
 entirely invented (generic well-known vendors only, fictional owners/accounts — no PII), and shaped to
 exercise the features worth showing: multiple owners and account types, per-account import batches
-(provenance), custom categories and rules, category-level tags that *inherit* onto transactions, a few
-months of recurring + one-off activity, a standing two-legged inter-account transfer, card payments, a
+(provenance), custom categories and rules, category-level tags that *inherit* onto transactions, a year
+of recurring + one-off activity, a standing two-legged inter-account transfer, card payments, a
 refund, an Amazon order history reconciled against the card, and a cross-account duplicate that the real
 post-import sweep flags for review.
 
@@ -252,15 +252,31 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     def bank(days_ago, desc, category, amount, acct):
         bank_rows.append((d(days_ago), desc, category, f"{-amount:.2f}", name_of[acct]))
 
-    for i in range(6):
-        bank(7 + i * 14, "Acme Corp Payroll", "Salary", -3200.00, "checking")
-    for m in range(3):
+    # The steady activity runs thirteen months, so "Last 12 months" — the dashboard's default period — is
+    # full from end to end and every trend chart has a year of shape rather than a few recent bars. The
+    # figures are sized to one household: income clears spending by a believable margin, not by double.
+    def seasonal(by_month, m):
+        # `m` counts back from this month, so the seasonal position follows the real calendar.
+        return by_month[(today.month - 1 - m) % 12]
+
+    for i in range(28):
+        bank(7 + i * 14, "Acme Corp Payroll", "Salary", -2400.00, "checking")
+    # Occasional freelance work: irregular in both timing and size, the income that is not a paycheck.
+    for days_ago, amount in [(24, 1150.00), (118, 860.00), (205, 1400.00), (290, 725.00), (370, 980.00)]:
+        bank(days_ago, "Brightline Design — invoice", "Freelance", -amount, "checking")
+    # Electricity peaks in summer (air conditioning), the opposite of the gas bill below.
+    power_by_month = [88.40, 81.15, 76.30, 72.85, 84.10, 118.60,
+                      146.25, 152.90, 121.40, 86.75, 78.20, 90.65]
+    for m in range(13):
         base = m * 30
         bank(base + 1, "Parkside Apartments", "Rent & Mortgage", 2200.00, "checking")
-        bank(base + 3, "City Power & Light", "Electricity", 94.50 + m, "checking")
+        bank(base + 3, "City Power & Light", "Electricity", seasonal(power_by_month, m), "checking")
         bank(base + 4, "Fiberlink", "Internet", 69.99, "checking")
         bank(base + 5, "CellOne Mobile", "Phone", 55.00, "checking")
-        bank(base + 6, "Metro Water", "Water", 38.25, "checking")
+        bank(base + 10, "Keystone Auto Insurance", "Auto Insurance", 132.00, "checking")
+    # Month 0's water bill is the one that outgrew its rule, further down.
+    for m in range(1, 13):
+        bank(m * 30 + 6, "Metro Water", "Water", 34.10 + (m * 7) % 12, "checking")
     # A gas bill with a real winter peak, carried back far enough to be seasonal rather than noisy. Two
     # features need this shape and nothing else in the set provides it: the price-change signal's
     # tightness test (which reads the whole prior history, so four flat summer bills must not make the
@@ -269,9 +285,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     gas_by_month = [148.20, 132.75, 88.40, 61.30, 44.85, 39.10,
                     41.60, 43.25, 58.90, 79.40, 104.60, 139.80]
     for m in range(14):
-        # `m` counts back from this month, so the seasonal position follows the real calendar.
-        month_index = (today.month - 1 - m) % 12
-        bank(m * 30 + 8, "Northgate Gas", "Gas & Heating", gas_by_month[month_index], "checking")
+        bank(m * 30 + 8, "Northgate Gas", "Natural Gas", seasonal(gas_by_month, m), "checking")
 
     # A subscription that stops two periods before the data ends. Two constraints decide those numbers
     # and they pull against each other: the missed signal is judged against how fresh the *data* is
@@ -299,9 +313,10 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # (services/recurring_pairs.py), so this runs over enough months for that pairing to be visible. The
     # two sides are worded differently on purpose: pairing is structural — rows that offset exactly — and
     # a demo whose legs shared a name would let a name-based shortcut look like it worked.
-    for m in range(6):
+    for m in range(13):
         bank(m * 30 + 5, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
         bank(m * 30 + 5, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
+    # One row only: categorize.spec.js finds it by name as the single categorized row it edits.
     bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
 
     # Paying off the card: the other movement every household with a credit card makes, and the one a
@@ -311,16 +326,30 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # figure, and the card side posts a day later, because pairing is by exact amount within a window and
     # a demo with identical amounts on identical dates would not show that either is tolerated. The
     # card-side rows are in the card source below; a rule files them.
-    card_payments = [612.48, 845.10, 733.92, 698.15, 910.37, 787.60]
+    card_payments = [812.48, 945.10, 833.92, 898.15, 1010.37, 887.60, 924.33,
+                     861.75, 1102.40, 979.05, 846.62, 1218.90, 905.14]
     for m, amount in enumerate(card_payments):
         bank(m * 30 + 15, "Rewards Card Autopay", "Credit Card Payment", amount, "checking")
 
     # A sofa paid for in two instalments: a deposit when ordered, the balance on delivery. Each payment is
     # real money on its own date and is already counted correctly, so what the multi-payment purchase
     # built afterwards adds is only the relationship — and the expected total that shows nothing is still
-    # owed. "Furniture" is not a starter leaf, so it also lands in the imported-categories workspace.
+    # owed. "Furniture" is not a starter leaf; it is grouped after the import, as a user part-way through
+    # the imported-categories workspace would have done.
     bank(70, "Oakline Furniture", "Furniture", 450.00, "checking")
     bank(16, "Oakline Furniture", "Furniture", 1149.00, "checking")
+
+    # The irregular spending of a year: a summer trip, the dentist twice, prescriptions, and the holidays
+    # (placed by calendar month, like the bills above, so December lands in December).
+    bank(250, "SkyWest Air", "Air Travel", 586.40, "checking")
+    bank(236, "Coastline Car Rental", "Rental Car", 214.75, "checking")
+    bank(160, "Bright Smile Dental", "Dental", 95.00, "checking")
+    bank(340, "Bright Smile Dental", "Dental", 95.00, "checking")
+    for days_ago, amount in [(38, 24.60), (132, 18.25), (221, 24.60), (309, 31.40)]:
+        bank(days_ago, "Lakeview Pharmacy", "Pharmacy", amount, "checking")
+    for m in range(1, 13):
+        if (today.month - 1 - m) % 12 in (10, 11):   # November, December
+            bank(m * 30 + 13, "Maple & Co. Gifts", "Gifts Given", 145.00 + m * 6, "checking")
 
     # The money coming back. Each is claimed by one of the reimbursements built after the import; until
     # then they are ordinary inflows, which is exactly what they look like to someone who has not
@@ -365,22 +394,30 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # earlier 15.99 → 17.99 was 12.5%, under it, and this dataset's streaming hike therefore raised
     # nothing for as long as the comment here claimed it did. The threshold lives in
     # `recurring_signals._FIXED_STEP_FRACTION`; keep this rise comfortably the far side of it.
-    for m in range(6):
+    for m in range(13):
         base = m * 30
         card(base + 8, "Netflix", 15.99 if m else 18.99)   # rule → Streaming Services
         card(base + 9, "FitClub", 40.00)                   # recurring rule → Gym Membership
+        card(base + 17, "Spotify", 11.99)                  # rule → Streaming Services
+    # The everyday spending repeats on a cadence but never at one price; the small deterministic wobble
+    # (`(i * k) % n`) keeps every month's total close to the last without any row repeating exactly.
     grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
-    grocery_amts = [182.40, 64.10, 121.75, 88.30]
-    for i in range(12):
-        card(2 + i * 7, grocers[i % 4], grocery_amts[i % 4] + i)   # Costco → rule; the rest uncategorized
+    grocery_amts = [168.40, 58.10, 104.75, 76.30]
+    for i in range(56):
+        card(2 + i * 7, grocers[i % 4], grocery_amts[i % 4] + (i * 7) % 23)   # rules → Groceries
+    # Blue Bottle is the one merchant no rule claims, so a few rows stay uncategorized to work on.
     coffee_amts = [4.75, 5.40, 6.25, 4.10, 5.95]
-    for i in range(10):
-        card(1 + i * 6, "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])  # Starbucks → rule
+    for i in range(32):
+        card(1 + i * 12, "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])  # Starbucks → rule
     diners = ["The Corner Bistro", "Sushi House", "Taco Stand", "Pasta Bar"]
-    for i in range(8):
-        card(3 + i * 9, diners[i % 4], 28.50 + i * 4)             # uncategorized
-    for i in range(6):
-        card(4 + i * 11, "Shell" if i % 2 else "Chevron", 42.00 + i * 3)   # Shell → rule
+    for i in range(36):
+        card(3 + i * 11, diners[i % 4], 26.50 + (i * 5) % 19)     # rules → Dining Out
+    for i in range(30):
+        card(4 + i * 13, "Shell" if i % 2 else "Chevron", 38.00 + (i * 3) % 17)   # rules → Gas
+    for days_ago, amount in [(19, 31.50), (87, 28.00), (163, 34.50), (241, 28.00), (318, 31.50)]:
+        card(days_ago, "Cinemark Theatres", amount)               # rule → Movies & Events
+    for days_ago, amount in [(11, 18.40), (57, 23.75), (128, 16.90), (199, 27.30), (274, 21.15)]:
+        card(days_ago, "Uber Trip", amount)                       # rule → Rideshare
     online_amts = [23.99, 119.40, 14.25, 56.80, 31.10, 78.65, 19.99, 44.50]
     amazon_charges = []   # (days_ago, amount), for the order history imported against them below
     for i in range(8):
@@ -395,7 +432,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     card(41, "Sky Harbor Parking", 64.00)       # part of the same trip, attached receipt
     card(26, "Lakeside Taverna", 96.00)         # lunch for four, repaid the same day
     card(30, "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
-    card(45, "Quarterly Dividend", -52.40, "brokerage")          # uncategorized income
+    for q, amount in enumerate([52.40, 49.85, 47.10, 45.60]):
+        card(45 + q * 91, "Quarterly Dividend", -amount, "brokerage")   # uncategorized income
     card(26, "Annual Membership", 96.00)                         # cross-account duplicate, leg B
     for m, amount in enumerate(card_payments):
         card(m * 30 + 14, "Payment Received - Thank You", -amount)   # the card side of each autopay
@@ -435,8 +473,19 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for keyword, leaf_name in [
         ("starbucks", "Coffee & Drinks"),
         ("netflix", "Streaming Services"),
+        ("spotify", "Streaming Services"),
         ("costco", "Groceries"),
+        ("trader joe", "Groceries"),
+        ("whole foods", "Groceries"),
+        ("safeway", "Groceries"),
+        ("bistro", "Dining Out"),
+        ("sushi house", "Dining Out"),
+        ("taco stand", "Dining Out"),
+        ("pasta bar", "Dining Out"),
         ("shell", "Gas"),
+        ("chevron", "Gas"),
+        ("cinemark", "Movies & Events"),
+        ("uber", "Rideshare"),
         ("amazon", "Online Shopping"),
         ("petco", "Pet Care"),
         ("chewy", "Pet Care"),
@@ -500,6 +549,13 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # --- The features that are done *to* a transaction rather than imported with it ---
     _groups, leaves = _category_lookup(conn)
     examples = seed_all(conn, leaves, tag_ids)
+
+    # A year of use leaves its traces: the largest imported label has been grouped (the smaller ones
+    # still wait in the workspace), and everything but the last week has been looked over. The newest
+    # rows keep their review markers so the Needs-review filter and Tasks have something to show.
+    from backend.routers.categories import CategoryUpdate, _apply_category_update
+    _apply_category_update(conn, leaves["Furniture"], CategoryUpdate(parent_id=groups["Household"]))
+    conn.execute("UPDATE txn SET needs_review = 0 WHERE date < ?", (d(7),))
 
     # Detect the series, then accept the two the dataset was shaped around. Both are load-bearing: the
     # anomalies this demo advertises — a subscription that stopped, a bill whose price stepped —

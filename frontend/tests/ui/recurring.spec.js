@@ -183,5 +183,6 @@ test('a transfer between two accounts is one series, not two', async ({ page }) 
 
   // One set of actions, over a count that spans both legs' rows.
   await expect(card.getByRole('button', { name: 'Not recurring' })).toHaveCount(1)
-  await expect(card.getByRole('button', { name: /12 transactions/ })).toBeVisible()
+  // Thirteen monthly transfers in the demo, two legs each.
+  await expect(card.getByRole('button', { name: /26 transactions/ })).toBeVisible()
 })
