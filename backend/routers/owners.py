@@ -118,7 +118,18 @@ def owner_summary(
 ):
     # The split view keeps unassigned spending visible as its own bucket instead of
     # dropping those transactions from the totals once owner filtering is introduced.
-    clauses = ["t.amount > 0", "t.is_pending = 0"]
+    #
+    # The population is the one every other spending figure uses: live rows only, and nothing from a
+    # category (or group) marked `exclude_from_totals`. Without the first a trashed charge still counted
+    # against its owner; without the second a card payment read as that person's spending, which on a
+    # household split is the difference between a plausible number and a doubled one. See
+    # `docs/data-model.md` → *Reporting assumptions*.
+    clauses = [
+        "t.amount > 0",
+        "t.is_pending = 0",
+        "t.trashed_at IS NULL",
+        "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
+    ]
     params  = []
 
     if date_start and date_end:
@@ -153,6 +164,8 @@ def owner_summary(
                 COUNT(*)                           AS count
             FROM   txn t
             LEFT JOIN owner o ON o.id = t.owner_id
+            LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category p ON p.id = c.parent_id
             {where}
             GROUP BY owner_id
             ORDER BY total DESC
