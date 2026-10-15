@@ -88,6 +88,7 @@ from backend.services.duplicate_detection import (
     mark_import_suspects,
     match_terminal_amount_revision,
     record_account_pair_distinct,
+    terminal_window_days_for,
     unresolved_account_pairs,
     MIN_TERMINAL_WINDOW_DAYS,
     sweep_import_suspects,
@@ -3982,14 +3983,16 @@ def run_import_parsed(
             config_snapshot[IMPORT_SUMMARY_KEY] = import_summary
             save_batch_snapshot(conn, batch_id, config_snapshot)
             # A saved data source declares how many trailing days it lags its bank; a one-off file
-            # import has no source and keeps the default of 1 (just the export day).
+            # import has no source and takes `DEFAULT_TERMINAL_WINDOW_DAYS`. Normalized through the
+            # shared rule rather than here, so a stated narrow window clamps to the minimum instead of
+            # being read as "unset" and handed the widest window of all.
             source_terminal_window = DEFAULT_TERMINAL_WINDOW_DAYS
             if profile_id:
                 profile_row = conn.execute(
                     "SELECT terminal_window_days FROM csv_import_profile WHERE id = ?", (profile_id,)
                 ).fetchone()
-                if profile_row and profile_row["terminal_window_days"]:
-                    source_terminal_window = max(1, int(profile_row["terminal_window_days"]))
+                if profile_row:
+                    source_terminal_window = terminal_window_days_for(profile_row)
             for csv_val, info in batch_account_stats.items():
                 coverage_start_date, coverage_end_date = compute_import_coverage_window(
                     info.get("coverage_dates"),
