@@ -295,6 +295,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
                t.is_split,
+               t.trashed_at,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                COALESCE(p.type, a.type) AS effective_account_type
            FROM txn t
@@ -317,7 +318,10 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     for txn in txns:
         if not _rule_matches_txn(rule, txn):
             continue
-        if txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
+        # A trashed row is not a live effect (see `recategorize_all`), so it does not advance the date
+        # the rule is judged recently-used by, even though the apply still reaches it — a row restored
+        # later should come back carrying the category its rule would have given it.
+        if txn["trashed_at"] is None and txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
             effect_max_date = txn["date"]
         row_changed = False
         # A split transaction keeps its allocations: the category half of this rule is declined and

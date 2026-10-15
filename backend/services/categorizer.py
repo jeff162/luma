@@ -540,6 +540,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                t.display_name_source,
                t.import_evidence_json,
                t.imported_category,
+               t.trashed_at,
                COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
@@ -620,8 +621,10 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
             updated += 1
 
         # Advance last_effect_date for every rule that supplies a live effect on this row (whether or not
-        # this pass changed it) — the newest transaction date the rule owns.
-        txn_date = txn["date"]
+        # this pass changed it) — the newest transaction date the rule owns. A trashed row is not a live
+        # effect: crediting it would make a rule whose only recent matches are in the trash read as
+        # recently used, which is the judgement the cleanup window and the stale-rule signal rest on.
+        txn_date = txn["date"] if txn["trashed_at"] is None else None
         if txn_date:
             for rid in effect_rule_ids(result, rules_by_id, rule_tags_by_id):
                 if rid not in effect_dates or txn_date > effect_dates[rid]:
