@@ -152,6 +152,21 @@ def is_refund_type(type_value: Optional[str]) -> bool:
     return ("refund" in t or "reversal" in t) and not is_money_movement_type(type_value)
 
 
+def states_money_movement(type_value: Optional[str]) -> bool:
+    """Whether a `Type` says outright that this row moved money between the wallet and an outside
+    account, in either direction — the union of the three vocabularies above.
+
+    The union has a caller of its own because the three overlap without one containing the others: "Add
+    Money from a Card" is a wallet funding type and is *not* in the money-movement vocabulary, so asking
+    `is_money_movement_type` alone would read it as an ordinary payment. Anything deciding "is this row
+    some other mechanism's?" wants this rather than one of the three (`services/refund_links.py`); a
+    row with no captured `Type` states nothing and is false here.
+    """
+    return (is_money_movement_type(type_value)
+            or is_wallet_funding_type(type_value)
+            or is_wallet_withdrawal_type(type_value))
+
+
 def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
     """The distinct accounts a batch's rows landed on (a PayPal import lands on one account, so normally a
     single id) — the accounts to mark as the PayPal type when the user approves money-movement rules."""

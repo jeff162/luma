@@ -1781,6 +1781,18 @@ the purchase's category. Where a source states which payment a refund returns,
   CSV refund says the same through the optional `Reference Txn ID` column. The refund must be on the
   same account group, in the other direction, for no more than was paid. A refund with no reference is
   an ordinary transaction. A reversal of a payment received pairs the same way.
+- **The reference is the qualifying signal; a captured `Type` is only a veto.** Naming the transaction
+  returned is the source saying what the row is, and most file sources carry no `Type` column to
+  corroborate it with — so a word the PayPal vocabulary does not know ("Return" on a card export), or
+  no `Type` at all, still pairs. A `Type` is read only to rule a row out, and only where it names a
+  different mechanism: a deposit, withdrawal, currency conversion or hold references its counterpart in
+  the same field and belongs to [wallet funding legs](#wallet-funding-legs), not here
+  (`states_money_movement`).
+- **The payment is looked up by the id under either name it is stored under.** A mapped
+  `transaction_id` column lands in [`source_transaction_id`](#source_transaction_id); a source that
+  force-captures the header (PayPal) also leaves `Transaction ID` among the evidence fields. A stated
+  reference names the id without saying which, so both are indexed and the evidence value wins a
+  collision.
 - The pair may cross imports and arrive in either order.
 - **The refund follows the payment's category.** It takes the category with `category_source = 'refund'`
   and `trg_refund_follows_payment` moves it whenever the payment's `category_id` changes. It is a

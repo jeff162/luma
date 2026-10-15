@@ -10,6 +10,14 @@ reversal of a payment received refers to it the same way. Nothing is inferred �
 guessing — so a pair is made only where the reference is stated, and it may cross imports: a refund
 may land in a later statement than its payment, and statements may be imported in any order.
 
+**The stated reference is what qualifies a row**, not a captured ``Type``. A source naming the
+transaction being returned has already said what this row is, and most file sources carry no ``Type``
+column to corroborate it with. A ``Type`` is read only to *rule a row out*, and only when it names a
+different mechanism — a deposit, withdrawal, currency conversion or hold references its counterpart in
+the same field, and belongs to wallet funding-leg suppression (``services/money_movement.py``) rather
+than here. What the reference cannot settle, :func:`_returns` still checks: the same account group, the
+other direction, and no more than was paid.
+
 **The refund takes the payment's category, and keeps following it.** Money back is not income; it offsets
 what was spent (see ``docs/data-model.md`` → *Reporting assumptions*), which is only true in the totals
 when the refund sits in the payment's category. So the refund is recategorized to the payment's category
@@ -39,7 +47,12 @@ from typing import Iterable, Optional
 from backend.app_logging import log_error
 from backend.services import txn_links
 from backend.services.categorizer import FEATURE_OWNED_CATEGORY_SOURCES, category_lock_for
-from backend.services.money_movement import captured_field, captured_reference, captured_type, is_refund_type
+from backend.services.money_movement import (
+    captured_field,
+    captured_reference,
+    captured_type,
+    states_money_movement,
+)
 
 LINK_KIND = "refund"
 PAYMENT_ROLE = "payment"
@@ -51,9 +64,18 @@ _CENT = 0.005
 
 
 def _refund_candidates(conn: sqlite3.Connection) -> list[dict]:
-    """Refund rows carrying a stated reference that are not paired yet. The evidence text is narrowed by
+    """Rows carrying a stated reference that are not paired yet. The evidence text is narrowed by
     `LIKE` before anything is parsed, so a ledger with no referencing source costs one scan and nothing
-    more."""
+    more.
+
+    **The reference is the qualifying signal, not the `Type`.** A source that names the transaction being
+    returned has said which row this is money back on, and that is the whole of what the pairing needs —
+    an ordinary CSV mapping `Reference Txn ID` carries no `Type` column at all, and requiring one made the
+    documented file path pair nothing. A captured `Type` is therefore only ever a *veto*, and only where it
+    names a different mechanism: a deposit, withdrawal, conversion or hold references its counterpart the
+    same way, and those rows belong to wallet funding-leg suppression, not here (see
+    `docs/mechanism-index.md`). Everything the reference cannot settle is still checked structurally by
+    :func:`_returns`."""
     rows = conn.execute(
         """SELECT t.id, t.amount, t.import_evidence_json, t.category_id, t.category_source,
                   t.category_overridden, COALESCE(a.parent_account_id, t.account_id) AS root_id
@@ -65,22 +87,38 @@ def _refund_candidates(conn: sqlite3.Connection) -> list[dict]:
         (LINK_KIND, REFUND_ROLE),
     ).fetchall()
     return [dict(r) for r in rows
-            if is_refund_type(captured_type(r["import_evidence_json"])) and captured_reference(r["import_evidence_json"])]
+            if captured_reference(r["import_evidence_json"])
+            and not states_money_movement(captured_type(r["import_evidence_json"]))]
 
 
 def _payments_by_transaction_id(conn: sqlite3.Connection, root_ids: set[str]) -> dict[str, dict]:
-    """Every row on the given account groups that carries a Transaction ID, keyed by it."""
+    """Every row on the given account groups that carries an id its source issued, keyed by that id.
+
+    **Two places hold one fact.** A mapped `transaction_id` column lands in `txn.source_transaction_id`
+    (`docs/data-model.md` → *source_transaction_id*), while a source that force-captures the header —
+    PayPal, whose statement and activity CSV both carry `Transaction ID` — also leaves it among the
+    evidence fields. A refund's stated reference names the id without saying which of the two the
+    payment happened to store it in, so both are indexed. Reading only the evidence made an ordinary
+    file source, which maps the column rather than capturing it, resolve no reference at all.
+
+    The evidence value wins a collision: it is the one a stated `Ref ID` is defined against.
+    """
     placeholders = ",".join("?" * len(root_ids))
     rows = conn.execute(
         f"""SELECT t.id, t.amount, t.is_split, t.category_id, COALESCE(a.parent_account_id, t.account_id) AS root_id,
-                   t.import_evidence_json
+                   t.import_evidence_json, t.source_transaction_id
             FROM   txn t JOIN account a ON a.id = t.account_id
             WHERE  t.trashed_at IS NULL
               AND  COALESCE(a.parent_account_id, t.account_id) IN ({placeholders})
-              AND  t.import_evidence_json LIKE '%"transaction id"%'""",
+              AND  (t.source_transaction_id IS NOT NULL
+                    OR t.import_evidence_json LIKE '%"transaction id"%')""",
         sorted(root_ids),
     ).fetchall()
     out: dict[str, dict] = {}
+    for row in rows:
+        source_id = str(row["source_transaction_id"] or "").strip()
+        if source_id:
+            out.setdefault(source_id, dict(row))
     for row in rows:
         transaction_id = captured_field(row["import_evidence_json"], "transaction id")
         if transaction_id:

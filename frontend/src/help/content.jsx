@@ -2954,6 +2954,14 @@ export const HELP_TOPICS = [
           the column afterwards changes nothing.
         </p>
         <p>
+          Where an export also names, on a refund, the ID of the payment it returns &mdash; a column
+          headed something like <em>Reference Txn ID</em> &mdash; capturing that column pairs the two:
+          the refund takes the payment&apos;s category and follows it, so the two cancel out there
+          rather than the refund counting as income somewhere else. The payment must be in the same
+          account group, in the other direction, and for at least what came back. Nothing is guessed
+          from amounts and dates; only a reference the file states pairs anything.
+        </p>
+        <p>
           When one provider&apos;s files have ended up under two data sources, delete one of them: its
           files move to <strong>unknown data source</strong>, and <strong>Assign to data
             source</strong> on each file card places them under the other.
