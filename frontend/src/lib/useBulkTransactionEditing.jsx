@@ -57,6 +57,27 @@ export function describeBulkActions(actions = []) {
   return actions.map(action => BULK_ACTION_LABELS[action.type] || action.type).join(' · ')
 }
 
+// What the notice says after an apply, including the rows the server declined to touch.
+//
+// `set_category` leaves two kinds of row alone and reports each separately: a split row, whose
+// allocations are its categorization, and a row a reimbursement has claimed money in. Both are counted
+// out of `updated_count`, so the total is what actually changed — and both are named, because a silent
+// difference between "40 selected" and "37 updated" is the version of this the user cannot act on. The
+// two are kept apart rather than summed since what to do about them differs.
+export function describeBulkOutcome(result) {
+  const updated = Number(result?.updated_count || 0)
+  const splits = Number(result?.skipped_splits || 0)
+  const claimed = Number(result?.skipped_claimed || 0)
+  const parts = [`Updated ${updated} transaction${updated === 1 ? '' : 's'}.`]
+  if (splits) {
+    parts.push(`${splits} split transaction${splits === 1 ? '' : 's'} kept ${splits === 1 ? 'its' : 'their'} categories.`)
+  }
+  if (claimed) {
+    parts.push(`${claimed} transaction${claimed === 1 ? '' : 's'} ${claimed === 1 ? 'is' : 'are'} claimed by a reimbursement and ${claimed === 1 ? 'was' : 'were'} left alone.`)
+  }
+  return parts.join(' ')
+}
+
 export function useBulkTransactionEditing({
   rows = [],
   setRows = null,
@@ -173,7 +194,7 @@ export function useBulkTransactionEditing({
       selection.clear()
       setShowPanel(false)
       setBulkMode(false)
-      setNotice(`Updated ${result.updated_count} transaction${result.updated_count === 1 ? '' : 's'}.`)
+      setNotice(describeBulkOutcome(result))
       if (onReload) await onReload()
       else {
         reconcile(actions, affectedIds)
