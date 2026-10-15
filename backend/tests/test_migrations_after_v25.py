@@ -226,5 +226,60 @@ class TransfersGroupIdentityTests(MigrationCase):
         self.assertEqual(keys, {"group": "transfers", "leaf": None, "renamed": None, "reimb": "reimbursable"})
 
 
+class LeafCategoryTypeAlignmentTests(MigrationCase):
+    """v77 puts every leaf on its group's side, the property a group's total rests on.
+
+    A leaf carrying the other side's type is selected by one expression and signed by another, so the
+    group stops equalling the sum of its slices and no single bucket looks wrong. Enforced on every
+    category write, and *not* by a restore — which is what an old database can get wrong.
+    """
+
+    def test_a_mismatched_leaf_takes_its_groups_side_and_the_rest_are_untouched(self):
+        self._database_at(76, """
+            CREATE TABLE category (
+                id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, category_type TEXT, is_active INTEGER
+            );
+            INSERT INTO category (id, parent_id, name, category_type, is_active) VALUES
+                ('earnings',  NULL,       'Earnings',  'income',  1),
+                ('salary',    'earnings', 'Salary',    'expense', 1),
+                ('bonus',     'earnings', 'Bonus',     NULL,      1),
+                ('retired',   'earnings', 'Old job',   'expense', 0),
+                ('household', NULL,       'Household', 'expense', 1),
+                ('groceries', 'household','Groceries', 'expense', 1),
+                ('orphan',    NULL,       'Loose',     'income',  1);
+        """)
+        self._upgrade()
+
+        types = dict(self.conn.execute("SELECT id, category_type FROM category").fetchall())
+        # The mismatched leaf is corrected...
+        self.assertEqual(types["salary"], "income")
+        # ...including an inactive one, so a recovered category returns on its group's side.
+        self.assertEqual(types["retired"], "income")
+        # A leaf inheriting by NULL is given the type outright rather than left to COALESCE, which is
+        # what makes the two resolvers agree without either of them having to.
+        self.assertEqual(types["bonus"], "income")
+        # A leaf that already agreed, and the groups themselves, are left exactly as they were.
+        self.assertEqual(types["groceries"], "expense")
+        self.assertEqual(types["earnings"], "income")
+        self.assertEqual(types["household"], "expense")
+        self.assertEqual(types["orphan"], "income")
+
+    def test_the_step_is_safe_to_run_on_a_database_that_already_agrees(self):
+        # It is registered in POST_RESTORE_DATA_INIT, so it runs against data that may already be right.
+        self._database_at(76, """
+            CREATE TABLE category (
+                id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, category_type TEXT, is_active INTEGER
+            );
+            INSERT INTO category (id, parent_id, name, category_type, is_active) VALUES
+                ('household', NULL,        'Household', 'expense', 1),
+                ('groceries', 'household', 'Groceries', 'expense', 1);
+        """)
+        self._upgrade()
+        database._normalize_leaf_category_type(self.conn)
+
+        types = dict(self.conn.execute("SELECT id, category_type FROM category").fetchall())
+        self.assertEqual(types, {"household": "expense", "groceries": "expense"})
+
+
 if __name__ == "__main__":
     unittest.main()

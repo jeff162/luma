@@ -277,6 +277,9 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # it per read, so a file card can count the rejections still wanting a look. v62 adds
 # `import_batch_rejected_row`, which keeps the rows an import refused rather than only counting them
 # — the uploaded file is unrecoverable, so a count was the whole record of what a file left behind.
+# v77 aligns every leaf category's `category_type` with its group's, the property a group's total
+# depends on to equal the sum of its slices — enforced on every category write but not by a restore,
+# which inserts verbatim.
 # v63 lets a data source name a folder the server imports from unattended (`csv_import_profile.watch_*`
 # plus `import_watch_file`, the per-file `(size, mtime)` watermark that keeps a scan off the disk).
 # v65 records what period each import card covers (`import_batch.covers_*`) and backfills it, so the
@@ -301,7 +304,7 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 76
+CURRENT_VERSION = 77
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2369,6 +2372,45 @@ def _release_missing_rule_suggestion_rows(conn):
         log_info(f"[db] removed deleted transactions from {changed} rule-suggestion reviews", keep_in_file=True)
 
 
+def _normalize_leaf_category_type(conn):
+    """Give every leaf category its group's `category_type`.
+
+    **A leaf's type is its group's**, which is what keeps a group's total equal to the sum of its own
+    slices: selection and signing read `COALESCE(leaf, parent)` at the category level and
+    `COALESCE(parent, leaf)` at the group level, so a leaf carrying the other side's type is selected by
+    one rule and signed by the other. Nothing on a single screen looks wrong when that happens, which is
+    why it is worth asserting rather than trusting.
+
+    Every category write path already enforces it (`routers/categories.py` — a create takes the parent's
+    type, a move rewrites it, a group retype carries its children). A **restore** does not: it inserts the
+    payload verbatim, so a backup predating those rules, or one edited by hand, brings a mismatched leaf
+    back. Registered in `POST_RESTORE_DATA_INIT` for exactly that, and run as a migration too so a
+    database that has already drifted is repaired rather than waiting for a restore that may never come.
+
+    Inactive leaves included, for the same reason a group retype carries them: a recovered category comes
+    back on the side its group is on. A leaf whose `parent_id` is NULL is not a leaf and is left alone.
+    """
+    if "category" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(category)")}
+    if not {"parent_id", "category_type"} <= columns:
+        return
+    changed = conn.execute(
+        """
+        UPDATE category
+        SET    category_type = (
+                   SELECT p.category_type FROM category p WHERE p.id = category.parent_id
+               )
+        WHERE  parent_id IS NOT NULL
+          AND  category_type IS NOT (
+                   SELECT p.category_type FROM category p WHERE p.id = category.parent_id
+               )
+        """
+    ).rowcount
+    if changed:
+        log_info(f"[db] aligned {changed} categories with their group's type", keep_in_file=True)
+
+
 @migration(75)
 def _drop_deleted_rule_suggestion_rows(conn):
     _release_missing_rule_suggestion_rows(conn)
@@ -2384,6 +2426,11 @@ def _add_amazon_pending_item_consumed_batch(conn):
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(amazon_pending_item)")}
     if "consumed_batch_id" not in columns:
         conn.execute("ALTER TABLE amazon_pending_item ADD COLUMN consumed_batch_id TEXT")
+
+
+@migration(77)
+def _align_leaf_category_type(conn):
+    _normalize_leaf_category_type(conn)
 
 
 def get_db_version(conn) -> int:
@@ -2428,6 +2475,7 @@ POST_RESTORE_DATA_INIT = {
     71: _namespace_plaid_transaction_ids,
     72: _remove_stored_source_restatements,
     75: _release_missing_rule_suggestion_rows,
+    77: _normalize_leaf_category_type,
 }
 
 

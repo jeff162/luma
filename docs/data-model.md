@@ -1969,7 +1969,9 @@ When the schema changes:
 - pending rows are left out of totals
 - **A group's total equals the sum of its category slices.** It holds because a leaf's type always
   matches its group's. No single bucket looks wrong when it breaks, which is why it is tested
-  (`backend/tests/test_report_sign_filters.py`)
+  (`backend/tests/test_report_sign_filters.py`). Every category write enforces it, and a restore —
+  which inserts verbatim — has it re-asserted by the registered data step that also repairs a database
+  that already drifted (see [Schema evolution](#schema-evolution))
 - **Every category rollup counts allocations, not transactions.** A split transaction contributes one
   row per `txn_split` part, with that part's category and amount. A new aggregation gets this by
   selecting from `txn_effective_sql` and loses it by selecting from `txn` (see
