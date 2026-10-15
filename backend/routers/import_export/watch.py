@@ -694,15 +694,23 @@ def set_profile_watch(profile_id: str, body: WatchSettings):
         if not row:
             raise HTTPException(status_code=404, detail="Data source not found")
         fields, params = [], []
+        # Resolved once rather than appended as it is decided, because clearing the path and setting the
+        # switch are two reasons to write the same column and a request may carry both. Two assignments
+        # to one column is not an error in SQLite — the last simply wins — so appending each would have
+        # left `watch_dir` NULL with the switch still on: a source the status view no longer lists, armed
+        # for the next request that names a folder.
+        enabled = None if body.watch_enabled is None else (1 if body.watch_enabled else 0)
         if body.watch_dir is not None:
             directory = body.watch_dir.strip()
             fields += ["watch_dir = ?", "watch_notice = NULL"]
             params.append(directory or None)
+            # Clearing the path clears the switch, and wins over an enable in the same request: there is
+            # nothing left to watch.
             if not directory:
-                fields.append("watch_enabled = 0")
-        if body.watch_enabled is not None:
+                enabled = 0
+        if enabled is not None:
             fields.append("watch_enabled = ?")
-            params.append(1 if body.watch_enabled else 0)
+            params.append(enabled)
         if body.watch_purge_mode is not None:
             fields.append("watch_purge_mode = ?")
             params.append(normalized_purge_mode(body.watch_purge_mode))

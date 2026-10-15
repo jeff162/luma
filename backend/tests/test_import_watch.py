@@ -371,6 +371,33 @@ class ImportWatchTests(unittest.TestCase):
         self.assertEqual(self._files(), {})
         self.assertEqual(self._scan()["sources"], [])
 
+    def test_clearing_the_path_clears_the_switch_even_when_the_same_request_enables_it(self):
+        """Two reasons to write one column, in one request. SQLite takes the last assignment without
+        complaining, so writing each as it was decided left a source with no folder and the switch
+        still on — invisible in the status view, which lists only sources that have a path, and armed
+        for whatever named a folder next."""
+        self._create_source()
+        with self._use_db_path():
+            watch.set_profile_watch("src-1", watch.WatchSettings(watch_dir="", watch_enabled=True))
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT watch_dir, watch_enabled FROM csv_import_profile WHERE id = 'src-1'"
+            ).fetchone()
+            self.assertIsNone(row["watch_dir"])
+            self.assertEqual(row["watch_enabled"], 0)
+            self.assertEqual(watch.watched_sources(conn), [])
+
+    def test_a_request_that_only_sets_the_switch_leaves_the_path_alone(self):
+        self._create_source(watch_enabled=0)
+        with self._use_db_path():
+            watch.set_profile_watch("src-1", watch.WatchSettings(watch_enabled=True))
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT watch_dir, watch_enabled FROM csv_import_profile WHERE id = 'src-1'"
+            ).fetchone()
+        self.assertEqual(row["watch_dir"], str(self.watched))
+        self.assertEqual(row["watch_enabled"], 1)
+
     def test_auto_scan_is_a_no_op_until_it_is_due(self):
         self._create_source()
         self._prove_source()
