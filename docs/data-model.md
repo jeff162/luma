@@ -1023,7 +1023,12 @@ finding.
 
 ### What a batch counts
 
-- **`imported_count`**: rows inserted.
+Five of these are `import_batch` columns; the other two are figures the card derives, and the
+difference matters because only the columns record something the ledger cannot be asked again. The
+columns are `row_count`, `skipped_count`, `deduped_count`, `ignored_count` and `updated_count`.
+
+- **`skipped_count`**: every row the import refused for a reason other than duplication — a parse
+  failure, another currency, a zero amount, or an account set to Skip.
 - **`deduped_count`**: rows refused as duplicates that the batch's duplicate report can show. It is left
   out of the card's duplicates figure once `detail_cleared_at` is set, since the count's contract
   (`removed_duplicate_count`) is that it never names a row the report cannot show.
@@ -1034,9 +1039,22 @@ finding.
   from `deduped_count` so that count's contract holds.
 - **`updated_count`**: rows that corrected a transaction already held. The corrected row does not say it
   moved, so the card is the only record.
-- **`rejected_count`**: rows refused for a reason other than duplication (see
-  [Rejected rows](#rejected-rows)).
-- **`row_count`**: rows received: imported, skipped and deduped.
+- **`row_count`**: rows received — **the sum of all five populations**: imported, skipped, deduped,
+  ignored and updated. The four that added nothing to the ledger are still rows the file offered, and
+  leaving the ignored and updated ones out is what made a file of thousands of already-held rows read
+  as a handful.
+
+Two more are derived rather than stored, and are reported through `config_snapshot.import_summary`:
+
+- **`imported_count`**: rows inserted. Recounted from the ledger on every history load
+  (`refresh_batch_totals`), so it falls as rows are hard-deleted while the stored counters stay put.
+- **`rejected_count`**: the part of `skipped_count` refused on the row's own content — zero-amount,
+  another currency, a parse failure — leaving out the rows dropped for belonging to a skipped account
+  (`account_skipped_count`). It is what the card's *Not imported* view totals (see
+  [Rejected rows](#rejected-rows)), and being inside `skipped_count` it is inside `row_count` too.
+
+`refresh_batch_totals` re-derives `row_count` and every headline summary figure from one set of parts,
+so the card's row count and its summary cannot contradict each other.
 
 A row counts as a **restatement** when all of these hold:
 
@@ -1672,18 +1690,26 @@ not survive a restore is dropped, not turned into "untracked".
 **Reconciliation** (`amazon_reconciliation(batch_id)`) reports per batch:
 
 - **matched**: an order and the charges it excluded
-- **duplicate**: an order with two or more same-amount candidate charges. `mergeable` is set only when
-  no other unmatched order shares the amount; otherwise the copies may be distinct purchases
-  (`merge_duplicate_charges` checks the same condition)
+- **duplicate**: an order with two or more same-amount candidate charges **on one effective account**,
+  inside the matcher's own window. `mergeable` is set only when no other unmatched order shares the
+  amount; otherwise the copies may be distinct purchases (`merge_duplicate_charges` checks the same
+  condition). Copies spread across different accounts are never grouped here — they are distinct rows
+- **duplicate_review**: the same shape, but the copies appear only in the wider review window, so their
+  dates do not corroborate the way an in-window duplicate's do. Kept apart so each copy is looked at
+  before a merge or discard
 - **matched_review**: an unmatched order whose total is covered by a unique combination of unaccounted
   charges. Accepting links the set; dismissing stores `split_suggestion_dismissed` on the link
 - **amazon_unmatched**: an order with no candidate charge. `no_charge_reviewed` on the link acknowledges
   it, and linking a charge clears the flag
 - **payment_unmatched**: Amazon-looking charges on the cards Amazon uses, in the batch's date range,
   that no order links. `amazon_charge_reviewed` acknowledges one, and linking clears it
+- **unaccounted_duplicate**: reverse-scan charges that look like copies of *each other* — same account
+  and amount, dates close — with no order accounting for either. Carved out of `payment_unmatched`,
+  because this is the double import the general dedupe cannot catch
 
-`reconciliation_attention_count` is the duplicate and review buckets plus each unacknowledged row of the
-last two. It is cached as `import_batch.recon_attention_count` against `recon_epoch`.
+`reconciliation_attention_count` is the four duplicate and review buckets whole, plus each
+unacknowledged row of `amazon_unmatched` and `payment_unmatched`. It is cached as
+`import_batch.recon_attention_count` against `recon_epoch`.
 
 ### Wallet funding legs
 
@@ -1738,7 +1764,8 @@ import and sync, `services/paypal_funding.py` pairs each PayPal row with the row
 the movement and links them (`paypal_funding`).
 
 - **A transfer pair** (money into or out of PayPal) is movement on both sides, so both rows move to the
-  *Money movement* leaf.
+  *Money movement* leaf. A row already excluded is left where it is, and so is a split row, whose
+  `category_id` is the stashed prior its parts replaced rather than a category it is filed under.
 - **A payment pair** (a PayPal payment a card or bank paid directly) counts once. The PayPal row records
   what was bought, so the card row is excluded, unless the PayPal row is already excluded, in which case
   nothing changes.
@@ -1869,10 +1896,18 @@ skipped.
 
 ### The compatibility guard
 
-The payload is stamped with the source database's `instance_id` and `access_mode`. Restore proceeds when
-the target is empty or the backup is this system's own in the same mode. Otherwise it answers
-`409 restore_incompatible` with reasons `different_system`, `mode_mismatch` or `newer_schema`, and
-`force` is the only way past.
+The payload is stamped with the source database's `instance_id` and `access_mode`. Three conditions are
+checked independently, and any of them answers `409 restore_incompatible` naming the reasons that
+fired, with `force` the only way past:
+
+- `different_system` — the target holds data and the backup is another instance's. **This is the one an
+  empty target suppresses**: there is nothing to overwrite, so a fresh install takes any backup
+- `mode_mismatch` — the backup was made in the other access mode (`auth` vs `local`)
+- `newer_schema` — the backup's `schema_version` is past this build's, which is the one direction that
+  loses data, since restore drops columns this schema does not know
+
+So "the target is empty" is not on its own a pass: a first install restoring an `auth`-mode backup into
+a `local`-mode instance is refused, and so is any downgrade.
 
 **A restore adopts the backup's `instance_id`**, since afterwards the data is the backup's lineage.
 Restoring one backup twice into a fresh database therefore does not trip the guard. The id also
