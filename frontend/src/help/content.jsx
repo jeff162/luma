@@ -2683,6 +2683,8 @@ export const HELP_TOPICS = [
         <p>
           Disconnecting retains the accounts and their transactions. If disconnecting the
           account revokes the provider's access the confirmation page will indicate this.
+          For Plaid, {APP_NAME}'s own access (its client ID and secret) is kept; it can be revoked only
+          by signing into the Plaid Dashboard.
         </p>
       </>
     ),

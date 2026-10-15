@@ -1649,7 +1649,11 @@ export default function ConnectionsTab({ onShowHistory }) {
           description={!disconnectTarget.hasCredential
             ? `This removes the connection from Luma. Existing accounts and their transactions are kept. There is no stored credential left for it, so nothing can be revoked from here — if ${providerLabel(disconnectTarget.provider)} still lists this connection, remove it there too.`
             : disconnectTarget.revokes
-              ? 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
+              // Revoking the bank's token leaves Luma's own app credential in force, so a provider that has
+              // one is named as still reachable, with where that access is revoked.
+              ? providerById[disconnectTarget.provider]?.requires_app_config !== false
+                ? `This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts, their transactions and Luma's access to ${providerLabel(disconnectTarget.provider)} are kept. Reconnecting later means linking the bank again. Luma's access to ${providerLabel(disconnectTarget.provider)} can be revoked only by signing into the ${providerLabel(disconnectTarget.provider)} Dashboard.`
+                : 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
               : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
           confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect'}
           confirmDisabled={disconnecting}
