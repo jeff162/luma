@@ -154,6 +154,106 @@ backwards (entry 1 above), and every question here is a question about ordering.
 
 ---
 
+## 3. `database is locked` in the browser lane, specs reading an empty ledger
+
+**Status: not understood. The holder of the lock is the open question; the candidates that looked
+obvious were measured and ruled out.**
+
+**Last seen: 2026-10-15** — **three of four gate runs**, against **0 of 2** standalone
+`npm run ui:test` runs on the same tree, same worker count (10). Gate-only is the one reproducible fact
+about *when* it happens: the browser lane runs after the backend suite (2763 tests, 20 workers) and
+vitest (164 files), so the machine is loaded by the time it starts. At three in four it is closer to
+reliable-in-the-gate than intermittent, which is itself the strongest hint — whatever holds the lock is
+being made slow rather than being triggered.
+
+### Symptom
+
+One to four `app` specs fail together, each on a `toBeVisible` that times out with `element(s) not
+found`. **The failing assertion names the symptom badly in every case**: the page snapshot shows the
+ledger reporting `0 transactions` with the list still `Loading…`, so nothing was wrong with the tags,
+documents or markers the assertions were about — the page could not read. `transactions.spec.js:7`
+(inherited category tags) failed in both occurrences; `documents.spec.js`, `duplicates.spec.js` and
+`needs-review-marker.spec.js` joined it in the first. `demo-data.spec.js` passes earlier in the same
+run, so the ledger is seeded and the data is there.
+
+Alongside it, four to eight `sqlite3.OperationalError: database is locked` tracebacks in the
+`[WebServer]` output.
+
+### What the lock errors mean here, exactly
+
+`get_db` sets a **15-second** busy timeout (`_BUSY_TIMEOUT_SECONDS`), so these are not instant
+collisions: **some writer held the write lock for more than fifteen seconds.** That also explains the
+20-second spec timeouts — a request waits out the 15s, fails, and the page never fills.
+
+The sites in the tracebacks are **victims, not the holder**, which is why they look unrelated and move
+between runs. Three of the four are incidental writes that a read or a view preference triggers:
+
+- `services/reconciliation_attention.py` → `batch_attention`, which **writes its cache on a read path**
+- `services/preferences.py` → `set_preference`
+- `services/documents.py` → `rename_document`
+- `routers/transactions.py` → `_apply_bulk_action`, the `mark_reviewed` branch
+
+### Candidates measured and ruled out
+
+Both were timed against a freshly seeded demo ledger (445 rows) on an idle machine, which is the
+wrong machine state but the right order of magnitude to exclude them:
+
+- **The first-load duplicate re-examination**, which used to run on every fresh stack because
+  `init_db` wrote no `duplicate_detection_version`: **~5 ms**. `init_db` now stamps a fresh database
+  (`stamp_detection_version`), so the pass no longer runs there at all — that was worth doing on its
+  own, as waste avoidance, and it is **not** a fix for this entry. Ruled out before it was changed, and
+  the failure has been seen since.
+- **The demo-data load**, one write transaction for the whole dataset (`POST /api/auth/demo-data`):
+  **~0.81 s**. It would need roughly a twentyfold slowdown to cross the timeout.
+
+### It is a permanent stall, not an intermittent — the flake is the tail of it
+
+The slowest four spec durations in each condition, same tree, same 10 workers:
+
+| condition | slowest four (s) |
+| --- | --- |
+| standalone, cold | 18.4 · 16.3 · 15.5 · 15.4 |
+| standalone, after a vitest run | 20.9 · 19.1 · 17.2 · 15.1 |
+| inside the gate | 34.2 · 32.5 · 26.3 · 21.1 |
+
+**Every condition has specs sitting at or just above fifteen seconds**, which is
+`_BUSY_TIMEOUT_SECONDS`. Those specs are waiting out the write lock and then succeeding. Load does not
+cause the contention; it shifts the distribution until some spec crosses its own 20-second assertion
+timeout and the wait becomes a failure. A cold run is not a clean run, it is the same stall with more
+headroom — which is why "it passed standalone" was the wrong conclusion to draw, twice.
+
+Two consequences worth stating. The lane is paying this on every run, so whatever is fixed here makes
+it faster rather than merely greener. And the shape argues against one long writer: ten workers each
+triggering incidental writes on page load (a view preference, an attention-cache recompute) serialize
+against WAL's single writer, and each waits up to the timeout. That is contention among many short
+writes, not one transaction held open — the opposite of the sync-across-network-calls case
+`_BUSY_TIMEOUT_SECONDS` was sized for.
+
+### What the next occurrence needs
+
+Nothing in the current output identifies the holder, which is why this entry cannot say. What would:
+
+- the writer's identity and duration — log the statement and elapsed time whenever a `get_db()` block
+  holds a write transaction beyond a second or two, which is cheap and would name the holder directly,
+  and would also settle one-long-holder against many-short-writers;
+- whether taking the write off the read paths is enough on its own: `batch_attention` recomputing its
+  cache during a GET is the clearest candidate, and the attention count is a cache by construction;
+- `PRAGMA wal_checkpoint` / WAL size at the time, since an unbounded WAL and a blocked checkpointer
+  present exactly this way;
+- whether the frontend dev server's own `--reload` backend was also running against a different
+  database on the same host, which affects machine load but not this lock.
+
+**Until the holder is named, a red run matching this signature is not evidence about the change in
+hand**: look for the `0 transactions` / `Loading…` snapshot and the lock tracebacks before concluding
+anything. The lane's database is wiped and re-seeded per launch (`scripts/run-e2e-backend.sh`), so no
+migration or accumulated state is involved, and `reuseExistingServer: false` rules out a stale server
+holding the old file.
+
+Distinct from entry 2 despite sharing a spec list: that one is two reads committing out of order and
+leaves the page populated, while this one leaves it empty with a lock error behind it.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

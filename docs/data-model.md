@@ -42,8 +42,10 @@ some rules, divides dashboard views, and decides whether its new transactions ar
 (`owner.flag_new_for_review`, see [`needs_review`](#needs_review)).
 
 `txn.owner_id` is copied from the account when a row is created, so owner filters need no join. It is
-the owner axis every filter and task reads; joining through `account.owner_id` instead would disagree
-with the ledger as soon as one row's owner is corrected.
+the owner axis every filter and task reads. Changing an account's owner rewrites every one of its rows
+in the same write, which is what keeps the stored axis and the account in step; the column exists so
+that every filter, summary and task reads one place rather than joining, and so a correction has one
+site to make.
 
 ## Accounts
 
@@ -234,6 +236,10 @@ canonically (`*_low < *_high`), cascades with either side, and rides the data ba
 Otherwise the column supplies the direction and the cell's own sign reverses it, so a negative
 debit-column cell is a refund. A two-column row blank on both sides is `0.0`, which is a real amount.
 
+A third shape states the direction in its own column (`column_map.direction`, with the amount unsigned).
+There the column is the only signal read: a `DR` / `CR` suffix in the amount cell does not override it,
+since a file carrying both has already said which way it means.
+
 ### Dates
 
 `date` is when the charge was made, the transaction date, wherever the source gives one, and the posted
@@ -335,8 +341,11 @@ uncategorized.
 
 - **Set** on every import and sync insert unless the row's owner has flagging off. Hand-entered rows
   start at `0`.
-- **Cleared** by a manual category edit (the actions that write `category_source = 'manual'`) or by an
-  explicit mark-reviewed. Automatic categorization never clears it.
+- **Cleared** by a manual category edit (the actions that write `category_source = 'manual'`), by
+  saving a split or a reimbursement's allocations — the row has plainly been looked at — or by an
+  explicit mark-reviewed, per row or over a whole import card. Automatic categorization never clears it.
+- **Set back on by hand only**, through the bulk editor's *Review status*, which is the one writer that
+  raises the flag after arrival.
 - **`owner.flag_new_for_review`** (default on, read through `services/review_flagging.py`) is per owner
   because the flag is written at ingest, where a sync has no user to ask but every row has an owner. A
   row with no owner is always flagged.
@@ -1970,7 +1979,11 @@ When the schema changes:
 - income groups match money-in transactions and expense groups money-out
 - a branch may still hold the other sign: an expense category holds refunds, an income category holds
   reversals. Summaries include every matching transaction
-- `exclude_from_totals` is honored by every summary and chart
+- `exclude_from_totals` is honored by every cross-cutting summary and chart. **A scope the user named
+  explicitly is the exception**: a drill into one group or category shows that group's own activity
+  unfiltered, so `/summary/by-category-in-group` applies no exclusion and the trend endpoints apply it
+  only when no `category_id` scopes them. Asking for an excluded category's figures is not the same as
+  asking for a total
 - pending rows are left out of totals
 - **A group's total equals the sum of its category slices.** It holds because a leaf's type always
   matches its group's. No single bucket looks wrong when it breaks, which is why it is tested
@@ -2013,7 +2026,8 @@ resolve the type the same way.
 
 ### Averages
 
-An average per month or year divides by **elapsed days**, not by the number of buckets drawn, and is
+An average per unit — month, quarter or year — divides by **elapsed days**, not by the number of
+buckets drawn, and is
 withheld where the window does not cover one whole unit. Buckets are uneven, a partial bucket at either
 end is not a whole one, and `txn.date` has no finer grain than a day.
 
@@ -2083,8 +2097,9 @@ the ledger's plain search (`matched_split_label`). The stored value is capped.
   part id. An expanded row also carries the transaction's `is_split` with the part's amount;
   `split_part_id IS NOT NULL` is the test for "this row is one allocation" (`lib/splitRows.js`).
 - **Expansion is chosen by what a query is for.** Summaries and trends always expand. The list expands
-  only when a category-shaped facet scopes it (a category or group filter, or a `spending` / `income`
-  view), so a drill-down's rows sum to the total it came from. Dedupe, rule matching, recurring
+  only when a category-shaped facet scopes it — a category or group filter, included or excluded, or
+  any of the `spending` / `income` / `cash_flow` views, since each of those resolves through the
+  category — so a drill-down's rows sum to the total it came from. Dedupe, rule matching, recurring
   detection and import read plain `txn`.
 - **The CSV export follows the list.** Unscoped, a split exports once at its full amount with Category
   and Group reading `--split--`, since `category_id` on a split is the stashed prior and an empty cell
@@ -2218,8 +2233,10 @@ Nothing is assumed about a repayment that may never arrive.
 
 - **The group's identity is `system_key = 'reimbursable'`.** The empty-category sweep skips keyed rows,
   and a receivable category is empty exactly when nothing is outstanding.
-- **Leaves are created on first use** (`services/excluded_categories.py`), and any active leaf in the
-  group is a receivable. A leaf is named for what the money is for, so it stays true after repayment.
+- **Leaves are the user's**, added to the group on the Categories page like any other, and **any active
+  leaf in the group is a receivable** — the feature keys on the group, never on one blessed leaf
+  (`reimbursable_leaf_ids`). A leaf is named for what the money is for, so it stays true after
+  repayment.
 - **The group cannot be deleted, moved, or have `exclude_from_totals` changed.** A moved group becomes a
   leaf, which no lookup finds, and clearing the exclusion restores the overstatement. Renaming and
   re-sorting are allowed.
