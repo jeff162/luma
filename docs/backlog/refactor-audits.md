@@ -8,8 +8,10 @@
 > 1. **[Refactor smells](#why-this-exists)** — duplication and shotgun surgery. First run: frontend,
 >    high-signal, 2026-07-03. Next scope: **backend**.
 > 2. **[Doc conformance](#doc-conformance-audit-data-modelmd)** — does the code do what
->    `data-model.md` says it does. First run: 2026-10-15, **twelve of the doc's
->    seventeen sections**. Next scope: **the four it did not reach**, plus half of a fifth.
+>    `data-model.md` says it does. First run: 2026-10-15, twelve of the doc's seventeen sections.
+>    Second run: 2026-10-15, the remaining five. **All seventeen are now covered; nothing is carried.**
+>    Next scope: a re-run, which is worth it once the sections have moved — or the same lens over
+>    `architecture.md`, whose cross-subsystem contracts have never had one.
 
 ## Why this exists
 
@@ -113,33 +115,27 @@ break it), **VIOLATED** (name the path, the inputs, and what ends up in the data
   did the thing. Build the fixture and run it: that is what separated the three real defects from the
   several that looked identical on a reading.
 
-### Carried scope: the four sections the first run did not reach
+Nothing from either run is owed. Findings were fixed or folded back into `data-model.md` as
+corrections in the same pass, which is where a conformance audit's output belongs — the point of the
+exercise is that the doc and the code agree afterwards, so there is no standing finding list to carry.
 
-These were checked only mechanically — every symbol, constant, file path and cited test name in them
-exists — and **not** audited for behaviour. They are the largest sections in the doc, and their claims
-are mostly multi-step arithmetic over fixtures, which is exactly the kind that needs a built fixture
-rather than a reading:
+### What the second run changed, as a shape to expect
 
-- **Import batches and profiles** (`data-model.md` → that section, ~540 lines, the biggest in the doc).
-  The count contracts (*What a batch counts*), restatement when stored detail is cleared, the two
-  shapes of coverage, the terminal window's arithmetic, soft duplicates, and the three stores that
-  describe one sync. Several of these are figures the UI shows a user, derived in more than one place.
-- **Watched import folders** — short, but every claim is a refusal the unattended scan has to make, and
-  nothing in the app is watching whether it still makes them.
-- **Transaction links and Amazon order import** — the link primitive's role invariants, wallet funding
-  legs, PayPal funding pairs and refunds. `mechanism-index.md` exists because picking the wrong one of
-  these writes bad data quietly, so this section's claims are the ones with the least margin.
-- **Backups** — the two version axes and the compatibility guard, what each artifact carries, and
-  which half a connection lands in. A claim that is wrong here is only discovered during a restore.
+Five sections, three code defects and five stale claims. The distribution is worth knowing before a
+third run, because it is not what the first run's was:
 
-**Half-covered: Schema evolution.** The migration chain and `POST_RESTORE_DATA_INIT` were exercised
-directly by the first run's leaf-category-type fix, so that machinery is known good; the rest of the
-section's claims were not read against the code.
-
-Nothing in the twelve audited sections is owed. Their findings were either fixed or folded back into
-`data-model.md` as corrections in the same pass, which is where a conformance audit's output belongs —
-the point of the exercise is that the doc and the code agree afterwards, so there is no standing
-finding list to carry.
+- **The stale claims clustered where a figure is derived in more than one place.** `row_count` was
+  defined as three populations where every write path sums five; the Amazon reconciliation's bucket
+  list had drifted two buckets behind the function. Both had a correct second description in a
+  docstring beside the code, which is the tell: when the same fact is written twice, the copy in
+  `data-model.md` is the one that goes stale, because the one by the code gets edited with it.
+- **The code defects were each a second implementation of a rule stated once.** A duplicate
+  `watch_enabled` assignment in one `UPDATE`; a `terminal_window_days` normalizer open-coded beside the
+  shared one it contradicts; a refund matcher reading the payment's id from only one of the two places
+  the id is stored. None was reachable by reading the doc — each needed a fixture.
+- **A veto is where a widened mechanism rots.** Refund pairing required a PayPal-shaped `Type`, so the
+  CSV path the doc advertised paired nothing, silently. When a mechanism is documented as general and
+  implemented against one source, the gate is usually a predicate borrowed from that source.
 
 ### Obstacles
 
@@ -150,4 +146,14 @@ finding list to carry.
   `category_id` and `amount` over the parent row, so any claim phrased in terms of "the transaction's
   category" has two readings, and a query written for one of them is wrong for split rows without
   erroring. Check every per-transaction count for `COUNT(DISTINCT t.id)` against the seam. The first
-  run's sharpest findings were all this one shape.
+  run's sharpest findings were all this one shape. It cost the second run nothing: the batch counts
+  count rows a card imported, which a split does not multiply, and the three places it could have bitten
+  already guard on `is_split`. Check it, but do not budget for it in a section about import counts.
+- **A fixture's own premises are the likeliest thing wrong.** Two of the second run's fixtures went red
+  on the fixture, not the code: a CSV amount cell is written in the *file's* convention and inverted on
+  import, so a purchase is a negative cell and a positive row. Confirm how a value is stored with a
+  throwaway import before asserting against it.
+- **The tree moves under a long audit.** The second run's citations were taken against a working tree
+  four commits behind where it ended, and `database.py` had shifted ~80 lines and a schema version by
+  then. Re-grep every doc and code line number against the current tree before acting on a finding
+  list, and re-read `git log` rather than the session's opening snapshot.
