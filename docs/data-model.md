@@ -1142,7 +1142,12 @@ the id; a row already carrying a suspect pointer is never canonical.
 
 **A matcher change re-examines stored rows once.** `DUPLICATE_DETECTION_VERSION` is bumped with any
 change that could alter a verdict on stored rows. App load compares it with a `db_meta` stamp and runs
-the existing-versus-existing scan over every account (`maybe_rescan_for_detection_change`).
+the existing-versus-existing scan over every account (`maybe_rescan_for_detection_change`). A missing
+stamp reads as "never examined", so **`init_db` stamps a fresh database** (`stamp_detection_version`):
+one holds no stored rows, and without it every first app load opened a write transaction to reach that
+conclusion. The stamp is the version and not a "done" flag, so a later bump still re-examines
+everything; an upgraded database is deliberately left unstamped, because it has rows that predate the
+stamp.
 `rescan_until_settled` loops to a fixed cap, because each row takes one partner per pass. It is not the
 schema version: a threshold change needs no migration. A flag already raised keeps its tier.
 

@@ -3642,6 +3642,13 @@ def init_db(db_path: str | None = None):
         if is_fresh_db:
             _alphabetize_top_level_category_groups(conn)
             set_db_version(conn, CURRENT_VERSION)
+            # A new database holds no transactions, so the duplicate matcher has nothing to re-examine:
+            # stamping the version keeps the first app load from opening a write transaction to reach
+            # that conclusion. After `set_db_version`, which is what creates `db_meta`. Imported
+            # locally, like the services the migrations reach for.
+            from backend.services.duplicate_detection import stamp_detection_version
+
+            stamp_detection_version(conn)
             log_info(f"[db] created new database at schema version {CURRENT_VERSION}", keep_in_file=True)
         else:
             # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT

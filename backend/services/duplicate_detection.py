@@ -4200,6 +4200,25 @@ def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
     return {"skipped": False, "from_version": seen, "version": DUPLICATE_DETECTION_VERSION, **result}
 
 
+def stamp_detection_version(conn: sqlite3.Connection) -> None:
+    """Record the current matcher version without scanning — for a database that has nothing to scan.
+
+    `maybe_rescan_for_detection_change` reads a missing stamp as "never examined", which is right for a
+    database that predates the stamp and wrong for one created after it: a **brand-new** database holds
+    no stored rows, so re-examining them is a write transaction over an empty ledger at the first app
+    load, for a verdict that cannot differ. `init_db` calls this on the fresh branch only; an upgraded
+    database is left unstamped so the catch-up still runs for the rows it already held.
+
+    Not a substitute for the pass: a later bump still re-examines everything, because the stamp is the
+    version and not a "done" flag.
+    """
+    conn.execute(
+        "INSERT INTO db_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_DETECTION_VERSION_META_KEY, str(DUPLICATE_DETECTION_VERSION)),
+    )
+
+
 def _same_origin(row_a, row_b) -> bool:
     """Whether two stored rows were reported by the same source, and so must not be paired.
 

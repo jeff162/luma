@@ -547,7 +547,12 @@ class VersionGatedRescanTests(_LedgerTestCase):
         self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
 
     def test_an_unstamped_database_is_scanned_once_and_then_left_alone(self):
+        # The stamp has to be cleared to reach this: `init_db` now writes it on a fresh database, which
+        # has nothing to examine. An unstamped database is therefore one created before the stamp
+        # existed — still the case this covers, and the only way it arises.
         self._two_sources()
+        with self._db() as conn:
+            conn.execute("DELETE FROM db_meta WHERE key = 'duplicate_detection_version'")
         with self._db() as conn:
             first = maybe_rescan_for_detection_change(conn)
         self.assertFalse(first["skipped"])
@@ -569,8 +574,34 @@ class VersionGatedRescanTests(_LedgerTestCase):
     def test_a_malformed_stamp_reads_as_never_scanned_rather_than_crashing_app_load(self):
         self._two_sources()
         with self._db() as conn:
-            conn.execute("INSERT INTO db_meta (key, value) VALUES ('duplicate_detection_version','yes')")
+            conn.execute("INSERT INTO db_meta (key, value) VALUES ('duplicate_detection_version','yes')"
+                         " ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             self.assertFalse(maybe_rescan_for_detection_change(conn)["skipped"])
+
+    def test_a_fresh_database_is_stamped_so_the_first_app_load_writes_nothing(self):
+        # The pass opened a write transaction at every first app load to conclude that an empty ledger
+        # had no duplicates. Nothing is lost: a later version bump still re-examines everything, because
+        # the stamp records the version rather than that a scan has happened.
+        with self._db() as conn:
+            stamp = conn.execute(
+                "SELECT value FROM db_meta WHERE key = 'duplicate_detection_version'"
+            ).fetchone()
+            self.assertIsNotNone(stamp, "init_db should stamp a fresh database")
+            self.assertEqual(int(stamp["value"]), DUPLICATE_DETECTION_VERSION)
+            self.assertTrue(maybe_rescan_for_detection_change(conn)["skipped"])
+
+    def test_a_bump_still_re_examines_a_stamped_fresh_database(self):
+        # The stamp must not read as "already done" — it is a version, so moving past it scans again.
+        self._two_sources()
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO db_meta (key, value) VALUES ('duplicate_detection_version', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(DUPLICATE_DETECTION_VERSION - 1),),
+            )
+            result = maybe_rescan_for_detection_change(conn)
+        self.assertFalse(result["skipped"])
+        self.assertEqual(result["flagged"], 1)
 
     def test_the_convergence_loop_is_bounded(self):
         # It converges by exhausting pairs, but the cap is what makes that a guarantee rather than an
