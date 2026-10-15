@@ -168,6 +168,10 @@ build and the DevTools hook each inflate render cost enough to change which cost
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
 - **Dependency-based cache invalidation**, if transaction-derived views proliferate enough that the
   hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
+- **Write-lock contention**: one write transaction is held across a recurring rescan, and several read
+  paths write a cache, so writers queue and the unlucky one waits out the busy timeout. Present on a
+  cold run, not only under the browser lane's parallelism.
+  → [`backlog/write-lock-contention.md`](backlog/write-lock-contention.md)
 - **A structural database check does not answer whether the data is coherent**: a cursor ahead of a
   restored ledger, a coverage claim disagreeing with its rows and a mapping pointing at a merged account
   all read as `ok`. What a semantic checker should assert is unstarted design.

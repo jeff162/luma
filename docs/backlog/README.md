@@ -68,6 +68,12 @@ scale — rather than by feature.
   funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
   ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
   from stored raw values, and the deferred column-centric mapping-screen rework.
+- [write-lock-contention.md](write-lock-contention.md) — **cause established, nothing started
+  (2026-10-15).** Writers queue until one waits out the 15s busy timeout: a category edit holds its
+  transaction across a recurring rescan (6.07s of a 6.29s hold running no SQL), and read paths write an
+  attention cache, which supplies the queue. Surfaces as a flaky browser lane and sits on every category
+  edit in the running app. Records the two fixes, the three candidates already measured and ruled out,
+  and why the obvious instrument gives the wrong answer.
 - [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
   (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
   it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers

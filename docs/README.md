@@ -208,5 +208,5 @@ index in [`backlog/README.md`](backlog/README.md).
 
 - [1. Two documents on one transaction list in the wrong order](transient-failures.md#1-two-documents-on-one-transaction-list-in-the-wrong-order)
 - [2. A row marked reviewed does not settle: the marker returns, or the row leaves the list](transient-failures.md#2-a-row-marked-reviewed-does-not-settle-the-marker-returns-or-the-row-leaves-the-list)
-- [3. `database is locked` in the browser lane, specs reading an empty ledger](transient-failures.md#3-database-is-locked-in-the-browser-lane-specs-reading-an-empty-ledger)
+- [3. Write-lock starvation in the browser lane](transient-failures.md#3-write-lock-starvation-in-the-browser-lane)
 - [Not an entry: the cash-flow frame, and the 401 burst behind it](transient-failures.md#not-an-entry-the-cash-flow-frame-and-the-401-burst-behind-it)
