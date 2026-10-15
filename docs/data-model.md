@@ -476,13 +476,24 @@ A category carries `is_active` (default 1), `set_aside` (default 0) and `import_
 
 Deleting a **leaf**:
 
-- rewrites the branch's transactions first. With no replacement they become uncategorized
-  (`category_id`, `category_source` NULL, `category_overridden = 0`) and keep their `imported_category`
-  text; with a replacement they move to it. An inactive category is therefore referenced by no live
-  transaction
+- rewrites the branch's transactions first (`_rewrite_branch_categorizations`). With no replacement they
+  become uncategorized (`category_id`, `category_source` NULL, `category_overridden = 0`) and keep their
+  `imported_category` text; with a replacement they move to it. An inactive category is therefore
+  referenced by no live transaction
+- **rewrites the split allocations too, and they are the row's categorization.** A part filed in the
+  branch follows the replacement, or is left naming nothing, which the expansion seam already reads as
+  uncategorized; the row stays split, because its allocations exist nowhere else. A split row's own
+  `category_id` is the stashed prior rather than a categorization, so that value is repointed while
+  `category_source = 'split'` and its lock bit stay as they are
 - clears `import_pending` and keeps `parent_id`, which is how reactivation returns it to its group
 - deletes every rule that targets it; the categorizer also skips any rule whose target is inactive
 - removes it from `GET /categories` and `/categories/flat`; it appears in `GET /categories/inactive`
+
+**Whether a category is in use is one question** (`_categories_referenced_by_transactions`), asked by
+the delete preview, the usage summary and the empty sweep alike. It reads the expansion seam as well as
+`txn.category_id`, because a split's money is filed in `txn_split` and the column holds only the prior.
+Both columns are `ON DELETE SET NULL`, so a reader that misses the allocations reports a category as
+unused and the removal then moves that money to *Uncategorized* with nothing on screen saying so.
 
 Deleting a **group** removes the row outright, since a group is a container and not an import label.
 Its leaves are deactivated like any leaf, and their `parent_id` is nulled by the foreign key, so they
@@ -493,12 +504,15 @@ leaf to its former group when that group is still an active top-level group, els
 does not recategorize the transactions the deletion cleared.
 
 **Permanent delete** (`DELETE /categories/{id}/forever`) accepts only an inactive category, which is
-what makes it safe: nothing references one. Afterwards the label is no longer suppressed, so a future
-import creates a fresh pending leaf.
+what makes it safe: nothing references one. It refuses anyway while a split allocation still names the
+branch — the state the delete above no longer produces, so reaching it means a backup predating that
+rewrite, and the foreign key would otherwise null the allocation. Afterwards the label is no longer
+suppressed, so a future import creates a fresh pending leaf.
 
 **Empty cleanup** (`POST /categories/empty-cleanup`) removes, outright, every active non-system leaf
-that is not import-pending and that no transaction (trashed or not) and no rule references, then every
-non-system group left without children. The set is recomputed server-side.
+that is not import-pending and that no transaction (trashed or not, allocations included) and no rule
+references, then every non-system group left without children. The set is recomputed server-side. It
+removes rather than deactivates, so a leaf it misread as empty would be destroyed instead of parked.
 
 **Undo of an import** removes only still-pending leaves that import created.
 
@@ -2043,7 +2057,9 @@ item description. No report reads it. It is shown under the merchant name on a p
 the ledger's plain search (`matched_split_label`). The stored value is capped.
 
 - **`txn.category_id` is kept while a row is split**, as the prior that un-splitting restores.
-  **`txn.is_split`** marks the row.
+  **`txn.is_split`** marks the row. Because the column is the prior and not the categorization,
+  anything asking what a category holds has to read the allocations (see
+  [Categories](#lifecycle-flags) on removing one).
 - **`txn_effective_sql` is the expansion seam.** It left-joins `txn` to its allocations and substitutes
   the part's `category_id` and `amount` where one matched, so every filter, sign expression and
   exclusion written against `t.category_id` / `t.amount` applies per allocation. The substitution keys

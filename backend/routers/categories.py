@@ -228,23 +228,91 @@ def _get_affected_category_ids(conn, category_id: str) -> list[str]:
         ).fetchall()
     ]
 
+
+# Every category the ledger's transactions point at, **split allocations included** — the question
+# behind "is it safe to remove this category".
+#
+# A split transaction's own `txn.category_id` is the stashed pre-split prior, so the categories its
+# money is actually filed under live in `txn_split`, where a query over `txn` alone cannot see them.
+# Missing them answers "unused" about a category holding a split's money, and the removal then nulls
+# the allocation silently: `txn_split.category_id` is `ON DELETE SET NULL`, exactly like
+# `txn.category_id`. Both tables are asked, so both kinds of reference count — including the prior,
+# which is what un-splitting restores.
+#
+# Phrased as a union of the two tables rather than through the reporting seam (`txn_effective_sql`),
+# which answers the same question here but gets there by scanning `txn` and joining each row to its
+# parts; this way each side is a covering-index read of the column being asked about. The seam earns
+# its cost where a query needs the *amount* and filters per allocation, which this does not.
+def _categories_referenced_by_transactions(conn) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT category_id FROM txn        WHERE category_id IS NOT NULL
+        UNION
+        SELECT DISTINCT category_id FROM txn_split  WHERE category_id IS NOT NULL
+        """
+    ).fetchall()
+    return {row["category_id"] for row in rows}
+
+
+# Move everything filed under a branch of categories onto `replacement_category_id`, or off the branch
+# altogether when it is None — the write half of `_categories_referenced_by_transactions`, and the one
+# place a category removal rewrites what pointed at it.
+#
+# Three statements rather than one, because a transaction can point at the branch in two different
+# capacities and they are not rewritten the same way:
+#
+# - **A plain row's `category_id` is its categorization.** It moves to the replacement (or clears) and
+#   is unlocked, so later rule runs are free to classify it again.
+# - **A split row's `category_id` is the stashed pre-split prior**, not its categorization. The value is
+#   repointed so un-splitting still lands somewhere real, but `category_source = 'split'` and its lock
+#   bit stay exactly as they are: rewriting them would leave a row flagged `is_split`, with allocations,
+#   claiming to have been categorized by a rule.
+# - **A split row's categorization is its allocations.** Each one filed in the branch follows the
+#   replacement. With no replacement they are left naming nothing, which the expansion seam already
+#   reads as uncategorized (`services/txn_splits.py`) and the split editor shows for the user to fill —
+#   the alternative, un-splitting the row, would destroy hand-built allocation work that exists nowhere
+#   else. Left out entirely, the FK (`ON DELETE SET NULL`) would do this silently at the permanent
+#   delete instead, with no replacement ever applied.
+def _rewrite_branch_categorizations(conn, affected_ids: list[str], replacement_category_id) -> None:
+    placeholders = ",".join("?" for _ in affected_ids)
+    target = replacement_category_id or None
+    # A replacement is taxonomy maintenance rather than a judgement about the row, so the moved rows are
+    # left unlocked for later rule runs; clearing leaves nothing to attribute.
+    source = "rule" if target else None
+    conn.execute(
+        f"""UPDATE txn
+            SET    category_id = ?, category_overridden = 0, category_source = ?
+            WHERE  is_split = 0 AND category_id IN ({placeholders})""",
+        [target, source, *affected_ids],
+    )
+    conn.execute(
+        f"""UPDATE txn SET category_id = ?
+            WHERE  is_split = 1 AND category_id IN ({placeholders})""",
+        [target, *affected_ids],
+    )
+    conn.execute(
+        f"UPDATE txn_split SET category_id = ? WHERE category_id IN ({placeholders})",
+        [target, *affected_ids],
+    )
+
+
 def _compute_empty_cleanup(conn) -> tuple[list[dict], list[dict]]:
     """Identify the removable "empty" groups and categories for the one-click cleanup.
 
     An **empty leaf** is an active, non-system category that isn't an import-workspace pending
     label and is referenced by nothing the user has set up: no transaction (trashed or not) points
-    at it and no categorization rule targets it (a rule target is configured-but-unused, not
+    at it — a **split allocation** counts, see `_categories_referenced_by_transactions` — and no
+    categorization rule targets it (a rule target is configured-but-unused, not
     clutter). An **empty group** is an active, non-system group whose every active child is itself
     an empty leaf — so nothing survives the sweep — which includes childless groups. The Unassigned
     group and any other system rows are never touched. Returns (empty_groups, empty_leaves), each a
     list of {id, name[, parent_id]}.
+
+    The sweep removes what it finds **outright**, so a category it misreads as empty is destroyed
+    rather than parked — which is why the reference question is asked through the shared helper and
+    not re-derived here.
     """
-    referenced = {
-        row["category_id"]
-        for row in conn.execute(
-            "SELECT DISTINCT category_id FROM txn WHERE category_id IS NOT NULL"
-        ).fetchall()
-    }
+    referenced = _categories_referenced_by_transactions(conn)
     referenced |= {
         row["category_id"]
         for row in conn.execute(
@@ -349,8 +417,15 @@ def _rewrite_category_assignments_in_payload(payload: dict, affected_ids: set[st
 
 def _collect_delete_impact(conn, affected_ids: list[str]) -> dict:
     placeholders = ",".join("?" for _ in affected_ids)
+    # Counted through the split-expansion seam, and DISTINCT, so the figure is "transactions this
+    # delete would rewrite" — a row filed here only by one allocation is one of them, and a row with
+    # two allocations in the same category is still one transaction. `/usage-summary` counts the same
+    # way, so the number beside a category on the Categories page and the number in its delete
+    # dialog cannot disagree.
     txn_row = conn.execute(
-        f"SELECT COUNT(*) AS txn_count FROM txn WHERE category_id IN ({placeholders})",
+        f"""SELECT COUNT(DISTINCT t.id) AS txn_count
+            FROM   {txn_effective_sql(conn, expand=True)} t
+            WHERE  t.category_id IN ({placeholders})""",
         affected_ids,
     ).fetchone()
     rule_row = conn.execute(
@@ -507,7 +582,7 @@ def get_category_usage_summary():
             row["category_id"]: row["txn_count"]
             for row in conn.execute(
                 f"""
-                SELECT category_id, COUNT(*) AS txn_count
+                SELECT category_id, COUNT(DISTINCT t.id) AS txn_count
                 FROM {txn_effective_sql(conn, expand=True)} t
                 WHERE category_id IS NOT NULL
                 GROUP BY category_id
@@ -677,29 +752,11 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 raise HTTPException(status_code=400, detail="Replacement category cannot be deleted in the same operation")
             # Replacements are taxonomy maintenance, not manual recategorization, so the
             # affected transactions are unlocked for future rule-based updates.
-            conn.execute(
-                f"""
-                UPDATE txn
-                SET category_id = ?,
-                    category_overridden = 0,
-                    category_source = 'rule'
-                WHERE category_id IN ({placeholders})
-                """,
-                [replacement_category_id, *affected_ids],
-            )
+            _rewrite_branch_categorizations(conn, affected_ids, replacement_category_id)
         else:
             # Clearing a deleted branch also clears the manual override bit so later rule
             # runs are free to classify the now-uncategorized transactions again.
-            conn.execute(
-                f"""
-                UPDATE txn
-                SET category_id = NULL,
-                    category_overridden = 0,
-                    category_source = NULL
-                WHERE category_id IN ({placeholders})
-                """,
-                affected_ids,
-            )
+            _rewrite_branch_categorizations(conn, affected_ids, None)
 
         affected_id_set = set(affected_ids)
         # Import drafts store category ids inside JSON snapshots, so deletes have to
@@ -873,6 +930,20 @@ def hard_delete_category(category_id: str):
             raise HTTPException(
                 status_code=400,
                 detail="Cannot permanently remove a branch that still contains an active category",
+            )
+        # The same hazard one table over: `txn_split.category_id` is `ON DELETE SET NULL` too, so an
+        # allocation still filed here would be silently uncategorized — and a split's parts are the
+        # row's whole categorization, recorded nowhere else. Soft delete clears them, so reaching this
+        # means the branch was not emptied by that path: a restore of a backup predating it, or a
+        # write path that bypassed it. Refusing states that rather than destroying the allocation.
+        if conn.execute(
+            f"SELECT 1 FROM txn_split WHERE category_id IN ({placeholders})",
+            affected_ids,
+        ).fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot permanently remove a category that a split transaction still uses. "
+                       "Delete it again to move those allocations off it first.",
             )
         # FK cascades would handle these, but delete explicitly so the result is correct regardless
         # of foreign-key enforcement on the connection.

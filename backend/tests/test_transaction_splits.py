@@ -857,5 +857,156 @@ class SplitProtectionTests(SplitFixtureMixin, unittest.TestCase):
             self.assertEqual(remaining, 0)
 
 
+class SplitCategoryRemovalTests(SplitFixtureMixin, unittest.TestCase):
+    """Removing a category rewrites the allocations filed under it, and never destroys them.
+
+    `txn_split.category_id` is `ON DELETE SET NULL` just as `txn.category_id` is, and a split row's own
+    `category_id` is the stashed pre-split prior rather than its categorization — so every "is this
+    category in use" and "move what points at it" query has to read the allocations, not the column.
+    A miss here is a *wrong total*: the money leaves the bucket it was filed in and lands in
+    Uncategorized with nothing on screen saying so. Each test checks the money as well as the row,
+    since a rewrite that moved the pointer and lost the amount would satisfy the row assertions alone.
+    """
+
+    def _split_only_leaf(self, client, path):
+        """A ledger whose "Hardware Fixture" leaf is reached *only* through an allocation."""
+        account, groups, leaves = self._seed(path)
+        txn = self._add_txn(path, account=account, amount=100.0)
+        response = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+            {"category_id": leaves["Groceries Fixture"], "amount": 60.0},
+            {"category_id": leaves["Hardware Fixture"], "amount": 40.0},
+        ]})
+        self.assertEqual(response.status_code, 200, response.text)
+        return account, groups, leaves, txn
+
+    def _totals(self, client):
+        return {
+            r["category_name"]: r["total"]
+            for r in client.get(
+                "/api/transactions/summary/by-category", params={"month": "2026-04"}
+            ).json()
+        }
+
+    def _parts(self, path, txn):
+        conn = _connect(path)
+        rows = conn.execute(
+            "SELECT category_id, amount FROM txn_split WHERE txn_id = ? ORDER BY sort_order", (txn,)
+        ).fetchall()
+        conn.close()
+        return [(r["category_id"], r["amount"]) for r in rows]
+
+    def test_a_category_used_only_by_an_allocation_reads_as_in_use(self):
+        # The figure the delete dialog shows and the figure beside the category on the Categories page
+        # come from different queries; both have to see the allocation or the user is told it is safe.
+        with api_client() as (client, path):
+            _, _, leaves, _ = self._split_only_leaf(client, path)
+            hardware = leaves["Hardware Fixture"]
+
+            usage = client.get("/api/categories/usage-summary").json()[hardware]
+            self.assertEqual(usage["txn_count"], 1)
+            self.assertTrue(usage["is_in_use"])
+
+            preview = client.get(f"/api/categories/{hardware}/delete-preview").json()
+            self.assertEqual(preview["txn_count"], 1)
+            self.assertTrue(preview["is_in_use"])
+
+    def test_deleting_with_a_replacement_moves_the_allocation_to_it(self):
+        with api_client() as (client, path):
+            _, _, leaves, txn = self._split_only_leaf(client, path)
+            response = client.request(
+                "DELETE", f"/api/categories/{leaves['Hardware Fixture']}",
+                json={"replacement_category_id": leaves["Groceries Fixture"]},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+            self.assertEqual(
+                self._parts(path, txn),
+                [(leaves["Groceries Fixture"], 60.0), (leaves["Groceries Fixture"], 40.0)],
+            )
+            # Both allocations now name one category, so the whole purchase reports there — and the
+            # deleted leaf is gone from the report rather than lingering as a phantom bucket.
+            totals = self._totals(client)
+            self.assertEqual(totals["Groceries Fixture"], 100.0)
+            self.assertNotIn("Hardware Fixture", totals)
+
+    def test_deleting_with_no_replacement_clears_the_allocation_and_keeps_the_split(self):
+        # The row stays split with a part awaiting a category: un-splitting it instead would discard
+        # allocation work that exists nowhere else.
+        with api_client() as (client, path):
+            _, _, leaves, txn = self._split_only_leaf(client, path)
+            response = client.request("DELETE", f"/api/categories/{leaves['Hardware Fixture']}", json={})
+            self.assertEqual(response.status_code, 200, response.text)
+
+            self.assertEqual(self._parts(path, txn), [(leaves["Groceries Fixture"], 60.0), (None, 40.0)])
+            row = self._row(path, txn)
+            self.assertTrue(row["is_split"])
+            self.assertEqual(row["category_source"], "split")
+
+            totals = self._totals(client)
+            self.assertEqual(totals["Groceries Fixture"], 60.0)
+            self.assertEqual(totals["Uncategorized"], 40.0)
+
+    def test_a_split_rows_stashed_prior_is_repointed_without_losing_its_provenance(self):
+        # The prior is what un-splitting restores, so it follows the replacement — but it is not the
+        # row's categorization, and rewriting `category_source` with it would leave a row carrying
+        # allocations while claiming a rule had categorized it.
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(
+                path, account=account, amount=100.0, category=leaves["Hardware Fixture"]
+            )
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0},
+                {"category_id": leaves["Groceries Fixture"], "amount": 40.0},
+            ]})
+            client.request(
+                "DELETE", f"/api/categories/{leaves['Hardware Fixture']}",
+                json={"replacement_category_id": leaves["Salary Fixture"]},
+            )
+
+            row = self._row(path, txn)
+            self.assertEqual(row["category_id"], leaves["Salary Fixture"])
+            self.assertEqual(row["category_source"], "split")
+            self.assertEqual(row["category_overridden"], 1)
+            self.assertTrue(row["is_split"])
+
+    def test_empty_cleanup_spares_a_category_used_only_by_an_allocation(self):
+        # The sweep removes what it finds outright rather than parking it, so a leaf it misreads as
+        # empty is destroyed and its allocation nulled by the foreign key.
+        with api_client() as (client, path):
+            _, groups, leaves, txn = self._split_only_leaf(client, path)
+
+            preview = client.get("/api/categories/empty-cleanup-preview").json()
+            swept = {entry["id"] for entry in preview["categories"]}
+            self.assertNotIn(leaves["Hardware Fixture"], swept)
+            self.assertNotIn(leaves["Groceries Fixture"], swept)
+            # Nor the group holding them, which would take them with it.
+            self.assertNotIn(groups["Household Fixture"], {g["id"] for g in preview["groups"]})
+
+            client.post("/api/categories/empty-cleanup")
+            self.assertEqual(
+                self._parts(path, txn),
+                [(leaves["Groceries Fixture"], 60.0), (leaves["Hardware Fixture"], 40.0)],
+            )
+            self.assertEqual(self._totals(client)["Hardware Fixture"], 40.0)
+
+    def test_permanent_delete_refuses_while_an_allocation_still_points_at_the_branch(self):
+        # The state soft delete no longer produces, which is why the guard exists: a backup predating
+        # it, or any write path that bypassed it, restores an inactive category an allocation still
+        # names. Built directly, because the supported path is what was fixed.
+        with api_client() as (client, path):
+            _, _, leaves, txn = self._split_only_leaf(client, path)
+            hardware = leaves["Hardware Fixture"]
+            conn = _connect(path)
+            conn.execute("UPDATE category SET is_active = 0 WHERE id = ?", (hardware,))
+            conn.commit()
+            conn.close()
+
+            response = client.delete(f"/api/categories/{hardware}/forever")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("split", response.json()["detail"].lower())
+            self.assertEqual(self._parts(path, txn)[1], (hardware, 40.0))
+
+
 if __name__ == "__main__":
     unittest.main()
