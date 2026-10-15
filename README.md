@@ -2,7 +2,7 @@
 
 > Understand where the money actually went.
 
-Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized to answer the question: **what was spent, on what, and how does this period compare with others.** Luma exists because Mint is no longer and Monarch has some annoying issues. I had time so I decided to see if I could build a replacement.
+Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized to answer the question: **what was spent, on what, and how does this period compare with others.**
 
 ![The dashboard: a year of spending by group, with the monthly trend below](docs/images/dashboard.png)
 
@@ -28,13 +28,13 @@ Luma is a local-first personal finance tool. It collects transaction data from b
 
 ## What Luma is not
 
-Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that I don't use them:
+Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that there isn't a need for them at the moment:
 
 - **No budgeting.** Nothing to allocate, no envelopes, no per-category targets, no alert when a category runs hot.
 
 - **No net worth tracking.** Luma holds transactions, not balances — no asset and liability rollup, no account values over time.
 
-Anyone whose main requirement is either of these will be better served by some other app, or they can spend the time to add them to Luma if that feels worthwhile.
+Anyone whose main requirement is either of these will be better served by some other app, or they can spend the time to add them if that feels worthwhile.
 
 **Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
@@ -42,20 +42,20 @@ Anyone whose main requirement is either of these will be better served by some o
 
 ## What Luma is good at
 
-- **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. An import needs no planning and no arithmetic about which dates are already covered, overlapping files sort themselves out, and a categorization made once is carried forward instead of being made again.
+- **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. Overlapping imports sort themselves out, and rules exists to apply categorization or edits to incoming data. Rules can be derived from imported data which is already curated to help make migration less painful.
 
-- **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. They exist so that a question about a period can be answered without going through it row by row. Rules exist to automate this for incoming transactions.
+- **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. If they are useful, they are available.
 
-- **Surfacing potential exceptions** — a subscription that quietly went up, a bill that has not turned up, a charge that no longer matches the rule that used to catch it. Noticing these is what the reports and the recurring detection are for.
+- **Recurring series detection** — automatic and helpful to pick up unwanted subscriptions,  subscription that quietly went up, a missing bill, a charge outside the range of the rule that used to catch it.
 
-- **Staying out of the way** — if something needs changing, it can usually be changed right there: a category, a merchant name, whether a transaction counts towards a total at all.
+- **Staying out of the way** — if something needs changing, it can usually be changed right there without having to switch to a different page for editing.
 
 ## Quick start
 
 1. Download the build from the [releases page](https://github.com/jeff162/luma/releases), extract it to a directory, run `luma`and Luma will open in the browser.
 2. Enter a user name and choose **Load demo data**.
 3. Look around. The demo data is crafted so most features can be explored.
-4. When ready, choose **Clear demo data** in the banner at the top and bring in real data — see [Getting started with real data](#getting-started-with-real-data). Load demo data is on the Import page if it gets cleared by accident.
+4. When ready, use **Clear demo data** and bring in real data — see [Getting started with real data](#getting-started-with-real-data). Load demo data is on the Import page if it gets cleared by accident.
 5. [Installing Luma](#installing-luma) has the detail for each platform.
 
 ## Features
@@ -64,58 +64,53 @@ Anyone whose main requirement is either of these will be better served by some o
 
   ![The transaction register with a row's category picker open](docs/images/transactions.png)
 
-- **Comparing periods** — the same breakdown across months or years, so a change in spending is visible. Year-over-year and trend comparisons are built in.
+- **Comparing periods** — Investigate what contributes to changes in spending over time. Year-over-year and trend comparisons are built in.
 
-- **Analyzing cash flow** — a cash-flow view sits alongside the spending and income views and nets the two. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to. The trend is displayed as a run money in against money out with the net over the top. All of the graphs can be drilled into to investigate what is behind them.
+- **Analyzing cash flow** — the cash-flow view nets the spending and income views. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to. The graphs can be drilled into to investigate what is behind them.
 
   ![The cash-flow view: income on the left flowing out to spending groups and net saved on the right](docs/images/cash-flow.png)
 
   ![The cash-flow trend: each month's money in above the line and money out below it, with the net drawn across them](docs/images/cash-flow-trends.png)
 
-- **Getting data in without ceremony** — a CSV file exported from a bank or card, or a connected data source (e.g. SimpleFIN Bridge). Watch a folder is supported, so a downloaded file gets loaded the next time the app is open. Other input formats can be added as the need arises.
+- **Getting data in** — a CSV file exported from a bank or card or a connected data source (e.g. SimpleFIN Bridge). Folder watching loads downloaded files automatically to make using CSV exports easier.
 
-- **Filling in what a marketplace charge bought** — an Amazon or PayPal purchase typically arrives with just the marketplace name (eg. Amazon), an amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with detail information about the transaction. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending". Charges which represent multiple purchases can be split into multiple items for categorization purposes.
+- **Re-importing just works.** Importing overlapping exports or statements from a single source ignores the already imported transactions. Activity that arrives from a different source for the same account but with slight differences is flagged as a likely duplicate for review.
+
+- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data and as part of the categorization process.
+
+- **Filling in detail for marketplace purchases** — Amazon/PayPal purchases typically arrive with just the marketplace name, the amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with the transaction details. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending". Charges which represent multiple purchases can be split into multiple items for categorization purposes.
 
   ![The Amazon reconciliation report: each order matched to its card charge, and one charge no order accounts for](docs/images/amazon-reconciliation.png)
 
-- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
+- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them rather than filing the whole amount under one category. Each part can be labelled with what it covered. The Amazon reconcilliation report offers to split charges which contain multiple items to record details for the individual items.
 
-- **Re-importing just works.** A file that was already imported is recognized, and rows from an overlapping export or a statement in a different format are recognized and skipped. Activity that arrives from a different source for the same account but with slight differences is flagged as a likely duplicate for review.
-
-- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data in addition to being created as part of categorizing transactions.
-
-- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them rather than filing the whole amount under one category. Each part can be labelled with what it covered. Charges matched to an imported Amazon order which contains multiple is offers to fill in the details from the item detail.
-
-- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule. The Recurring page also reports if something unexpected happens: a charge that has not turned up, a price that has moved, a series that has only just appeared, and a bill that has drifted outside the amount range its rule matches on.
-
-  ![The Recurring page's Needs attention view: a missing subscription charge and two price changes](docs/images/recurring.png)
+- **Keep track of receipts** — receipt or invoice can be added to a transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt contains readable text so these are searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
 
 - **Searching the history** — filter and search across the whole ledger, including exclusion filters and cross-cutting tags.
 
-- **Reimbursable Expenses** — money that goes out and is expected back but is excluded from spending or income. The part that is owed is held in its own excluded category rather than counted as spending, and the repayment lands there too instead of arriving as income, so each month reports what it really spent and what is still outstanding is a running total. A repayment sometimes does not match the original purchase — tickets bought for one price and sold on for another — and what is left over gets categorized as either a real cost or gain. An expense can also be recorded before any repayment exists. Reimbursable expenses can have reminders to alert if they are not completed within the expected timeframe.
+- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule. Alerts are generated if something unexpected happens: a charge that has not turned up, a price that has moved, a series that has only just appeared, and a bill that has drifted outside the amount range its rule matches on.
 
-### Also included
+  ![The Recurring page's Needs attention view: a missing subscription charge and two price changes](docs/images/recurring.png)
 
-- **Multiple owners** — track personal and shared finances across several people in one ledger, with
-  owner as a reporting axis rather than a separate set of books.
+- **Reimbursable Expenses** — Expenses which are reimbursable can be flagged so the reimbursable portion is exluded from spending. When the reimbursement arrives it is paired with the expense and it is not treated as income. Alerts exist to indicate if reimbursement is not received within the expected timeframe.
 
-- **Backup and restore** — export the data anywhere, with optional encryption under a key of the
-  user's choosing.
 
-- **Tasks** — a running list of what needs attention, such as transactions nothing has categorized.
+
+- **Multiple owners** — track personal and shared finances across several people in one ledger, with owner as a reporting axis rather than a separate set of books.
+
+- **Backup and restore** — Backup the data, with optional encryption under a key of the user's choosing. Export the data as a csv file for moving to another app or using with another too.
+
+- **Tasks** — a running list of what needs attention, such as uncategorized transactions, issues with recurring payments, late reimbursements.
 
 - **Multiple users** — screen layout and preferences stored on a per-user basis.
 
-- **Runs locally or on the network** — a single-user desktop install, or a machine on the LAN that
- other devices reach.
+- **Runs locally or on the network** — a single-user desktop install, or a machine on the LAN that other devices reach.
 
 ## Design principles
 
-- **Local unless told otherwise.** Everything runs on the local machine against a local SQLite database. Luma makes no outbound request except for an action the user explicitly asked for — syncing a connected source, writing a backup to a chosen location, reading a CSV off a network drive. There is no telemetry, no analytics, and nothing that phones home. One edge case is that, when enabled, Luma will check for a new version which involves fetching the current release information periodically. Nothing about the installation is sent.
+- **Local unless told otherwise.** Everything runs on the local machine against a local SQLite database. Luma makes no outbound request except to support a user's request such as syncing a connected source, writing a backup to a network location, reading a CSV off a network drive. There is no telemetry, no analytics, nothing that phones home. One edge case is that, when enabled, Luma will check for a new version which involves fetching the current release information from GitHub. Nothing about the installation is sent.
 
-- **Curation compounds.** Effort spent categorizing should keep paying off on data that has not arrived yet, which is what rules are for.
-
-- **Correctable where it is visible.** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it or the editor which allows modifications.
+- **Luma's job is to be helpful, not be frustrating** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it or the editor which allows modifications.
 
 - **Reversible by default.** Most changes can be undone or adjusted later, and most removals go to a trash or an inactive list that can be restored from. The few that are permanent say so before they happen.
 
@@ -127,7 +122,7 @@ Luma is local-first by design, and the data stays local:
 
 - **No tracking** — Luma has no analytics, telemetry, or "phone home."
 
-- **Connections happen only when the user asks** — the app reaches the network only for user-driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
+- **Connections happen only when the user asks** — the app reaches the network only for user-driven actions, such as syncing transactions from a connected data source or reading or writing a file from/to a remote location.
 
 - **Optional check for new releases** — off by default. When enabled Luma periodically asks GitHub for the project's latest version number. The request says nothing about the installation or its data but as with any network request, GitHub sees the address it comes from.
 
@@ -139,21 +134,21 @@ What comes in, what stays and what leaves are all the user's decision. Luma is b
 
 Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
 
-- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the artifacts to protect. Consider using the **encrypted backup** (protected with a user-supplied key) for anything that leaves the machine if you feel it is sensitive data.
+- **Transaction data is stored unencrypted on disk.** The ledger lives unencrypted in a local SQLite database, so the database files — and any **unencrypted** backup — are the artifacts to protect. Access to the machine and its files are responsible for securing these assets if they are considered sensitive. **Encrypted backup** (protected with a user-supplied key) can be generted for anything that will leave the machine if you feel it is sensitive data.
 
-- **The optional sign-in password is network-access control.** It governs who on the local machine or network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk. It does not prevent someone from examining the database file directly with SQLite.
+- **The optional sign-in password is application access control.** It governs who on the local machine or network (for server installs) can reach a running instance. It does not encrypt the database, does not protect the files if someone copies them off the disk and does not prevent someone from examining the database file directly with SQLite. 2FA is available for use with sign-in passwords and a passkey can be used as well.
 
-- **Data-source tokens are one of the secrets Luma encrypts at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — it may or may not also be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources — the ledger itself is not affected.
+- **Data-source tokens are encrypted at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — Luma only uses read access but the token may be able to initiate transfers. Since they are sensitive, the tokens are kept in a passphrase-protected vault. The vault passphrase is separate from the sign-in password. Losing every way into the vault means re-linking the data sources — the ledger itself is not affected. Backups of data source tokens are encrypted using the vault passphrase of the user running the backup. It is safe to move these off the machine without further encryption.
 
-- **A household shares one vault, and each person has their own access.** A user requests access to the vault by setting a vault passphrase on an install that already has a vault passphrase. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction.
+- **A household shares one vault, and each person has their own access.** Initially the user who installs Luma is an administrator and can create the vault passphrase (and designate other administrative users). After the vault passphrase is created, a subseuqnt user requests access to the vault by creating their own vault passphrase which posts a request to the users who can unlock the valut to approve the request. Passphrases are  not revealed in the process.
 
-  - **Vault passphrases** are best kept in a password manager: they are complex, and losing every way in means the vault has to be rebuilt (transactions are not lost, just access to the data providers).
-  - **A passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need a secure connection. The desktop app's `localhost` address works or reaching Luma over a network uses HTTPS and a host name.)
-  - **A recovery code** can also be generated. It is worth keeping somewhere separate from the vault passphrase as if stored together in one password manager, losing access to the manager loses both. Printed or kept in separate secure storage is what makes it useful to have. Recovery codes are single-use.
+  - **Vault passphrases** are best kept in a password manager as they are supposed to be complex. Loosing vault access does not affect access to the transaction ledger, just to the data connections to refresh the account data. Loosing access means rebuilding these connections.
+  - **Passkeys** can be added as a more access method, so a fingerprint or face check replaces retyping a long passphrase. Browsers require a secure connection to use a Passkeys. The desktop app's `localhost` address works. This is part of why setting up HTTPS for a server configuration is desireable.
+  - **A recovery code** can if there is a secure location separate from where the vault passphrase as if stored. The recovery code is for when the passphrase is lost and if they are stored together, they are likely to get lost together. Printed or kept in separate secure storage is what makes it useful to have. A new recovery code is generated when it is used.
 
-- **If a database or backup is lost or copied by someone else** and data connections are configured, Luma's access should be revoked at each connected data source so the copied credentials cannot pull anything new or worse, be used to move money around if the credentials support money movement.. The place to start is **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked), which replaces the credentials where the provider allows it and lists the steps that remain. `SECURITY.md` has the full response.
+- **If a database or backup is lost or copied by someone else** and data connections are configured, Luma's access should be revoked at each connected data source so the copied credentials cannot pull anything new, or worse, be used to move money around. The process is described in **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked). `SECURITY.md` has the full response.
 
-- **Revoking works differently per provider, and the app says which applies.** Where a provider supports it (Plaid), **Disconnect** revokes the credential at the provider and the access genuinely ends. Some providers publish no way for another app to revoke a credential (SimpleFIN); there, Disconnect removes only Luma's copy, and revoking means signing in to the provider and doing it there. The disconnect confirmation states which of the two is about to happen, so a connection is never left live while appearing closed.
+  
 
 ## Installing Luma
 
@@ -163,13 +158,13 @@ Luma can also be deployed as a server to other computers in a household.
 That can be built around the same download or (for Linux) around a Docker container version — see
 [Running Luma as a server](#running-luma-as-a-server).
 
-| Platform | Download | Shape |
-| --- | --- | --- |
-| Windows | `luma-<version>-windows-x64.zip` | Portable |
-| Linux (x86-64) | `luma-<version>-linux-x64.tar.gz` | Portable |
-| Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.tar.gz` | Portable |
-| macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
-| macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
+| Platform                   | Download                            | Shape                |
+| -------------------------- | ----------------------------------- | -------------------- |
+| Windows                    | `luma-<version>-windows-x64.zip`    | Portable             |
+| Linux (x86-64)             | `luma-<version>-linux-x64.tar.gz`   | Portable             |
+| Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.tar.gz` | Portable             |
+| macOS (Apple Silicon)      | `luma-<version>-macos-arm64.dmg`    | Drag to Applications |
+| macOS (Intel)              | `luma-<version>-macos-x64.dmg`      | Drag to Applications |
 
 **The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run.
 
@@ -244,13 +239,13 @@ Instructions for the last two, and what each connecting computer does on its fir
 `luma --server` starts Luma in server mode and creates a name on the network, `luma.local`, to reach the app. It can be
 set up with or without HTTPS, which is what encrypts the connection between the server and the other computers.
 
-| | With HTTPS | Without HTTPS |
-| --- | --- | --- |
-| Address the other computers open | `https://luma.local` | `http://luma.local:8010` |
-| What crosses the network | encrypted | readable by anyone on the network, sign-in passwords and vault passphrase included |
-| Passkeys | work | do not work |
-| Setting up a data provider | from any computer | only from a browser on the server itself |
-| Setup | Caddy runs beside Luma to provide HTTPS. Each computer installs the server's certificate once, so its browser trusts the server | nothing further |
+|                                  | With HTTPS                                                                                                                      | Without HTTPS                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Address the other computers open | `https://luma.local`                                                                                                            | `http://luma.local:8010`                                                           |
+| What crosses the network         | encrypted                                                                                                                       | readable by anyone on the network, sign-in passwords and vault passphrase included |
+| Passkeys                         | work                                                                                                                            | do not work                                                                        |
+| Setting up a data provider       | from any computer                                                                                                               | only from a browser on the server itself                                           |
+| Setup                            | Caddy runs beside Luma to provide HTTPS. Each computer installs the server's certificate once, so its browser trusts the server | nothing further                                                                    |
 
 The two restrictions have different causes. The passkey requirement is from the browser and cannot be worked around. The restriction around setting up a data provider comes from Luma, because secrets need to move between the user and the server and these should not pass over a network unencrypted. Syncing is still allowed from any browser, since that does not involve secrets moving over the local network.
 
@@ -262,7 +257,9 @@ On a Linux host, if Docker with the Compose plugin is available, this is a strai
 
 1. Save `docker-compose.yml` from the [releases page](https://github.com/jeff162/luma/releases) into a
    folder of its own.
+
 2. Create a file named `.env` in the folder containing: `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+
 3. Start it, and read the address other computers use from the log:
 
    ```sh
@@ -292,12 +289,12 @@ pulling the published one.
 A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with
 `--reset-password`:
 
-| Installation | Command |
-| --- | --- |
-| Windows or Linux download | `luma --reset-password`, in the folder holding the program |
-| macOS | `/Applications/Luma.app/Contents/Resources/server/luma --reset-password` |
-| Docker | `docker compose exec app python -m backend.desktop --reset-password` |
-| Source checkout | `backend/venv/bin/python -m backend.desktop --reset-password` |
+| Installation              | Command                                                                  |
+| ------------------------- | ------------------------------------------------------------------------ |
+| Windows or Linux download | `luma --reset-password`, in the folder holding the program               |
+| macOS                     | `/Applications/Luma.app/Contents/Resources/server/luma --reset-password` |
+| Docker                    | `docker compose exec app python -m backend.desktop --reset-password`     |
+| Source checkout           | `backend/venv/bin/python -m backend.desktop --reset-password`            |
 
 It lists the accounts to choose from and asks for the new password, and is safe to run while Luma is
 running. The account chosen ends up as an active administrator with two-factor sign-in off, and current
@@ -331,10 +328,10 @@ from source; the downloads carry their own runtime.)
 
 ## Tech stack
 
-| Layer | Technology |
-| --- | --- |
-| Backend | Python 3.12 / FastAPI / SQLite |
-| Frontend | React 19 / Vite / Recharts |
+| Layer     | Technology                         |
+| --------- | ---------------------------------- |
+| Backend   | Python 3.12 / FastAPI / SQLite     |
+| Frontend  | React 19 / Vite / Recharts         |
 | Bank data | Plaid or SimpleFIN (both optional) |
 
 ## Documentation
