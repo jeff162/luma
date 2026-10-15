@@ -27,7 +27,6 @@ from backend.services.recurring_detection import (
     maybe_auto_scan,
     payee_keys_for_ids,
     scan_and_store,
-    scan_imported_payees,
 )
 
 
@@ -115,7 +114,7 @@ class RecurringDetectionTests(unittest.TestCase):
     def _scan_scoped(self, payee_keys):
         with self._use_db_path():
             with get_db() as conn:
-                return scan_imported_payees(conn, set(payee_keys))
+                return scan_and_store(conn, payee_keys=set(payee_keys))
 
     def _watermark(self):
         with self._use_db_path():

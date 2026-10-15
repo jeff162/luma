@@ -68,12 +68,6 @@ scale — rather than by feature.
   funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
   ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
   from stored raw values, and the deferred column-centric mapping-screen rework.
-- [write-lock-contention.md](write-lock-contention.md) — **cause established, nothing started
-  (2026-10-15).** Writers queue until one waits out the 15s busy timeout: a category edit holds its
-  transaction across a recurring rescan (6.07s of a 6.29s hold running no SQL), and read paths write an
-  attention cache, which supplies the queue. Surfaces as a flaky browser lane and sits on every category
-  edit in the running app. Records the two fixes, the three candidates already measured and ruled out,
-  and why the obvious instrument gives the wrong answer.
 - [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
   (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
   it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers
@@ -138,10 +132,16 @@ scale — rather than by feature.
   [online-categorizer.md](online-categorizer.md) and should be designed with it), phase 4 (an approved
   itemization pre-filling a split), the **sizing assumption** and the signal that would falsify it, and
   the space-reclamation view — plus why originals are never sunset on a timer.
-- [refactor-audits.md](refactor-audits.md) — **recurring process; the method moved 2026-09-02** to `CONTRIBUTING.md` → *Auditing for duplication*. Periodically hunt duplication /
-  shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
-  run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
-  deferred candidates (row-patch util, the four drill panels), and the next scope (**backend audit**).
+- [refactor-audits.md](refactor-audits.md) — **two recurring audit processes.** (1) Duplication /
+  shotgun-surgery smells — the method moved 2026-09-02 to `CONTRIBUTING.md` → *Auditing for
+  duplication*; the file records the first run's shipped items (`getFormControlStyle` in Dashboard,
+  `TransactionListToolbar`, `useTags()`), the deferred candidates (row-patch util, the four drill
+  panels) and the next scope (**backend audit**). (2) **Doc conformance** — does the code do what
+  `data-model.md` says it does, claim by claim, with a five-way verdict per claim. The first run
+  (2026-10-15) covered twelve of the doc's seventeen sections; what is carried is the four it did not
+  reach — **import batches and profiles, watched import folders, transaction links and Amazon order
+  import, backups** — plus the method and the two obstacles, of which the load-bearing one is that a
+  green suite says nothing about conformance.
 - [help-topic-search.md](help-topic-search.md) — **parked, not started (2026-07-25).** A search box on the
   `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
   use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
@@ -278,6 +278,7 @@ at the first public release, so it cannot point at anything completed before tha
 
 | Path | Disposed | Fed | File kept? |
 | --- | --- | --- | --- |
+| `docs/backlog/write-lock-contention.md` | 2026-10-15 | **architecture** (*Database concurrency*) — a write and its recurring rescan divided at the commit, and a read endpoint never holding the lock past its own write; **data-model** (*When a scan runs*) — the owed rescan, recorded inside the write and settled by any scan, with its generation and overdue rules; **transient-failures** entry 3 — the lane's stall, which outlived the fix, and the instrument with its two traps | **No** — deleted. Both defects shipped; the symptom that led to it is now an open question in the register rather than parked work |
 | `docs/backlog/import-source-header-evolution.md` | 2026-10-09 | **data-model** — the fingerprint as the last imported file's layout (learned on import, older file takes it back, recognized sources excluded), the capture panel's blind spot that let an added column go uncaptured, and the single `ParsedFile.fingerprint` definition; **ui-patterns** (*Import mapping persistence*) — continuing past the header warning applies the source's mapping rather than re-inferring, and the one thing it drops | **No** — deleted the day it was written. Written as a plan, built in the same session; nothing in it was left unstarted and no code ever cited it |
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |

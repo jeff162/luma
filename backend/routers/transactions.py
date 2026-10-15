@@ -19,7 +19,7 @@ from decimal import Decimal
 import re
 import uuid
 from backend.db.database import compact_if_worthwhile, get_db
-from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
+from backend.services.recurring_detection import owe_recurring_rescan, payee_keys_for_ids, settle_owed_rescans
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
 from backend.services.account_groups import effective_account_id_sql
@@ -1488,7 +1488,7 @@ def create_transaction(body: TransactionCreate):
         # The recurring detector's membership cache is only rewritten by a scan, and none of its
         # triggers cover a row appearing outside an import — so a hand-entered charge would never join
         # the series it belongs to without this.
-        rescan_edited_transactions(conn, [txn_id])
+        owe_recurring_rescan(conn, [txn_id])
         row = conn.execute(
             """SELECT t.id, t.date, t.amount, t.display_name, t.category_id, t.notes,
                       COALESCE(c.name, '') AS category_name
@@ -1496,6 +1496,7 @@ def create_transaction(body: TransactionCreate):
                WHERE  t.id = ?""",
             (txn_id,),
         ).fetchone()
+    settle_owed_rescans()
     return dict(row)
 
 
@@ -1576,7 +1577,7 @@ def update_amount(txn_id: str, body: AmountUpdate):
         # Membership, the expected-amount band, and which charge on a crowded date represents a series
         # are all read off the amount, and only a scan rewrites them — the same reason the manual insert
         # calls this.
-        rescan_edited_transactions(conn, [txn_id])
+        owe_recurring_rescan(conn, [txn_id])
         updated = conn.execute(
             """SELECT t.id, t.date, t.amount, t.display_name, t.category_id, t.notes,
                       COALESCE(c.name, '') AS category_name
@@ -1584,6 +1585,7 @@ def update_amount(txn_id: str, body: AmountUpdate):
                WHERE  t.id = ?""",
             (txn_id,),
         ).fetchone()
+    settle_owed_rescans()
     return dict(updated)
 
 
@@ -1623,13 +1625,14 @@ def override_category(txn_id: str, body: CategoryOverride):
         )
         # Category is part of a derived series' identity, so a manual recategorization can move a row
         # between series — or out of one. Membership is a cache only a scan rewrites (see
-        # rescan_edited_transactions), and nothing else re-runs after a hand edit. Gated on the category
+        # owe_recurring_rescan), and nothing else re-runs after a hand edit. Gated on the category
         # actually changing: a re-save of the same category is a common no-op (the picker fires on every
         # confirm) and a scan costs a pass over the whole detection window.
         if body.category_id != txn["category_id"]:
-            rescan_edited_transactions(conn, [txn_id])
+            owe_recurring_rescan(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
         followed_ids = following_refund_ids(conn, [txn_id])
+    settle_owed_rescans()
     # `followed_ids`: the refunds that moved with this row's category (services/refund_links.py), which
     # the client refetches — its patch covers only the row it edited.
     return {"ok": True, **resolved, "followed_ids": followed_ids}
@@ -1885,7 +1888,8 @@ def update_merchant(txn_id: str, body: dict):
             (name, txn_id),
         )
         if changed:
-            rescan_edited_transactions(conn, [txn_id], prior_payee_keys=prior)
+            owe_recurring_rescan(conn, [txn_id], prior_payee_keys=prior)
+    settle_owed_rescans()
     return {"ok": True}
 
 @router.patch("/{txn_id}/notes")
@@ -1942,9 +1946,10 @@ def clear_override(txn_id: str):
             (txn_id,),
         )
         if had_category:
-            rescan_edited_transactions(conn, [txn_id])
+            owe_recurring_rescan(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
         followed_ids = following_refund_ids(conn, [txn_id])
+    settle_owed_rescans()
     return {"ok": True, **resolved, "followed_ids": followed_ids}
 
 
@@ -2236,8 +2241,9 @@ def bulk_update_transactions(body: BulkUpdateRequest):
         # Once for the whole batch, never per row: a scan loads the entire detection window before it
         # filters by payee, so a per-row call would repeat that load for every row selected.
         if touches_recurring:
-            rescan_edited_transactions(conn, target_ids, prior_payee_keys=prior_keys)
+            owe_recurring_rescan(conn, target_ids, prior_payee_keys=prior_keys)
         followed_ids = following_refund_ids(conn, target_ids) if "set_category" in kinds else []
+    settle_owed_rescans()
     # `skipped_splits` counts rows a set_category action left alone because they are split, and
     # `skipped_claimed` those it left alone because a reimbursement claims money in them. Both are
     # reported *and* kept out of the total: "updated 40" when 3 of them kept their old categorization is

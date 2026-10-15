@@ -19,7 +19,7 @@ account, so the pool's breadth changes only cost, never outcome — which is why
 to ship unoptimized.
 
 **What changed is who pays it.** The scan was originally only on the import/sync path, where 125 ms is
-invisible. It is now on the path of **every category edit** (`rescan_edited_transactions` keeps
+invisible. It is now on the path of **every category edit** (`owe_recurring_rescan` keeps
 membership from going stale when a recategorization moves a row out of its series), and the cost grows
 with the ledger rather than with the edit.
 

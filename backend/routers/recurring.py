@@ -33,7 +33,9 @@ from backend.services.recurring_detection import (
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
     maybe_auto_scan,
+    owe_full_recurring_scan,
     scan_and_store,
+    settle_owed_rescans,
     transfer_review,
 )
 from backend.services.recurring_signals import (
@@ -215,7 +217,8 @@ def decide_pair(body: PairDecision):
             "INSERT OR REPLACE INTO transfer_pair_decision (paying_txn_id, receiving_txn_id) VALUES (?, ?)",
             (body.paying_txn_id, body.receiving_txn_id or None),
         )
-        return {"ok": True, "scan": scan_and_store(conn)}
+        owe_full_recurring_scan(conn)
+    return {"ok": True, "scan": settle_owed_rescans()}
 
 
 class RestoreDecision(BaseModel):
@@ -229,7 +232,8 @@ def restore_decision(body: RestoreDecision):
     made."""
     with get_db() as conn:
         conn.execute("DELETE FROM transfer_pair_decision WHERE paying_txn_id = ?", (body.paying_txn_id,))
-        return {"ok": True, "scan": scan_and_store(conn)}
+        owe_full_recurring_scan(conn)
+    return {"ok": True, "scan": settle_owed_rescans()}
 
 
 # Signal routes are declared ahead of the `/{series_id}` ones so "signals" is never read as a series id.

@@ -28,14 +28,14 @@ from backend.services.categorizer import (
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.rule_range_drift import find_range_drift
 from backend.services import signal_dismissals
-from backend.app_logging import log_error
 from backend.services.recurring_detection import (
     CADENCES,
     link_series_members,
     _normalize_payee,
+    owe_recurring_rescan,
     payee_keys_for_ids,
-    rescan_edited_transactions,
     resolve_txn_name,
+    settle_owed_rescans,
 )
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
@@ -183,34 +183,6 @@ def _rule_matches_txn(rule, txn) -> bool:
     # Thin wrapper over the shared service predicate so rule apply and rule-backed recurring membership
     # can never diverge on "which rows a rule owns". `txn` here carries import_evidence_json when present.
     return rule_matches_row(rule, txn)
-
-
-def _rescan_recurring(txn_ids, prior_payee_keys=frozenset()) -> None:
-    """Re-derive recurring membership for the payees a rule apply just touched.
-
-    Every path that writes a transaction's category has to do this, because membership is a cache only a
-    scan rewrites — and a rule apply is the *bulk* version of the hand edit the transaction endpoints
-    already cover, so it is the path where a stale reading is most likely and least visible. Two things
-    go wrong without it. The quiet half is the one hand edits taught: the row's menu opens the series it
-    has left, the new series' drill-down never gains it, and a missed-charge finding about it stays open.
-    The sharp half is what a category change can *reveal* — a charge that only pairs with its counterpart
-    once both legs are money movement leaves a phantom payee series behind, sitting in *Needs attention*
-    beside a Confirm button that would make the wrong reading permanent (a confirmed series is preserved
-    by every later scan and goes on claiming rows).
-
-    Runs after the write transaction has committed, in its own connection, and never lets a detection
-    hiccup fail the apply that already succeeded — the same shape sync and recategorize use. The scan
-    itself is scoped to the payees involved and loads the detection window once for the batch, so the
-    cost is one scan per request rather than one per row.
-    """
-    ids = list(txn_ids or [])
-    if not ids and not prior_payee_keys:
-        return
-    try:
-        with get_db() as conn:
-            rescan_edited_transactions(conn, ids, prior_payee_keys=prior_payee_keys)
-    except Exception as err:
-        log_error(f"[rules] recurring rescan failed: {err}", exc_info=err)
 
 
 def _rule_affected_txn_ids(conn, rule) -> list[str]:
@@ -870,7 +842,8 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         result, rescan_ids, rescan_prior_keys = update_rule_core(
             conn, rule_id, body, on_existing=on_existing, reconcile=reconcile,
         )
-    _rescan_recurring(rescan_ids, prior_payee_keys=rescan_prior_keys)
+        owe_recurring_rescan(conn, rescan_ids, prior_payee_keys=rescan_prior_keys)
+    settle_owed_rescans()
     return result
 
 
@@ -1018,7 +991,7 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
             affected_ids.update(_rule_affected_txn_ids(conn, post_rule))
         if affected_ids:
             # Read before the write: a reconcile re-derives renames as well as categories, so a row
-            # can leave the payee group it is in now (see `_rescan_recurring`).
+            # can leave the payee group it is in now (see `owe_recurring_rescan`).
             rescan_ids = list(affected_ids)
             rescan_prior_keys = payee_keys_for_ids(conn, rescan_ids)
             recategorize_all(conn, txn_ids=rescan_ids, retain_unmatched=False)
@@ -1034,7 +1007,8 @@ def apply_rule(rule_id: str, preserve_manual: bool = False):
             conn, rule_id, preserve_manual=preserve_manual, skipped_splits=skipped_splits,
             capture_prior_keys=prior_keys,
         )
-    _rescan_recurring(affected_ids, prior_payee_keys=prior_keys)
+        owe_recurring_rescan(conn, affected_ids, prior_payee_keys=prior_keys)
+    settle_owed_rescans()
     # `transaction_ids` lets an in-place caller reconcile exactly the rows the rule changed (re-fetch them
     # by id and merge them back) instead of re-running its scoped query, which would drop the now-
     # recategorized rows out of the view.
@@ -1106,7 +1080,8 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
         affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=True, skipped_splits=skipped_splits, capture_prior_keys=prior_keys,
         )
-    _rescan_recurring(affected_ids, prior_payee_keys=prior_keys)
+        owe_recurring_rescan(conn, affected_ids, prior_payee_keys=prior_keys)
+    settle_owed_rescans()
     return {
         "rule_id": rule_id,
         column: new_bound,
@@ -1127,7 +1102,8 @@ def delete_rule(rule_id: str, reconcile: bool = False):
     rule's rows, so it never touches categorizations left behind by other rules."""
     with get_db() as conn:
         reverted, prior_keys = _trash_rule(conn, rule_id, reconcile=reconcile)
-    _rescan_recurring(reverted, prior_payee_keys=prior_keys)
+        owe_recurring_rescan(conn, reverted, prior_payee_keys=prior_keys)
+    settle_owed_rescans()
     return {"ok": True}
 
 
@@ -1203,9 +1179,8 @@ def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> tuple[list[st
     survive for restore; the categorizer/matcher-identity already ignore a `deleted_at` row. A rule-backed
     recurring series is dropped (it has no matcher without its rule) and re-created on restore.
 
-    Returns the rows a `reconcile` reverted and the payee keys they carried beforehand, for the caller's
-    recurring rescan — which the caller runs once, after the transaction commits, however many rules the
-    batch trashed."""
+    Returns the rows a `reconcile` reverted and the payee keys they carried beforehand, for the recurring
+    rescan the caller owes once, however many rules the batch trashed."""
     affected: list[str] = []
     prior_keys: set = set()
     if reconcile:
@@ -1221,7 +1196,7 @@ def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> tuple[list[st
     conn.execute("UPDATE category_rule SET deleted_at = datetime('now') WHERE id = ? AND deleted_at IS NULL", (rule_id,))
     if reconcile and affected:
         # Before the write: reverting a row re-derives its rename as well as its category, so the payee
-        # group it sits in now may not be the one it ends up in (see `_rescan_recurring`).
+        # group it sits in now may not be the one it ends up in (see `owe_recurring_rescan`).
         prior_keys = payee_keys_for_ids(conn, affected)
         recategorize_all(conn, txn_ids=affected, retain_unmatched=False)
     return affected, prior_keys
@@ -1360,9 +1335,10 @@ def cleanup_rules(body: RuleCleanupBody):
             reverted.extend(rule_reverted)
             prior_keys |= rule_prior_keys
             trashed += 1
-    # One scan for the batch, not one per rule: a scoped scan loads the whole detection window before it
-    # filters, so a per-rule version would repeat that load for every rule in the cleanup.
-    _rescan_recurring(reverted, prior_payee_keys=prior_keys)
+        # Owed once for the batch, not once per rule, so the cleanup settles with one scan rather than one
+        # per rule (see `owe_recurring_rescan`).
+        owe_recurring_rescan(conn, reverted, prior_payee_keys=prior_keys)
+    settle_owed_rescans()
     return {"trashed": trashed}
 
 

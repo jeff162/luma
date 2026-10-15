@@ -45,6 +45,7 @@ from backend import app_log_file, runtime_config, transport
 from backend.services import crypto_service, proxy_certificate, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
+from backend.services.recurring_detection import overdue_owed_rescan_count
 from backend.services.recurring_signals import compute_signals
 from backend.services.rule_range_drift import find_range_drift
 from backend.services.reimbursements import due_reminders
@@ -482,6 +483,9 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "severity":    SEVERITY_WARNING,
             })
 
+        owed_rescan_task = _owed_rescan_task(conn)
+        if owed_rescan_task:
+            tasks.append(owed_rescan_task)
         tasks.extend(_recurring_signal_tasks(conn))
         tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
@@ -604,6 +608,26 @@ def _recurring_signal_tasks(conn) -> list[dict]:
             "severity":    spec["severity"],
         })
     return tasks
+
+
+def _owed_rescan_task(conn) -> dict | None:
+    """Recurring detection known to be behind: a rescan an edit or import owed that no scan has settled
+    (`docs/data-model.md` → *When a scan runs*). Every series, member and finding read off those payees may
+    be stale until one does, and a scan from the Recurring page settles everything owed."""
+    overdue = overdue_owed_rescan_count(conn)
+    if not overdue:
+        return None
+    return {
+        "id":          "recurring_rescan_owed",
+        "title":       "Recurring detection is out of date",
+        "description": "Transactions were changed and recurring detection has not caught up with them, so "
+                       "some series, their members and their findings may be out of date. Scan for "
+                       "recurring brings them up to date.",
+        "count":       overdue,
+        "link":        "/recurring",
+        "link_label":  "Open Recurring",
+        "severity":    SEVERITY_WARNING,
+    }
 
 
 def _rule_range_drift_tasks(conn) -> list[dict]:

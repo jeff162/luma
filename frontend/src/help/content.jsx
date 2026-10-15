@@ -2129,7 +2129,9 @@ export const HELP_TOPICS = [
           A <strong>scan</strong> looks across recent history for transactions which arrive on a regular rhythm.
           The signal is <em>regularity of timing</em>, not frequency. A punctual once-a-year tax is
           recognized; a busy merchant paid at random is not. The scan runs on
-          its own after an import, and can be run on demand from the Recurring page.
+          its own after an import or an edit to a transaction, and can be run on demand from the Recurring
+          page. If one of those automatic scans cannot finish, a task reports that recurring detection is
+          out of date until a later scan catches up.
         </p>
         <p>
           Amount is a hint, not a gate, unless matching by amount is turned on (see <em>Which transactions
@@ -3907,6 +3909,7 @@ export const HELP_TOPICS = [
           <li> transactions which need categorization</li>
           <li>a newly detected recurring series</li>
           <li>a change in the amount for a suspected member of an existing recurring series</li>
+          <li>recurring detection that has not caught up with changed transactions</li>
           <li>a problem fetching transactions from a data connection</li>
           <li>an error recorded in the log file</li>
         </ul>

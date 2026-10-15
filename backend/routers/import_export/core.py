@@ -48,7 +48,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend import app_config
-from backend.app_logging import log_error, log_warning
+from backend.app_logging import log_warning
 from backend.db.database import (SHARED_OWNER_ID, compact_database, compact_if_worthwhile, get_db,
                                  get_tenant_workflow_state, set_tenant_workflow_state)
 from backend.db.demo_data import is_demo_data_loaded
@@ -69,7 +69,7 @@ from backend.services.categorizer import (
     effect_rule_ids,
     bump_rule_effect_dates,
 )
-from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
+from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 from backend.services.import_evidence import (
     EVIDENCE_ROLE_CATEGORICAL,
     EVIDENCE_ROLE_DESCRIPTIVE,
@@ -2965,22 +2965,12 @@ def _run_uploaded_import(text: str, cfg: dict, filename: str, progress_id: Optio
     with tracked_import(progress_id) as on_progress:
         result = run_import_core(text, cfg, filename=filename, on_progress=on_progress)
 
-    # A completed import is new data, so refresh recurring detection now instead of waiting for a manual
-    # scan. Use the cheap scoped path: reprocess only the payees this batch touched, not the whole ledger
-    # (the daily app-load catch-up is the global safety net). Triggered here, not in run_import_core,
-    # because the core also runs inside the demo loader's own transaction; the user-import path is where a
-    # scan belongs. A detection hiccup must never fail an import that already committed, hence the guard.
+    # A completed import is new data, so settle the recurring rescan it owes now instead of waiting for a
+    # manual scan: scoped to the payees this batch touched, not the whole ledger. Settled here, not in
+    # run_import_core, because the core also runs inside the demo loader's own transaction, which scans
+    # once at its end.
     if result.get("imported") and result.get("batch_id"):
-        try:
-            with get_db() as conn:
-                ids = [
-                    r["id"] for r in conn.execute(
-                        "SELECT id FROM txn WHERE import_batch_id = ?", (result["batch_id"],)
-                    ).fetchall()
-                ]
-                scan_imported_payees(conn, payee_keys_for_ids(conn, ids))
-        except Exception as e:
-            log_error(f"[import] recurring auto-scan failed: {e}", exc_info=e)
+        settle_owed_rescans()
 
     return result
 
@@ -4020,6 +4010,13 @@ def run_import_parsed(
                     VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL)
                 """, (batch_id, csv_val, mapped_id or None, row_ct))
 
+        # New rows owe their payees a recurring rescan, recorded with the rows themselves; the caller settles
+        # it once the import has committed (see `owe_recurring_rescan`).
+        if batch_id:
+            owe_recurring_rescan(conn, [
+                r["id"] for r in conn.execute("SELECT id FROM txn WHERE import_batch_id = ?", (batch_id,)).fetchall()
+            ])
+
         account_skipped = sum(skip_counts.values())
 
     # Cross-account soft-flag sweep — catches matches between this batch's rows and existing rows on
@@ -4696,6 +4693,9 @@ def list_batches():
             refresh_batch_totals(conn, [row["id"] for row in batch_rows])
         except sqlite3.OperationalError as exc:
             log_warning(f"[import] batch-history reconcile skipped (transient): {exc}")
+        # Ends the reconcile's write, if it made one, before the listing below: everything after this is
+        # reads, and left open the transaction would hold the write lock for the whole listing.
+        conn.commit()
         # Full completed history, unbounded. A prior global `LIMIT 50` here silently dropped older imports
         # — and because the cap was global-most-recent, an actively-fed source could push another source's
         # cards (and their Undo/rename/review affordances) entirely out of the window with no indication.

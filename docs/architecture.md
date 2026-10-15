@@ -337,15 +337,16 @@ shapes: `null` (unset, falls back to a page's registered default), the `{start:n
   manual and suppressed ones. It is one function (`scan_and_store`) with an optional `payee_keys` scope,
   called three ways:
   - **On demand:** `POST /recurring/scan`.
-  - **Scoped** (`scan_imported_payees`): a completed CSV import or sync reprocesses only the payees the
-    batch touched. That is correct because detection groups by payee and `reconcile_series` does not
-    disturb out-of-scope rows. A scoped pass does not stamp the watermark, since it cannot see
-    cross-payee effects. `rescan_edited_transactions` uses the same path from the transaction edit
-    endpoints and the rule apply/reconcile paths, because membership is a cache that any category write
-    can invalidate; bulk edits scan once per batch.
+  - **Scoped**, as an owed rescan: an import, a sync, a transaction edit or a rule apply records the
+    payees it touched in `recurring_rescan_owed` inside its own write transaction, then
+    `settle_owed_rescans` reprocesses only those payees after the commit. That is correct because
+    detection groups by payee and `reconcile_series` does not disturb out-of-scope rows. A scoped pass
+    does not stamp the watermark, since it cannot see cross-payee effects; bulk edits owe once per batch.
+    Every scan settles what is owed within its scope, so a failed settle is retried by the next one
+    (`data-model.md` → *When a scan runs*).
   - **Full catch-up** (`POST /recurring/auto-scan`): app load runs a global scan only when the `db_meta`
-    watermark says one is due (never scanned, or older than the daily interval). It also hosts the
-    payee-key re-derivation repair.
+    watermark says one is due (never scanned, or older than the daily interval), and settles any owed
+    rescan that is overdue. It also hosts the payee-key re-derivation repair.
 
 - **A money movement between two tracked accounts is one series that owns both legs.** `scan_and_store`
   runs a transfer pass first: `transfer_pairs.pair_money_movements` pairs rows structurally (same amount
@@ -1002,12 +1003,18 @@ wait or fail for its duration. In particular:
 
 - **No provider call inside a write transaction.** Sync fetches with nothing open, applies, commits, and
   repeats per page.
-- **Ingestion and the analysis after it are separate stages, divided at the commit.** The duplicate
+- **A write and the analysis after it are separate stages, divided at the commit.** The duplicate
   sweep, the recurring rescan and the PayPal funding pairing each run after the ingest commit, in their
-  own connections, guarded so a failure cannot fail the ingest. A long read inside a write transaction
-  blocks writers too, because the lock is held from the first write to the commit.
-- **A read endpoint's best-effort write is wrapped** so lock contention degrades instead of returning
-  500 (`backend/routers/import_export/core.py`).
+  own connections, guarded so a failure cannot fail the ingest. A transaction edit or rule apply and its
+  recurring rescan are divided the same way, with the debt recorded inside the write so a failed rescan
+  is not lost. A long read inside a write transaction blocks writers too, because the lock is held from
+  the first write to the commit.
+- **A read endpoint never holds the write lock past its own write.** SQLite takes the lock for a DELETE
+  or UPDATE even when it matches nothing, and the caller's transaction then holds it until the block
+  ends — the whole of a listing that only reads after it. So a read path's maintenance write runs only
+  when a read has found something to change, and a cache it writes commits at once
+  (`services/reconciliation_attention.py`, the batch history's reconcile). That write is also wrapped,
+  so lock contention degrades instead of returning 500 (`backend/routers/import_export/core.py`).
 
 **A file import holds its write transaction from first row to commit**: there is nothing to fetch
 between rows, and a failed import leaves nothing behind. Its progress therefore cannot be read from the

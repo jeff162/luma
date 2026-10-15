@@ -69,7 +69,7 @@ from backend.services.duplicate_detection import (
     evaluate_duplicate,
     sweep_import_suspects,
 )
-from backend.services.recurring_detection import payee_keys_for_ids, run_auto_scan, scan_imported_payees
+from backend.services.recurring_detection import owe_full_recurring_scan, owe_recurring_rescan, settle_owed_rescans
 from backend.services.review_flagging import owners_not_flagging
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
@@ -927,6 +927,15 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     )
 
     with get_db() as conn:
+        # The rows each commit below makes durable are owed their recurring rescan in that same commit, so
+        # a sync that stops partway still leaves the debt for the rows it kept (see `owe_recurring_rescan`).
+        owed_through = 0
+
+        def _owe_touched() -> None:
+            nonlocal owed_through
+            owe_recurring_rescan(conn, touched_ids[owed_through:])
+            owed_through = len(touched_ids)
+
         if connection_id:
             connections = conn.execute(f"{_SELECT_CONNECTIONS} WHERE id = ?", (connection_id,)).fetchall()
         elif provider:
@@ -1531,6 +1540,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # Nothing may be held open across the fetch below. This is the commit the restructure
                     # exists for; on the first pass it also flushes the in-progress marker so the rest of
                     # the app can see that a sync is running.
+                    _owe_touched()
                     conn.commit()
                     # Re-derived per page, from coverage this loop just committed, because that is what a
                     # walking adapter resumes from. Built once per connection it would freeze at the depths
@@ -1637,6 +1647,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     _apply_removed(ext_id)
                 # Account discovery talks to the provider, so the drain's last page has to be committed
                 # before it — same rule as the fetch above.
+                _owe_touched()
                 conn.commit()
                 discovered += _discover_new_provider_accounts(
                     connection, adapter, app_config, credential, seen_unknown, connection_advisories,
@@ -1804,6 +1815,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                  1 if info["skipped"] and not info["count"] else 0),
             )
 
+        _owe_touched()
+
         # Persist the sync diagnostics. Written unconditionally: a diagnostic that only records while a
         # flag is on cannot explain a failure that already happened — enabling the flag afterwards yields
         # an empty table and the user has to reproduce the problem to see anything, which is backwards for
@@ -1845,16 +1858,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     if cards_touched or touched_ids:
         pair_after_ingest(get_db())
 
-    # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
-    # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
-    # (the daily app-load catch-up is the global safety net). Runs after the sync transaction commits, in
-    # its own connection, and never lets a detection hiccup fail the sync itself.
+    # New/advanced rows change the recurring picture, so settle the rescan they are owed now rather than
+    # waiting for a manual scan: scoped to the payees this sync touched, not the whole ledger.
     if touched_ids:
-        try:
-            with get_db() as conn:
-                scan_imported_payees(conn, payee_keys_for_ids(conn, touched_ids))
-        except Exception as e:
-            log_error(f"[sync] recurring auto-scan failed: {e}", exc_info=e)
+        settle_owed_rescans()
 
     # `historical_complete` is the client's stop-polling signal: true once no connection has more to deliver
     # *right now*. A paused connection counts as nothing-more-right-now even though its history is
@@ -2091,17 +2098,15 @@ def clear_sync_diagnostics():
 def recategorize():
     with get_db() as conn:
         n = recategorize_all(conn)
-    # Recategorization can move categories and rename payees (clean_name) across the whole ledger, both of
-    # which reshape recurring grouping. It is also the one path that renames *existing* series members —
-    # the case the scoped import/sync passes deliberately leave to a full rebuild (they skip payee-key
-    # re-derivation). So run a FULL scan here, not a scoped one: it re-detects and re-derives keys. Guarded
-    # so a detection hiccup never fails the recategorize that already committed.
+        # Recategorization can move categories and rename payees (clean_name) across the whole ledger, both
+        # of which reshape recurring grouping. It is also the one path that renames *existing* series
+        # members — the case the scoped import/sync passes deliberately leave to a full rebuild (they skip
+        # payee-key re-derivation). So it owes a FULL scan, not a scoped one: it re-detects and re-derives
+        # keys.
+        if n:
+            owe_full_recurring_scan(conn)
     if n:
-        try:
-            with get_db() as conn:
-                run_auto_scan(conn)
-        except Exception as e:
-            log_error(f"[recategorize] recurring auto-scan failed: {e}", exc_info=e)
+        settle_owed_rescans()
     return {"updated": n}
 
 

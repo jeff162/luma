@@ -21,11 +21,9 @@ import io
 import json
 import zipfile
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
@@ -34,7 +32,7 @@ from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.money_movement import PAYPAL_ACCOUNT_TYPE, is_money_movement_type
 from backend.services.paypal_statement import STATEMENT_HEADERS, Statement, StatementError, is_pdf, read_statement
-from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
+from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.restore_state import require_no_pending_restore
 from backend.services.source_capabilities import SOURCE_PAYPAL_STATEMENT
 
@@ -332,17 +330,7 @@ async def import_paypal_statements(files: list[UploadFile] = File(...), assignme
             "rejected": result.get("rejected_count", 0),
             "enriched": result.get("enriched_count", 0),
         })
-        _scan_recurring(result.get("batch_id"))
+    # Each statement's import owed its payees a recurring rescan; one scan settles them all.
+    if batches:
+        settle_owed_rescans()
     return {"batches": batches, "skipped": skipped, "unrecognized_files": unrecognized, "unreadable_files": unreadable}
-
-
-def _scan_recurring(batch_id: Optional[str]) -> None:
-    """Refresh recurring detection for the payees a statement brought in, as a CSV import does."""
-    if not batch_id:
-        return
-    try:
-        with get_db() as conn:
-            ids = [r["id"] for r in conn.execute("SELECT id FROM txn WHERE import_batch_id = ?", (batch_id,)).fetchall()]
-            scan_imported_payees(conn, payee_keys_for_ids(conn, ids))
-    except Exception as e:
-        log_error(f"[import] recurring auto-scan failed: {e}", exc_info=e)

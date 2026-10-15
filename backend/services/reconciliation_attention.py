@@ -14,7 +14,12 @@ value cached by earlier code is never served to the code that replaced it.
 
 Two scopes share the mechanism: a count per import batch, cached on the batch row, and a value derived
 from the whole ledger — for a report that is not about one file, such as the PayPal reconciliation —
-cached in `db_meta`. Neither cache write touches a table with a trigger, so a write never invalidates itself."""
+cached in `db_meta`. Neither cache write touches a table with a trigger, so a write never invalidates itself.
+
+**A cache write commits at once when the caller had no transaction open**, which is the case on the read
+paths that ask. It is a write, so it takes the write lock, and left to the caller's block the lock would be
+held across every read after it — the rest of a history listing or a Tasks poll. A caller already
+mid-write keeps its transaction whole, since committing it would split the caller's own work."""
 
 from __future__ import annotations
 
@@ -32,6 +37,13 @@ def recon_epoch(conn: sqlite3.Connection) -> int:
         return 0
 
 
+def _store(conn: sqlite3.Connection, sql: str, params: tuple) -> None:
+    held = conn.in_transaction
+    conn.execute(sql, params)
+    if not held:
+        conn.commit()
+
+
 def batch_attention(conn: sqlite3.Connection, batch_id: str, compute: Callable[[sqlite3.Connection, str], int]) -> int:
     """A batch's attention count, from its cache when the cache is current."""
     epoch = recon_epoch(conn)
@@ -42,7 +54,8 @@ def batch_attention(conn: sqlite3.Connection, batch_id: str, compute: Callable[[
             and row["recon_attention_count"] is not None:
         return int(row["recon_attention_count"])
     count = compute(conn, batch_id)
-    conn.execute(
+    _store(
+        conn,
         "UPDATE import_batch SET recon_attention_count = ?, recon_epoch = ? WHERE id = ?",
         (count, epoch, batch_id),
     )
@@ -60,7 +73,8 @@ def ledger_cached(conn: sqlite3.Connection, key: str, compute: Callable[[sqlite3
     if isinstance(cached, dict) and cached.get("epoch") == epoch and "value" in cached:
         return cached["value"]
     value = compute(conn)
-    conn.execute(
+    _store(
+        conn,
         "INSERT INTO db_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, json.dumps({"epoch": epoch, "value": value})),
     )

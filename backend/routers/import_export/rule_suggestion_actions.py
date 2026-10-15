@@ -22,8 +22,8 @@ every *pre-existing* rule it wrote to (`rules._rule_snapshot`), including one a 
 so an edit to a rule the review does not own is reversed along with everything else. Like
 `restore_categorization_rows`, undo trusts the payload it is handed.
 
-The recurring rescan runs after commit, outside the transaction, over every row an action changed —
-membership is a cache only a scan rewrites (see `rules._rescan_recurring`).
+Every row an action changed is owed a recurring rescan inside the transaction, settled after commit —
+membership is a cache only a scan rewrites (see `recurring_detection.owe_recurring_rescan`).
 
 Scopes work as in the rest of the family (`core._RuleSuggestionReviewScope`): a route names its scope and
 hands the opener to the one implementation.
@@ -40,7 +40,6 @@ from backend.routers.rules import (
     RuleCreate,
     RuleUpdate,
     _apply_rule_to_existing,
-    _rescan_recurring,
     _restore_rule_snapshot,
     _restore_trashed_rule,
     _trash_rule,
@@ -52,6 +51,7 @@ from backend.routers.transactions import (
     restore_categorization_rows,
     settle_rejected_suggestion_rows,
 )
+from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 
 from .core import (
     RULE_SUGGESTION_REVIEW_STATUSES,
@@ -198,7 +198,7 @@ class _ActionEffects:
 
 def _run_action(open_scope: _ReviewScopeOpener, perform) -> dict:
     """Open the scope, let `perform(conn, scope, effects)` make every write, then persist the review state and
-    answer with its undo payload — all in one transaction, with the recurring rescan after commit."""
+    answer with its undo payload — all in one transaction, with the recurring rescan settled after commit."""
     with get_db() as conn:
         scope = open_scope(conn)
         effects = _ActionEffects(scope.review_state)
@@ -206,7 +206,8 @@ def _run_action(open_scope: _ReviewScopeOpener, perform) -> dict:
         undo = effects.undo_payload(scope.review_state)
         review_summary = summarize_rule_suggestion_review(scope.review_state)
         scope.save(conn)
-    _rescan_recurring(effects.rescan_ids, prior_payee_keys=effects.rescan_prior_keys)
+        owe_recurring_rescan(conn, effects.rescan_ids, prior_payee_keys=effects.rescan_prior_keys)
+    settle_owed_rescans()
     return {
         "ok": True,
         "undo": undo,
@@ -706,7 +707,8 @@ def _undo_rule_suggestion_action(open_scope: _ReviewScopeOpener, body: RuleSugge
                     review_state[key][suggestion_id] = value
         review_summary = summarize_rule_suggestion_review(review_state)
         scope.save(conn)
-    _rescan_recurring(restored_ids)
+        owe_recurring_rescan(conn, restored_ids)
+    settle_owed_rescans()
     return {"ok": True, "review_summary": review_summary, "generated_at": review_state.get("generated_at")}
 
 

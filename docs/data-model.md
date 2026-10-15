@@ -919,13 +919,25 @@ membership is the rule's matches, through the same predicate rule apply uses
 
 `scan_and_store` takes an optional `payee_keys` scope.
 
-- **Scoped** (`scan_imported_payees`): a completed import or sync reprocesses only the payees it
-  touched. It does not stamp the watermark and does not re-derive payee keys.
-- **Every path that writes a category, merchant name, date or trash state re-evaluates the payees it
-  touched** (`rescan_edited_transactions`, and `rules._rescan_recurring` for the rule apply, reconcile
-  and trash paths). The scope is the payees the rows belong to now plus those they belonged to before,
-  so the caller reads the prior keys before it writes. A no-op edit skips the scan and a bulk edit scans
-  once, because a scan loads the whole detection window before it filters by payee.
+- **Scoped**: a completed import or sync reprocesses only the payees it touched. It does not stamp the
+  watermark and does not re-derive payee keys.
+- **Every path that writes a category, merchant name, date, amount, trash state or new rows owes the
+  payees it touched a rescan** (`owe_recurring_rescan`), and a path whose effect no payee list can name
+  (a global recategorize, a transfer-pair answer) owes a full one (`owe_full_recurring_scan`). The scope
+  is the payees the rows belong to now plus those they belonged to before, so the caller reads the prior
+  keys before it writes. A no-op edit owes nothing and a bulk edit owes once, because a scan loads the
+  whole detection window before it filters by payee.
+- **The debt is recorded inside the write's transaction and settled after it commits**
+  (`settle_owed_rescans`), in a connection of its own. A scan held inside the write held the write lock
+  for all of its reading. The debt row in `recurring_rescan_owed` is what makes the split safe: a scan
+  that fails, or a process that stops before it runs, leaves the debt standing, and **every scan settles
+  what is owed within its scope**, so the next one retries it. A failed settle never fails the write it
+  follows. `generation` moves each time a payee is owed again, and a scan deletes only the generation it
+  read, so a write that lands during a scan keeps its own debt.
+- **An overdue debt** (older than `OWED_RESCAN_OVERDUE_MINUTES`) has lost its settling scan. App load
+  settles it, and Tasks reports it, because the series, members and findings read off those payees are
+  known to be stale until a scan runs. A younger debt is left to the scan already settling it. The table
+  is derived state: not backed up, and wiped with the ledger.
 - **A payee series holding a paired row is always in scope** (`_payee_keys_holding`), because a
   movement's two legs sit in different payee groups and an edit to one changes the other.
 - **Full** (`run_auto_scan`): app load calls `maybe_auto_scan`, which runs a global scan when none has

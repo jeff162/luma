@@ -1157,6 +1157,9 @@ def _wipe_user_data_tables(conn):
     # After txn (which references recurring_series via recurring_series_id), before category/account
     # (which recurring_series references).
     conn.execute("DELETE FROM recurring_series")
+    # Owed rescans name payees of the ledger being replaced. Not backed up (derived state), so the
+    # restored ledger starts owing nothing; the daily full scan covers a debt the backup was taken with.
+    conn.execute("DELETE FROM recurring_rescan_owed")
     conn.execute("DELETE FROM import_batch_duplicate")
     conn.execute("DELETE FROM import_batch_rejected_row")
     conn.execute("DELETE FROM import_batch_account")

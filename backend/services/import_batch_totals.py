@@ -65,27 +65,39 @@ def refresh_batch_totals(conn, batch_ids, *, drop_emptied_sync_cards: bool = Fal
     from backend.routers.sync import SYNC_SOURCE_KIND
 
     for batch_id in sorted({str(value).strip() for value in (batch_ids or []) if str(value or "").strip()}):
-        conn.execute(
+        # Probed with a read first because a DELETE or UPDATE takes the write lock even when it matches
+        # nothing, and from then on the caller's transaction holds it.
+        if conn.execute(
             """
-            DELETE FROM import_batch_account
+            SELECT 1 FROM import_batch_account
             WHERE batch_id = ?
-              AND was_skipped = 0
               AND account_id IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM account a WHERE a.id = import_batch_account.account_id)
+            LIMIT 1
             """,
             (batch_id,),
-        )
-        conn.execute(
-            """
-            UPDATE import_batch_account
-            SET account_id = NULL
-            WHERE batch_id = ?
-              AND was_skipped = 1
-              AND account_id IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM account a WHERE a.id = import_batch_account.account_id)
-            """,
-            (batch_id,),
-        )
+        ).fetchone():
+            conn.execute(
+                """
+                DELETE FROM import_batch_account
+                WHERE batch_id = ?
+                  AND was_skipped = 0
+                  AND account_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM account a WHERE a.id = import_batch_account.account_id)
+                """,
+                (batch_id,),
+            )
+            conn.execute(
+                """
+                UPDATE import_batch_account
+                SET account_id = NULL
+                WHERE batch_id = ?
+                  AND was_skipped = 1
+                  AND account_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM account a WHERE a.id = import_batch_account.account_id)
+                """,
+                (batch_id,),
+            )
 
         batch = conn.execute(
             "SELECT row_count, skipped_count, deduped_count, ignored_count, updated_count, source_kind, "

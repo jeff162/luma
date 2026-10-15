@@ -21,12 +21,14 @@ The contract is *re-evaluation*, not re-attachment: a row that still belongs whe
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 import uuid
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import (
@@ -39,7 +41,9 @@ from backend.routers.transactions import (
     update_merchant,
 )
 from backend.routers.rules import apply_rule, delete_rule
-from backend.services.recurring_detection import scan_and_store
+from backend.routers.tasks import _owed_rescan_task
+from backend.services import recurring_detection
+from backend.services.recurring_detection import maybe_auto_scan, owe_recurring_rescan, scan_and_store
 from backend.services.recurring_signals import compute_signals
 
 
@@ -359,3 +363,70 @@ class RecurringRescanOnEditTests(unittest.TestCase):
         # were in must not still be holding them.
         self.assertEqual(self._series_of(ids[0]) is None or self._members_of("Town of Harborline") == 8,
                          self._members_of("Town of Harborline") == 8)
+
+    # --- a rescan that cannot run -------------------------------------------------------------------
+    # The edit commits first and the rescan runs after it, so a rescan that fails cannot take the edit
+    # with it. What it must not do is vanish: the debt is recorded with the edit and stays until a scan
+    # settles it.
+
+    def _owed(self):
+        with self._use_db_path():
+            with get_db() as conn:
+                return {r["payee_key"]: r["generation"] for r in conn.execute(
+                    "SELECT payee_key, generation FROM recurring_rescan_owed").fetchall()}
+
+    def test_an_edit_whose_rescan_fails_is_saved_and_its_rescan_stays_owed(self):
+        self._monthly(payee="Town of Harborline", category="Water", count=8, amount=-95.00)
+        stray = self._txn(payee="Town of Harborline", category="Water", amount=-3400.00,
+                          when=date.today() - timedelta(days=5))
+        self._scan()
+        self.assertIsNotNone(self._series_of(stray), "precondition: the scan claimed the stray charge")
+        with self._use_db_path():
+            with get_db() as conn:
+                # A recent full scan, so only the debt can make the app-load catch-up run one.
+                conn.execute("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('recurring_last_scan_at', "
+                             "datetime('now'))")
+
+        locked = sqlite3.OperationalError("database is locked")
+        with self._use_db_path(), mock.patch.object(recurring_detection, "scan_and_store", side_effect=locked):
+            override_category(stray, CategoryOverride(category_id=self.cats["Property Tax"]))
+        with self._use_db_path():
+            with get_db() as conn:
+                saved = conn.execute("SELECT category_id FROM txn WHERE id = ?", (stray,)).fetchone()["category_id"]
+        self.assertEqual(saved, self.cats["Property Tax"], "the edit stands although its rescan failed")
+        self.assertEqual(list(self._owed()), ["town of harborline"])
+
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_rescan_owed SET owed_at = datetime('now', '-1 hour')")
+                maybe_auto_scan(conn)
+        self.assertEqual(self._owed(), {})
+        self.assertNotEqual(self._series_of(stray), "Town of Harborline")
+
+    def test_a_scan_settles_only_the_debt_it_read(self):
+        # A write that owes the same payee again while a scan is running wrote rows that scan may not
+        # have read, so the scan must leave the newer debt standing for the next one.
+        ids = self._monthly(payee="Streamly", category="Misc", count=6, amount=-15.99)
+        with self._use_db_path():
+            with get_db() as conn:
+                owe_recurring_rescan(conn, ids)
+        load_pool = recurring_detection._load_pool
+
+        def load_then_owe_again(conn, window_months):
+            pool = load_pool(conn, window_months)
+            with get_db() as other:
+                owe_recurring_rescan(other, ids[:1])
+            return pool
+
+        with self._use_db_path(), mock.patch.object(recurring_detection, "_load_pool", load_then_owe_again):
+            self._scan()
+        self.assertEqual(self._owed(), {"streamly": 2})
+
+    def test_a_debt_left_standing_is_reported_on_tasks(self):
+        ids = self._monthly(payee="Streamly", category="Misc", count=2, amount=-15.99)
+        with self._use_db_path():
+            with get_db() as conn:
+                owe_recurring_rescan(conn, ids)
+                self.assertIsNone(_owed_rescan_task(conn), "a debt the settling scan is about to clear is not news")
+                conn.execute("UPDATE recurring_rescan_owed SET owed_at = datetime('now', '-1 hour')")
+                self.assertIsNotNone(_owed_rescan_task(conn))

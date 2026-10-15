@@ -39,6 +39,8 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from typing import NamedTuple
 
+from backend.app_logging import log_error
+from backend.db.database import get_db
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql
 from backend.services.transfer_pairs import (
@@ -93,8 +95,8 @@ _WINDOW_MONTHS_DEFAULT = 25
 # the catch-up treats "never scanned" as due and populates both the series and the watermark.
 _LAST_SCAN_META_KEY = "recurring_last_scan_at"
 
-# The app-load catch-up rescans at most this often. Ingest triggers (import/sync) bypass this gate — data
-# demonstrably changed — and restamp the watermark, so the catch-up won't then redundantly re-run.
+# The app-load catch-up rescans at most this often. Ingest and edit triggers bypass this gate with scoped
+# scans of their own, which do not restamp the watermark: only a full scan does.
 _AUTO_SCAN_MIN_INTERVAL_HOURS = 20.0
 
 
@@ -1084,8 +1086,8 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     `payee_keys` scopes the rebuild. `None` is the full global scan. A set restricts *every* step —
     detection, series partitioning, auto-series removal, reconciliation, and candidate insertion — to
     those payee keys, leaving every other payee's series and membership exactly as they are. That is the
-    cheap per-import/sync path (`scan_imported_payees`): reprocess only the payees a batch touched instead
-    of the whole ledger. It is correct because detection groups by payee (so a scoped pool yields the same
+    cheap path every owed rescan takes (`settle_owed_rescans`): reprocess only the payees a write touched
+    instead of the whole ledger. It is correct because detection groups by payee (so a scoped pool yields the same
     per-payee result) and `reconcile_series` never disturbs out-of-scope rows. The one thing a scoped pass
     skips is the payee-key re-derivation below — a global normalization-repair step the daily full-scan
     catch-up owns — so a scoped pass trusts the stored keys.
@@ -1097,7 +1099,13 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     a recurring rule attaches to its series right away without stamping membership through every insert
     path. **Payee series holding a paired row**: pairing is decided by the money, so a movement's two legs
     normally sit in different payee groups, and an edit to one leg's group changes what the other's may
-    claim — the scope is widened to those groups below."""
+    claim — the scope is widened to those groups below.
+
+    **Every scan settles the rescans owed within its scope** (see `owe_recurring_rescan`), so a scoped
+    scan takes the owed payees into its scope, and one owing a full scan becomes one."""
+    owed = _owed_rescans(conn)
+    if payee_keys is not None and owed:
+        payee_keys = None if _FULL_SCAN_OWED in owed else set(payee_keys) | set(owed)
     full_pool, ref_now = _load_pool(conn, window_months)
     # Movements between two tracked accounts are detected first, and always over the FULL pool — the
     # same exception rule-backed series get, and for the same reason: a movement's identity is its two
@@ -1272,6 +1280,7 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         claimed.update(member_ids)
         inserted += 1
 
+    _settle_owed_rescans(conn, owed)
     return {
         "detected": len(candidates),
         "transfers": len(transfer_candidates),
@@ -1314,60 +1323,116 @@ def payee_keys_for_ids(conn: sqlite3.Connection, ids: list[str]) -> set[str]:
     return keys
 
 
-def scan_imported_payees(conn: sqlite3.Connection, payee_keys: set[str], *,
-                         window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict:
-    """Cheap per-import/sync scan: rebuild recurring series for only the payees a batch touched, via the
-    scoped `scan_and_store`. Every other payee is left untouched. This is the "the rule is the cache" fast
-    path — new charges for an existing series are matched and its next_due advanced, and a new series among
-    the touched payees is detected, without re-scanning the whole ledger.
+# --- Owed rescans ---------------------------------------------------------------------------------------
+# Every path that writes something a series is read off (a category, a name, a date, an amount, trash
+# state, new rows) owes the payees it touched a rescan, because membership is a cache only a scan rewrites.
+# Left stale, an edited row stays linked to a series it no longer belongs to: its menu opens the old series,
+# the new series' drill-down never gains it, a missed-charge finding about it stays open, and a phantom
+# series can sit in *Needs attention* beside a Confirm that would make the wrong reading permanent.
+#
+# **The debt is recorded in the write's own transaction, and the scan runs after it commits.** A scan is
+# seconds of reading, and run inside the write it held the write lock for all of them, which is what
+# starved other requests into "database is locked". Recording the debt durably is what makes the split
+# safe: a scan that fails, or a process that stops before the scan runs, leaves the debt in
+# `recurring_rescan_owed` rather than losing it, and whichever scan runs next settles it — every scan
+# drains what is owed within its scope (`scan_and_store`). A debt that outlives
+# `OWED_RESCAN_OVERDUE_MINUTES` is one whose settling scan failed or never ran: the app-load catch-up retries
+# it, and Tasks reports it, since recurring results are then known to be out of date.
+#
+# A row's `generation` moves each time its payee is owed again, so a scan that read the debt before a
+# later write settles only what it read, never the later write's claim.
 
-    Deliberately does NOT stamp the full-scan watermark: a scoped pass cannot see cross-payee effects
-    (dedupe merges, a normalization change) or repair stale payee keys, so the daily app-load catch-up
-    must still run a global `run_auto_scan`. Scoped passes give immediacy between those daily rebuilds.
+# Owes a full scan rather than one payee's. Not a payee key: `_normalize_payee` keeps only letters, digits
+# and spaces.
+_FULL_SCAN_OWED = "*"
 
-    Anomaly/forecast signals deliberately do NOT hang off this function, although it was long marked as
-    their natural home. They are derived on read instead (`services/recurring_signals.py`): a finding
-    stored here would be orphaned within a day (an auto series is re-minted with a new id on every scan)
-    and stale on the next recategorize, trash or membership override. Nothing about the signals needs a
-    hook in the ingest path."""
-    if not payee_keys:
-        return {"detected": 0, "inserted": 0, "preserved": 0, "removed_auto": 0, "resumed": 0}
-    return scan_and_store(conn, window_months=window_months, payee_keys=payee_keys)
+# A debt is ordinarily settled within seconds of its write committing, so one still standing after this long
+# means the settling scan failed or never ran. Younger debts are left alone: their own settling scan is
+# running, and a second one beside it would only repeat its work.
+OWED_RESCAN_OVERDUE_MINUTES = 2
 
 
-# Bulk-edit paths call this once per request, never once per row: a scan loads the whole detection
-# window before it filters by payee, so per-row calls would repeat that load for every row in a batch.
-def rescan_edited_transactions(conn: sqlite3.Connection, txn_ids, *,
-                               prior_payee_keys=frozenset(),
-                               window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict:
-    """Re-evaluate recurring membership after the user edits transactions by hand.
+def _owe(conn: sqlite3.Connection, payee_keys) -> None:
+    conn.executemany(
+        """INSERT INTO recurring_rescan_owed (payee_key, generation, owed_at) VALUES (?, 1, datetime('now'))
+           ON CONFLICT(payee_key) DO UPDATE SET generation = generation + 1""",
+        [(key,) for key in sorted(payee_keys)],
+    )
 
-    Membership is a cache only a scan rewrites, so before this existed an edit could leave a row linked
-    to a series it no longer belonged to — recategorizing a bill still showed it under its old series,
-    the series' own drill-down never gained it, and a missed-charge signal about it stayed open. None of
-    the existing triggers covered the case: import and sync scan the payees they touched, a global
-    recategorize scans everything, and the app-load catch-up is watermark-gated to roughly a day.
 
-    The scope is the payees the edited rows belong to *now*, plus any they belonged to *before* — a
-    rename moves a row between payee groups, so the group it left has to be reconsidered too, and the
-    caller captures those keys before it writes. A category edit needs no prior key: the key is derived
-    from the name, so both the old and the new series for that payee are already in scope.
+# Bulk paths call this once per request, never once per row: the settling scan loads the whole detection
+# window before it filters by payee, and one call per request keeps it to one scan.
+def owe_recurring_rescan(conn: sqlite3.Connection, txn_ids, *, prior_payee_keys=frozenset()) -> None:
+    """Record, inside the caller's write transaction, that the payees of `txn_ids` need a rescan.
+
+    The scope is the payees the rows belong to *now*, plus any they belonged to *before* — a rename moves
+    a row between payee groups, so the group it left has to be reconsidered too, and the caller captures
+    those keys before it writes. A category edit needs no prior key: the key is derived from the name, so
+    both the old and the new series for that payee are already in scope.
 
     Re-evaluation is the whole contract, not re-attachment: a row that still belongs where it was stays
-    put, and one that no longer matches is released for whatever else claims it.
+    put, and one that no longer matches is released for whatever else claims it. The caller runs
+    `settle_owed_rescans` once its transaction has committed.
     """
-    keys = set(prior_payee_keys) | payee_keys_for_ids(conn, [i for i in txn_ids if i])
-    if not keys:
-        return {"detected": 0, "inserted": 0, "preserved": 0, "removed_auto": 0, "resumed": 0}
-    return scan_imported_payees(conn, keys, window_months=window_months)
+    _owe(conn, set(prior_payee_keys) | payee_keys_for_ids(conn, [i for i in txn_ids if i]))
+
+
+def owe_full_recurring_scan(conn: sqlite3.Connection) -> None:
+    """Record, inside the caller's write transaction, that the whole ledger needs a rescan — for a write
+    whose effect is not confined to payees it can name."""
+    _owe(conn, {_FULL_SCAN_OWED})
+
+
+def _owed_rescans(conn: sqlite3.Connection, *, overdue_only: bool = False) -> dict[str, int]:
+    sql = "SELECT payee_key, generation FROM recurring_rescan_owed"
+    params: tuple = ()
+    if overdue_only:
+        sql += " WHERE owed_at <= datetime('now', ?)"
+        params = (f"-{OWED_RESCAN_OVERDUE_MINUTES} minutes",)
+    return {r["payee_key"]: r["generation"] for r in conn.execute(sql, params).fetchall()}
+
+
+def _settle_owed_rescans(conn: sqlite3.Connection, owed: dict[str, int]) -> None:
+    conn.executemany(
+        "DELETE FROM recurring_rescan_owed WHERE payee_key = ? AND generation = ?", list(owed.items()),
+    )
+
+
+def _run_owed(conn: sqlite3.Connection, owed: dict[str, int], window_months: int) -> dict:
+    if _FULL_SCAN_OWED in owed:
+        return run_auto_scan(conn, window_months=window_months)
+    return scan_and_store(conn, window_months=window_months, payee_keys=set(owed))
+
+
+def settle_owed_rescans(*, window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict | None:
+    """Run the rescans owed, in a connection of its own, after the caller's write has committed.
+
+    Never raises: the write it follows has already succeeded and must not be reported as failed. A failure
+    leaves the debt standing for the next scan to settle, and is logged for whoever investigates why.
+    Returns the scan summary, or None when nothing was owed or the scan failed."""
+    try:
+        with get_db() as conn:
+            owed = _owed_rescans(conn)
+            if not owed:
+                return None
+            return _run_owed(conn, owed, window_months)
+    except Exception as err:
+        log_error(f"[recurring] owed rescan failed: {err}", exc_info=err)
+        return None
+
+
+def overdue_owed_rescan_count(conn: sqlite3.Connection) -> int:
+    """How many owed rescans have outlived `OWED_RESCAN_OVERDUE_MINUTES` — what Tasks reports."""
+    return len(_owed_rescans(conn, overdue_only=True))
 
 
 def maybe_auto_scan(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT,
                     min_interval_hours: float = _AUTO_SCAN_MIN_INTERVAL_HOURS) -> dict:
-    """Scan only if one is *due*: never scanned (a fresh, or pre-recurring/older-schema, database) or the
-    last scan is older than `min_interval_hours`. This is the app-load catch-up, so detection stays
-    current even when data arrives outside the import/sync paths (a restore, another tab, a schema
-    migration). Returns the scan summary, or ``{"skipped": True}`` when a recent scan makes it a no-op."""
+    """Scan only if one is *due*: never scanned (a fresh, or pre-recurring/older-schema, database), the
+    last scan is older than `min_interval_hours`, or an owed rescan is overdue. This is the app-load
+    catch-up, so detection stays current even when data arrives outside the import/sync paths (a restore,
+    another tab, a schema migration) and a rescan whose settling scan failed is retried on the next load.
+    Returns the scan summary, or ``{"skipped": True}`` when a recent scan makes it a no-op."""
     row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (_LAST_SCAN_META_KEY,)).fetchone()
     last = row["value"] if row else None
     if last:
@@ -1377,5 +1442,7 @@ def maybe_auto_scan(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MO
             (last, min_interval_hours),
         ).fetchone()["due"]
         if not due:
+            if _owed_rescans(conn, overdue_only=True):
+                return _run_owed(conn, _owed_rescans(conn), window_months)
             return {"skipped": True, "last_scan_at": last}
     return run_auto_scan(conn, window_months=window_months)

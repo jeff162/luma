@@ -53,7 +53,7 @@ from backend.authorization import require_admin_or_local
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
-from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
+from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.restore_state import require_no_pending_restore
 from backend.time_utils import utcnow_iso
 
@@ -573,7 +573,9 @@ def scan_watched_sources(*, profile_id: Optional[str] = None) -> dict:
             "imported": imported, "parked": parked, "purged": len(purged),
         })
 
-    _rescan_recurring_for(imported_batch_ids)
+    # Each import owed its payees a recurring rescan; one scan settles them all.
+    if imported_batch_ids:
+        settle_owed_rescans()
     with get_db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO db_meta (key, value) VALUES (?, ?)",
@@ -581,25 +583,6 @@ def scan_watched_sources(*, profile_id: Optional[str] = None) -> dict:
         )
         counts = attention_counts(conn)
     return {"sources": summaries, "attention": counts}
-
-
-def _rescan_recurring_for(batch_ids: list[str]) -> None:
-    """New data means recurring detection is behind, exactly as it is after an interactive import. Kept
-    out of the import itself for the same reason `POST /run` keeps it out: a detection hiccup must
-    never fail an import that already committed."""
-    if not batch_ids:
-        return
-    try:
-        with get_db() as conn:
-            placeholders = ",".join("?" * len(batch_ids))
-            ids = [
-                row["id"] for row in conn.execute(
-                    f"SELECT id FROM txn WHERE import_batch_id IN ({placeholders})", batch_ids
-                ).fetchall()
-            ]
-            scan_imported_payees(conn, payee_keys_for_ids(conn, ids))
-    except Exception as error:
-        log_error(f"[import-watch] recurring auto-scan failed: {error}", exc_info=error)
 
 
 def maybe_auto_scan() -> dict:

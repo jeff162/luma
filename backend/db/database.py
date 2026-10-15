@@ -92,18 +92,18 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
 # be delayed by another's. Python's default is 5 seconds, which was chosen for neither this workload nor
 # any other — it was simply never set.
 #
-# It is defence in depth rather than the fix. What made contention long enough to matter was a sync holding
-# its transaction open across provider network calls; that is now committed per page, so the window a writer
-# can collide with is milliseconds. This value covers what remains: a large import or a backup restore
-# writing in bulk while someone clicks something. Raising it further would only trade a visible error for an
+# It is defence in depth rather than the fix. What made contention long enough to matter was a transaction
+# held open across work that is not writing: a sync across provider network calls, an edit across the
+# recurring rescan it caused, a read endpoint across the listing after its cache write. Each now commits
+# before the long part (`docs/architecture.md` → *Database concurrency*), so the window a writer can collide
+# with is short. This value covers what remains: a large import or a backup restore writing in bulk while
+# someone clicks something. Raising it further would only trade a visible error for an
 # invisible stall, which is the worse failure for a request a user is waiting on.
 _BUSY_TIMEOUT_SECONDS = 15
 
 
-# TEMPORARY DIAGNOSTIC — remove once the browser lane's write-lock stall is understood.
-#
-# `docs/transient-failures.md` entry 3: specs sit at `_BUSY_TIMEOUT_SECONDS` in every condition, and
-# three candidate holders have been measured and ruled out.
+# TEMPORARY DIAGNOSTIC — remove once the browser lane's stall is understood (`docs/transient-failures.md`
+# entry 3, which says how to read its output).
 #
 # **The question is whether a block is *waiting* for the write lock or *holding* it**, and a trace
 # callback cannot tell them apart: it fires when a statement begins, so a slow statement and a slow
@@ -149,7 +149,28 @@ class _TracedConnection(sqlite3.Connection):
         self._trace_slowest = (0.0, None)
         self._trace_first_statement = None
 
+    def _trace_block_init(self) -> None:
+        self._block_opened_at = time.monotonic()
+        self._block_sql_seconds = 0.0
+        self._block_stmts = 0
+        self._block_slowest = (0.0, None)
+
+    def trace_block_report(self) -> None:
+        span = time.monotonic() - self._block_opened_at
+        if span < 3.0:
+            return
+        slowest, statement = self._block_slowest
+        log_info(
+            f"[db-block-trace] span {span:.2f}s sql {self._block_sql_seconds:.2f}s stmts {self._block_stmts} "
+            f"slowest {slowest:.2f}s | {statement}",
+            keep_in_file=True,
+        )
+
     def _trace_record(self, statement, elapsed: float) -> None:
+        self._block_sql_seconds += elapsed
+        self._block_stmts += 1
+        if elapsed > self._block_slowest[0]:
+            self._block_slowest = (elapsed, " ".join(str(statement).split())[:160])
         if not _is_write(statement):
             # Counted separately: a read inside a held write transaction keeps the lock just as a write
             # does, and without timing it, slow reads are indistinguishable from a stalled thread.
@@ -178,6 +199,13 @@ class _TracedConnection(sqlite3.Connection):
             return super().executemany(statement, *args, **kwargs)
         finally:
             self._trace_record(statement, time.monotonic() - started)
+
+    def commit(self) -> None:
+        # A commit inside the block ends the hold, so it is reported and the tally starts over; otherwise
+        # reads after an early commit would be counted as time spent holding the lock.
+        super().commit()
+        self.trace_report()
+        self._trace_init(self._trace_path)
 
     def trace_report(self) -> None:
         if self._trace_first_write_at is None:
@@ -226,6 +254,7 @@ def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
     )
     if traced:
         conn._trace_init(resolved_path)
+        conn._trace_block_init()
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -235,6 +264,8 @@ def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
         if traced:
             conn.trace_report()
     finally:
+        if traced:
+            conn.trace_block_report()
         conn.close()
 
 
@@ -408,12 +439,13 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner. v75
 # removes from every stored rule-suggestion review the transactions that no longer exist. v76 adds
 # `amazon_pending_item.consumed_batch_id`, so undoing an orders import returns the parked items it attached.
+# v78 adds `recurring_rescan_owed`, so a recurring rescan a write owes survives the scan failing.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 77
+CURRENT_VERSION = 78
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2542,6 +2574,18 @@ def _align_leaf_category_type(conn):
     _normalize_leaf_category_type(conn)
 
 
+@migration(78)
+def _record_owed_recurring_rescans(conn):
+    # See the baseline CREATE. Empty on an existing database: nothing is owed until a write records it.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recurring_rescan_owed (
+            payee_key  TEXT PRIMARY KEY,
+            generation INTEGER NOT NULL,
+            owed_at    TEXT NOT NULL
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3642,6 +3686,15 @@ def init_db(db_path: str | None = None):
                 counterpart_account_id TEXT REFERENCES account(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
+            -- Payees owed a recurring rescan: recorded in the transaction of the write that made it
+            -- necessary, cleared by the scan that settles it (`docs/data-model.md` -> *When a scan runs*).
+            -- `generation` moves on each re-owe, so a scan settles only the debt it read. Derived
+            -- state: not backed up, and wiped with the ledger it describes.
+            CREATE TABLE IF NOT EXISTS recurring_rescan_owed (
+                payee_key  TEXT PRIMARY KEY,
+                generation INTEGER NOT NULL,
+                owed_at    TEXT NOT NULL
+            );
             -- What the user answered when the pairing pass could not tell which of two transactions
             -- was the other half of a movement. `receiving_txn_id` names the counterpart; NULL is the
             -- dismissal ("this one has none, stop asking") — one column for both answers, because they

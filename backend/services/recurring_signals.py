@@ -14,7 +14,7 @@ recurring finding because a drifted range costs the row its series, but both act
 `rule_range_drift.py` for the Rules page. Only the dismissal store is still shared with it.
 
 **Signals are derived on read, never stored.** The obvious home would have been the import/sync scan
-(`scan_imported_payees`), which knows exactly which payees changed — but stored findings would be
+(the scoped `scan_and_store`), which knows exactly which payees changed — but stored findings would be
 wrong twice over here. Auto-detected series are deleted and re-minted with fresh ids on every scan,
 so anything keyed to a series id would be orphaned within a day; and a finding written at import time
 goes stale the moment the user recategorizes, trashes, or re-scopes a row. Deriving from the ledger

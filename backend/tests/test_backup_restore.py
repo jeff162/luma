@@ -86,6 +86,9 @@ EXCLUDED_TABLES |= {"restore_state"}
 # disk loses nothing. The folder settings themselves are columns of `csv_import_profile` and do travel, so
 # a restore can see what the paths were before deciding what they should be here.
 EXCLUDED_TABLES |= {"import_watch_file"}
+# Owed recurring rescans: a note that derived state is behind, not data. A debt the backup was taken with
+# is covered by the daily full scan (`recurring_detection.maybe_auto_scan`).
+EXCLUDED_TABLES |= {"recurring_rescan_owed"}
 
 # Columns of a backed-up table that deliberately do not travel, per table, each with its reason. Empty on
 # purpose: a restore is meant to return the system to the state it was in when the backup was taken, so a
