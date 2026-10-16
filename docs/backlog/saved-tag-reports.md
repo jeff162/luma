@@ -23,6 +23,10 @@ turns out to be too easy to miss.
 - Useful as a single place to bulk-clean stale presets, which is harder to
   do one-by-one from the dashboard.
 
+  [since this was written there's now a tags button on the transaction page for
+
+  creating/editing/manging tags. maybe this goes there.]
+
 ## Capture filters with a saved preset
 
 **Context.** A saved preset today is just `{ id, name, tagIds,
