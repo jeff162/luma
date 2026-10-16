@@ -94,8 +94,6 @@ Anyone whose main requirement is either of these will be better served by some o
 
 - **Reimbursable Expenses** — Expenses which are reimbursable can be flagged so the reimbursable portion is exluded from spending. When the reimbursement arrives it is paired with the expense and it is not treated as income. Alerts exist to indicate if reimbursement is not received within the expected timeframe.
 
-
-
 - **Multiple owners** — track personal and shared finances across several people in one ledger, with owner as a reporting axis rather than a separate set of books.
 
 - **Backup and restore** — Backup the data, with optional encryption under a key of the user's choosing. Export the data as a csv file for moving to another app or using with another too.
@@ -134,29 +132,25 @@ What comes in, what stays and what leaves are all the user's decision. Luma is b
 
 Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
 
-- **Transaction data is stored unencrypted on disk.** The ledger lives unencrypted in a local SQLite database, so the database files — and any **unencrypted** backup — are the artifacts to protect. Access to the machine and its files are responsible for securing these assets if they are considered sensitive. **Encrypted backup** (protected with a user-supplied key) can be generted for anything that will leave the machine if you feel it is sensitive data.
+- **Transaction data is stored unencrypted on disk.** The ledger lives unencrypted in a local SQLite database, so the database files — and any **unencrypted** backup — are the artifacts to protect. Access to the machine and its files are responsible for securing these assets if they are considered sensitive. **Encrypted backup** (protected with a user-supplied key) can be generted for anything that will leave the machine.
 
-- **The optional sign-in password is application access control.** It governs who on the local machine or network (for server installs) can reach a running instance. It does not encrypt the database, does not protect the files if someone copies them off the disk and does not prevent someone from examining the database file directly with SQLite. 2FA is available for use with sign-in passwords and a passkey can be used as well.
+- **The optional sign-in password is application access control.** It governs who on the local machine or network (for server installs) can reach a running instance. It does not encrypt the database, does not prevent someone from examining the database file directly with SQLite. 2FA is available for use with sign-in passwords, passkeys are available as a convenience.
 
-- **Data-source tokens are encrypted at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — Luma only uses read access but the token may be able to initiate transfers. Since they are sensitive, the tokens are kept in a passphrase-protected vault. The vault passphrase is separate from the sign-in password. Losing every way into the vault means re-linking the data sources — the ledger itself is not affected. Backups of data source tokens are encrypted using the vault passphrase of the user running the backup. It is safe to move these off the machine without further encryption.
+- **Data-source tokens are encrypted at rest.** There is a token which authorizes Luma to interact with the data provider. Some data providers may also issue tokens for each individual account connection. Luma only uses read access but these tokens may be able to authorize transfers or payments. Since they are sensitive, all of these tokens are kept in a passphrase-protected vault. The vault passphrase is separate from the sign-in password. Losing every way into the vault means re-linking the data sources, the ledger itself is not affected. Backups of data source tokens are encrypted. 
 
-- **A household shares one vault, and each person has their own access.** Initially the user who installs Luma is an administrator and can create the vault passphrase (and designate other administrative users). After the vault passphrase is created, a subseuqnt user requests access to the vault by creating their own vault passphrase which posts a request to the users who can unlock the valut to approve the request. Passphrases are  not revealed in the process.
+- **A household shares one vault, and each person has their own access.** When there is no vault passphrase set any user can create one. After the vault passphrase is created, a subsequent user requests access to the vault by creating their own vault passphrase which posts a request to the user(s) who can unlock the vault to approve the request. Passphrases are not revealed in the process.
 
-  - **Vault passphrases** are best kept in a password manager as they are supposed to be complex. Loosing vault access does not affect access to the transaction ledger, just to the data connections to refresh the account data. Loosing access means rebuilding these connections.
-  - **Passkeys** can be added as a more access method, so a fingerprint or face check replaces retyping a long passphrase. Browsers require a secure connection to use a Passkeys. The desktop app's `localhost` address works. This is part of why setting up HTTPS for a server configuration is desireable.
-  - **A recovery code** can if there is a secure location separate from where the vault passphrase as if stored. The recovery code is for when the passphrase is lost and if they are stored together, they are likely to get lost together. Printed or kept in separate secure storage is what makes it useful to have. A new recovery code is generated when it is used.
+  - **Vault passphrases** are best kept in a password manager as they are complex: long, and checked for how easy they are to guess. Losing vault access does not affect access to the transaction ledger, just to the data connections to refresh the account data. Losing access means rebuilding these connections. A passphrase is checked against the current strength rule each time it is typed, and its owner is asked to change it if a tightened rule finds it too easy to guess, since a credentials backup is only as hard to break as the passphrase of the user who made it.
+  - **Passkeys** can be added as an alternative access method, so a fingerprint or face check replaces retyping a long passphrase. Browsers require a secure connection to use a Passkey. The desktop app's `localhost` address works. This is part of why setting up HTTPS for a server configuration is desirable.
+  - **A recovery code** can be added if there is a secure location separate from where the vault passphrase is stored. The recovery code is for when the passphrase is lost and if they are stored together, they are likely to get lost together. Printed or kept in separate secure storage is what makes it useful to have. A new recovery code is generated when it is used.
 
 - **If a database or backup is lost or copied by someone else** and data connections are configured, Luma's access should be revoked at each connected data source so the copied credentials cannot pull anything new, or worse, be used to move money around. The process is described in **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked). `SECURITY.md` has the full response.
-
-  
 
 ## Installing Luma
 
 Luma for a single machine is distributed as a self-contained download. The current build is available at the [releases page](https://github.com/jeff162/luma/releases).
 
-Luma can also be deployed as a server to other computers in a household.
-That can be built around the same download or (for Linux) around a Docker container version — see
-[Running Luma as a server](#running-luma-as-a-server).
+[Running Luma as a server](#running-luma-as-a-server) describes how to deploy Luma in a server configuration. 
 
 | Platform                   | Download                            | Shape                |
 | -------------------------- | ----------------------------------- | -------------------- |
@@ -166,7 +160,7 @@ That can be built around the same download or (for Linux) around a Docker contai
 | macOS (Apple Silicon)      | `luma-<version>-macos-arm64.dmg`    | Drag to Applications |
 | macOS (Intel)              | `luma-<version>-macos-x64.dmg`      | Drag to Applications |
 
-**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run.
+**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run. 
 
 ### Windows and Linux — portable
 
@@ -185,71 +179,70 @@ need glibc 2.39 or newer — Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie, or
 Pick the download matching the
 machine — Apple menu → **About This Mac** names which one it is. The two are not interchangeable. Open the downloaded disk image and drag **Luma** onto the Applications shortcut.
 
-Because the build is neither signed nor notarized, macOS refuses it on first launch. To mark the executable so it can be run:
+Because the build is neither signed nor notarized, macOS refuses it on first launch. Either use a terminal window to clear the quarantine flag or in **System Settings** mark the executable so it can be run:
 
-1. Double-click **Luma**, and dismiss the warning.
-2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.
-3. Choose **Open Anyway** beside the message naming Luma, and confirm.
-
-Clearing the quarantine flag beforehand has the same effect:
+Clearing the quarantine flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Luma.app
 ```
 
-Unlike the portable builds, macOS keeps its data in `~/Library/Application Support/Luma`, and **it
-stays there when the application is removed** — an upgrade replaces the bundle wholesale without
-touching the databases. An application started from Finder has no terminal, so the startup messages go to `luma-desktop.log` in that directory.
+Using **System Settings**
 
-Quit from the Dock, with Command-Q, or with **Shut down Luma** at the bottom of the navigation panel —
-all three perform the same graceful shutdown.
+1. Double-click **Luma**, and dismiss the warning.
+2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.
+3. Choose **Open Anyway** beside the message naming Luma, and confirm.
+
+macOS keeps its data in `~/Library/Application Support/Luma`. 
+
+An application started from Finder has no terminal, so the startup messages go to `luma-desktop.log` in that directory.
+
+Quit from the Dock, with Command-Q, or with **Shut down Luma** at the bottom of the navigation panel.
 
 ### Starting Luma
 
-Luma starts a local server and opens in the default browser. **It listens on loopback only**, so
-nothing off the machine can reach it. Launching it again while it is already running opens a new tab
-against the existing instance rather than starting a second copy. Additional browser windows can be pointed at the same address if desired; it is safe to access from multiple browsers simultaneously.
+Luma starts a local server and opens in the browser. **It listens on loopback only**, so
+nothing off the machine can reach it. Launching it again while it is already running opens a new tab against the existing instance rather than starting a second copy. Additional browser windows can be pointed at the same address if desired; it is safe to access from multiple browsers simultaneously.
 
 There is nothing to be configured up front. Every setting has a working default.
 
 ## Getting started with real data
 
-The first run asks for a user name and then offers a choice of where the first data comes from. **Skip for now** opens the application empty, and everything below can be done from there.
+The first run asks for a user name and offers a choice of where the first data comes from. **Skip for now** opens the application empty, and everything below can be done from there as well.
 
-1. **Load transactions.** Import CSV files on the Import page, connect a data provider, or both. With several files, import them all before moving on. Importing creates the accounts the transactions belong to.
-2. **Set up categories.** Load the starter categories and rules, or have Luma build them from the categories the imported files already carry, or start with none and add them while categorizing.
-3. **Categorize what is left.** The Transactions page can show only the uncategorized rows. Assigning a category offers to create a rule from it, so the same kind of transaction is handled from then on.
-4. **Open the Dashboard** and drill into the categories to see whether the picture looks right.
+1. **Load transactions.** Import CSV files on the Import page, connect a data provider, or both. Importing creates the accounts the transactions belong to.
+2. **Set up categories.** Load the starter categories and rules, have Luma build them from the categories the imported files already carry, or start with none and add them while categorizing.
+3. **Open the Dashboard** and drill into the categories to see whether the picture looks right.
 
 **Help → How Luma works** in the application covers the same steps in more detail.
 
 ## Running Luma as a server
 
-One computer runs Luma and the other computers on the local network open it in a browser. Everyone
-connected sees the same data. Sign-in protection can be enabled to control who can connect.
+One computer runs Luma and the other computers on the local network open it in a browser. Everyone connected sees the same data. Sign-in protection can be enabled to control who can connect.
 
-How to set one up, with HTTPS:
+How to set one up with HTTPS:
 
-- **Docker on Linux** is the easiest way, and uses Caddy to provide HTTPS. The instructions are [below](#with-docker).
-- **On Windows**, the easiest way is to put the Caddy executable (a free download) in the directory with Luma, which then starts it.
-- **On Linux without Docker**, Caddy is installed from the distribution's packages.
+- **Docker on Linux** is the easiest way. 
+- **On Windows**, the easiest way is to put the Caddy executable in the directory with Luma. Luma handles starting and configuring Caddy.
+- **On Linux without Docker**, Caddy is installed from the distribution's packages and systemd is used to start Luma at boot and keep it running. Luma can provide the configuration files.
 
-Instructions for the last two, and what each connecting computer does on its first visit, are in the application under **Help → Running Luma as a server**. Starting the download the ordinary way is enough to read them. A Mac can be the server as well, with Caddy and starting at boot set up using that system's own tools.
+Instructions for the last two, and what each connecting computer does on its first visit, are in the application under **Help → Running Luma as a server**. Start the downloaded version of Luma to read them. A Mac can be the server as well, with Caddy and starting at boot set up using that system's own tools.
 
-`luma --server` starts Luma in server mode and creates a name on the network, `luma.local`, to reach the app. It can be
-set up with or without HTTPS, which is what encrypts the connection between the server and the other computers.
+`luma --server` starts Luma in server mode and creates a name on the network, `luma.local`, to reach the app. While not recommended Luma can be configured as a server without HTTPS. The following details the issues:
 
 |                                  | With HTTPS                                                                                                                      | Without HTTPS                                                                      |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Address the other computers open | `https://luma.local`                                                                                                            | `http://luma.local:8010`                                                           |
 | What crosses the network         | encrypted                                                                                                                       | readable by anyone on the network, sign-in passwords and vault passphrase included |
 | Passkeys                         | work                                                                                                                            | do not work                                                                        |
-| Setting up a data provider       | from any computer                                                                                                               | only from a browser on the server itself                                           |
+| Setting up a data provider       | from any computer                                                                                                               | only from a browser on the server                                                  |
 | Setup                            | Caddy runs beside Luma to provide HTTPS. Each computer installs the server's certificate once, so its browser trusts the server | nothing further                                                                    |
 
 The two restrictions have different causes. The passkey requirement is from the browser and cannot be worked around. The restriction around setting up a data provider comes from Luma, because secrets need to move between the user and the server and these should not pass over a network unencrypted. Syncing is still allowed from any browser, since that does not involve secrets moving over the local network.
 
 **Without HTTPS the vault passphrase travels over the local network unencrypted.** Anyone who captures it and has a copy of either the database or a credentials backup can extract the data provider secrets from that copy. This should be considered before using Luma in a server configuration without HTTPS.
+
+Caddy and HTTPS are quite easy to configure. The biggest issue is that the server's certifcate must be added to each client's certifiacate store as a trusted certificate.
 
 ### With Docker
 
@@ -267,10 +260,7 @@ On a Linux host, if Docker with the Compose plugin is available, this is a strai
    docker compose logs app
    ```
 
-The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the
-installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443
-have to be free for Caddy. Each connecting computer installs the server's certificate on its first
-visit, as described in the Help topic above. The fingerprint for comparison is displayed by:
+The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443 have to be free for Caddy. Each connecting computer installs the server's certificate on its first visit, as described in the Help topic above. The fingerprint for comparison is displayed by:
 
 ```sh
 docker compose exec app python -m backend.desktop --certificate-fingerprint
@@ -278,16 +268,13 @@ docker compose exec app python -m backend.desktop --certificate-fingerprint
 
 Updating to a newer release is `docker compose pull` followed by `docker compose up -d`.
 
-Docker Desktop on Windows and macOS runs containers inside a virtual machine, which does not work for a
-Luma server, so this only works on Linux.
+Docker Desktop on Windows and macOS runs containers inside a virtual machine, which does not work for a Luma server, so this only works on Linux.
 
-If running from a source checkout, `docker compose up -d --build` builds the image from the source instead of
-pulling the published one.
+If running from a source checkout, `docker compose up -d --build` builds the image from the source instead of pulling the published one.
 
 ## Locked out
 
-A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with
-`--reset-password`:
+A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with`--reset-password`:
 
 | Installation              | Command                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
@@ -296,35 +283,22 @@ A forgotten password is reset from a terminal on the computer that holds the dat
 | Docker                    | `docker compose exec app python -m backend.desktop --reset-password`     |
 | Source checkout           | `backend/venv/bin/python -m backend.desktop --reset-password`            |
 
-It lists the accounts to choose from and asks for the new password, and is safe to run while Luma is
-running. The account chosen ends up as an active administrator with two-factor sign-in off, and current
-browser sessions are signed out. The vault passphrase is not affected.
+It lists the accounts to choose from and asks for the new password, and is safe to run while Luma is running. The account chosen ends up as an active administrator with two-factor sign-in off, and current browser sessions are signed out. The vault passphrase is not affected.
 
 ## Running from source
 
-Running from a checkout needs Python 3.12 or newer and Node.js 22.12+, and is the arrangement for working *on*
-Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project
-conventions.
+Running from a checkout needs Python 3.12 or newer and Node.js 22.12+, and is the arrangement for working *on* Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project conventions.
 
-An optional `.env` file overrides the handful of values resolved before the app is running — the ports,
-the data directory (`DATA_DIR`, holding both databases, the `documents` folder of attachments and the
-`luma.log` error log), and the developer-options gate. Copy
-`env_example.txt` to `.env` to use it.
+An optional `.env` file overrides the handful of values resolved before the app is running — the ports, the data directory (`DATA_DIR`, holding both databases, the `documents` folder of attachments and the `luma.log` error log), and the developer-options gate. Copy `env_example.txt` to `.env` to use it.
 
 ## Platform support
 
-Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux distributions). On a Pi,
-performance depends on the model, storage speed, and whether it runs directly or through Docker.
+Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux distributions). On a Pi, performance depends on the model, storage speed, and whether it runs directly or through Docker.
 
-Each Linux download carries a minimum glibc, because the build links against the C library of the
-machine that produced it. Both are compiled on Ubuntu 24.04 and need **glibc 2.39 or newer**, which
-covers Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie and everything after them. The ARM64 download
-is also **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no build.
-Running from source has none of these restrictions, and the Docker image carries its own C library, so
-the glibc minimum does not apply to it.
+Each Linux download carries a minimum glibc, because the build links against the C library of the machine that produced it. Both are compiled on Ubuntu 24.04 and need **glibc 2.39 or newer**, which covers Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie and everything after them. The ARM64 download is also **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no build.
+Running from source has none of these restrictions, and the Docker image carries its own C library, so the glibc minimum does not apply to it.
 
-Python 3.12 is what Luma is built on, and the test suite also runs on 3.14. (This applies to running
-from source; the downloads carry their own runtime.)
+Python 3.12 is what Luma is built on, and the test suite also runs on 3.14. (This applies to running from source; the downloads carry their own runtime.)
 
 ## Tech stack
 

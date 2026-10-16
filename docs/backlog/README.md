@@ -217,8 +217,7 @@ scale — rather than by feature.
   [`../security-model.md`](../security-model.md). What stays: an **accounts & secrets** backup and a
   sectioned *back up all* (one artifact, because the token ciphertext and the key that opens it live in
   different databases — split them and the file restores but cannot sync), the **restore-time identity
-  reconciliation** flow, `backup_recipient` inclusion, whether the file carries every member's vault
-  slot, and restoring an incremental chain (the document delta is the tractable half; a date-windowed
+  reconciliation** flow, `backup_recipient` inclusion, and restoring an incremental chain (the document delta is the tractable half; a date-windowed
   backup is a slice, not disaster recovery).
 - [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
   unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
@@ -243,10 +242,8 @@ scale — rather than by feature.
   config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
-  post-rebrand migration), rule-suggestion owner-scope stability, a component-test harness for
-  `Settings.jsx`, which has none of any kind, and — added 2026-09-03 — restoring a credentials backup
-  across a vault reset, the recovery ladder's first real rung and the only one nothing exercises end to
-  end. Also records the E2E harness that *is* available
+  post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for
+  `Settings.jsx`, which has none of any kind. Also records the E2E harness that *is* available
   (`npm run ui:test` against its own throwaway stack).
 - [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
   ever checks that the databases are intact — no health surface, and notably no check of the *target*

@@ -204,7 +204,7 @@ Left out, each for a reason:
 - **Passkeys**, which verify a signature or a 32-byte PRF output and cannot be guessed. Sign-in by passkey
   stays open while the password is paused, which gives the owner a way in.
 - **The code that confirms two-factor setup**, checked against a secret the same session was just given.
-- **The passphrase that opens a credentials backup file**, which whoever holds the file attacks offline.
+- **The secret that opens a credentials backup file**, which whoever holds the file attacks offline.
 - **Guessing across many names.** A global limit would let one caller pause everyone's sign-in.
 
 **Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** A
@@ -283,6 +283,33 @@ Three properties keep that exception narrow:
   plaintext.
 - It takes **no second challenge when the vault is already unlocked** — sync, disconnect and refresh all
   ride the same boundary.
+
+**The floor has two halves: length, and how guessable the passphrase is.** Length is the main lever, since
+a passphrase lives in a password manager where a long one costs nothing more to enter. Guessability is an
+estimate (zxcvbn, which runs offline from the dictionaries it ships with) held to its top score, the band
+it describes as strong against an offline slow-hash attack — the attack a slot's wrap faces. It catches
+the long passphrase that dictionary words, repeats or a keyboard run make quick to guess. A composition
+rule would not: NIST SP 800-63B advises against them, and a repeated phrase clears one. The estimate lives
+on the server, so the dialog asks it rather than carrying a second estimator that would disagree at the
+margin.
+
+**Every typed secret is stretched with Argon2id**, at parameters sized for a wrap attacked offline
+(`crypto_service.ARGON2_*`). Each slot records the KDF and parameters it was written with, so they can be
+raised without stranding a slot written under older ones. Guidance on both moves — hardware gets faster,
+and a weakness is found in an algorithm — so checking them against it is a release step
+(`releasing.md` → *Reviewing the vault's cryptography*).
+
+**A passphrase can be judged, and its wrap strengthened, only while it is in hand**, so both happen when it
+is typed to unlock. The verdict is re-taken under the current rule and stored with what it was taken
+under — the rule's version and the estimator's release (`STRENGTH_BASIS`), since a new release can move a
+score as surely as a new threshold — and a slot on an outdated KDF is rewrapped under the current one,
+keeping its keypair. A passphrase that fails a tightened rule **keeps opening the vault**: refusing the unlock would
+stop that member syncing over a passphrase nobody has shown to be exposed. What it loses is what a weak
+wrap would put at risk — connecting a data source, and taking a credentials backup that would carry it —
+until its owner, the only person who can, changes it. A verdict from an earlier basis stands until the
+passphrase is next typed, except that a credentials export waits for a current one. Meanwhile its owner is
+asked, dismissably, to unlock once by typing it: nothing is known to be wrong, and it is the only way the
+question reaches someone who unlocks with a passkey, which cannot judge a passphrase.
 
 **The vault is only as strong as its weakest slot**, which is why the floor is an all-slots property and a
 high-entropy recovery code does not compensate for a weak passphrase.
@@ -401,9 +428,24 @@ password hashes gate the *perimeter*; the credentials fall only if the **vault p
 That is why the strength requirement lives on the passphrase, and why the strength flag rides along in a
 credentials export.
 
-**A credentials export carries one slot — the exporter's.** Within the install that made it the live DEK
-opens it whoever exported it; cross-install, only that person's passphrase does. Whether it should carry
-every member's slot is **open**.
+**A credentials export carries the exporter's slots and no one else's** — their passphrase, recovery code
+and passkeys. Within the install that made it the live DEK opens it whoever exported it; on another
+install, any one of that person's secrets as they were when it was taken does. The file is as hard to
+break as its weakest slot. A recovery code is generated to full key strength and a passkey's secret never
+leaves its authenticator, so neither weakens it; another member's passphrase would make it only as strong
+as theirs, which the exporter can neither see nor vouch for. The exporter's own passphrase is held to the
+rule in force before a file is written. The cost is that a file opens elsewhere only for the member who
+took it: someone who leaves takes with them the only secrets that open their files on another install.
+
+**A passkey answers only at the host name it was registered under**, so each passkey slot in a file
+carries a salted digest of that name and a restore offers the passkey only where the page's own name
+matches. The slots are readable without any key, so a digest rather than the name; a common name is still
+guessable from it, which is why it is a courtesy and not a secret. A passkey's label rides along in the
+clear, so the restore can name it, and discloses whatever the user named it, as a backup key's name does.
+
+**Whether a file's credentials are already valid here is read from the key's seal**, never from the
+wrapping a passphrase change or a KDF upgrade replaces. Rotation replaces the key and leaves every wrapping
+alone, so a file matched on its wrapping would be copied back verbatim under a key nothing opens.
 
 **Restore must never cost the operator their way in.** When a restore includes identity data, the current
 admin is preserved and the backup's accounts are merged in. Overwriting the perimeter is an explicit
@@ -418,7 +460,7 @@ key to find before they hold one. Keys are therefore named for what they are, no
 **The ladder is ordered by cost**, and the UI offers it in sequence rather than presenting destruction as
 the only answer. Another member re-enrolling the stuck user moves nothing. A recovery code re-keys the
 passphrase **against the same DEK**, so nothing is re-linked. A credentials backup opened with the
-passphrase *it* was made under is a complete recovery. Only then, reset.
+passphrase or recovery code in force when *it* was taken is a complete recovery. Only then, reset.
 
 **Losing the passphrase costs the ability to keep syncing, not ledger data**, and the reset dialog leads
 with that: only two columns are ever encrypted.
@@ -467,21 +509,16 @@ What a second attempt hits, whether or not it is planned.
   re-link is transparent.
 - **An interrupted rotation must be resumed, not restarted.** Restarting pushes the key the ciphertext is
   under off the end of the two a slot can hold.
+- **Tightening the strength rule or the KDF reaches a slot only when its passphrase is next typed.** A
+  member who never unlocks keeps the old verdict and the old wrap, and a credentials backup already
+  written keeps the wrap it was written with for good — only a new backup carries the stronger one.
 
 ## Open
 
 Decisions owed. Each names the live backlog item that will feed this topic when it is picked up.
 
-- **Should a credentials backup carry every member's slot?** Only meaningful in a multi-member workspace
-  where the exporter is unavailable. One slot makes the file as strong as its owner's passphrase; every
-  member's slot makes it as strong as the least careful member's, which no member can audit — while "the
-  person who made the backup has left" is an ordinary way to lose data. A middle option: let the exporter
-  choose whose slots ride along. → `backlog/backup-restore-scope-and-secrets.md`
 - **Whether `backup_recipient` belongs in an accounts-and-secrets backup** or stays machine-local.
   → `backlog/backup-restore-scope-and-secrets.md`
 - **The wider accounts-and-secrets artifact.** The credentials half is settled — its payload is
   ciphertext, so there is no plaintext variant to permit. The wider artifact also carries password
   hashes, which have no such wrapping. → `backlog/backup-restore-scope-and-secrets.md`
-- **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
-  the ladder's first real rung and the only one nothing exercises end to end.
-  → `backlog/test-coverage-gaps.md`

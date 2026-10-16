@@ -977,19 +977,33 @@ _VAULT_SLOT_DDL = """
         method               TEXT NOT NULL DEFAULT 'passphrase',
         label                TEXT,
         format               INTEGER NOT NULL DEFAULT 2,
+        -- A typed secret's KDF and its parameters, stored per slot so the current choice can change
+        -- without stranding a wrap made under an earlier one: `scrypt` reads n/r/p, `argon2id` reads
+        -- m (KiB)/t/p. NULL on a passkey slot, whose secret is already key material.
         kdf_algo             TEXT,
         kdf_salt             TEXT,
         kdf_n                INTEGER,
         kdf_r                INTEGER,
         kdf_p                INTEGER,
+        kdf_m                INTEGER,
+        kdf_t                INTEGER,
         credential_id        TEXT,
         prf_salt             TEXT,
+        -- The WebAuthn RP id (the host name) a passkey slot answers under. A passkey works only at the
+        -- name it was registered for, so this is what lets a credentials backup say where one of its
+        -- passkeys can be used. NULL until the slot is registered or next unlocks with this recorded.
+        rp_id                TEXT,
         public_key           TEXT,
         wrapped_private_key  TEXT,
         sealed_dek           TEXT,
         sealed_dek_prev      TEXT,
         wrapped_dek          TEXT,
         meets_production_min INTEGER NOT NULL DEFAULT 0,
+        -- What `meets_production_min` was judged under: the strength rule's version and the estimator
+        -- release (`crypto_service.STRENGTH_BASIS`). A passphrase can only be judged while it is in
+        -- hand, so a verdict taken under an earlier basis stays as it was until the owner next types
+        -- it; NULL is a verdict from before the basis was recorded.
+        strength_basis       TEXT,
         -- Set on a pending slot written by someone who ALREADY had vault access and lost the secret
         -- that opened it (the re-enrollment rung). The approval queue reads the same shape for a
         -- newcomer enrolling and for a locked-out member coming back, and the two ask very different
@@ -1052,6 +1066,13 @@ def _init_vault_slot_table(conn):
     # the right answer for every slot written before re-enrollment existed.
     if "replaces_access" not in columns:
         conn.execute("ALTER TABLE vault_slot ADD COLUMN replaces_access INTEGER NOT NULL DEFAULT 0")
+    # Additive the same way, and NULL is the honest value for every existing row: no slot written before
+    # these columns used Argon2id, recorded where its passkey was registered, or was judged by a
+    # versioned rule.
+    for column, decl in (("kdf_m", "INTEGER"), ("kdf_t", "INTEGER"), ("rp_id", "TEXT"),
+                         ("strength_basis", "TEXT")):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE vault_slot ADD COLUMN {column} {decl}")
     conn.executescript(_VAULT_SLOT_INDEXES)
 
 
@@ -1141,23 +1162,32 @@ def list_vault_members() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# The columns that say how a typed secret becomes a KEK. Written as one set everywhere a slot's KDF is
+# set, because a column left out of an update keeps the previous KDF's value and the slot then reads as a
+# mixture of two algorithms' parameters.
+VAULT_SLOT_KDF_COLUMNS = ("kdf_algo", "kdf_salt", "kdf_n", "kdf_r", "kdf_p", "kdf_m", "kdf_t")
+
+
+def _kdf_values(kdf: dict | None) -> tuple:
+    kdf = kdf or {}
+    return tuple(kdf.get(column) for column in VAULT_SLOT_KDF_COLUMNS)
+
+
 def upsert_vault_slot(
     user_id: str,
     *,
     method: str,
     slot_id: str | None = None,
     label: str | None = None,
-    kdf_algo: str | None = None,
-    kdf_salt: str | None = None,
-    kdf_n: int | None = None,
-    kdf_r: int | None = None,
-    kdf_p: int | None = None,
+    kdf: dict | None = None,
     credential_id: str | None = None,
     prf_salt: str | None = None,
+    rp_id: str | None = None,
     public_key: str,
     wrapped_private_key: str,
     sealed_dek: str | None,
     meets_production_min: bool,
+    strength_basis: str | None = None,
     replaces_access: bool = False,
 ) -> str:
     """Write a format-2 slot, replacing the row `slot_id` names if it already exists.
@@ -1165,40 +1195,39 @@ def upsert_vault_slot(
     Identity is by slot id alone — never re-derived from (user, method) — because the caller has
     already bound that id into the AAD of the material being stored. A row written under one id and
     saved over another would be unopenable."""
+    kdf_assignments = ", ".join(f"{column} = ?" for column in VAULT_SLOT_KDF_COLUMNS)
     with get_control_db() as conn:
         existing = conn.execute("SELECT id FROM vault_slot WHERE id = ?", (slot_id,)).fetchone() if slot_id else None
         # `replaces_access` is stated here rather than left to the column default: the default only
         # applies to an INSERT that omits the column, so the UPDATE arm below would otherwise carry a
         # stale flag from whatever the row held before.
         values = (
-            method, label, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p, credential_id, prf_salt,
+            method, label, *_kdf_values(kdf), credential_id, prf_salt, rp_id,
             public_key, wrapped_private_key, sealed_dek, 1 if meets_production_min else 0,
-            1 if replaces_access else 0,
+            strength_basis, 1 if replaces_access else 0,
         )
         if existing:
             conn.execute(
-                """
+                f"""
                 UPDATE vault_slot SET
                     method = ?, label = ?, format = 2,
-                    kdf_algo = ?, kdf_salt = ?, kdf_n = ?, kdf_r = ?, kdf_p = ?,
-                    credential_id = ?, prf_salt = ?,
+                    {kdf_assignments},
+                    credential_id = ?, prf_salt = ?, rp_id = ?,
                     public_key = ?, wrapped_private_key = ?, sealed_dek = ?,
                     sealed_dek_prev = NULL, wrapped_dek = NULL,
-                    meets_production_min = ?, replaces_access = ?, updated_at = datetime('now')
+                    meets_production_min = ?, strength_basis = ?, replaces_access = ?,
+                    updated_at = datetime('now')
                 WHERE id = ?
                 """,
                 values + (existing["id"],),
             )
             return existing["id"]
         new_id = slot_id or str(uuid.uuid4())
+        columns = ("id", "user_id", "method", "label", *VAULT_SLOT_KDF_COLUMNS, "credential_id", "prf_salt",
+                   "rp_id", "public_key", "wrapped_private_key", "sealed_dek", "meets_production_min",
+                   "strength_basis", "replaces_access")
         conn.execute(
-            """
-            INSERT INTO vault_slot
-                (id, user_id, method, label, format, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
-                 credential_id, prf_salt, public_key, wrapped_private_key, sealed_dek,
-                 meets_production_min, replaces_access)
-            VALUES (?,?,?,?,2,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
+            f"INSERT INTO vault_slot ({', '.join(columns)}, format) VALUES ({', '.join('?' * len(columns))}, 2)",
             (new_id, user_id) + values,
         )
         return new_id
@@ -1208,29 +1237,58 @@ def rewrap_vault_slot_secret(
     slot_id: str,
     *,
     wrapped_private_key: str,
-    kdf_algo: str,
-    kdf_salt: str,
-    kdf_n: int,
-    kdf_r: int,
-    kdf_p: int,
+    kdf: dict,
     meets_production_min: bool,
+    strength_basis: str | None,
+    keeps_secret: bool = False,
+    old_fingerprint: str | None = None,
+    new_fingerprint: str | None = None,
 ):
-    """Re-guard an existing slot with a new unlock secret, touching nothing else.
+    """Re-guard an existing slot's private key under a new KEK, touching nothing else.
 
     A passphrase change replaces only the KEK, so the keypair and the DEK's seal stay exactly as they
     are — no other slot is disturbed, no credential is re-encrypted, and nothing mid-rotation is
-    disrupted. Re-sealing here as well would be busywork that quietly discards `sealed_dek_prev`."""
+    disrupted. Re-sealing here as well would be busywork that quietly discards `sealed_dek_prev`.
+
+    `keeps_secret` marks the other reason to rewrap: the same passphrase under a stronger KDF. The
+    credentials-export history then moves with the wrapping, for the reason it does on a format upgrade
+    (`upgrade_vault_slot_to_format_2`) — the files it names still open with exactly the passphrase they
+    did. After a real change those files need the *old* passphrase, so the history stays behind and the
+    change dialog stops counting them as at stake."""
+    kdf_assignments = ", ".join(f"{column} = ?" for column in VAULT_SLOT_KDF_COLUMNS)
     with get_control_db() as conn:
         conn.execute(
-            """
+            f"""
             UPDATE vault_slot
-               SET wrapped_private_key = ?, kdf_algo = ?, kdf_salt = ?, kdf_n = ?, kdf_r = ?, kdf_p = ?,
-                   meets_production_min = ?, updated_at = datetime('now')
+               SET wrapped_private_key = ?, {kdf_assignments},
+                   meets_production_min = ?, strength_basis = ?, updated_at = datetime('now')
              WHERE id = ?
             """,
-            (wrapped_private_key, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
-             1 if meets_production_min else 0, slot_id),
+            (wrapped_private_key, *_kdf_values(kdf), 1 if meets_production_min else 0,
+             strength_basis, slot_id),
         )
+        if keeps_secret and old_fingerprint and new_fingerprint:
+            conn.execute(
+                "UPDATE credentials_export SET wrapped_dek_fingerprint = ? WHERE wrapped_dek_fingerprint = ?",
+                (new_fingerprint, old_fingerprint),
+            )
+
+
+def set_vault_slot_strength(slot_id: str, *, meets_production_min: bool, strength_basis: str):
+    """Record a passphrase's verdict under the current rule, judged the moment it was typed.
+
+    Leaves `updated_at` alone: nothing about how the slot opens has changed."""
+    with get_control_db() as conn:
+        conn.execute(
+            "UPDATE vault_slot SET meets_production_min = ?, strength_basis = ? WHERE id = ?",
+            (1 if meets_production_min else 0, strength_basis, slot_id),
+        )
+
+
+def set_vault_slot_rp_id(slot_id: str, rp_id: str):
+    """Record the host name a passkey slot answered under. Leaves `updated_at` alone, like the above."""
+    with get_control_db() as conn:
+        conn.execute("UPDATE vault_slot SET rp_id = ? WHERE id = ?", (rp_id, slot_id))
 
 
 def set_vault_slot_sealed_dek(slot_id: str, sealed_dek: str, *, keep_previous: bool = False):

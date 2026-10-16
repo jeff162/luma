@@ -731,7 +731,7 @@ has several requests in flight.
   the browser that asked.
 - A passkey sign-in completes without the TOTP step, since required user verification is the second
   factor. It still honors `must_change_password`.
-- `_passkey_context` (`routers/auth.py`) reports whether a ceremony can run on this connection, with a
+- `transport.passkey_context` reports whether a ceremony can run on this connection, with a
   stated reason (`insecure_context`, `ip_address_host`). The accepted origin is any origin on the RP
   id's host; the port is unpinned because both ports are configurable.
 - Frontend: `lib/appPasskey.js`, `lib/base64url.js` (the vault stores standard base64, sign-in speaks
@@ -757,21 +757,37 @@ custody*; this section is the mechanism.
   key. Sealing needs only a public key, so a member can grant access to someone whose secret they do not
   have and rotation can re-seal for every slot. **Format 1** (the DEK wrapped directly) is still
   readable and is converted at the next unlock.
-- **Unlock secrets** are a passphrase via `scrypt`, a passkey's WebAuthn PRF output via `HKDF`, or a
-  recovery code. One passphrase and any number of passkeys per user, enforced by a partial unique index;
-  the last method that opens the vault cannot be removed. No WebAuthn assertion is verified: a wrong PRF
-  output fails at the AEAD tag as a wrong passphrase does. WebAuthn's preconditions (a secure context,
-  an RP id that is a domain) are detected server-side and returned as stated reasons.
+- **Unlock secrets** are a passphrase or a recovery code stretched with Argon2id, or a passkey's WebAuthn
+  PRF output via `HKDF`. Each slot records its KDF and parameters (`kdf_*`), so a slot written under
+  scrypt still opens. One passphrase and any number of passkeys per user, enforced by a partial unique
+  index; the last method that opens the vault cannot be removed. No WebAuthn assertion is verified: a
+  wrong PRF output fails at the AEAD tag as a wrong passphrase does. WebAuthn's preconditions (a secure
+  context, an RP id that is a domain) are detected server-side (`transport.passkey_context`) and returned
+  as stated reasons. A passkey slot records the RP id it answers under (`rp_id`), at registration or, for
+  one registered before that was kept, at its next unlock.
 - **Unlocking** holds the DEK in a server-side, in-process cache keyed by `user_id` and the sign-in
   session, with an idle TTL (`UNLOCK_TTL_SECONDS`). It is never put in the session cookie, and is
   dropped on logout and restart. Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,unlock,
   lock}`, `/auth/vault/passkey/{params,register,unlock,set-passphrase}`, `/auth/vault/reenrol`. Status:
   `vault_configured`, `vault_has_passphrase`, `vault_unlocked`, `vault_access_pending`. Connect, sync
-  and credential export/restore need an unlocked vault (`423`; connect on an unconfigured vault `409`).
-  There is no plaintext path and no app-held master key.
-- **Passphrase strength is an all-slots property**, since the DEK is only as strong as its weakest wrap:
-  every passphrase must pass `passphrase_meets_production_min` (`VAULT_PRODUCTION_MIN_LEN`,
-  `VAULT_PRODUCTION_MIN_DISTINCT`).
+  and a credentials restore that has to re-key need an unlocked vault (`423`; connect on an unconfigured
+  vault `409`); the credentials export copies ciphertext and needs none. There is no plaintext path and
+  no app-held master key.
+- **Passphrase strength is an all-slots property**, since the DEK is only as strong as its weakest wrap.
+  `passphrase_shortfall` is the floor: `VAULT_PRODUCTION_MIN_LEN` and the zxcvbn estimate at
+  `VAULT_MIN_STRENGTH_SCORE`. `_write_slot` refuses a passphrase below it, and `POST
+  /auth/vault/passphrase-strength` answers the dialog as it is typed. Each slot stores its verdict
+  (`meets_production_min`) with what it was taken under (`strength_basis`): the rule's version and the
+  installed zxcvbn release (`STRENGTH_BASIS`, read from the distribution's metadata, which
+  `scripts/luma.spec` collects into the frozen kit).
+- **A passphrase slot is brought current at unlock** (`_bring_passphrase_slot_current`), the one moment
+  the passphrase is in hand: the verdict is re-taken under `STRENGTH_BASIS`, and a slot on an
+  outdated KDF is rewrapped under the current one, keeping its keypair and carrying its
+  `credentials_export` rows across. A failing verdict leaves the unlock working and sets
+  `vault_passphrase_needs_change`, which raises the `vault_passphrase_change` task; `ready_for_production`
+  then refuses a connect, and `credentials_export_refusal` an export, until the owner changes it. A
+  verdict under an older basis sets `vault_passphrase_needs_check` instead, which raises the dismissable
+  `vault_passphrase_check` task and a note on the locked strip; only the export waits on it.
 - **Minting a durable unlock method needs a recently presented secret.** Writing a passphrase slot,
   registering a passkey and issuing a recovery code each require proof within `PROOF_TTL_SECONDS`,
   stamped where a secret is verified (`unlock`, `unlock_with_passkey`, `change_passphrase`,
@@ -808,7 +824,7 @@ custody*; this section is the mechanism.
      sign-in recovery codes, because a slot's wrap can be attacked offline. `POST /auth/vault/recover`
      takes `{code, new_passphrase}` as one operation: the replacement slot is written before the
      recovery slot is deleted, so a failure leaves the code usable, and a fresh code is issued.
-  3. A credentials backup, restorable with the passphrase it was made under.
+  3. A credentials backup, restorable with the passphrase or recovery code in force when it was taken.
   4. `POST /auth/vault/reset` (admin-gated): every slot deleted, every `ENCRYPTED_COLUMNS` value cleared,
      `reauth_required` set on every connection. Connections, accounts, transactions, mappings and
      coverage survive. It asks *lost or compromised*: a compromised passphrase still opens the vault, so

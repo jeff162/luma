@@ -121,6 +121,29 @@ def page_is_secure_context(request: Request) -> bool:
     )
 
 
+def passkey_context(request: Request) -> dict:
+    """The Relying Party id a ceremony must run under, or why one cannot run here.
+
+    Two constraints, both outside the app's control. WebAuthn requires a **secure context**, so a
+    cleartext network bind cannot register or use a passkey at all. And an RP id must be a *domain* —
+    a bare IP address is not one, so a LAN server reached as `192.168.x.x` can never host passkeys
+    however it is served. Both are reported as stated reasons rather than left to surface as an
+    unexplained browser exception, because in both cases the answer is "use a passphrase here".
+    """
+    host = (request.url.hostname or "").strip("[]")
+    # A hostname made only of digits and dots, or containing a colon, is an address rather than a name.
+    is_address = bool(host) and (":" in host or all(part.isdigit() for part in host.split(".") if part))
+    # The address check comes first because the two reasons differ in whether anything can be done: an
+    # address can never host passkeys however it is served, while cleartext is fixed by configuring
+    # HTTPS. Reporting the fixable one on a host where the fix would not help sends the user to set up
+    # TLS and arrive back at the same refusal.
+    if is_address:
+        return {"available": False, "reason": "ip_address_host", "rp_id": None}
+    if not page_is_secure_context(request):
+        return {"available": False, "reason": "insecure_context", "rp_id": None}
+    return {"available": True, "reason": None, "rp_id": host}
+
+
 def link_is_protected(request: Request) -> bool:
     """Whether what this request carries is out of reach of anyone else on the network: it never left
     the machine, or it crossed the network encrypted."""

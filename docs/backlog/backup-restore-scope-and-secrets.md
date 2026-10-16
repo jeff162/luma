@@ -56,28 +56,9 @@ complaint.
   page, so a lost list costs more than it did.
 - **Is the wider artifact allowed unencrypted?** The question dissolved for the *credentials* half in
   2026-08-10 — the payload is already ciphertext, so there is no plaintext variant to permit and no
-  toggle to offer, and the file's strength is the vault passphrase's (which is why `meets_production_min`
-  rides along in it). The wider artifact additionally carries **password hashes, which have no such
+  toggle to offer, and the file's strength is its weakest slot's (which, for the passphrase, is why the
+  export waits for it to clear the current rule). The wider artifact additionally carries **password hashes, which have no such
   wrapping**, so the reasoning does not simply carry over.
-- **Should a credentials backup carry every member's passphrase slot?** Only meaningful in a multi-member
-  workspace whose exporter is unavailable, and the trade is genuinely two-sided:
-
-  | | one slot (today) | every member's slot |
-  | --- | --- | --- |
-  | Cross-install restore | only the exporter can | any member can |
-  | The file's strength | that one passphrase | the **weakest** among members |
-  | Offline-attackable wraps in the file | one | one per member |
-
-  Each slot is an independently crackable wrap of the *same* DEK, so adding slots strictly widens the
-  offline attack surface and the file stops being as strong as its owner's passphrase — becoming as
-  strong as the least careful member's, which no member can see or audit. Against that, "the person who
-  made the backup has left" is an ordinary way to lose data, and there is no answer to it today beyond
-  taking a fresh backup while you still can. Two things narrow the decision: the Production vault floor
-  already bounds how weak any member's passphrase can be, and a **middle option** exists — let the
-  exporter choose whose slots ride along, keeping the default strong while making a deliberately
-  shareable file possible, at the cost of a decision on a screen that currently has none. Not urgent:
-  single-user installs are unaffected. Also tracked from
-  [`../security-model.md`](../security-model.md) → *Open*.
 - **Restoring an incremental chain.** The **document delta** — send only the ids the target lacks — is
   the tractable half and both its prerequisites already exist (members addressed by id, a digest each);
   the ledger needs no delta because it is small once zipped and is always sent in full. What is unsolved

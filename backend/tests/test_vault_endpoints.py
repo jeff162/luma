@@ -67,16 +67,27 @@ class VaultEndpointTests(unittest.TestCase):
             self.assertEqual(r.json()["detail"]["code"], "vault_locked")
 
     def test_a_weak_passphrase_is_refused_with_the_numbers_the_dialog_needs(self):
-        # The floor is data, not just prose: the dialog gates its own submit button on these two numbers,
-        # so a client that had to parse them out of a sentence would drift from the server and either
-        # block what the server accepts or offer what it refuses.
+        # The floor is data, not just prose: the dialog gates its own submit button on the length and
+        # says which half failed, so a client that had to parse them out of a sentence would drift from
+        # the server and either block what the server accepts or offer what it refuses.
         with api_client() as (client, _):
             r = client.post("/api/auth/vault/set-passphrase", json={"passphrase": "shortpass"})
         self.assertEqual(r.status_code, 400, r.text)
         detail = r.json()["detail"]
         self.assertEqual(detail["code"], "weak_passphrase")
         self.assertEqual(detail["min_length"], cs.VAULT_PRODUCTION_MIN_LEN)
-        self.assertEqual(detail["min_distinct"], cs.VAULT_PRODUCTION_MIN_DISTINCT)
+        self.assertEqual(detail["reason"], "too_short")
+
+    def test_a_long_but_guessable_passphrase_is_refused_with_the_estimators_advice(self):
+        # Length is not enough on its own: twenty characters of one word repeated clear it and fall to a
+        # dictionary attack at once. The refusal says which half failed and passes on what to change.
+        with api_client() as (client, _):
+            r = client.post("/api/auth/vault/set-passphrase", json={"passphrase": "passwordpassword1234"})
+        self.assertEqual(r.status_code, 400, r.text)
+        detail = r.json()["detail"]
+        self.assertEqual(detail["code"], "weak_passphrase")
+        self.assertEqual(detail["reason"], "guessable")
+        self.assertTrue(detail["suggestions"])
 
     def test_changing_to_a_weak_passphrase_is_refused_the_same_way(self):
         with api_client() as (client, _):

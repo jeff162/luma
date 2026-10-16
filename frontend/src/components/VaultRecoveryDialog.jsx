@@ -37,7 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppDialog, Button, Input, InsetPanel, PasswordInput, PasswordManagerUsername, SectionEyebrow, Spinner } from './ui.jsx'
 import { NEW_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
-import { passphraseLimits, passphraseMeetsFloor, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { passphraseLimits, passphraseMeetsFloor, usePassphraseStrength } from '../lib/vaultPassphrase.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
@@ -137,13 +137,15 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
 
   const limits = passphraseLimits(session?.currentUser)
   const fitsFloor = value => passphraseMeetsFloor(value, limits)
-  const shortfall = passphraseShortfall(passphrase, limits)
+  const strength = usePassphraseStrength(passphrase, limits)
+  const shortfall = strength.issue
   // Named once because two things now gate on it — the button and the Enter handler — and a second copy
   // is how Enter comes to accept something the button refuses.
-  const recoverBlocked = busy === 'recover' || !code.trim() || !passphrase || !!shortfall
+  const recoverBlocked = busy === 'recover' || !code.trim() || !passphrase || !!shortfall || strength.pending
 
-  const reenrolShortfall = passphraseShortfall(reenrolPassphrase, limits)
-  const reenrolBlocked = busy === 'reenrol' || !reenrolPassphrase || !!reenrolShortfall
+  const reenrolStrength = usePassphraseStrength(reenrolPassphrase, limits)
+  const reenrolShortfall = reenrolStrength.issue
+  const reenrolBlocked = busy === 'reenrol' || !reenrolPassphrase || !!reenrolShortfall || reenrolStrength.pending
 
   const load = useCallback(async () => {
     try {
@@ -258,8 +260,9 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           ) : null}
           {backups.length > 0 ? (
             <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-              A credentials backup is on file. Set a new passphrase and restore it with the passphrase it
-              was made under, and the connections will work again without reconnecting anything.
+              A credentials backup is on file. Set a new passphrase and restore it with the passphrase or
+              recovery code in force when it was taken, and the connections will work again without
+              reconnecting anything.
             </p>
           ) : null}
           {todo.length > 0 || appSecrets.length > 0 ? (
@@ -424,9 +427,9 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
             <Rung title="A credentials backup is on file">
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
                 The most recent was taken {formatDate(String(backups[0].exported_at).slice(0, 10))}. A
-                backup is restored with the passphrase it was made under, not your current one — so if you
-                remember an older passphrase, rebuilding below and then restoring that file recovers
-                everything without reconnecting anything.
+                backup is restored with the passphrase or recovery code in force when it was taken, not
+                your current ones — so if you still have an older passphrase or code, rebuilding below and
+                then restoring that file recovers everything without reconnecting anything.
               </p>
             </Rung>
           ) : null}

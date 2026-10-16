@@ -269,26 +269,3 @@ Standing one up is the real work; the sections are large and lean on `UserPrefer
 whatever feature lands there next. `VaultSettingsDialog.test.jsx` is the closest existing example of
 mounting one of this file's dialogs with mocked `api`.
 
-
-## Credentials backup restored across a vault reset
-
-**Owed.** The recovery ladder's cheapest real rung is *a credentials backup, opened with the passphrase
-it was made with* — see [`../security-model.md`](../security-model.md) → *Recovery and compromise
-response* — and nothing exercises it end to end. Every other rung is covered
-(`backend/tests/test_vault_recovery.py`, `test_vault_endpoints.py`,
-`frontend/src/components/__tests__/VaultRecoveryDialog.test.jsx`); this one is the gap.
-
-**Shape** — a backend test against the temp-DB harness:
-
-- [ ] Take a **credentials backup** while the vault is open under passphrase A.
-- [ ] **Reset** the vault (the lost-passphrase path — every slot deleted, both encrypted columns
-      cleared, `reauth_required` set) and **set** a new passphrase B. The reset mints a *different* DEK,
-      so nothing written under A opens any more; that much is already pinned.
-- [ ] **Restore** the backup, giving passphrase A. Assert it re-keys the credentials under the live DEK
-      rather than adopting a foreign slot, and that the connections come back **syncable** — the
-      credential decrypts and `reauth_required` clears.
-
-**Why it is worth its own test rather than a rider.** The rung's whole claim is that a reset is
-recoverable *if a backup exists*, and that claim spans both databases and two DEK generations. Each half
-is tested alone and their composition is not — which is exactly the shape of thing that stops working
-without any single test going red.

@@ -999,9 +999,10 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
     def _restore_credentials_file(self, connections):
         """A credentials restore of an already-local file, so the rows go back verbatim with no vault work."""
-        payload = {"version": 4, "connections": connections, "provider_configs": [], "vault": {"format": 2}}
+        payload = {"version": 5, "connections": connections, "provider_configs": [], "vault_slots": [{"format": 2}]}
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
-        with mock.patch("backend.routers.import_export.backup.crypto_service.vault_slot_is_local", return_value=True):
+        with mock.patch("backend.routers.import_export.backup.crypto_service.exported_slots_hold_live_dek",
+                        return_value=True):
             return restore_credentials(CredentialsRestoreRequest(data=payload), request)
 
     def test_restoring_credentials_keeps_every_mapping_hanging_off_the_connection(self):

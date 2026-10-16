@@ -753,11 +753,11 @@ class CredentialBackupTests(unittest.TestCase):
             payload = read_payload_bytes(exported.content)
             # The export carries CIPHERTEXT plus the vault material that reopens it — the token itself
             # must not be in the file (see routers/import_export/backup.py::export_credentials).
-            self.assertEqual(payload["version"], 4)
+            self.assertEqual(payload["version"], 5)
             self.assertEqual(payload["connections"][0]["provider"], "plaid")
             self.assertNotIn("access-sandbox-xyz", json.dumps(payload))
             self.assertTrue(payload["connections"][0]["credential_enc"])
-            self.assertTrue(payload["vault"]["sealed_dek"])
+            self.assertTrue(payload["vault_slots"][0]["sealed_dek"])
 
             restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(restored.status_code, 200, restored.text)

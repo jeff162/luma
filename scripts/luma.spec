@@ -36,7 +36,7 @@ import re
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).resolve().parent
 
@@ -107,6 +107,10 @@ datas = [
 ]
 if stamp:
     datas.append((str(stamp_marker), "."))
+# The vault records which estimator release judged each passphrase (`crypto_service.STRENGTH_BASIS`) and
+# reads it from the distribution's metadata, which the analysis does not collect on its own. Without this
+# the build succeeds and the server fails on its first import.
+datas += copy_metadata("zxcvbn")
 
 analysis = Analysis(
     [str(ROOT / "backend" / "desktop.py")],

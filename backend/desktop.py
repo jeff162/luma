@@ -12,7 +12,7 @@ that reliably has it.
 Three decisions carry the design:
 
 - **Bind an address, hand out a name.** uvicorn binds `127.0.0.1` so nothing off the machine can reach
-  it, but the URL opened is `http://localhost:<port>`. `_passkey_context` in `routers/auth.py` refuses a
+  it, but the URL opened is `http://localhost:<port>`. `transport.passkey_context` refuses a
   bare IP as a WebAuthn Relying Party id, so opening `http://127.0.0.1:<port>` would silently disable
   every passkey slot with nothing on screen to explain why. The two are not interchangeable here.
 - **A port is a convenience, not an identity.** The configured `FRONTEND_PORT` is preferred so the URL

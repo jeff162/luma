@@ -51,6 +51,10 @@ function vaultFlags(user) {
     unlocked: !!u.vault_unlocked,
     accessPending: !!u.vault_access_pending,
     hasPasskey: (u.vault_passkeys || []).some(pk => !pk.pending),
+    // Judged at this member's last unlock against the current strength rule, and failed.
+    passphraseNeedsChange: !!u.vault_passphrase_needs_change,
+    // Not yet judged under the current rule, which only typing it can do.
+    passphraseNeedsCheck: !!u.vault_passphrase_needs_check,
   }
 }
 

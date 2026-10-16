@@ -22,6 +22,10 @@ from backend.db import control_database as cdb
 from backend.db import database
 from backend.services import crypto_service as cs
 
+# The scrypt parameters every passphrase slot was written with before Argon2id. Fixed here rather than
+# read from the service, because what these tests build is a slot as an older install actually wrote it.
+LEGACY_SCRYPT = {"kdf_algo": "scrypt", "kdf_n": 2 ** 15, "kdf_r": 8, "kdf_p": 1}
+
 
 @contextmanager
 def _isolated_stack():
@@ -251,11 +255,7 @@ class VaultTests(unittest.TestCase):
             public_key="AA==",
             wrapped_private_key="{}",
             sealed_dek="{}",
-            kdf_algo="scrypt",
-            kdf_salt="AA==",
-            kdf_n=cs.SCRYPT_N,
-            kdf_r=cs.SCRYPT_R,
-            kdf_p=cs.SCRYPT_P,
+            kdf=dict(LEGACY_SCRYPT, kdf_salt="AA=="),
             meets_production_min=False,
         )
         self.assertFalse(cs.ready_for_production())
@@ -271,11 +271,7 @@ class VaultTests(unittest.TestCase):
             public_key="AA==",
             wrapped_private_key="{}",
             sealed_dek=None,
-            kdf_algo="scrypt",
-            kdf_salt="AA==",
-            kdf_n=cs.SCRYPT_N,
-            kdf_r=cs.SCRYPT_R,
-            kdf_p=cs.SCRYPT_P,
+            kdf=dict(LEGACY_SCRYPT, kdf_salt="AA=="),
             meets_production_min=False,
         )
         self.assertTrue(cs.ready_for_production())
@@ -521,7 +517,7 @@ class LegacySlotUpgradeTests(unittest.TestCase):
 
         dek = os.urandom(cs.DEK_BYTES)
         salt = os.urandom(16)
-        kek = cs._derive_kek(self.passphrase, salt)
+        kek = cs._derive_kek(self.passphrase, dict(LEGACY_SCRYPT, kdf_salt=cs._b64e(salt)))
         with cdb.get_control_db() as conn:
             conn.execute(
                 """
@@ -533,7 +529,7 @@ class LegacySlotUpgradeTests(unittest.TestCase):
                 (
                     str(uuid.uuid4()), self.alice,
                     cs._wrap(kek, dek, aad=cs._slot_aad(self.alice)),
-                    cs._b64e(salt), cs.SCRYPT_N, cs.SCRYPT_R, cs.SCRYPT_P,
+                    cs._b64e(salt), LEGACY_SCRYPT["kdf_n"], LEGACY_SCRYPT["kdf_r"], LEGACY_SCRYPT["kdf_p"],
                 ),
             )
         return dek
@@ -609,6 +605,7 @@ class LegacySlotUpgradeTests(unittest.TestCase):
         self.assertEqual(slot["format"], 2)
         self.assertIsNone(slot["wrapped_dek"], "the superseded wrap must not be left behind")
         self.assertTrue(slot["public_key"] and slot["wrapped_private_key"] and slot["sealed_dek"])
+        self.assertEqual(slot["kdf_algo"], "argon2id", "and it leaves on the current KDF, not the legacy one")
 
     def test_the_converted_slot_still_opens_ciphertext_written_before_it(self):
         # Conversion changes how the DEK is *reached*, never which DEK it is.
@@ -641,6 +638,146 @@ class LegacySlotUpgradeTests(unittest.TestCase):
         cs.set_passphrase(bob, "bob's long vault passphrase")
         cs.grant_access(self.alice, cs.pending_access_requests()[0]["slot_id"])
         self.assertEqual(cs.unlock(bob, "bob's long vault passphrase"), self.dek)
+
+
+class PassphraseCurrencyTests(unittest.TestCase):
+    """A passphrase slot held to today's KDF and strength rule, at the one moment that is possible.
+
+    Neither can be applied to a stored slot — both need the passphrase — so unlock does both, silently
+    when nothing has changed. What these defend is that an install's existing slots do not stay on
+    whatever was current when they were written.
+    """
+
+    PASSPHRASE = "a-strong-vault-passphrase"
+    WEAK = "passwordpassword1234"   # clears the length and falls to a dictionary attack
+
+    def setUp(self):
+        self._stack = _isolated_stack()
+        self._stack.__enter__()
+        cs.lock_all()
+        self.alice = cdb.create_local_identity("alice")["id"]
+
+    def tearDown(self):
+        cs.lock_all()
+        self._stack.__exit__(None, None, None)
+
+    def _put_slot_on_scrypt(self, passphrase: str) -> None:
+        """Rewrap Alice's passphrase slot exactly as the scrypt-era code would have left it."""
+        import os
+
+        slot = cdb.get_vault_slot(self.alice)
+        private_key, _ = cs._open_slot(slot, passphrase, user_id=self.alice)
+        kdf = dict(LEGACY_SCRYPT, kdf_salt=cs._b64e(os.urandom(16)))
+        cdb.rewrap_vault_slot_secret(
+            slot["id"],
+            wrapped_private_key=cs._wrap(cs._derive_kek(passphrase, kdf), private_key,
+                                         aad=cs._private_key_aad(self.alice, slot["id"])),
+            kdf=kdf, meets_production_min=True, strength_basis=None,
+        )
+
+    def test_a_new_slot_uses_the_current_kdf(self):
+        cs.set_passphrase(self.alice, self.PASSPHRASE)
+        slot = cdb.get_vault_slot(self.alice)
+        self.assertEqual(
+            (slot["kdf_algo"], slot["kdf_m"], slot["kdf_t"], slot["kdf_p"]),
+            ("argon2id", cs.ARGON2_MEMORY_KIB, cs.ARGON2_TIME_COST, cs.ARGON2_LANES),
+        )
+        self.assertEqual(slot["strength_basis"], cs.STRENGTH_BASIS)
+
+    def test_unlock_moves_a_scrypt_slot_onto_the_current_kdf_without_disturbing_its_key(self):
+        # The keypair and the DEK's seal are what other code relies on — grants, rotation, and whether a
+        # backup is still valid here — so the upgrade replaces the KEK's wrap and nothing else.
+        cs.set_passphrase(self.alice, self.PASSPHRASE)
+        dek = cs.require_dek(self.alice)
+        self._put_slot_on_scrypt(self.PASSPHRASE)
+        before = cdb.get_vault_slot(self.alice)
+        cs.lock_all()
+
+        self.assertEqual(cs.unlock(self.alice, self.PASSPHRASE), dek)
+
+        after = cdb.get_vault_slot(self.alice)
+        self.assertEqual(after["kdf_algo"], "argon2id")
+        self.assertIsNone(after["kdf_n"], "no scrypt parameter may survive beside the Argon2id ones")
+        self.assertEqual((after["public_key"], after["sealed_dek"]), (before["public_key"], before["sealed_dek"]))
+        cs.lock_all()
+        self.assertEqual(cs.unlock(self.alice, self.PASSPHRASE), dek, "and it opens under the new KDF")
+
+    def test_the_upgrade_carries_the_credentials_export_history_across(self):
+        # Same passphrase, so every backup it names still opens with exactly what it did; a change dialog
+        # that stopped listing them would be wrong about what the change strands.
+        cs.set_passphrase(self.alice, self.PASSPHRASE)
+        self._put_slot_on_scrypt(self.PASSPHRASE)
+        cdb.record_credentials_export(self.alice, cs.current_wrapped_dek_fingerprint(self.alice))
+        cs.lock_all()
+        cs.unlock(self.alice, self.PASSPHRASE)
+        self.assertEqual(len(cdb.credentials_exports_for_fingerprint(cs.current_wrapped_dek_fingerprint(self.alice))), 1)
+
+    def test_a_passphrase_failing_the_current_rule_still_unlocks_but_is_flagged(self):
+        # A passphrase written under an earlier, laxer rule. Refusing the unlock would stop this member's
+        # syncing over a passphrase nobody has shown to be exposed; what changes is that they are asked to
+        # replace it, no data source can be connected, and they cannot take a backup that would carry it.
+        from unittest import mock
+
+        with mock.patch.object(cs, "passphrase_shortfall", return_value=None):
+            cs.set_passphrase(self.alice, self.WEAK)
+        with cdb.get_control_db() as conn:
+            conn.execute("UPDATE vault_slot SET strength_basis = NULL")
+        cs.lock_all()
+        self.assertTrue(cs.ready_for_production(), "an earlier rule's verdict stands until the passphrase is typed")
+        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+
+        cs.unlock(self.alice, self.WEAK)
+
+        self.assertTrue(cs.is_unlocked(self.alice))
+        self.assertTrue(cs.passphrase_needs_change(self.alice))
+        self.assertFalse(cs.ready_for_production())
+        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "weak_passphrase")
+
+        cs.change_passphrase(self.alice, self.WEAK, self.PASSPHRASE)
+        self.assertFalse(cs.passphrase_needs_change(self.alice))
+        self.assertTrue(cs.ready_for_production())
+        self.assertIsNone(cs.credentials_export_refusal(self.alice))
+
+    def test_a_passing_passphrase_judged_under_an_earlier_rule_is_cleared_by_one_unlock(self):
+        cs.set_passphrase(self.alice, self.PASSPHRASE)
+        with cdb.get_control_db() as conn:
+            conn.execute("UPDATE vault_slot SET strength_basis = NULL")
+        cs.lock_all()
+        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+        cs.unlock(self.alice, self.PASSPHRASE)
+        self.assertIsNone(cs.credentials_export_refusal(self.alice))
+
+    def test_a_new_estimator_release_asks_for_the_passphrase_to_be_typed_again(self):
+        # A new release can move a score as surely as a new threshold can, so a verdict is current only
+        # for the release that took it. Until the passphrase is typed nothing is known to be wrong, so it
+        # is a request, not a block — except for the backup that would carry it.
+        cs.set_passphrase(self.alice, self.PASSPHRASE)
+        self.assertFalse(cs.passphrase_needs_check(self.alice))
+        cs.lock_all()
+        from unittest import mock
+
+        with mock.patch.object(cs, "STRENGTH_BASIS", cs.STRENGTH_BASIS + "-next"):
+            self.assertTrue(cs.passphrase_needs_check(self.alice))
+            self.assertFalse(cs.passphrase_needs_change(self.alice))
+            self.assertTrue(cs.ready_for_production())
+            self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+
+            cs.unlock(self.alice, self.PASSPHRASE)
+
+            self.assertFalse(cs.passphrase_needs_check(self.alice))
+            self.assertIsNone(cs.credentials_export_refusal(self.alice))
+
+    def test_the_basis_names_the_installed_estimator_release(self):
+        # Read from the distribution, so a dependency refresh changes it without anyone remembering to.
+        from importlib.metadata import version
+
+        self.assertIn(f"zxcvbn-{version('zxcvbn')}", cs.STRENGTH_BASIS)
+
+    def test_a_slot_asking_for_unbounded_work_is_refused_before_any_is_done(self):
+        # A slot read out of a backup file carries whatever parameters the file names.
+        kdf = {"kdf_algo": "argon2id", "kdf_salt": "AA==", "kdf_m": 64 * 1024 * 1024, "kdf_t": 3, "kdf_p": 4}
+        with self.assertRaises(ValueError):
+            cs._derive_kek(self.PASSPHRASE, kdf)
 
 
 class PasskeySlotTests(unittest.TestCase):

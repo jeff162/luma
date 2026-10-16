@@ -16,6 +16,8 @@ dependencies = [
     # WebAuthn verification for passkey sign-in; the vault's passkeys verify no assertion and do not
     # use it.
     "webauthn==3.0.1",
+    # Estimates how guessable a vault passphrase is, offline, from the dictionaries it ships with.
+    "zxcvbn==4.5.0",
     # Verifies TLS against the OS certificate store rather than a CA bundle pinned here — a
     # runtime dependency because a frozen build has no CA file on disk at all.
     "truststore==0.10.5",

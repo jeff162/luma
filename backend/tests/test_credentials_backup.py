@@ -89,10 +89,10 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/lock")
             payload = self._export(client)
 
-        self.assertEqual(payload["version"], 4)
+        self.assertEqual(payload["version"], 5)
         self.assertTrue(payload["connections"][0]["credential_enc"])
-        self.assertTrue(payload["vault"]["wrapped_private_key"])
-        self.assertTrue(payload["vault"]["sealed_dek"])
+        self.assertTrue(payload["vault_slots"][0]["wrapped_private_key"])
+        self.assertTrue(payload["vault_slots"][0]["sealed_dek"])
 
     # ---- knowing which backups a passphrase change would strand ----------
 
@@ -131,8 +131,8 @@ class CredentialsBackupTests(unittest.TestCase):
             payload = self._export(client)
             user_id = self._user_id(client)
             fingerprint = cs.current_wrapped_dek_fingerprint(user_id)
-        self.assertEqual(fingerprint, cs.exported_slot_fingerprint(payload["vault"]))
-        self.assertNotIn(payload["vault"]["wrapped_private_key"], fingerprint)
+        self.assertEqual(fingerprint, cs.exported_slots_fingerprint(payload["vault_slots"]))
+        self.assertNotIn(payload["vault_slots"][0]["wrapped_private_key"], fingerprint)
         self.assertNotIn(PASSPHRASE, fingerprint)
 
     def test_the_fingerprint_tracks_the_wrapping_a_change_replaces(self):
@@ -146,10 +146,10 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/change-passphrase",
                         json={"old_passphrase": PASSPHRASE, "new_passphrase": OTHER_PASSPHRASE})
             after = self._export(client)
-        self.assertEqual(before["vault"]["sealed_dek"], after["vault"]["sealed_dek"])
+        self.assertEqual(before["vault_slots"][0]["sealed_dek"], after["vault_slots"][0]["sealed_dek"])
         self.assertNotEqual(
-            cs.exported_slot_fingerprint(before["vault"]),
-            cs.exported_slot_fingerprint(after["vault"]),
+            cs.exported_slots_fingerprint(before["vault_slots"]),
+            cs.exported_slots_fingerprint(after["vault_slots"]),
         )
 
     def test_no_usable_secret_appears_anywhere_in_the_file(self):
@@ -212,7 +212,8 @@ class CredentialsBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             user_id = self._seed(client)
             payload = self._export(client)
-            payload["vault"]["user_id"] = "some-other-member"
+            for slot in payload["vault_slots"]:
+                slot["user_id"] = "some-other-member"
             payload.pop(CONTENT_HASH_FIELD, None)
             with get_db() as conn:
                 conn.execute("DELETE FROM connection")
@@ -228,7 +229,8 @@ class CredentialsBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             self._seed(client)
             payload = self._export(client)
-            payload["vault"]["user_id"] = "someone-elsewhere"
+            for slot in payload["vault_slots"]:
+                slot["user_id"] = "someone-elsewhere"
             payload["connections"][0]["credential_enc"] = base64.urlsafe_b64encode(b"not-our-ciphertext").decode()
             payload.pop(CONTENT_HASH_FIELD, None)
 
@@ -236,7 +238,7 @@ class CredentialsBackupTests(unittest.TestCase):
 
             self.assertEqual(r.status_code, 400, r.text)
             detail = r.json()["detail"]
-            self.assertEqual(detail["code"], "backup_passphrase_required")
+            self.assertEqual(detail["code"], "backup_secret_required")
             self.assertIn("another install", detail["message"])
 
     def test_restoring_the_downloaded_file_through_the_upload_endpoint(self):
@@ -304,7 +306,7 @@ class CredentialsBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
             local_user = self._user_id(client)
-            local_slot_before = cs.export_vault_slot(local_user)
+            local_slots_before = cs.export_vault_slots(local_user)
 
             r = client.post(
                 "/api/import-export/restore/credentials",
@@ -314,7 +316,10 @@ class CredentialsBackupTests(unittest.TestCase):
 
             # Readable under the LOCAL dek, and the local vault slot is untouched.
             self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
-            self.assertEqual(cs.export_vault_slot(local_user), local_slot_before)
+            self.assertEqual(
+                [{k: v for k, v in s.items() if k != "site"} for s in cs.export_vault_slots(local_user)],
+                [{k: v for k, v in s.items() if k != "site"} for s in local_slots_before],
+            )
             with get_db() as conn:
                 stored = conn.execute("SELECT credential_enc FROM connection WHERE external_id='ext-1'").fetchone()
             self.assertNotEqual(stored["credential_enc"], payload["connections"][0]["credential_enc"],
@@ -330,7 +335,8 @@ class CredentialsBackupTests(unittest.TestCase):
         foreign_user = str(uuid.uuid4())
         dek = os.urandom(cs.DEK_BYTES)
         salt = os.urandom(16)
-        kek = cs._derive_kek(PASSPHRASE, salt)
+        kdf = {"kdf_algo": "scrypt", "kdf_salt": cs._b64e(salt), "kdf_n": 2 ** 15, "kdf_r": 8, "kdf_p": 1}
+        kek = cs._derive_kek(PASSPHRASE, kdf)
         payload = _stamp_content_hash({
             "version":     3,
             "exported_at": "2026-01-01T00:00:00Z",
@@ -347,8 +353,7 @@ class CredentialsBackupTests(unittest.TestCase):
             "vault": {
                 "user_id": foreign_user, "method": "passphrase",
                 "wrapped_dek": cs._wrap(kek, dek, aad=cs._slot_aad(foreign_user)),
-                "kdf_algo": "scrypt", "kdf_salt": cs._b64e(salt),
-                "kdf_n": cs.SCRYPT_N, "kdf_r": cs.SCRYPT_R, "kdf_p": cs.SCRYPT_P,
+                **kdf,
                 "meets_production_min": True,
             },
         })
@@ -363,6 +368,173 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
 
+    # ---- every way the exporter opens the vault -------------------------
+    #
+    # A file carries the exporting member's passphrase, recovery code and passkey slots, so whichever of
+    # those secrets survives the loss of the machine reopens it. None of them weakens the file: the code
+    # is 160 random bits and a passkey's secret never leaves its authenticator.
+
+    SITE = "https://luma.local"
+    PRF = base64.b64encode(b"\x5a" * 32).decode()
+
+    def _seed_with_every_method(self, client) -> str:
+        """The usual seed, plus a recovery code and a passkey registered at `SITE`. Returns the code."""
+        self._seed(client)
+        code = client.post("/api/auth/vault/recovery-code").json()["recovery_code"]
+        r = client.post("/api/auth/vault/passkey/register", json={
+            "credential_id": "cred-1", "prf_output": self.PRF, "prf_salt": "c2FsdA==", "label": "Laptop",
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        return code
+
+    def test_the_file_carries_the_exporters_recovery_code_and_passkeys(self):
+        with api_client(base_url=self.SITE) as (client, _):
+            self._seed_with_every_method(client)
+            payload = self._export(client)
+        methods = [s["method"] for s in payload["vault_slots"]]
+        self.assertEqual(methods, ["passphrase", "recovery", "passkey"])
+        recovery, passkey = payload["vault_slots"][1], payload["vault_slots"][2]
+        self.assertTrue(recovery["issued_at"], "so a restore can say which kept code opens it")
+        self.assertTrue(cs.exported_site_matches(passkey, "luma.local"))
+        self.assertFalse(cs.exported_site_matches(passkey, "elsewhere.local"))
+        self.assertNotIn("luma.local", json.dumps(passkey), "the host is carried as a digest, not by name")
+
+    def test_a_foreign_install_offers_what_the_file_carries_and_where_a_passkey_works(self):
+        with api_client(base_url=self.SITE) as (client, _):
+            self._seed_with_every_method(client)
+            payload = self._export(client)
+
+        for site, expect_passkey in ((self.SITE, True), ("https://elsewhere.local", False)):
+            with api_client(base_url=site) as (client, _):
+                client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+                r = client.post("/api/import-export/restore/credentials", json={"data": payload})
+            self.assertEqual(r.status_code, 400, r.text)
+            options = r.json()["detail"]["unlock_options"]
+            self.assertTrue(options["passphrase"])
+            self.assertTrue(options["recovery_code"]["issued_at"])
+            self.assertEqual([p["credential_id"] for p in options["passkeys"]],
+                             ["cred-1"] if expect_passkey else [], site)
+
+    def test_a_foreign_install_restores_with_the_recovery_code_alone(self):
+        with api_client(base_url=self.SITE) as (client, _):
+            code = self._seed_with_every_method(client)
+            payload = self._export(client)
+
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+            local_user = self._user_id(client)
+            # Typed back as it was printed, dashes and case and all.
+            r = client.post("/api/import-export/restore/credentials",
+                            json={"data": payload, "recovery_code": code.lower()})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
+
+    def test_a_foreign_install_restores_with_the_passkey_alone(self):
+        with api_client(base_url=self.SITE) as (client, _):
+            self._seed_with_every_method(client)
+            payload = self._export(client)
+
+        with api_client(base_url=self.SITE) as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+            local_user = self._user_id(client)
+            r = client.post("/api/import-export/restore/credentials", json={
+                "data": payload, "passkey_credential_id": "cred-1", "passkey_prf_output": self.PRF,
+            })
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
+
+    def test_a_wrong_recovery_code_is_a_clean_refusal(self):
+        with api_client(base_url=self.SITE) as (client, _):
+            self._seed_with_every_method(client)
+            payload = self._export(client)
+
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+            r = client.post("/api/import-export/restore/credentials",
+                            json={"data": payload, "recovery_code": cs.generate_recovery_code()})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["detail"]["code"], "incorrect_backup_secret")
+
+    # ---- after the workspace key is replaced -----------------------------
+
+    def test_a_backup_from_before_a_rotation_is_reopened_not_copied(self):
+        # Rotation replaces the key and leaves every slot's wrapping alone, so a file from before it still
+        # looks like this install's own by its wrapping — and copied verbatim, its credentials would sit
+        # under a key nothing here can open any more. It has to be reopened with a secret and re-keyed.
+        with api_client() as (client, _):
+            user_id = self._seed(client)
+            payload = self._export(client)
+            self.assertEqual(client.post("/api/auth/vault/rotate").status_code, 200)
+            client.post("/api/auth/vault/lock")
+
+            r = client.post("/api/import-export/restore/credentials", json={"data": payload})
+            self.assertEqual(r.status_code, 400, r.text)
+            self.assertEqual(r.json()["detail"]["code"], "backup_secret_required")
+
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            r = client.post("/api/import-export/restore/credentials",
+                            json={"data": payload, "passphrase": PASSPHRASE})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
+
+    def test_a_backup_from_before_a_vault_reset_restores_into_the_new_vault(self):
+        # The recovery ladder's backup rung: the passphrase is lost, the vault is reset (a new key, every
+        # credential cleared), a new passphrase is set — and a backup taken under the old vault puts every
+        # credential back, opened with what was in force when it was taken.
+        for secret_field in ("passphrase", "recovery_code"):
+            with self.subTest(secret_field), api_client() as (client, _):
+                user_id = self._seed(client)
+                code = client.post("/api/auth/vault/recovery-code").json()["recovery_code"]
+                payload = self._export(client)
+                reset = client.post("/api/auth/vault/reset", json={"reason": "lost", "confirm": "RESET VAULT"})
+                self.assertEqual(reset.status_code, 200, reset.text)
+                client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+
+                secret = PASSPHRASE if secret_field == "passphrase" else code
+                r = client.post("/api/import-export/restore/credentials",
+                                json={"data": payload, secret_field: secret})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
+
+    # ---- the passphrase a file carries -----------------------------------
+
+    def test_no_backup_is_written_while_the_passphrase_fails_the_current_rule(self):
+        # The file carries the passphrase slot to wherever it is kept, open to offline guessing, so it is
+        # held to the rule in force — judged at the last unlock, the only moment it can be.
+        from unittest import mock
+
+        with api_client() as (client, _):
+            with mock.patch.object(cs, "passphrase_shortfall", return_value=None):
+                client.post("/api/auth/vault/set-passphrase", json={"passphrase": "passwordpassword1234"})
+            client.post("/api/auth/vault/lock")
+            client.post("/api/auth/vault/unlock", json={"passphrase": "passwordpassword1234"})
+
+            r = client.get("/api/import-export/backup/credentials")
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(r.json()["detail"]["code"], "weak_passphrase")
+            tasks = client.get("/api/tasks").json()
+            self.assertIn("vault_passphrase_change", [t["id"] for t in tasks["tasks"]])
+
+    def test_a_passphrase_not_yet_checked_under_the_current_rule_is_asked_for_by_a_dismissable_task(self):
+        # Nothing is known to be wrong, so the reminder can be put away; the backup still waits for the
+        # passphrase to be typed whether or not it is.
+        from backend.db import control_database as cdb
+
+        with api_client() as (client, _):
+            self._seed(client)
+            with cdb.get_control_db() as conn:
+                conn.execute("UPDATE vault_slot SET strength_basis = 'rule-1'")
+            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_passphrase_needs_check"])
+            task = next(t for t in client.get("/api/tasks").json()["tasks"] if t["id"] == "vault_passphrase_check")
+            self.assertEqual(client.post(f"/api/tasks/dismiss/{task['dismiss_key']}").status_code, 200)
+            self.assertNotIn("vault_passphrase_check", [t["id"] for t in client.get("/api/tasks").json()["tasks"]])
+            self.assertEqual(client.get("/api/import-export/backup/credentials").status_code, 409)
+
+            client.post("/api/auth/vault/lock")
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_passphrase_needs_check"])
+            self.assertEqual(client.get("/api/import-export/backup/credentials").status_code, 200)
+
     # ---- refusals -------------------------------------------------------
 
     def test_a_foreign_backup_without_a_passphrase_asks_for_one(self):
@@ -374,7 +546,7 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
             r = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(r.status_code, 400)
-            self.assertEqual(r.json()["detail"]["code"], "backup_passphrase_required")
+            self.assertEqual(r.json()["detail"]["code"], "backup_secret_required")
 
     def test_a_wrong_backup_passphrase_is_a_clean_refusal(self):
         # The AEAD tag is the verifier, so a wrong passphrase surfaces as a stated refusal rather than
@@ -390,7 +562,7 @@ class CredentialsBackupTests(unittest.TestCase):
                 json={"data": payload, "passphrase": "not-the-right-one"},
             )
             self.assertEqual(r.status_code, 400)
-            self.assertEqual(r.json()["detail"]["code"], "incorrect_backup_passphrase")
+            self.assertEqual(r.json()["detail"]["code"], "incorrect_backup_secret")
 
     def test_an_unrecognized_version_is_refused(self):
         with api_client() as (client, _):

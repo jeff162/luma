@@ -24,7 +24,8 @@ hides the reminder and nothing else: the state it reports stays on the page it l
 tasks whose findings have their own per-item answer too — a recurring signal dismissed by fingerprint on
 the Recurring page, a reimbursement snoozed — because putting the reminder away ("two of these are waiting
 on someone else") is a different statement from answering a finding. The only exception is a task that
-declares itself `required` (HTTPS with a data provider configured), which stays until it is fixed.
+declares itself `required` because it blocks something until it is fixed (a proxy certificate devices do
+not trust, a vault passphrase that has to change), which stays until it is.
 `_with_dismiss_keys` applies the rule in one place, so a new task is dismissible without opting in.
 
 This reverses an earlier design that withheld dismissal from the connection, vault-access, recurring,
@@ -121,6 +122,55 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "count":       len(waiting),
         "link":        "/import-export?tab=connections",
         "link_label":  "Review vault access",
+        "severity":    SEVERITY_INFO,
+    }
+
+
+def _vault_passphrase_task(request: Request | None) -> dict | None:
+    """This member's vault passphrase failed the strength rule when they last typed it.
+
+    Required rather than dismissible: while it stands no data source can be connected
+    (`crypto_service.ready_for_production`) and this member cannot take a credentials backup, and the only
+    person who can clear it is the one it is shown to — a passphrase can be changed by its owner alone.
+    """
+    user = getattr(request, "state", None) and getattr(request.state, "user", None)
+    if not user or not crypto_service.passphrase_needs_change(user["id"]):
+        return None
+    return {
+        "id":          "vault_passphrase_change",
+        "title":       "Change your vault passphrase",
+        "description": "Your vault passphrase is too easy to guess under the current strength rule. It still "
+                       "opens the vault, but no data provider can be connected and no credentials backup "
+                       "can be taken until it is changed. Change it in Vault settings.",
+        "count":       1,
+        "link":        "/import-export?tab=connections",
+        "link_label":  "Open data connections",
+        "severity":    SEVERITY_WARNING,
+        "required":    True,
+    }
+
+
+def _vault_passphrase_check_task(request: Request | None) -> dict | None:
+    """This member's vault passphrase has not been judged under the current strength rule and estimator.
+
+    Dismissable, unlike the change task: nothing is known to be wrong, and usually nothing is — an
+    estimator release seldom moves a strong passphrase. What does wait is a credentials backup, which
+    refuses until the passphrase has been typed (`credentials_export_refusal`) whether or not this is
+    dismissed. Raised for every member at once when the rule or the estimator changes, and the one way it
+    reaches a member who unlocks only with a passkey, which cannot judge a passphrase.
+    """
+    user = getattr(request, "state", None) and getattr(request.state, "user", None)
+    if not user or not crypto_service.passphrase_needs_check(user["id"]):
+        return None
+    return {
+        "id":          "vault_passphrase_check",
+        "title":       "Confirm your vault passphrase",
+        "description": "The rule for how hard a vault passphrase must be to guess has changed since yours was "
+                       "last checked. Unlock the vault by typing your passphrase, rather than with a passkey, "
+                       "so it can be checked. No credentials backup can be taken until then.",
+        "count":       1,
+        "link":        "/import-export?tab=connections",
+        "link_label":  "Open data connections",
         "severity":    SEVERITY_INFO,
     }
 
@@ -309,6 +359,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     vault_task = _vault_access_task(request)
     if vault_task:
         tasks.append(vault_task)
+
+    passphrase_task = _vault_passphrase_task(request) or _vault_passphrase_check_task(request)
+    if passphrase_task:
+        tasks.append(passphrase_task)
 
     error_task = _server_error_task(request)
     if error_task:

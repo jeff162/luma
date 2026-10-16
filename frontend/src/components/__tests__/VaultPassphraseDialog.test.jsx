@@ -14,11 +14,24 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const vaultCredentialsBackups = vi.fn(async () => ({ backups: [] }))
+// The server's guessability verdict. Anything containing "password" stands in for what the estimator
+// calls guessable; everything else clears it.
+const vaultPassphraseStrength = vi.fn(async (passphrase) => (
+  passphrase.includes('password')
+    ? {
+      acceptable: false, score: 1,
+      shortfall: { reason: 'guessable', warning: 'This is a very common password.', suggestions: ['Add another word or two.'] },
+    }
+    : { acceptable: passphrase.length >= 20, score: 4, shortfall: null }
+))
 const runVaultPasskeyUnlock = vi.fn(async () => ({ ok: true, user: { id: 'u1' } }))
 const runVaultPasskeySetPassphrase = vi.fn(async () => ({ ok: true, user: { id: 'u1' } }))
 
 vi.mock('../../lib/api.js', () => ({
-  api: { vaultCredentialsBackups: (...a) => vaultCredentialsBackups(...a) },
+  api: {
+    vaultCredentialsBackups: (...a) => vaultCredentialsBackups(...a),
+    vaultPassphraseStrength: (...a) => vaultPassphraseStrength(...a),
+  },
 }))
 
 // The ceremony itself is mocked: it is WebAuthn, which jsdom has no way to run. What is under test here
@@ -44,8 +57,12 @@ async function clickIsIgnored(label, onSubmit) {
 // The limits the server would serve. Passed through the session exactly as the app does, so the dialog is
 // exercised against served numbers rather than its own fallbacks.
 const SESSION = {
-  currentUser: { vault_passphrase_min_length: 20, vault_passphrase_min_distinct: 6 },
+  currentUser: { vault_passphrase_min_length: 20 },
 }
+
+// The server's verdict arrives after a pause in typing, and the dialog holds its submit until it does —
+// so a case that submits a good passphrase waits for the meter to say so first.
+const strengthSettled = () => screen.findByText('Strong')
 
 function renderDialog(props, session = SESSION) {
   return render(
@@ -62,6 +79,7 @@ const withPasskey = (...passkeys) => ({
 afterEach(() => {
   cleanup()
   vaultCredentialsBackups.mockClear()
+  vaultPassphraseStrength.mockClear()
   runVaultPasskeyUnlock.mockClear()
   runVaultPasskeySetPassphrase.mockClear()
 })
@@ -75,6 +93,7 @@ describe('a passkey as the proof of the current passphrase', () => {
   async function fillNewPassphrase() {
     await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), STRONG)
+    await strengthSettled()
   }
 
   // `findBy` rather than `getBy` in these two: the dialog fetches the stranded-backup list on mount, and
@@ -165,7 +184,9 @@ describe('the Enter key', () => {
     const onSubmit = vi.fn()
     renderDialog({ mode: 'set', onSubmit })
     await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase')
-    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'a-strong-vault-passphrase{Enter}')
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'a-strong-vault-passphrase')
+    await strengthSettled()
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), '{Enter}')
     expect(onSubmit).toHaveBeenCalledWith('a-strong-vault-passphrase')
   })
 
@@ -190,11 +211,26 @@ describe('the passphrase floor is enforced, not suggested', () => {
     await clickIsIgnored('Set passphrase', onSubmit)
   })
 
-  it('blocks a long passphrase built from too few distinct characters', async () => {
+  it('blocks a long passphrase the server judges easy to guess, and passes on its advice', async () => {
+    // Length cannot catch a long passphrase made of a common word repeated; the server's estimate can,
+    // and what it says is what to change.
     const onSubmit = vi.fn()
     renderDialog({ mode: 'set', onSubmit })
-    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'abababababababababababab')
-    expect(await screen.findByText('Use at least 6 different characters.')).toBeTruthy()
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'passwordpassword1234')
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'passwordpassword1234')
+    expect(await screen.findByText('This is a very common password. Add another word or two.')).toBeTruthy()
+    await clickIsIgnored('Set passphrase', onSubmit)
+  })
+
+  it('holds submit until the verdict on what is typed has arrived', async () => {
+    // Otherwise a fast Enter would send a passphrase the dialog has not yet judged.
+    vaultPassphraseStrength.mockImplementationOnce(() => new Promise(() => {}))
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'set', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase')
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'a-strong-vault-passphrase')
+    // Asked, and the answer never comes.
+    await waitFor(() => expect(vaultPassphraseStrength).toHaveBeenCalled())
     await clickIsIgnored('Set passphrase', onSubmit)
   })
 
@@ -203,6 +239,7 @@ describe('the passphrase floor is enforced, not suggested', () => {
     renderDialog({ mode: 'set', onSubmit })
     await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase')
     await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'a-strong-vault-passphrase')
+    await strengthSettled()
     await userEvent.click(screen.getByText('Set passphrase').closest('button'))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('a-strong-vault-passphrase'))
   })
@@ -222,7 +259,7 @@ describe('changing the passphrase', () => {
     vaultCredentialsBackups.mockResolvedValueOnce({ backups: [{ exported_at: '2026-08-11T10:00:00Z' }] })
     renderDialog({ mode: 'change', onSubmit: vi.fn() })
     expect(await screen.findByText(/Aug 11, 2026/)).toBeTruthy()
-    expect(screen.getByText(/can only be restored with it/)).toBeTruthy()
+    expect(screen.getByText(/can only be restored on another system with it/)).toBeTruthy()
   })
 
   it('still cautions when no backup is on record, since one may predate the record', async () => {
@@ -236,6 +273,7 @@ describe('changing the passphrase', () => {
     await userEvent.type(screen.getByPlaceholderText('Current passphrase'), 'the-old-one')
     await userEvent.type(screen.getByPlaceholderText('New passphrase'), 'a-strong-vault-passphrase')
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), 'a-strong-vault-passphrase')
+    await strengthSettled()
     await userEvent.click(screen.getByText('Change passphrase').closest('button'))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
       current: 'the-old-one', next: 'a-strong-vault-passphrase',
@@ -349,6 +387,7 @@ describe('telling the user why the new passphrase is not accepted yet', () => {
     // which is what makes hovering the greyed button answer the question at all.
     renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
     await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    await strengthSettled()
     await userEvent.hover(screen.getByText('Use a passkey').closest('button').parentElement)
     expect((await screen.findByRole('tooltip')).textContent)
       .toBe('Re-enter the new passphrase to confirm it.')

@@ -423,9 +423,36 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
         <Button small variant="ghost" onClick={onRecover} disabled={passkeyBusy}>
           Can’t open it?
         </Button>
+        {/* Only a typed passphrase can be checked against a strength rule that changed since it was last
+            typed, and the passkey button above is the one a passkey user reaches for — so this says
+            which to use, here where the choice is made. */}
+        {vault.passphraseNeedsCheck ? (
+          <div style={{ flexBasis: '100%', fontSize: 12 }}>
+            The strength rule for vault passphrases has changed. Unlock with your passphrase this time,
+            not a passkey, so yours can be checked.
+          </div>
+        ) : null}
         {/* Below the buttons on its own row, not competing with them: the request is somebody else's
             business to raise and this user's to get to, where the unlock above is what they came for. */}
         <WaitingForAccess waiting={waiting} />
+      </div>
+    )
+  }
+  // Still unlocked, because a passphrase that fails a tightened rule keeps opening the vault — but it
+  // blocks connecting a data source and taking a credentials backup, and only its owner can change it.
+  // Said here because this is where both of those are attempted; Change passphrase is in Vault settings.
+  if (vault.passphraseNeedsChange) {
+    return (
+      <div style={box('rgba(234, 179, 8, 0.12)', 'rgba(234, 179, 8, 0.4)')}>
+        {help}
+        <span>
+          Your vault passphrase is too easy to guess under the current strength rule. Change it to connect
+          data providers or take a credentials backup.
+        </span>
+        <Button small onClick={onSettings} style={{ marginLeft: 'auto' }}>
+          {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
+        </Button>
+        <Button variant="ghost" small onClick={onLock}>Lock</Button>
       </div>
     )
   }

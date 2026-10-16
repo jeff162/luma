@@ -1979,25 +1979,35 @@ sync skips and flags `reauth_required`.
 ### The credentials backup
 
 It exports ciphertext: `connection.credential_enc` and `provider_config.secret_enc` as stored, with the
-exporting vault slot's key material (`crypto_service.export_vault_slot`) in a `vault` block read by its
-`format`. The reasoning is in `security-model.md`.
+exporting member's slots (`crypto_service.export_vault_slots`) in a `vault_slots` list, each read by its
+`method` and `format`. The payload format is `CREDENTIALS_PAYLOAD_VERSION`; older ones carried a single
+passphrase slot as `vault` and still restore (`RESTORABLE_CREDENTIALS_VERSIONS`). The reasoning is in
+`security-model.md` → *Secrets in backup and export*.
 
-- **Export needs no unlocked vault**, since it copies wrapped material.
-- **It carries one slot, the exporting user's passphrase slot.** Each slot is an independently
-  crackable wrap of the same key, so carrying every member's would make the file as weak as the weakest
-  passphrase. A passkey slot cannot be reproduced elsewhere.
-- **Restore asks for a passphrase only when the file's ciphertext is not already valid under the live
-  workspace key.** That is true when the file carries this install's slot
-  (`crypto_service.vault_slot_is_local`) or, with the vault unlocked, when one of its secrets opens
-  with the live key. Rows then go back verbatim.
-- **A file from another install** needs the passphrase that backup was made with
-  (`unwrap_dek_from_slot`, whose AAD is the exporting `user_id`) and the local vault unlocked. Each
-  secret is re-sealed under this workspace's key; a foreign slot is never adopted.
+- **Export needs no unlocked vault**, since it copies wrapped material. It is refused while the
+  exporter's passphrase has not been judged under the current rule, or fails it
+  (`credentials_export_refusal`).
+- **It carries the exporter's passphrase, recovery-code and passkey slots, and no other member's.** A
+  recovery slot carries `issued_at`, so a restore can say which kept code opens the file. A passkey slot
+  carries its `credential_id`, `prf_salt` and `label`, and `site`: a salted digest of the RP id it was
+  registered under, absent when that is unknown. The label is readable by anyone holding the file, like a
+  backup key's name. `sealed_dek_prev` rides along on a slot exported mid-rotation.
+- **Restore asks for a secret only when the file's ciphertext is not already valid under the live
+  workspace key.** It is valid when one of the file's slots seals the key this install holds now
+  (`exported_slots_hold_live_dek`, comparing the seal, which rotation changes and a passphrase change
+  does not), or, with the vault unlocked, when one of its secrets opens with the live key. Rows then go
+  back verbatim.
+- **Otherwise it needs one of the exporter's secrets** — a passphrase, a recovery code, or a passkey's
+  PRF output with its credential id (`deks_from_exported_slot`, whose AAD is the slot's own `user_id` and
+  `id`) — and the local vault unlocked. Each secret is re-sealed under this workspace's key; a foreign
+  slot is never adopted. The refusal that asks (`backup_secret_required`) lists the `unlock_options` the
+  file carries, offering a passkey only when the request's RP id matches its `site`.
 - **`credentials_export`** (control database) holds one row per export: a timestamp and
-  `wrapped_dek_fingerprint`, a digest of the slot's wrapping. On a keypair slot it covers
-  `wrapped_private_key`, the field a passphrase change alters. The passphrase-change dialog uses it to
-  name the backups that will need the old passphrase. It is in the control database so it survives a
-  data restore.
+  `wrapped_dek_fingerprint`, a digest of the passphrase slot's wrapping. On a keypair slot it covers
+  `wrapped_private_key`, the field a passphrase change alters; a KDF upgrade at unlock alters it too and
+  moves the rows with it, since the same passphrase still opens those files. The passphrase-change
+  dialog uses it to name the backups that will need the old passphrase elsewhere. It is in the control
+  database so it survives a data restore.
 
 ### Backup recipients
 
@@ -2413,8 +2423,8 @@ and owed decisions*.
   → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
 - **Account type as a filtering and search axis.** It exists as a rule scope only.
   → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
-- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, an
-  incremental chain, and carrying more than one member's slot in a credentials backup.
+- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, and an
+  incremental chain.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:
   an attributed node lists purchases dated outside the displayed period.

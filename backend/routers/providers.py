@@ -147,19 +147,22 @@ def establish_connection(request: Request, provider: str, payload: dict,
         })
 
     adapter = get_adapter(provider)
-    # Unconditional, and deliberately kept even though `set_passphrase` now refuses to write a weak slot:
-    # this is the boundary where a live bank credential is about to be stored, and it asserts the property
-    # that makes storing it safe rather than trusting that every path which could have created a slot
-    # enforced it. It used to ask the *adapter* whether this particular attempt was live enough to deserve
+    # Unconditional, and deliberately kept even though `set_passphrase` refuses to write a weak slot: a
+    # slot can fall below the floor later, when the rule tightens and its passphrase is re-judged at
+    # unlock. This is the boundary where a live bank credential is about to be stored, and it asserts the
+    # property that makes storing it safe rather than trusting that every path which could have created a
+    # slot enforced it. It used to ask the *adapter* whether this particular attempt was live enough to deserve
     # a strong passphrase; that question has only one answer now, and asking it per provider was one more
     # thing a new adapter could answer wrongly.
     if not crypto_service.ready_for_production():
         raise HTTPException(status_code=400, detail={
             "code": "weak_vault",
             "message": (
-                "Set a strong vault passphrase before connecting a data provider. Each vault passphrase must "
-                f"be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters with at least "
-                f"{crypto_service.VAULT_PRODUCTION_MIN_DISTINCT} distinct characters."
+                "A vault passphrase in this workspace does not meet the strength rule, so no data provider "
+                "can be connected until its owner changes it in Vault settings."
+                if not crypto_service.passphrase_needs_change(user["id"]) else
+                "Your vault passphrase does not meet the strength rule. Change it in Vault settings before "
+                "connecting a data provider."
             ),
         })
 

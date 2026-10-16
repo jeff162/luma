@@ -316,11 +316,17 @@ def _session_payload(user: dict) -> dict:
         # to say about a secret shown once, and is enough to recognize a code still on file.
         "vault_has_recovery_code": crypto_service.has_recovery_code(user["id"]),
         "vault_recovery_code_issued_at": crypto_service.recovery_code_issued_at(user["id"]),
-        # The floor the dialog gates its own submit button on. Served rather than duplicated in the
-        # client because the two must agree exactly: a client holding its own copy either blocks a
-        # passphrase the server would take or offers one it refuses, and both read as a broken vault.
+        # The length half of the floor, which the dialog checks on every keystroke. Served rather than
+        # duplicated in the client because the two must agree exactly: a client holding its own copy
+        # either blocks a passphrase the server would take or offers one it refuses, and both read as a
+        # broken vault. The guessability half is asked of the server (`/vault/passphrase-strength`).
         "vault_passphrase_min_length": crypto_service.VAULT_PRODUCTION_MIN_LEN,
-        "vault_passphrase_min_distinct": crypto_service.VAULT_PRODUCTION_MIN_DISTINCT,
+        # This member's passphrase was judged under the current rule and failed it — at their last unlock,
+        # since that is the only moment it can be judged. Drives the prompt to change it.
+        "vault_passphrase_needs_change": crypto_service.passphrase_needs_change(user["id"]),
+        # Not yet judged under the current rule and estimator, which only typing it can settle. Drives
+        # the locked strip's request to unlock with the passphrase rather than a passkey.
+        "vault_passphrase_needs_check": crypto_service.passphrase_needs_check(user["id"]),
         "must_change_password": bool(user.get("must_change_password")),
         # Login passkeys, which are not vault passkeys and are listed separately for that reason. No key
         # material rides along — only what the settings list renders.
@@ -897,7 +903,7 @@ _LOGIN_CHALLENGE_KEY = "passkey_login_challenge"
 
 
 def _require_passkey_context(request: Request) -> dict:
-    context = _passkey_context(request)
+    context = transport.passkey_context(request)
     if not context["available"]:
         raise HTTPException(status_code=400, detail={
             "code": context["reason"],
@@ -919,7 +925,7 @@ def _expected_origin(request: Request, rp_id: str) -> str:
     defended*).
 
     The scheme is not taken on trust, though: anything but loopback has to be HTTPS, which is the same
-    secure-context rule `_passkey_context` applies before a ceremony is offered at all.
+    secure-context rule `transport.passkey_context` applies before a ceremony is offered at all.
     """
     origin = request.headers.get("origin") or ""
     parsed = urllib.parse.urlparse(origin)
@@ -938,7 +944,7 @@ def passkey_params(request: Request):
     who they are. `any_registered` asks the same question the sign-in ceremony's credential list does —
     an active account's passkey — so the button is never offered for a list that would come back empty.
     """
-    context = _passkey_context(request)
+    context = transport.passkey_context(request)
     return {**context, "any_registered": bool(list_all_app_passkey_credentials())}
 
 
@@ -1050,16 +1056,29 @@ def passkey_remove(passkey_id: str, request: Request):
 def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:
     """The floor stated as data, not only as prose.
 
-    The dialog disables its submit button on the same two numbers, so it has to be able to read them
-    rather than parse them back out of a sentence — and a client that fell out of step with the server
-    would either block a passphrase the server accepts or offer one it refuses, both of which look like a
-    bug in the vault. `code` is what the UI keys on; the message is for anything that only shows text."""
+    Which part failed (`reason`), the length a client gates on, and the estimator's own advice, so a
+    client can say what to change rather than parse a sentence — and a client that fell out of step with
+    the server would either block a passphrase the server accepts or offer one it refuses, both of which
+    look like a bug in the vault. `code` is what the UI keys on; the message is for anything that only
+    shows text."""
     return HTTPException(status_code=400, detail={
         "code": "weak_passphrase",
-        "message": str(exc),
+        **exc.shortfall,
         "min_length": crypto_service.VAULT_PRODUCTION_MIN_LEN,
-        "min_distinct": crypto_service.VAULT_PRODUCTION_MIN_DISTINCT,
     })
+
+
+@router.post("/vault/passphrase-strength")
+def vault_passphrase_strength(body: VaultPassphraseRequest, request: Request):
+    """Whether a passphrase being chosen clears the floor, asked while it is typed.
+
+    The guessability half of the floor is an estimate from dictionaries that live only on the server, and
+    a second estimator in the browser would disagree with it at the margin — the drift the served length
+    exists to prevent. So the dialog asks here. Nothing is stored or limited: this verifies no secret, and
+    the same passphrase reaches the server anyway when it is submitted."""
+    _require_current_user(request)
+    assessment = crypto_service.passphrase_assessment(body.passphrase)
+    return {"acceptable": assessment["shortfall"] is None, **assessment}
 
 
 def _proof_required_error(exc: Exception) -> HTTPException:
@@ -1513,30 +1532,7 @@ def vault_rotate(request: Request):
 #
 # The browser runs the ceremony; the backend only ever sees the PRF output, which it treats exactly as
 # it treats a passphrase (see `crypto_service` for why no assertion is verified). What the backend does
-# own is the two preconditions the browser can only report as opaque failures.
-
-def _passkey_context(request: Request) -> dict:
-    """The Relying Party id a ceremony must run under, or why one cannot run here.
-
-    Two constraints, both outside the app's control. WebAuthn requires a **secure context**, so a
-    cleartext network bind cannot register or use a passkey at all. And an RP id must be a *domain* —
-    a bare IP address is not one, so a LAN server reached as `192.168.x.x` can never host passkeys
-    however it is served. Both are reported as stated reasons rather than left to surface as an
-    unexplained browser exception, because in both cases the answer is "use a passphrase here".
-    """
-    host = (request.url.hostname or "").strip("[]")
-    # A hostname made only of digits and dots, or containing a colon, is an address rather than a name.
-    is_address = bool(host) and (":" in host or all(part.isdigit() for part in host.split(".") if part))
-    # The address check comes first because the two reasons differ in whether anything can be done: an
-    # address can never host passkeys however it is served, while cleartext is fixed by configuring
-    # HTTPS. Reporting the fixable one on a host where the fix would not help sends the user to set up
-    # TLS and arrive back at the same refusal.
-    if is_address:
-        return {"available": False, "reason": "ip_address_host", "rp_id": None}
-    if not transport.page_is_secure_context(request):
-        return {"available": False, "reason": "insecure_context", "rp_id": None}
-    return {"available": True, "reason": None, "rp_id": host}
-
+# own is the two preconditions the browser can only report as opaque failures (`transport.passkey_context`).
 
 @router.get("/vault/passkey/params")
 def vault_passkey_params(request: Request):
@@ -1547,7 +1543,7 @@ def vault_passkey_params(request: Request):
     ceremony the user abandons should leave nothing behind.
     """
     user = _require_current_user(request)
-    context = _passkey_context(request)
+    context = transport.passkey_context(request)
     # Labelled as the vault's, because a device shows one passkey list per host and sign-in keeps its own
     # passkeys there too; see `app_passkey.passkey_account_names`. The handle stays the account id: it is
     # what every existing vault passkey was registered under, and sign-in is the one that moved off it.
@@ -1566,12 +1562,13 @@ def vault_passkey_params(request: Request):
 @router.post("/vault/passkey/register")
 def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
     user = _require_current_user(request)
-    if not _passkey_context(request)["available"]:
+    context = transport.passkey_context(request)
+    if not context["available"]:
         raise HTTPException(status_code=400, detail="Passkeys need an HTTPS connection to a named host")
     try:
         result = crypto_service.register_passkey_slot(
             user["id"], credential_id=body.credential_id, prf_output=body.prf_output,
-            prf_salt=body.prf_salt, label=body.label,
+            prf_salt=body.prf_salt, rp_id=context["rp_id"], label=body.label,
         )
     except crypto_service.ProofRequired as exc:
         raise _proof_required_error(exc)
@@ -1588,7 +1585,9 @@ def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
 def vault_passkey_unlock(body: VaultPasskeyUnlockRequest, request: Request):
     user = _require_current_user(request)
     try:
-        owner_id, _ = crypto_service.unlock_with_passkey(body.credential_id, body.prf_output)
+        owner_id, _ = crypto_service.unlock_with_passkey(
+            body.credential_id, body.prf_output, rp_id=transport.passkey_context(request)["rp_id"],
+        )
     except crypto_service.VaultAccessPending as exc:
         raise _access_pending_error(exc)
     except crypto_service.VaultLocked as exc:

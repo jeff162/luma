@@ -82,7 +82,7 @@ file **by phase number** (`db/database.py` migrations v18/v20, `services/provide
    results are not reliable across browsers; trusting it would produce a slot nothing could ever open.
    No WebAuthn assertion is verified and no WebAuthn library is used, because a wrong PRF output
    fails at the AEAD tag as a wrong passphrase does. The two hard preconditions (secure context, RP id must be a
-   domain) are detected server-side (`_passkey_context`) and reported as stated reasons.
+   domain) are detected server-side (`transport.passkey_context`) and reported as stated reasons.
 
    **Registration asks for PRF `eval` at `create()`, not only at the follow-up `get()`.** Requesting it
    costs nothing where unsupported — the field is ignored and the salt is still evaluated in the `get()`

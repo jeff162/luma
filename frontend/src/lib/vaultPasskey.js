@@ -276,6 +276,38 @@ export async function runVaultPasskeySetPassphrase(newPassphrase) {
   }
 }
 
+// Run a ceremony for one passkey slot carried in a credentials backup, and return its PRF output.
+//
+// The slot is not this install's, so there is nothing to ask the server for first: the restore surface
+// already holds the credential id and salt the backup carries, and the server offered this passkey only
+// because this page is served at the host name it was registered under (`rpId`). The output goes back to
+// the server with the file, which opens that slot with it — exactly as a typed passphrase would.
+//
+// Shares `unlockInFlight` with the two above, since the browser permits one ceremony at a time.
+export async function runBackupPasskeyCeremony({ rpId, credentialId, prfSalt }) {
+  if (unlockInFlight) return { ok: false, reason: 'in_progress', message: '' }
+  unlockInFlight = true
+  try {
+    const availability = passkeyAvailability({ available: !!rpId, reason: 'insecure_context' })
+    if (!availability.available) {
+      return { ok: false, reason: availability.reason, message: PASSKEY_UNAVAILABLE[availability.reason] }
+    }
+    const result = await evaluatePrf({ rpId, credentialIds: [credentialId], salt: b64.decode(prfSalt) })
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.reason === 'cancelled' ? '' : (PASSKEY_UNAVAILABLE[result.reason] || PASSKEY_UNAVAILABLE.unsupported),
+      }
+    }
+    return { ok: true, credentialId: result.credentialId, prfOutput: result.prfOutput }
+  } catch (e) {
+    return { ok: false, reason: 'failed', message: e?.message || 'The passkey did not answer.' }
+  } finally {
+    unlockInFlight = false
+  }
+}
+
 // Whether this user has a passkey that can actually open the vault. A `pending` slot is one awaiting
 // approval — registered, but not yet able to unlock anything — so offering it would produce a ceremony
 // that can only fail. Read from the session user, which both callers already hold.

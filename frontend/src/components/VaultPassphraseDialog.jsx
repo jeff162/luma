@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, PasswordInput, PasswordManagerUsername, AppDialog, Tooltip } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { passphraseLimits, passphraseMeetsFloor, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { passphraseLimits, passphraseMeetsFloor, usePassphraseStrength } from '../lib/vaultPassphrase.js'
 import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
 import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
 import { useVaultPasskeyUnlock } from '../lib/useVaultPasskeyUnlock.js'
@@ -26,36 +26,19 @@ import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
 
-// Advisory only — a rough entropy estimate, shown alongside the hard floor rather than in place of it.
-// The floor decides whether the passphrase is *allowed* (see `vaultPassphrase.js`); this says how good
-// it is beyond that, which is the part worth nudging. Bits ≈ length × log2(effective alphabet), heavily
-// penalized when very few distinct characters are used (a repeated char clears length but not entropy).
-const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Good', 'Strong']
-const STRENGTH_COLORS = ['#dc2626', '#dc2626', '#eab308', '#16a34a', '#16a34a']
+// The server's estimate (0–4, from `usePassphraseStrength`), drawn as four bars. The same estimate decides
+// whether the passphrase is allowed — only the top score is — so the meter and the gate cannot disagree:
+// a full green meter is exactly a passphrase the vault will take.
+const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Almost there', 'Strong']
+const STRENGTH_COLORS = ['#dc2626', '#dc2626', '#eab308', '#eab308', '#16a34a']
 
-function estimatePassphraseStrength(p) {
-  if (!p) return { score: 0, label: '', bits: 0 }
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/]
-  const sizes = [26, 26, 10, 32]
-  const alphabet = classes.reduce((sum, re, i) => sum + (re.test(p) ? sizes[i] : 0), 0) || 1
-  let bits = p.length * Math.log2(alphabet)
-  const distinct = new Set(p).size
-  if (distinct <= 4) bits = Math.min(bits, 24)  // near-repetition has almost no real entropy
-  let score = 0
-  if (bits >= 45) score = 1
-  if (bits >= 65) score = 2
-  if (bits >= 85) score = 3
-  if (bits >= 110) score = 4
-  return { score, label: STRENGTH_LABELS[score], bits }
-}
-
-function PassphraseStrengthMeter({ passphrase }) {
+function PassphraseStrengthMeter({ score }) {
   // Always rendered — even with no passphrase yet — so this row reserves its space up front and the
   // confirm field below doesn't jump the moment the user starts typing. The empty state shows neutral grey
   // bars and a muted "Passphrase strength" caption rather than an alarming "Very weak".
-  const has = !!passphrase
-  const { score, label } = has ? estimatePassphraseStrength(passphrase) : { score: 0, label: '' }
-  const color = STRENGTH_COLORS[score]
+  const has = score !== null && score !== undefined
+  const label = has ? STRENGTH_LABELS[score] : ''
+  const color = has ? STRENGTH_COLORS[score] : 'var(--muted)'
   return (
     <div style={{ display: 'grid', gap: 5 }}>
       <div style={{ display: 'flex', gap: 4 }}>
@@ -64,8 +47,7 @@ function PassphraseStrengthMeter({ passphrase }) {
         ))}
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)', minHeight: 16 }}>
-        <span style={{ color: has ? color : 'var(--muted)' }}>{has ? label : 'Passphrase strength'}</span>
-        {has && score < 2 ? <span>Consider a longer, more varied passphrase.</span> : null}
+        <span style={{ color }}>{has ? label : 'Passphrase strength'}</span>
       </div>
     </div>
   )
@@ -119,20 +101,23 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   const setting = mode === 'set' || changing || requesting
   const session = useAppSession()
   const limits = passphraseLimits(session?.currentUser)
-  const shortfall = setting ? passphraseShortfall(passphrase, limits) : null
+  const strength = usePassphraseStrength(passphrase, limits, { enabled: setting })
+  const shortfall = setting ? strength.issue : null
   const stranded = useStrandedBackups(changing)
   // Disabled rather than refused on submit: the floor is a rule the user can satisfy before spending a
   // round trip, and letting the click through only to answer it with an error is what made the old
-  // advisory meter feel like the passphrase had been accepted.
-  const blocked = busy || (setting && (!passphrase || !!shortfall))
+  // advisory meter feel like the passphrase had been accepted. Held while the verdict on what is typed
+  // is still on its way, for the same reason.
+  const blocked = busy || (setting && (!passphrase || !!shortfall || strength.pending))
 
   // What is still wrong with the new passphrase, in the words of the condition that is unmet. One
   // expression feeds all three places it is needed — the note under the confirm field and the hover on
   // each control it disables — so a control can never be greyed for a reason the screen does not give.
   const newPassphraseIssue = !passphrase ? 'Enter a new passphrase.'
     : shortfall ? shortfall
-      : !confirm ? 'Re-enter the new passphrase to confirm it.'
-        : passphrase !== confirm ? MISMATCH : ''
+      : strength.pending ? 'Checking how easy the passphrase is to guess…'
+        : !confirm ? 'Re-enter the new passphrase to confirm it.'
+          : passphrase !== confirm ? MISMATCH : ''
   // Shown from the first character typed into the confirm field until the two agree — deliberately
   // including the stretch where what has been typed is still a correct prefix. Staying silent there
   // reads as "so far so good" and leaves someone who stopped a character short with a greyed button
@@ -260,7 +245,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
             suggestionFits: value => passphraseMeetsFloor(value, limits),
           } : {})}
           {...(setting ? NEW_SECRET_PROPS : EXISTING_SECRET_PROPS)} />
-        {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
+        {setting ? <PassphraseStrengthMeter score={passphrase ? strength.score : null} /> : null}
         {shortfall ? (
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{shortfall}</div>
         ) : null}
@@ -276,8 +261,9 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{MISMATCH}</div>
         ) : null}
         {/* The consequence a passphrase change has that nothing else on screen would reveal: the same DEK
-            is rewrapped, so stored ciphertext is untouched, but any credentials backup already written
-            carries the OLD wrap and stays restorable only with the old passphrase — permanently. Named
+            is rewrapped, so stored ciphertext is untouched and backups still restore here, but any
+            credentials backup already written carries the OLD wrap, and on another system opens only
+            with the old passphrase (or the recovery code it carries) — permanently. Named
             by date where the record knows of one, since "you have a backup from this date" is actionable
             in a way that "if you hold any backup…" is not. The general line stays for files exported
             before that record existed. */}
@@ -291,12 +277,12 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
               <>
                 <b>Keep your current passphrase.</b> {stranded.length === 1 ? 'A credentials backup' : 'Credentials backups'} taken
                 {' '}{stranded.map(b => formatDate(String(b.exported_at).slice(0, 10))).join(', ')}
-                {' '}can only be restored with it, even after this change.
+                {' '}can only be restored on another system with it, even after this change.
               </>
             ) : (
               <>
                 <b>Keep your current passphrase.</b> Any credentials backup taken before now can only be
-                restored with it, even after this change.
+                restored on another system with it, even after this change.
               </>
             )}
           </div>
@@ -306,8 +292,8 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
             {requesting
               ? 'Nobody else ever learns this passphrase — approval does not require it.'
               : 'Nothing here can recover it for you — create a recovery code in Vault settings, or losing it means reconnecting every connection.'}
-            {' '}Store it in a password manager; it must be at least {limits.minLength} characters using
-            at least {limits.minDistinct} different ones.
+            {' '}Store it in a password manager; it must be at least {limits.minLength} characters and
+            hard to guess — several unrelated words work well.
           </p>
         ) : null}
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}

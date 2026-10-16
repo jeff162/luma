@@ -10,7 +10,8 @@
 // (the server reads that without decrypting, so an encrypted archive is
 // identified before any key is asked for), and the flow follows from the
 // answer: a data backup wants a private key when encrypted, a credentials
-// backup may want the vault passphrase that sealed it. Asking the user to
+// backup may want one of the secrets of the member who made it — the vault
+// passphrase, recovery code or a passkey its file carries. Asking the user to
 // choose the right upload control first meant asking them to know how the app
 // is split internally — and picking wrong produced an error about the names of
 // members inside a ZIP. Both restores still route through the confirm overlay,
@@ -19,14 +20,16 @@
 import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
-import { AppDialog, Button, Card, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
+import { AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { Subsection } from '../SectionListPage.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
 import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
+import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
+import { formatDate } from '../../lib/utils.js'
 import {
-  BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
+  BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
 
 // Human-readable explanation for the restore compatibility guard's 409 detail.
@@ -68,11 +71,13 @@ export default function BackupRestoreSection() {
   const [downloading, setDownloading] = useState(false)
   // Non-null while the recipient picker is open, holding the ids currently ticked.
   const [recipientChoice, setRecipientChoice] = useState(null)
-  // The passphrase of the vault that produced a credentials backup — asked for only once the server
-  // says the file came from elsewhere, so the ordinary "my own backup, this machine" restore never
-  // sees a prompt at all.
+  // A secret of the member who made a credentials backup — asked for only once the server says the
+  // file's credentials are not valid here as they stand, so the ordinary "my own backup, this machine"
+  // restore never sees a prompt at all. `unlockOptions` is the server's answer to which of that member's
+  // secrets the file carries and this page can use (a passkey only where its host name matches).
   const [backupPassphrase, setBackupPassphrase] = useState('')
-  const [needsBackupPassphrase, setNeedsBackupPassphrase] = useState(false)
+  const [backupRecoveryCode, setBackupRecoveryCode] = useState('')
+  const [unlockOptions, setUnlockOptions] = useState(null)
   const [vault, setVault] = useState({ configured: false, unlocked: false })
   // Restoring credentials re-keys them under this workspace's DEK, so it needs the vault open. The gate
   // prompts and the action resumes itself — see lib/useVaultGate.js.
@@ -91,6 +96,9 @@ export default function BackupRestoreSection() {
   const restoreBlocked = !restoreFile || restoring || inspectingRestore || !!inspectError || !restoreKind
     || demoLoaded
     || (restoreKind === 'data' && restoreInspection?.encrypted && !privateKeyFile)
+    // Once the file has asked for a secret, Restore means "with this one", so it waits for one typed.
+    // A passkey has its own button, which restores directly.
+    || (restoreIsCredentials && !!unlockOptions && !backupPassphrase && !backupRecoveryCode.trim())
 
   async function refreshVault() {
     const status = await api.getAuthStatus().catch(() => null)
@@ -159,8 +167,9 @@ export default function BackupRestoreSection() {
     setPrivateKeyFile(null)
     setPrivateKeyPassphrase('')
     // A new file is a new question: whatever the previous one asked for does not carry over.
-    setNeedsBackupPassphrase(false)
+    setUnlockOptions(null)
     setBackupPassphrase('')
+    setBackupRecoveryCode('')
     setRestoreMsg(null)
     setRestoreSuccess(null)
     if (!file) return
@@ -180,39 +189,68 @@ export default function BackupRestoreSection() {
     }
   }
 
+  // Whichever typed secret is filled in, passphrase first. A passkey is not typed: its button runs the
+  // ceremony and restores in one press (`restoreWithPasskey`).
+  function typedBackupSecret() {
+    if (backupPassphrase) return { passphrase: backupPassphrase }
+    if (backupRecoveryCode.trim()) return { recovery_code: backupRecoveryCode }
+    return null
+  }
+
   /** One credentials-restore attempt. Throws so the caller can run the gate's single 423 retry. */
-  async function restoreCredentialsOnce(file) {
-    const r = await api.restoreCredentialsFile(file, backupPassphrase || null)
+  async function restoreCredentialsOnce(file, secret) {
+    const r = await api.restoreCredentialsFile(file, secret)
     setRestoreMsg(null)
-    setNeedsBackupPassphrase(false)
+    setUnlockOptions(null)
     setBackupPassphrase('')
+    setBackupRecoveryCode('')
     setRestoreSuccess(`Restored ${r.restored} credential(s).`)
+  }
+
+  async function restoreCredentials(file, secret) {
+    setRestoring(true)
+    try {
+      await restoreCredentialsOnce(file, secret)
+    } catch (e) {
+      const code = e.detail?.code
+      if (code === 'backup_secret_required' || code === 'incorrect_backup_secret') {
+        // The file's credentials are sealed under a key this install does not hold, so they have to be
+        // reopened with one of the secrets of the member who made it before they can be re-keyed under
+        // this one. Reveal what the file can be opened with and let the user try again — none of this
+        // is the local vault's own passphrase.
+        setUnlockOptions(e.detail.unlock_options || null)
+        setRestoreMsg(`❌ ${e.message}`)
+      } else if (e.status === 423 && await ensureVault({ force: true })) {
+        // A late 423: the vault flags said unlocked but the server's DEK had already expired (or was
+        // never open). The gate prompts and the one retry runs against the state the unlock produced.
+        try { await restoreCredentialsOnce(file, secret) }
+        catch (retry) { setRestoreMsg(`❌ ${retry.message}`) }
+      } else {
+        setRestoreMsg(`❌ ${e.message}`)
+      }
+    }
+    setRestoring(false)
+  }
+
+  async function restoreWithPasskey(passkey) {
+    setRestoreMsg(null)
+    const result = await runBackupPasskeyCeremony({
+      rpId: unlockOptions?.rp_id, credentialId: passkey.credential_id, prfSalt: passkey.prf_salt,
+    })
+    if (!result.ok) {
+      if (result.message) setRestoreMsg(`❌ ${result.message}`)
+      return
+    }
+    await restoreCredentials(restoreFile, {
+      passkey_credential_id: result.credentialId, passkey_prf_output: result.prfOutput,
+    })
   }
 
   async function performRestore(file, type, force = false) {
     setPendingConfirm(null)
     if (type === 'credentials') {
-      setRestoring(true)
-      try {
-        await restoreCredentialsOnce(file)
-      } catch (e) {
-        const code = e.detail?.code
-        if (code === 'backup_passphrase_required' || code === 'incorrect_backup_passphrase') {
-          // The file came from another install, so its ciphertext has to be reopened with the vault
-          // passphrase that sealed it before it can be re-keyed under this one. Reveal the field and
-          // let the user press Restore again — this is not the local vault's passphrase.
-          setNeedsBackupPassphrase(true)
-          setRestoreMsg(`❌ ${e.message}`)
-        } else if (e.status === 423 && await ensureVault({ force: true })) {
-          // A late 423: the vault flags said unlocked but the server's DEK had already expired (or was
-          // never open). The gate prompts and the one retry runs against the state the unlock produced.
-          try { await restoreCredentialsOnce(file) }
-          catch (retry) { setRestoreMsg(`❌ ${retry.message}`) }
-        } else {
-          setRestoreMsg(`❌ ${e.message}`)
-        }
-      }
-      setRestoring(false); return
+      await restoreCredentials(file, typedBackupSecret())
+      return
     }
     setRestoring(true)
     try {
@@ -301,7 +339,7 @@ export default function BackupRestoreSection() {
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-            Encrypted data provider credentials back up.
+            The data provider credentials, still encrypted, with your own ways of opening the vault.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             <Button
@@ -311,12 +349,12 @@ export default function BackupRestoreSection() {
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
             {hasStoredCredentials
-              // Two facts that only bite elsewhere, and are easy to discover too late. The passphrase
-              // named is *this* user's: the file carries the exporting account's vault slot and no
-              // other, so in a shared workspace it is not interchangeable with a colleague's. Neither
-              // applies to restoring here — this install's key opens its own backups whatever the
-              // passphrase has since become — so the caveat is scoped to somewhere else.
-              ? 'Restoring this on another system, or here after the vault key is replaced, requires this user\'s current vault passphrase. Retain passphrases after a change to allow restoring older backups.'
+              // Two facts that only bite elsewhere, and are easy to discover too late. The secrets
+              // named are *this* user's: the file carries the exporting account's own ways in and no
+              // other member's, so in a shared workspace they are not interchangeable with a colleague's.
+              // Neither applies to restoring here — this install's key opens its own backups whatever
+              // has happened to anyone's passphrase since — so the caveat is scoped to somewhere else.
+              ? 'Restoring this on another system, or here after the vault key is replaced, needs this user\'s vault passphrase, recovery code or passkey as they were when it was taken. Keep old passphrases and recovery codes, with their dates, to restore older backups.'
               : 'No stored data provider credentials exist to back up.'}
           </div>
         </div>
@@ -483,23 +521,47 @@ export default function BackupRestoreSection() {
                   Select a matching RSA private key file before restoring this backup.
                 </div>
               )}
-              {/* Only shown once the server says the file came from another install: its contents are
-                  sealed under that vault's key, so they have to be reopened with that vault's passphrase
-                  before they can be re-sealed under this one. Restoring your own backup never asks. */}
-              {restoreIsCredentials && needsBackupPassphrase && (
-                <div style={{ display: 'grid', gap: 6, maxWidth: 420 }}>
+              {/* Only shown once the server says the file's credentials are sealed under a key this
+                  install does not hold: they have to be reopened with one of the secrets of the member
+                  who made it before they can be re-sealed under this one. Restoring your own backup here
+                  never asks. Each field appears only if the file carries that kind of key, and a passkey
+                  only where this page is served at the host name it was registered under. */}
+              {restoreIsCredentials && unlockOptions && (
+                <div style={{ display: 'grid', gap: 8, maxWidth: 420 }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    This backup was made on another system. Enter the vault passphrase it was created
-                    with — not this system&apos;s.
+                    Open it with a secret of the member who made it, as it was when the backup was taken —
+                    not this system&apos;s own passphrase.
                   </div>
-                  <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
-                  <PasswordInput
-                    value={backupPassphrase}
-                    onChange={setBackupPassphrase}
-                    placeholder="Vault passphrase this backup was made with"
-                    autoFocus
-                    {...EXISTING_SECRET_PROPS}
-                  />
+                  {unlockOptions.passphrase ? (
+                    <>
+                      <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
+                      <PasswordInput
+                        value={backupPassphrase}
+                        onChange={setBackupPassphrase}
+                        placeholder="Vault passphrase this backup was made with"
+                        autoFocus
+                        {...EXISTING_SECRET_PROPS}
+                      />
+                    </>
+                  ) : null}
+                  {unlockOptions.recovery_code ? (
+                    <Input
+                      value={backupRecoveryCode}
+                      onChange={setBackupRecoveryCode}
+                      placeholder={unlockOptions.recovery_code.issued_at
+                        ? `Or the recovery code issued ${formatDate(String(unlockOptions.recovery_code.issued_at).slice(0, 10))}`
+                        : 'Or the recovery code'}
+                      style={{ fontFamily: 'monospace' }}
+                      {...NO_AUTOFILL_PROPS}
+                    />
+                  ) : null}
+                  {(unlockOptions.passkeys || []).map(passkey => (
+                    <div key={passkey.credential_id}>
+                      <Button small variant="ghost" disabled={restoring} onClick={() => restoreWithPasskey(passkey)}>
+                        Restore with passkey “{passkey.label}”
+                      </Button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

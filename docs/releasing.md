@@ -21,6 +21,7 @@ need a build?*: nothing there does, and nothing here is needed to run one.
   - [What CI does, and the two things it deliberately does not](#what-ci-does-and-the-two-things-it-deliberately-does-not)
   - [The container image](#the-container-image)
   - [Smoke tests](#smoke-tests)
+  - [Reviewing the vault's cryptography](#reviewing-the-vaults-cryptography)
 - [Release checklist](#release-checklist)
 - [Configuring the public repository](#configuring-the-public-repository)
   - [Security features](#security-features)
@@ -337,6 +338,33 @@ CI also builds the *installed* form on Ubuntu and smoke-tests it, even though no
 Linux and it is excluded from the upload. It proves the mechanism macOS depends on entirely, on the
 cheapest runner, so macOS is not the first place it is ever exercised.
 
+### Reviewing the vault's cryptography
+
+What protects a provider credential in a copied database or a credentials backup is how long guessing the
+vault passphrase takes, and both halves of that answer move: hardware gets faster, and a weakness turns up
+in an algorithm. So the choices below are checked against current guidance at least once a year, as a
+step of the release that falls due (*Release checklist*), and changed when they fall behind. Unless noted,
+each lives in `backend/services/crypto_service.py`.
+
+| Choice | Where | Checked against |
+| --- | --- | --- |
+| Passphrase KDF and its cost | `ARGON2_TIME_COST`, `ARGON2_LANES`, `ARGON2_MEMORY_KIB` | OWASP Password Storage Cheat Sheet; RFC 9106 §4 |
+| Passphrase strength rule | `VAULT_PRODUCTION_MIN_LEN`, `VAULT_MIN_STRENGTH_SCORE`, the `zxcvbn` pin | NIST SP 800-63B; whether the estimator is still maintained |
+| Recovery code length | `RECOVERY_CODE_BYTES` | NIST SP 800-63B (memorized-secret and look-up-secret entropy) |
+| Key wrapping and sealing | AES-256-GCM, X25519 with HKDF-SHA256 | NIST and IETF (CFRG) notices for those primitives |
+| Encrypted backup keys | `BACKUP_KEY_SIZES` (`routers/import_export/backup.py`) | NIST SP 800-57 key-size guidance |
+
+**What a change costs is different for each.** Raising the KDF cost needs nothing else: each slot records
+its own parameters and is rewrapped under the current ones the next time its passphrase is typed.
+Tightening the strength rule also needs `PASSPHRASE_RULE_VERSION` raised. That, or a new `zxcvbn` release
+arriving with an ordinary dependency refresh, changes `STRENGTH_BASIS`, which asks every member to type
+their passphrase once so it is judged again, and holds back their credentials export until they have.
+Replacing a primitive is a format change: the slot or payload format version moves, and the reader keeps
+the old one.
+
+Last reviewed 2026-10-16, when the KDF moved from scrypt to Argon2id and the strength rule gained the
+guessability estimate.
+
 ## Release checklist
 
 1. `npm run ui:smoke` in `frontend/` — the built bundle loads and routes. Cheap, and the one check
@@ -347,6 +375,8 @@ cheapest runner, so macOS is not the first place it is ever exercised.
    If `npm run ui:stress` has not been run since the last release, run it and compare its report with
    the figures in `scale-and-limits.md` → *Many sessions on one server*. It runs here rather than in CI,
    whose machines are too small for its figures to mean anything.
+   If the vault's cryptography has not been reviewed in the past year, review it
+   (*Reviewing the vault's cryptography*) and update its date.
 2. `release.py --set-version X.Y.Z`, commit.
 3. `release.py --check` — version declarations agree, tree clean.
 4. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a

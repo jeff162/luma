@@ -38,31 +38,41 @@ a live connection simply re-links).
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import threading
 import time
 import uuid
 from contextvars import ContextVar
+from importlib.metadata import version as _distribution_version
 from dataclasses import dataclass
 from typing import Callable
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from zxcvbn import zxcvbn
 
 from backend.db import control_database as cdb
 from backend.db.database import get_db
 
-# scrypt work factors for passphrase slots (interactive-login scale, ~32 MiB). Persisted per slot so
-# they can be raised later without breaking existing wraps. cryptography 43 has no Argon2id KDF; the
-# design permits Argon2 *or* scrypt, and scrypt is memory-hard with no extra dependency.
-SCRYPT_N = 2 ** 15
-SCRYPT_R = 8
-SCRYPT_P = 1
+# The KDF every typed secret's KEK is derived with from now on: Argon2id at RFC 9106's second recommended
+# setting (§4: t=3, p=4, 64 MiB), OWASP's first choice for password hashing. Sized for a wrap that is
+# attacked *offline* — a copied control DB, or the slot inside a credentials backup — where no attempt
+# limit applies and the work per guess is the whole defence.
+#
+# Each slot stores the parameters it was written with, so these can be raised without stranding anything:
+# a passphrase slot written under older ones (including the scrypt slots that predate Argon2id) still
+# opens, and is rewrapped under these the next time its passphrase is typed (`_unlock_with_slot`). The
+# review that keeps them current is in `docs/releasing.md`.
+ARGON2_TIME_COST = 3
+ARGON2_LANES = 4
+ARGON2_MEMORY_KIB = 64 * 1024
 
 DEK_BYTES = 32  # AES-256
 
@@ -92,11 +102,31 @@ PROOF_TTL_SECONDS = 5 * 60
 # providers are added; an unconditional one cannot be got wrong. So the tier is gone: a strong passphrase
 # is required before any data connection can be configured, whatever the provider or its environment.
 #
-# Length is the main lever, for the password-manager reason above. The small distinct-character
-# requirement rejects degenerate inputs (one character repeated, trivial alternations) that clear a length
-# check while carrying almost no entropy.
+# Two parts. Length is the main lever, for the password-manager reason above. The other is an estimate of
+# how many guesses the passphrase would take (zxcvbn, which runs offline from its own dictionaries), held
+# to its top score — "strong protection from an offline slow-hash attack", which is the attack a slot's
+# wrap faces. It catches what length cannot: dictionary words, repeats, keyboard runs and substitutions
+# that make a long passphrase quick to guess. It replaced a composition rule (a minimum count of distinct
+# characters), which NIST SP 800-63B advises against and which a repeated phrase clears.
 VAULT_PRODUCTION_MIN_LEN = 20
-VAULT_PRODUCTION_MIN_DISTINCT = 6
+VAULT_MIN_STRENGTH_SCORE = 4
+
+# The version of the rule above. Raise it whenever the rule or its threshold tightens.
+PASSPHRASE_RULE_VERSION = 2
+
+# What a verdict is taken under, recorded on each slot with it (`strength_basis`): the rule above and the
+# estimator release, since a new release can move a score as surely as a new threshold can. Read from the
+# installed distribution rather than written here, so a dependency refresh changes it with nobody having
+# to remember to (the frozen kit carries the metadata for this — `scripts/luma.spec`).
+#
+# A passphrase can only be judged while it is in hand, so a slot judged under an earlier basis keeps that
+# verdict until its owner next types the passphrase. Meanwhile its owner is asked to (the
+# `vault_passphrase_check` task) and a credentials backup waits (`credentials_export_refusal`).
+STRENGTH_BASIS = f"rule-{PASSPHRASE_RULE_VERSION}+zxcvbn-{_distribution_version('zxcvbn')}"
+
+# zxcvbn refuses longer input, because its matching cost grows with length, so a longer passphrase is
+# judged on its first this-many characters. A guessable passphrase shows itself well within that.
+_STRENGTH_ESTIMATE_MAX_CHARS = 72
 
 
 # A vault recovery code's entropy, in raw bytes before base32 encoding. 20 bytes is 160 bits and encodes
@@ -146,11 +176,15 @@ class IncorrectSecret(ValueError):
 
 
 class WeakPassphrase(ValueError):
-    """A passphrase below the floor in `passphrase_meets_production_min` was offered for a vault slot.
+    """A passphrase below the floor in `passphrase_shortfall` was offered for a vault slot.
 
     Typed rather than a bare ValueError because the endpoints turn it into a specific error code the UI
-    keys on, and because the two numbers a user needs to hear are the constants above — a caller that has
-    to parse a message string to say "20 characters, 6 distinct" will drift from them."""
+    keys on, and carry the shortfall as data — which part of the rule failed and the estimator's advice —
+    so a client never has to parse it back out of a sentence."""
+
+    def __init__(self, shortfall: dict):
+        super().__init__(shortfall["message"])
+        self.shortfall = shortfall
 
 
 class MissingCredential(Exception):
@@ -357,8 +391,45 @@ def require_recent_proof(user_id: str) -> None:
 
 # --- KDF + wrap/unwrap primitives ----------------------------------------------------------------
 
-def _derive_kek(passphrase: str, salt: bytes, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int = SCRYPT_P) -> bytes:
-    return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase.encode("utf-8"))
+def _new_kdf() -> dict:
+    """The KDF columns for a typed secret about to be wrapped: the current choice, with a fresh salt."""
+    return {
+        "kdf_algo": "argon2id", "kdf_salt": _b64e(os.urandom(16)),
+        "kdf_m": ARGON2_MEMORY_KIB, "kdf_t": ARGON2_TIME_COST, "kdf_p": ARGON2_LANES,
+    }
+
+
+def _kdf_is_current(slot: dict) -> bool:
+    return (slot.get("kdf_algo"), slot.get("kdf_m"), slot.get("kdf_t"), slot.get("kdf_p")) == (
+        "argon2id", ARGON2_MEMORY_KIB, ARGON2_TIME_COST, ARGON2_LANES,
+    )
+
+
+# Ceilings on the work a slot may ask for. A slot read out of a credentials backup is whatever the file
+# says it is, and a file naming a 64 GiB Argon2 memory cost would take the server down with it.
+_KDF_MAX_MEMORY_KIB = 1024 * 1024
+_KDF_MAX_TIME_COST = 16
+_KDF_MAX_LANES = 16
+_KDF_MAX_SCRYPT_N = 2 ** 20
+
+
+def _derive_kek(secret: str, kdf: dict) -> bytes:
+    """Stretch a typed secret into a KEK with the KDF and parameters `kdf` (a slot's columns) records."""
+    salt = _b64d(kdf["kdf_salt"])
+    algo = kdf.get("kdf_algo")
+    if algo == "argon2id":
+        memory, time_cost, lanes = int(kdf["kdf_m"]), int(kdf["kdf_t"]), int(kdf["kdf_p"])
+        if not (memory <= _KDF_MAX_MEMORY_KIB and time_cost <= _KDF_MAX_TIME_COST and lanes <= _KDF_MAX_LANES):
+            raise ValueError("this vault key asks for more work than the server will do")
+        return Argon2id(
+            salt=salt, length=32, iterations=time_cost, lanes=lanes, memory_cost=memory,
+        ).derive(secret.encode("utf-8"))
+    if algo == "scrypt":
+        n, r, p = int(kdf["kdf_n"]), int(kdf["kdf_r"]), int(kdf["kdf_p"])
+        if not (n <= _KDF_MAX_SCRYPT_N and r <= 16 and p <= _KDF_MAX_LANES):
+            raise ValueError("this vault key asks for more work than the server will do")
+        return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(secret.encode("utf-8"))
+    raise ValueError(f"unknown vault key derivation {algo!r}")
 
 
 def _wrap(key: bytes, plaintext: bytes, *, aad: bytes) -> str:
@@ -458,18 +529,56 @@ def is_unlocked(user_id: str) -> bool:
 def ready_for_production() -> bool:
     """Every slot in the vault meets the passphrase floor, so the DEK is not recoverable through a weak wrap.
 
-    Trivially true for any slot written by `_write_passphrase_slot`, which now refuses to write a weak one.
-    Kept anyway, and still checked at the connect boundary: it is the *invariant*, and what it guards
-    against is a future slot **type** rather than a weak passphrase — phase 4's passkey slots wrap the same
-    DEK, and a slot method that reintroduced a weak wrap would be invisible to a check that only ran when
-    the passphrase was set. The flag it reads is also carried in the credentials backup payload, where the
-    slot may have been written by an older, laxer install."""
+    `_write_slot` refuses to write a weak passphrase, but a slot can still fall below the floor later: the
+    rule tightens, and a passphrase is re-judged under it each time it is typed
+    (`_bring_passphrase_slot_current`). It is also the *invariant* against a future slot **type** — a
+    method that reintroduced a weak wrap would be invisible to a check that only ran when the passphrase
+    was set. A verdict from an earlier rule counts until the passphrase is next typed, since nothing else
+    can re-take it."""
     return cdb.all_slots_meet_production_min()
 
 
-def passphrase_meets_production_min(passphrase: str) -> bool:
+def passphrase_assessment(passphrase: str) -> dict:
+    """The estimator's score for a passphrase (0–4) and its `shortfall` against the floor, or None.
+
+    `reason` is `too_short` or `guessable`. A guessable one carries the estimator's own `warning` and
+    `suggestions`, which say what made it guessable — "Repeats like abcabcabc…" is advice someone can act
+    on where a bare refusal is not. The score is reported for a short passphrase too, so a strength meter
+    can move while it is still being typed."""
     p = passphrase or ""
-    return len(p) >= VAULT_PRODUCTION_MIN_LEN and len(set(p)) >= VAULT_PRODUCTION_MIN_DISTINCT
+    estimate = zxcvbn(p[:_STRENGTH_ESTIMATE_MAX_CHARS]) if p else {"score": 0, "feedback": {}}
+    feedback = estimate.get("feedback") or {}
+    shortfall = None
+    if len(p) < VAULT_PRODUCTION_MIN_LEN:
+        shortfall = {
+            "reason": "too_short",
+            "message": f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters",
+            "warning": "",
+            "suggestions": [],
+        }
+    elif estimate["score"] < VAULT_MIN_STRENGTH_SCORE:
+        shortfall = {
+            "reason": "guessable",
+            "message": "the vault passphrase is long enough but too easy to guess",
+            "warning": feedback.get("warning") or "",
+            "suggestions": list(feedback.get("suggestions") or []),
+        }
+    return {"score": estimate["score"], "shortfall": shortfall}
+
+
+def passphrase_shortfall(passphrase: str) -> dict | None:
+    """Why a passphrase falls below the floor, or None when it clears it (`passphrase_assessment`)."""
+    return passphrase_assessment(passphrase)["shortfall"]
+
+
+def passphrase_meets_production_min(passphrase: str) -> bool:
+    return passphrase_shortfall(passphrase) is None
+
+
+def _require_strong(passphrase: str) -> None:
+    shortfall = passphrase_shortfall(passphrase)
+    if shortfall:
+        raise WeakPassphrase(shortfall)
 
 
 def require_dek(user_id: str) -> bytes:
@@ -491,12 +600,12 @@ def require_deks(user_id: str) -> list[bytes]:
 # --- Slot lifecycle (set / unlock / change) ------------------------------------------------------
 
 # The slot methods whose secret is *typed by a person* and therefore stretched, each carrying its own
-# scrypt parameters. Named once because two places must agree about it forever: `_write_slot`, which
+# KDF parameters. Named once because two places must agree about it forever: `_write_slot`, which
 # decides whether to mint a salt, and `_slot_kek`, which decides how to derive. A passkey is the
 # exception either way — its PRF output is already uniform key material.
 #
 # A recovery code is in the set even though it is generated and carries real entropy. Stretching it is
-# belt-and-braces rather than load-bearing, and it costs one scrypt derivation on a path taken once in a
+# belt-and-braces rather than load-bearing, and it costs one derivation on a path taken once in a
 # disaster; the alternative — a second, unstretched derivation rule — would be a second thing to get
 # right for no measurable gain.
 KDF_METHODS = ("passphrase", "recovery")
@@ -513,7 +622,7 @@ def _slot_kek(slot: dict, secret: str) -> bytes:
             algorithm=hashes.SHA256(), length=32,
             salt=slot["id"].encode("utf-8"), info=b"vault.passkey-kek.v1",
         ).derive(_b64d(secret))
-    return _derive_kek(secret, _b64d(slot["kdf_salt"]), slot["kdf_n"], slot["kdf_r"], slot["kdf_p"])
+    return _derive_kek(secret, slot)
 
 
 def _open_slot(slot: dict, secret: str, *, user_id: str) -> tuple[bytes | None, list[bytes]]:
@@ -544,29 +653,21 @@ def _open_slot(slot: dict, secret: str, *, user_id: str) -> tuple[bytes | None, 
 def _write_slot(
     user_id: str, *, method: str, secret: str, dek: bytes | None,
     slot_id: str | None = None, label: str | None = None,
-    credential_id: str | None = None, prf_salt: str | None = None,
-    private_key: bytes | None = None, meets_production_min: bool = True,
-    replaces_access: bool = False,
+    credential_id: str | None = None, prf_salt: str | None = None, rp_id: str | None = None,
+    private_key: bytes | None = None, replaces_access: bool = False,
 ) -> str:
     """Write one format-2 slot. `dek=None` leaves it pending a grant.
 
     Every slot in the system is written through here, which is why the passphrase floor is enforced
     here too: a check on each caller would have to be remembered on the next one, and the one that got
-    missed would be the hole.
+    missed would be the hole. A slot that gets past it is recorded as meeting the current rule.
     """
     # The floor is a *passphrase* policy, not a KDF one: a recovery code is generated to a fixed entropy
-    # by `generate_recovery_code` and has no user-chosen weakness to guard against, so applying a
-    # length-and-distinct-character rule to it would only ever reject well-formed key material.
-    if method == "passphrase" and not passphrase_meets_production_min(secret):
-        raise WeakPassphrase(
-            f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters with at least "
-            f"{VAULT_PRODUCTION_MIN_DISTINCT} distinct characters"
-        )
-    if method in KDF_METHODS:
-        salt = os.urandom(16)
-        kdf = {"kdf_algo": "scrypt", "kdf_salt": _b64e(salt), "kdf_n": SCRYPT_N, "kdf_r": SCRYPT_R, "kdf_p": SCRYPT_P}
-    else:
-        kdf = {}
+    # by `generate_recovery_code` and has no user-chosen weakness to guard against, and a passkey's secret
+    # is 32 bytes from the authenticator, so judging either would only ever reject well-formed key material.
+    if method == "passphrase":
+        _require_strong(secret)
+    kdf = _new_kdf() if method in KDF_METHODS else {}
 
     # The id is resolved here, before any wrapping, rather than by the storage layer: it is bound into
     # the AAD of the material written alongside it, so composing the row against a fresh id and then
@@ -590,16 +691,40 @@ def _write_slot(
         method=method,
         slot_id=slot_id,
         label=label,
+        kdf=kdf,
         credential_id=credential_id,
         prf_salt=prf_salt,
+        rp_id=rp_id,
         public_key=_b64e(public_key),
         wrapped_private_key=_wrap(kek, private_key, aad=_private_key_aad(user_id, slot_id)),
         sealed_dek=(
             _seal(public_key, dek, aad=_sealed_dek_aad(user_id, slot_id)) if dek is not None else None
         ),
-        meets_production_min=meets_production_min,
+        meets_production_min=True,
+        strength_basis=STRENGTH_BASIS,
         replaces_access=replaces_access,
-        **kdf,
+    )
+
+
+def _rewrap_private_key(slot: dict, secret: str, private_key: bytes, *, user_id: str, keeps_secret: bool,
+                        meets: bool = True) -> None:
+    """Re-guard a format-2 slot's private key under `secret` with the current KDF, keeping its keypair.
+
+    The two callers differ in what the secret is: a passphrase change brings a new one, and an unlock
+    brings the same one to move an outdated slot onto the current KDF (`keeps_secret`), carrying the
+    verdict it has just taken on it (`meets`). Either way the DEK's seal is untouched, so no other slot is
+    disturbed and no credential is re-encrypted."""
+    kdf = _new_kdf()
+    wrapped_private_key = _wrap(_derive_kek(secret, kdf), private_key, aad=_private_key_aad(user_id, slot["id"]))
+    cdb.rewrap_vault_slot_secret(
+        slot["id"],
+        wrapped_private_key=wrapped_private_key,
+        kdf=kdf,
+        meets_production_min=meets,
+        strength_basis=STRENGTH_BASIS,
+        keeps_secret=keeps_secret,
+        old_fingerprint=wrapped_dek_fingerprint(slot["wrapped_private_key"]),
+        new_fingerprint=wrapped_dek_fingerprint(wrapped_private_key),
     )
 
 
@@ -631,8 +756,7 @@ def set_passphrase(user_id: str, passphrase: str) -> None:
     else:
         dek = None
 
-    _write_slot(user_id, method="passphrase", secret=passphrase, dek=dek, slot_id=existing["id"] if existing else None,
-                meets_production_min=passphrase_meets_production_min(passphrase))
+    _write_slot(user_id, method="passphrase", secret=passphrase, dek=dek, slot_id=existing["id"] if existing else None)
     # Choosing the secret counts as presenting it — otherwise setting up a vault and immediately adding
     # a passkey would ask for the passphrase that was typed seconds earlier. Safe in both surviving
     # branches: one has no existing access to escalate from, the other writes a slot that opens nothing
@@ -660,24 +784,11 @@ def change_passphrase(user_id: str, old_passphrase: str, new_passphrase: str) ->
         # No keypair to rewrap yet — the change is also the conversion.
         _write_slot(
             user_id, method="passphrase", secret=new_passphrase, dek=deks[0] if deks else None,
-            slot_id=slot["id"], meets_production_min=passphrase_meets_production_min(new_passphrase),
+            slot_id=slot["id"],
         )
     else:
-        if not passphrase_meets_production_min(new_passphrase):
-            raise WeakPassphrase(
-                f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters with at least "
-                f"{VAULT_PRODUCTION_MIN_DISTINCT} distinct characters"
-            )
-        salt = os.urandom(16)
-        cdb.rewrap_vault_slot_secret(
-            slot["id"],
-            wrapped_private_key=_wrap(
-                _derive_kek(new_passphrase, salt), private_key,
-                aad=_private_key_aad(user_id, slot["id"]),
-            ),
-            kdf_algo="scrypt", kdf_salt=_b64e(salt), kdf_n=SCRYPT_N, kdf_r=SCRYPT_R, kdf_p=SCRYPT_P,
-            meets_production_min=passphrase_meets_production_min(new_passphrase),
-        )
+        _require_strong(new_passphrase)
+        _rewrap_private_key(slot, new_passphrase, private_key, user_id=user_id, keeps_secret=False)
     if deks:
         _cache_put(user_id, deks)
 
@@ -716,36 +827,6 @@ def current_wrapped_dek_fingerprint(user_id: str) -> str | None:
     return wrapped_dek_fingerprint(_slot_wrapping(cdb.get_vault_slot(user_id)))
 
 
-def exported_slot_fingerprint(exported: dict | None) -> str | None:
-    """The same fingerprint, for a slot as carried inside a credentials backup file.
-
-    Exists so the backup path does not have to know which field a given format keeps its wrapping in —
-    that rule belongs here, next to the formats themselves."""
-    if not exported:
-        return None
-    return wrapped_dek_fingerprint(_slot_wrapping({"format": 1, **exported}))
-
-
-def unwrap_dek_from_slot(slot: dict, passphrase: str, *, user_id: str) -> bytes:
-    """The DEK a passphrase opens from an **arbitrary** slot — this install's, or one carried in a
-    credentials backup taken on another machine.
-
-    `user_id` is the id the slot was written *for*, not necessarily the caller: the AAD binds the
-    material to it, so a foreign slot only opens when its own id comes along with it. That is why the
-    credentials backup carries the exporting user's id beside the key material.
-
-    Deliberately does **not** populate the unlock cache. The DEK this returns belongs to whatever
-    workspace produced the slot; caching it under the local user would quietly install a foreign key as
-    this workspace's own.
-    """
-    # A dict from a backup file, not a DB row: fill in the columns a format-1 file never carried.
-    slot = {"format": 1, "sealed_dek_prev": None, **slot}
-    _, deks = _open_slot(slot, passphrase, user_id=user_id)
-    if not deks:
-        raise ValueError("this vault key carries no workspace key")
-    return deks[0]
-
-
 def unlock(user_id: str, passphrase: str) -> bytes:
     slot = cdb.get_vault_slot(user_id, "passphrase")
     if not slot:
@@ -758,7 +839,10 @@ def _unlock_with_slot(slot: dict, secret: str, *, user_id: str) -> bytes:
     if not deks:
         raise VaultAccessPending("vault access has not been granted for this user yet")
     if slot["format"] == 1:
-        _upgrade_slot_to_keypair(slot, secret, deks[0], user_id=user_id)
+        private_key = _upgrade_slot_to_keypair(slot, secret, deks[0], user_id=user_id)
+        slot = cdb.get_vault_slot_by_id(slot["id"])
+    if slot["method"] == "passphrase":
+        _bring_passphrase_slot_current(slot, secret, private_key, user_id=user_id)
     _cache_put(user_id, deks)
     # The choke point both unlock paths pass through, so a passphrase and a passkey ceremony stamp
     # proof identically and neither can be forgotten separately.
@@ -766,13 +850,35 @@ def _unlock_with_slot(slot: dict, secret: str, *, user_id: str) -> bytes:
     return deks[0]
 
 
-def _upgrade_slot_to_keypair(slot: dict, secret: str, dek: bytes, *, user_id: str) -> None:
+def _bring_passphrase_slot_current(slot: dict, passphrase: str, private_key: bytes, *, user_id: str) -> None:
+    """Hold a passphrase slot to today's rules, at the one moment that is possible.
+
+    Neither the strength rule nor the KDF can be applied to a stored slot: judging a passphrase needs the
+    passphrase, and rewrapping under a stronger KDF needs it too. Unlock is when it is in hand, so both
+    happen here, and both are silent when nothing has changed.
+
+    - **The verdict is re-taken under the current rule** and stored with what it was taken under
+      (`STRENGTH_BASIS`). A passphrase
+      that no longer passes keeps working — refusing the unlock would stop this member's syncing over a
+      passphrase nobody has shown to be exposed — but its owner is asked to change it (the
+      `vault_passphrase_change` task), connecting a data source is refused while it stands
+      (`ready_for_production`), and so is taking a credentials backup, which would carry it.
+    - **A slot on an outdated KDF is rewrapped** under the current one, keeping its keypair.
+    """
+    meets = passphrase_meets_production_min(passphrase)
+    if not _kdf_is_current(slot):
+        _rewrap_private_key(slot, passphrase, private_key, user_id=user_id, keeps_secret=True, meets=meets)
+    elif bool(slot["meets_production_min"]) != meets or slot["strength_basis"] != STRENGTH_BASIS:
+        cdb.set_vault_slot_strength(slot["id"], meets_production_min=meets, strength_basis=STRENGTH_BASIS)
+
+
+def _upgrade_slot_to_keypair(slot: dict, secret: str, dek: bytes, *, user_id: str) -> bytes:
     """Convert a legacy directly-wrapped slot in place, now that both the KEK and the DEK are in hand.
 
     Unlock is the only moment that is ever true, which is why this rides here rather than running as a
     migration at startup: a slot cannot be converted without the secret that opens it, and the secret
     only exists in the process while someone is signing in to the vault. An install whose owner never
-    unlocks simply keeps working on format 1.
+    unlocks simply keeps working on format 1. Returns the new private key.
     """
     kek = _slot_kek(slot, secret)
     private_key = X25519PrivateKey.generate().private_bytes_raw()
@@ -788,58 +894,186 @@ def _upgrade_slot_to_keypair(slot: dict, secret: str, dek: bytes, *, user_id: st
         old_fingerprint=wrapped_dek_fingerprint(slot["wrapped_dek"]),
         new_fingerprint=wrapped_dek_fingerprint(wrapped_private_key),
     )
+    return private_key
 
 
-def export_vault_slot(user_id: str) -> dict | None:
-    """The user's passphrase slot as portable material: exactly enough to re-derive the KEK and unwrap
-    the DEK **given the passphrase**, and nothing else. `None` when no slot exists.
+# --- The slots a credentials backup carries -------------------------------------------------------
+#
+# A credentials backup copies the encrypted credentials and, beside them, the exporting member's own
+# slots: every way that member can open the vault — passphrase, recovery code, passkeys. That is what
+# lets the file be restored on another install, where none of this install's slots exist: whichever of
+# those secrets the member still holds reopens the workspace key the credentials are sealed under.
+#
+# **Only the exporter's own slots, never another member's.** Each slot is an independent way to the same
+# key, so the file is as hard to break as its weakest slot. A recovery code is 160 random bits and a
+# passkey's secret never leaves its authenticator, so neither weakens the file; another member's
+# passphrase would make it only as strong as theirs, which the exporter cannot see or vouch for. The
+# exporter's own passphrase is held to the current rule before a file is written
+# (`credentials_export_refusal`).
+#
+# **A passkey answers only at the host name it was registered under**, so each passkey slot carries a
+# salted digest of that name (`site`), and a restore offers a passkey only where the page's own name
+# matches it. A digest rather than the name, because the slots are readable by anyone holding the file;
+# a common name is still guessable from it, which is why it is a courtesy rather than a secret.
 
-    This is what makes a ciphertext credentials backup restorable on another machine — without it the
-    exported ciphertext is undecryptable anywhere but the install that produced it (the key lives in the
-    control DB, the ciphertext in the data DB). It is safe to hand out only because `wrapped_dek` is
-    passphrase-wrapped: the file's security is exactly the vault passphrase's strength, which is why
-    `meets_production_min` rides along for the UI to warn on.
-    """
-    slot = cdb.get_vault_slot(user_id)
-    if not slot or not slot_holds_dek(slot):
+def _dek_seal(slot: dict | None) -> str | None:
+    """The stored ciphertext of the workspace key a slot holds — the field that changes exactly when the
+    key does. Rotation re-seals it; a passphrase change or a KDF upgrade leaves it byte-identical."""
+    if not slot:
         return None
-    return {
-        "user_id":              user_id,   # the slot's AAD — see `unwrap_dek_from_slot`
-        "method":               slot["method"],
-        "format":               slot["format"],
-        # Format 1 carries the DEK wrapped straight under the KEK; format 2 carries the keypair that
-        # holds it. A reader picks by `format`, and a pre-format-2 file simply has none of the latter.
-        "wrapped_dek":          slot["wrapped_dek"],
-        "id":                   slot["id"],   # part of the format-2 AAD, so it must travel with them
-        "public_key":           slot["public_key"],
-        "wrapped_private_key":  slot["wrapped_private_key"],
-        "sealed_dek":           slot["sealed_dek"],
-        "kdf_algo":             slot["kdf_algo"],
-        "kdf_salt":             slot["kdf_salt"],
-        "kdf_n":                slot["kdf_n"],
-        "kdf_r":                slot["kdf_r"],
-        "kdf_p":                slot["kdf_p"],
-        "meets_production_min": bool(slot["meets_production_min"]),
-    }
+    return slot.get("wrapped_dek") if slot.get("format", 1) == 1 else slot.get("sealed_dek")
 
 
-def vault_slot_is_local(exported: dict | None, user_id: str) -> bool:
-    """Whether an exported slot is this workspace's own — same user and the identical wrapping.
+def _site_digest(salt: bytes, rp_id: str) -> str:
+    return hashlib.sha256(b"vault.passkey-site.v1|" + salt + b"|" + rp_id.lower().encode("utf-8")).hexdigest()
 
-    When it is, a backup's ciphertext is already valid against the live DEK and can be restored
-    verbatim: no passphrase, no unlock, no re-encryption. That is the ordinary "restore my own backup
-    onto the machine that made it" case, and it should not demand a passphrase to do nothing.
 
-    Compared on the wrapping rather than the seal for the same reason the fingerprint is: after a
-    passphrase change the seal is still byte-identical, and treating such a file as local would restore
-    it verbatim under a key the file no longer documents.
+def exported_site_matches(exported: dict, rp_id: str | None) -> bool:
+    """Whether a passkey slot from a backup was registered under the host this page is served from."""
+    site = exported.get("site") or {}
+    if not rp_id or not site.get("salt") or not site.get("digest"):
+        return False
+    return hmac.compare_digest(_site_digest(_b64d(site["salt"]), rp_id), site["digest"])
+
+
+def export_vault_slots(user_id: str) -> list[dict]:
+    """This member's slots as portable material, passphrase first: exactly enough to reopen the workspace
+    key **given one of their secrets**, and nothing else. Slots still awaiting a grant hold no key and are
+    left out."""
+    order = {"passphrase": 0, "recovery": 1, "passkey": 2}
+    slots = sorted(
+        (s for s in cdb.list_vault_slots(user_id) if slot_holds_dek(s)),
+        key=lambda s: order.get(s["method"], 3),
+    )
+    exported = []
+    for slot in slots:
+        entry = {
+            "user_id":              user_id,   # part of every slot's AAD — see `deks_from_exported_slot`
+            "id":                   slot["id"],   # likewise, for format 2
+            "method":               slot["method"],
+            "format":               slot["format"],
+            # Format 1 carries the DEK wrapped straight under the KEK; format 2 carries the keypair that
+            # holds it. A reader picks by `format`, and a pre-format-2 file simply has none of the latter.
+            "wrapped_dek":          slot["wrapped_dek"],
+            "public_key":           slot["public_key"],
+            "wrapped_private_key":  slot["wrapped_private_key"],
+            "sealed_dek":           slot["sealed_dek"],
+            # Set only while a rotation is unfinished, when the credentials copied beside it may still be
+            # under this previous key. Carried so the file reopens them, and so it is never mistaken for
+            # one sealed under the key this install settles on (`exported_slots_hold_live_dek`).
+            "sealed_dek_prev":      slot["sealed_dek_prev"],
+            **{column: slot[column] for column in cdb.VAULT_SLOT_KDF_COLUMNS},
+        }
+        if slot["method"] == "passphrase":
+            entry["meets_production_min"] = bool(slot["meets_production_min"])
+        elif slot["method"] == "recovery":
+            # So someone restoring can tell which of the codes they kept opens this file.
+            entry["issued_at"] = slot["updated_at"]
+        elif slot["method"] == "passkey":
+            salt = os.urandom(16)
+            entry.update({
+                "label":         slot["label"],
+                "credential_id": slot["credential_id"],
+                "prf_salt":      slot["prf_salt"],
+                "site": (
+                    {"salt": _b64e(salt), "digest": _site_digest(salt, slot["rp_id"])} if slot["rp_id"] else None
+                ),
+            })
+        exported.append(entry)
+    return exported
+
+
+def exported_slots_fingerprint(exported: list[dict]) -> str | None:
+    """The `wrapped_dek_fingerprint` of the passphrase slot a credentials backup carries, if any.
+
+    Exists so the backup path does not have to know which field a given format keeps its wrapping in —
+    that rule belongs here, next to the formats themselves."""
+    for slot in exported or []:
+        if slot.get("method", "passphrase") == "passphrase":
+            return wrapped_dek_fingerprint(_slot_wrapping({"format": 1, **slot}))
+    return None
+
+
+def exported_slots_hold_live_dek(exported: list[dict]) -> bool:
+    """Whether a backup's slots seal the workspace key this install holds now — so its credentials are
+    already valid here and can be restored verbatim, with no secret and with the vault still locked.
+
+    Decided by the seal, not by the wrapping. The wrapping is what a passphrase change or a KDF upgrade
+    replaces, and neither changes the key; rotation changes the key and leaves the wrapping alone. Matching
+    on the wrapping therefore asked for a passphrase after a change that needed none, and restored a
+    pre-rotation backup verbatim — credentials under a key nothing here can open any more.
+
+    A slot exported mid-rotation never matches: the credentials beside it may be under either key."""
+    for exported_slot in exported or []:
+        if exported_slot.get("sealed_dek_prev"):
+            continue
+        seal = _dek_seal({"format": 1, **exported_slot})
+        local = cdb.get_vault_slot_by_id(exported_slot.get("id")) if exported_slot.get("id") else None
+        if seal and local and local["user_id"] == exported_slot.get("user_id") and _dek_seal(local) == seal:
+            return True
+    return False
+
+
+def deks_from_exported_slot(exported: dict, secret: str) -> list[bytes]:
+    """The workspace keys one slot from a credentials backup holds, opened with that slot's own secret —
+    a passphrase, a recovery code, or a passkey's PRF output, by the slot's `method`.
+
+    The AAD binds the material to the user and slot it was written for, so the ids come from the slot
+    itself, never from the caller; that is why the backup carries them. A list, newest first, because a
+    slot exported mid-rotation holds both keys and the credentials beside it may be under either.
+
+    Deliberately does **not** populate the unlock cache. The keys belong to whatever workspace produced
+    the file; caching one under the local user would quietly install a foreign key as this workspace's.
     """
-    if not exported:
-        return False
-    local = cdb.get_vault_slot(user_id)
-    if not local or exported.get("user_id") != user_id:
-        return False
-    return _slot_wrapping({"format": 1, **exported}) == _slot_wrapping(local)
+    slot = {"format": 1, "method": "passphrase", "sealed_dek_prev": None, **exported}
+    if slot["method"] == "recovery":
+        secret = normalize_recovery_code(secret)
+    _, deks = _open_slot(slot, secret, user_id=slot.get("user_id") or "")
+    if not deks:
+        raise ValueError("this vault key carries no workspace key")
+    return deks
+
+
+def credentials_export_refusal(user_id: str) -> dict | None:
+    """Why this member cannot take a credentials backup right now, or None when they can.
+
+    The file carries their passphrase slot, open to offline guessing by whoever holds it, so the
+    passphrase has to clear the rule in force. A verdict from an earlier basis is not enough: the rule or
+    the estimator may have tightened since, and only typing the passphrase again can say."""
+    slot = _own_passphrase_slot(user_id)
+    if not slot:
+        return None
+    if slot["strength_basis"] != STRENGTH_BASIS:
+        return {
+            "code": "passphrase_unchecked",
+            "message": "Unlock the vault by typing your passphrase first, so it can be checked against the "
+                       "current strength rule before a backup carries it.",
+        }
+    if not slot["meets_production_min"]:
+        return {
+            "code": "weak_passphrase",
+            "message": "Your vault passphrase no longer meets the strength rule, and a credentials backup "
+                       "would carry it. Change it in Vault settings, then take the backup.",
+        }
+    return None
+
+
+def _own_passphrase_slot(user_id: str) -> dict | None:
+    slot = cdb.get_vault_slot(user_id, "passphrase")
+    return slot if slot_holds_dek(slot) else None
+
+
+def passphrase_needs_change(user_id: str) -> bool:
+    """Whether this member's passphrase has been judged under the current basis and failed it."""
+    slot = _own_passphrase_slot(user_id)
+    return bool(slot and slot["strength_basis"] == STRENGTH_BASIS and not slot["meets_production_min"])
+
+
+def passphrase_needs_check(user_id: str) -> bool:
+    """Whether this member's passphrase has not been judged under the current basis yet — the rule or the
+    estimator has changed since it was last typed. Only typing it again can settle that."""
+    slot = _own_passphrase_slot(user_id)
+    return bool(slot and slot["strength_basis"] != STRENGTH_BASIS)
 
 
 # --- Per-connection secret encrypt/decrypt (under the DEK) ---------------------------------------
@@ -1159,7 +1393,7 @@ def passkey_credentials(user_id: str) -> list[dict]:
 
 
 def register_passkey_slot(user_id: str, *, credential_id: str, prf_output: str,
-                          prf_salt: str, label: str | None = None) -> dict:
+                          prf_salt: str, rp_id: str | None = None, label: str | None = None) -> dict:
     """Add a passkey as an unlock method, or record it as pending when this user has no access yet.
 
     Enrolling by passkey is allowed for exactly the reason a keypair slot makes possible: the grant
@@ -1181,20 +1415,25 @@ def register_passkey_slot(user_id: str, *, credential_id: str, prf_output: str,
     slot_id = _write_slot(
         user_id, method="passkey", secret=prf_output, dek=dek,
         label=(label or "").strip() or "Passkey", credential_id=credential_id, prf_salt=prf_salt,
-        # The KEK is 32 bytes straight from the authenticator — there is no weak-passphrase analog for
-        # it to fall short of, and `ready_for_production` is asking about the strength of the wrap.
-        meets_production_min=True,
+        rp_id=rp_id,
     )
     return {"slot_id": slot_id, "pending": dek is None}
 
 
-def unlock_with_passkey(credential_id: str, prf_output: str) -> tuple[str, bytes]:
+def unlock_with_passkey(credential_id: str, prf_output: str, *, rp_id: str | None = None) -> tuple[str, bytes]:
     """Open the vault from a passkey ceremony. Returns `(user_id, dek)` — the credential identifies the
-    slot, so the caller does not have to be told which user it belongs to."""
+    slot, so the caller does not have to be told which user it belongs to.
+
+    `rp_id` is the host this ceremony ran under. A passkey answers only at the name it was registered
+    for, so a ceremony that opened the slot proves this is that name, and a slot registered before the
+    name was recorded learns it here."""
     slot = cdb.get_vault_slot_by_credential(credential_id)
     if not slot:
         raise VaultLocked("that passkey is not registered with this vault")
-    return slot["user_id"], _unlock_with_slot(slot, prf_output, user_id=slot["user_id"])
+    dek = _unlock_with_slot(slot, prf_output, user_id=slot["user_id"])
+    if rp_id and slot["rp_id"] != rp_id:
+        cdb.set_vault_slot_rp_id(slot["id"], rp_id)
+    return slot["user_id"], dek
 
 
 def set_passphrase_with_passkey(credential_id: str, prf_output: str, new_passphrase: str) -> str:
@@ -1230,7 +1469,6 @@ def set_passphrase_with_passkey(credential_id: str, prf_output: str, new_passphr
     _write_slot(
         user_id, method="passphrase", secret=new_passphrase, dek=deks[0],
         slot_id=existing["id"] if existing else None,
-        meets_production_min=passphrase_meets_production_min(new_passphrase),
     )
     _cache_put(user_id, deks)
     return user_id
@@ -1266,7 +1504,6 @@ def request_reenrolment(user_id: str, new_passphrase: str) -> dict:
     _write_slot(
         user_id, method="passphrase", secret=new_passphrase, dek=None,
         slot_id=existing["id"] if existing else None,
-        meets_production_min=passphrase_meets_production_min(new_passphrase),
         replaces_access=True,
     )
     # The old wrapping is gone either way; dropping every cached DEK keeps each session honest about it.
@@ -1418,7 +1655,6 @@ def recover_with_code(user_id: str, code: str, new_passphrase: str) -> str:
     _write_slot(
         user_id, method="passphrase", secret=new_passphrase, dek=deks[0],
         slot_id=existing["id"] if existing else None,
-        meets_production_min=passphrase_meets_production_min(new_passphrase),
     )
     cdb.delete_vault_slot(slot["id"])
     _cache_put(user_id, deks)

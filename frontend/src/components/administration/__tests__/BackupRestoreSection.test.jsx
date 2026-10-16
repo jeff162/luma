@@ -12,6 +12,8 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const downloadUrl = vi.fn()
+const restoreCredentialsFile = vi.fn()
+const runBackupPasskeyCeremony = vi.fn()
 // Mutable so a test can decide how many recipients exist before rendering: the picker's whole contract is
 // that it appears only when there is more than one, so both sides of that need a different fixture.
 let recipients = []
@@ -28,7 +30,16 @@ vi.mock('../../../lib/api.js', () => ({
         : '/api/import-export/backup'
     ),
     exportCredentials:          () => '/api/import-export/backup/credentials',
+    inspectBackupFile:          async () => ({ kind: 'credentials', container: 'zip', encrypted: false }),
+    getRestoreTargetStatus:     async () => ({ has_data: true }),
+    restoreCredentialsFile:     (...args) => restoreCredentialsFile(...args),
   },
+}))
+
+// WebAuthn, which jsdom cannot run. Under test is what the section does with the ceremony's outcome.
+vi.mock('../../../lib/vaultPasskey.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  runBackupPasskeyCeremony: (...args) => runBackupPasskeyCeremony(...args),
 }))
 
 const { default: BackupRestoreSection } = await import('../BackupRestoreSection.jsx')
@@ -36,7 +47,10 @@ const { AppSessionProvider } = await import('../../../lib/AppSessionContext.jsx'
 
 const renderSection = () => render(<AppSessionProvider value={{ demoLoaded: false }}><BackupRestoreSection /></AppSessionProvider>)
 
-afterEach(() => { cleanup(); downloadUrl.mockReset(); recipients = [] })
+afterEach(() => {
+  cleanup(); downloadUrl.mockReset(); restoreCredentialsFile.mockReset(); runBackupPasskeyCeremony.mockReset()
+  recipients = []
+})
 
 const KEYS = [
   { id: 'r1', label: 'Home NAS', fingerprint: 'SHA256:aaa', enabled: 1 },
@@ -142,5 +156,74 @@ describe('section order', () => {
     // Node.compareDocumentPosition: 4 === the argument follows this node in the document.
     expect(backup.compareDocumentPosition(restore) & 4).toBeTruthy()
     expect(restore.compareDocumentPosition(keys) & 4).toBeTruthy()
+  })
+})
+
+// A credentials backup whose credentials are not valid here as they stand has to be opened with one of the
+// secrets of the member who made it. The server says which the file carries and which this page can use;
+// the section offers exactly those, and sends back whichever one is used.
+describe('restoring a credentials backup that needs a secret', () => {
+  const FILE = new File(['{}'], 'luma_credentials.zip', { type: 'application/zip' })
+
+  function secretRequired(options) {
+    return Object.assign(new Error('This backup came from another install.'), {
+      status: 400,
+      detail: { code: 'backup_secret_required', message: 'This backup came from another install.', unlock_options: options },
+    })
+  }
+
+  async function chooseAndAttempt(user) {
+    await user.upload(screen.getByLabelText('Choose backup file to restore'), FILE)
+    await screen.findByText(/Data provider credentials, still encrypted/)
+    await user.click(screen.getByRole('button', { name: 'Restore credentials' }))
+    // The confirmation overlay's own button, which carries the same label.
+    const buttons = await screen.findAllByRole('button', { name: 'Restore credentials' })
+    await user.click(buttons[buttons.length - 1])
+  }
+
+  // Restore again once a secret is typed: the button, then the confirmation's.
+  async function chooseAgain(user) {
+    await user.click(screen.getByRole('button', { name: 'Restore credentials' }))
+    const buttons = await screen.findAllByRole('button', { name: 'Restore credentials' })
+    await user.click(buttons[buttons.length - 1])
+  }
+
+  it('offers the passphrase and the dated recovery code the file carries, and sends the one typed', async () => {
+    const user = userEvent.setup()
+    restoreCredentialsFile
+      .mockRejectedValueOnce(secretRequired({
+        passphrase: true, recovery_code: { issued_at: '2026-09-01T10:00:00Z' }, passkeys: [], rp_id: null,
+      }))
+      .mockResolvedValueOnce({ restored: 2 })
+    renderSection()
+    await chooseAndAttempt(user)
+
+    expect(await screen.findByPlaceholderText('Vault passphrase this backup was made with')).toBeTruthy()
+    const code = screen.getByPlaceholderText(/recovery code issued Sep 1, 2026/)
+    expect(screen.queryByText(/Restore with passkey/)).toBeNull()
+
+    await user.type(code, 'ABCD-EFGH')
+    await chooseAgain(user)
+    await waitFor(() => expect(restoreCredentialsFile).toHaveBeenLastCalledWith(FILE, { recovery_code: 'ABCD-EFGH' }))
+  })
+
+  it('restores with a passkey the server offered, in one press', async () => {
+    const user = userEvent.setup()
+    restoreCredentialsFile
+      .mockRejectedValueOnce(secretRequired({
+        passphrase: true, recovery_code: null, rp_id: 'luma.local',
+        passkeys: [{ credential_id: 'cred-1', prf_salt: 'c2FsdA==', label: 'Laptop' }],
+      }))
+      .mockResolvedValueOnce({ restored: 2 })
+    runBackupPasskeyCeremony.mockResolvedValueOnce({ ok: true, credentialId: 'cred-1', prfOutput: 'cHJm' })
+    renderSection()
+    await chooseAndAttempt(user)
+
+    await user.click(await screen.findByRole('button', { name: 'Restore with passkey “Laptop”' }))
+
+    expect(runBackupPasskeyCeremony).toHaveBeenCalledWith({ rpId: 'luma.local', credentialId: 'cred-1', prfSalt: 'c2FsdA==' })
+    await waitFor(() => expect(restoreCredentialsFile).toHaveBeenLastCalledWith(FILE, {
+      passkey_credential_id: 'cred-1', passkey_prf_output: 'cHJm',
+    }))
   })
 })

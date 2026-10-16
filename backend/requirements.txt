@@ -5,7 +5,7 @@ pydantic==2.14.1
 python-dotenv==1.2.4
 python-multipart==0.0.32
 itsdangerous==2.2.0
-# The vault's primitives (X25519, AES-GCM, HKDF, scrypt) and the encrypted backup format both sit on
+# The vault's primitives (X25519, AES-GCM, HKDF, Argon2id) and the encrypted backup format both sit on
 # this. Its wheels vendor OpenSSL, so the pin decides which OpenSSL every packaged kit ships with —
 # which makes it the one dependency where being current is a property of the shipped artifact rather
 # than of the build environment.
@@ -13,6 +13,9 @@ cryptography==50.0.2
 # WebAuthn verification for passkey sign-in (`services/app_passkey.py`). Only the login perimeter uses
 # it: the vault's passkeys verify no assertion by design, so nothing in `crypto_service` imports this.
 webauthn==3.0.1
+# Estimates how many guesses a vault passphrase would take (`crypto_service.passphrase_shortfall`).
+# Runs entirely offline from the dictionaries it ships with, so the strength check needs no network.
+zxcvbn==4.5.0
 # Verifies TLS against the operating system's own certificate store instead of a CA bundle pinned here.
 # A runtime dependency rather than a packaging one: a frozen macOS build has no CA file on disk at all,
 # because the OpenSSL it carries looks where the *build* machine kept one.

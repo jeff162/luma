@@ -65,6 +65,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from backend import transport
 from backend.authorization import require_admin_or_local
 from backend.db.database import (
     CURRENT_VERSION,
@@ -168,9 +169,14 @@ class RestoreRequest(BaseModel):
 
 class CredentialsRestoreRequest(BaseModel):
     data: dict
-    # The passphrase of the vault that *produced* the backup — needed only for a v3 file from another
-    # install, whose ciphertext must be reopened with its own DEK before being re-keyed under this one.
+    # One secret of the member who *produced* the backup, opening one of the slots it carries. Needed only
+    # when the file's credentials are not already valid here — a backup from another install, or from
+    # before this one's key was replaced — whose ciphertext must be reopened with the key it was sealed
+    # under before being re-keyed under this one. At most one is used, in this order.
     passphrase: str | None = None
+    recovery_code: str | None = None
+    passkey_credential_id: str | None = None
+    passkey_prf_output: str | None = None
 
 
 # --- Encryption envelope + archive (de)serialization -------------------------------------------
@@ -700,6 +706,12 @@ RESTORED_CURSOR_MAX_AGE_DAYS = 365
 BACKUP_KIND_DATA = "data"
 BACKUP_KIND_CREDENTIALS = "credentials"
 
+# The credentials payload's own format, separate from the data backup's. 3 carried ciphertext and the
+# exporter's directly-wrapped passphrase slot (`vault`), 4 the same for a keypair slot, and 5 every slot
+# the exporter opens the vault with (`vault_slots`). 1 and 2 held plaintext and still restore.
+CREDENTIALS_PAYLOAD_VERSION = 5
+RESTORABLE_CREDENTIALS_VERSIONS = (1, 2, 3, 4, 5)
+
 # Size of the buffer used everywhere bytes are moved between a file, a zip member and a cipher. Big
 # enough that a large archive is not a syscall storm, small enough to be the whole of the memory this
 # code holds at once.
@@ -1043,19 +1055,25 @@ def export_credentials(request: Request):
     This deliberately never decrypts. Versions 1 and 2 wrote *plaintext* access tokens and app secrets
     into a plain zip — an artifact strictly weaker than the databases it came from, which hold only
     ciphertext — and producing it was the sole reason the export demanded an unlocked vault. Copying the
-    ciphertext instead needs no DEK, so a locked vault is no longer an error here at all; the passphrase
-    is asked for at *restore*, where re-keying genuinely cannot proceed without it.
+    ciphertext instead needs no DEK, so a locked vault is no longer an error here at all; a secret is
+    asked for at *restore*, and only where re-keying genuinely cannot proceed without one.
 
-    The wrapped DEK travels with it (`vault`). Without it the ciphertext is undecryptable anywhere but
-    the install that produced it — the key lives in the control DB and the ciphertext in the data DB, so
-    a credentials backup that carried only one half would restore nowhere. It is safe to include only
-    because it is passphrase-wrapped: this file's security is exactly the vault passphrase's strength,
-    and no second encryption layer is offered because the payload is already encrypted.
+    The exporting member's slots travel with it (`vault_slots`; `crypto_service.export_vault_slots` says
+    which and why). Without them the ciphertext is undecryptable anywhere but the install that produced
+    it — the key lives in the control DB and the ciphertext in the data DB, so a credentials backup that
+    carried only one half would restore nowhere. They are safe to include only because each is wrapped by
+    a secret that resists offline guessing, which for the passphrase is why the export is refused until it
+    clears the current rule (`credentials_export_refusal`). No second encryption layer is offered because
+    the payload is already encrypted.
 
     A legacy row that was never vaulted (plaintext `credential`, no `credential_enc`) is exported as it
     sits. That keeps the invariant that matters — **the backup is never weaker than the DB at rest** —
     without needing a DEK to upgrade it here.
     """
+    user = getattr(request.state, "user", None)
+    refusal = crypto_service.credentials_export_refusal(user["id"]) if user else None
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     with get_db() as conn:
         connections = [dict(r) for r in conn.execute(
             "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
@@ -1063,30 +1081,31 @@ def export_credentials(request: Request):
         provider_configs = [dict(r) for r in conn.execute(
             "SELECT provider, client_id, secret, secret_enc, env FROM provider_config"
         ).fetchall()]
-    user = getattr(request.state, "user", None)
     payload = _stamp_content_hash({
         "kind":             BACKUP_KIND_CREDENTIALS,
-        # v4 carries a keypair slot (the DEK sealed to a public key) where v3 carried the DEK wrapped
-        # straight under the KEK. The bump is what makes an older install reject this file outright
-        # rather than reporting the passphrase as wrong when it reaches material it cannot read.
-        "version":          4,
+        # v5 carries every slot the exporter opens the vault with (`vault_slots`) where v4 carried only the
+        # passphrase slot (`vault`). The bump is what makes an older install reject this file outright
+        # rather than report it as carrying no vault key.
+        "version":          CREDENTIALS_PAYLOAD_VERSION,
         "exported_at":      utcnow_iso(),
-        "warning":          "This file holds encrypted data provider credentials. Anyone with it and your "
-                            "vault passphrase can use them. Store securely.",
+        "warning":          "This file holds encrypted data provider credentials. Anyone with it and the "
+                            "exporting member's vault passphrase, recovery code or passkey can use them. "
+                            "Store securely.",
         "connections":      connections,
         "provider_configs": provider_configs,
-        # The wrapped DEK, or None when no vault slot exists (nothing here is encrypted either, then).
-        "vault":            crypto_service.export_vault_slot(user["id"]) if user else None,
+        # Empty when the exporter holds no slot (nothing here is reopenable elsewhere, then).
+        "vault_slots":      crypto_service.export_vault_slots(user["id"]) if user else [],
     })
     # Note which wrapping went into the file. This artifact outlives the app's memory of it: change the
-    # passphrase and the DEK is rewrapped, leaving every file written before that restorable only with the
-    # old passphrase, permanently — a consequence the user has no way to notice at the moment it happens.
-    # Recorded here rather than in the UI because only this path knows what was actually written, and it
-    # is deliberately not allowed to fail the export: the file is the valuable thing, the note about it
-    # is a courtesy, and a control-DB hiccup must not cost someone their backup.
+    # passphrase and the DEK is rewrapped, leaving every file written before that restorable elsewhere only
+    # with the old passphrase (or the recovery code it carries) — a consequence the user has no way to
+    # notice at the moment it happens. Recorded here rather than in the UI because only this path knows
+    # what was actually written, and it is deliberately not allowed to fail the export: the file is the
+    # valuable thing, the note about it is a courtesy, and a control-DB hiccup must not cost someone their
+    # backup.
     if user:
         try:
-            fingerprint = crypto_service.exported_slot_fingerprint(payload.get("vault"))
+            fingerprint = crypto_service.exported_slots_fingerprint(payload["vault_slots"])
             if fingerprint:
                 control_database.record_credentials_export(user["id"], fingerprint)
         except Exception as exc:                                    # pragma: no cover - defensive
@@ -2344,19 +2363,68 @@ def _payload_opens_with_local_dek(user, connections: list[dict], provider_config
     return False
 
 
-def _foreign_backup_prompt(vault: dict, user) -> str:
-    """Which passphrase to ask for, said in terms of where the file came from.
+def _foreign_backup_prompt(slots: list[dict], user) -> str:
+    """Whose secret to ask for, said in terms of where the file came from.
 
-    Reaching here means the live DEK does not open this file, so the passphrase wanted is never simply
+    Reaching here means the live DEK does not open this file, so the secret wanted is never simply
     "yours" — and "enter the passphrase this was created with" leaves someone guessing which of their own
-    passphrases that was. The slot names the account it was written for, which separates the two cases
+    passphrases that was. The slots name the account they were written for, which separates the two cases
     worth telling apart.
     """
-    if user and vault.get("user_id") == user.get("id"):
-        return ("This backup was made under a different vault key on this account — enter the vault "
-                "passphrase that was in force when it was created.")
-    return ("This backup came from another install — enter the vault passphrase of the install that "
-            "created it.")
+    if user and any(s.get("user_id") == user.get("id") for s in slots):
+        return ("This backup was made under a different vault key on this account — open it with the "
+                "vault passphrase, recovery code or passkey that was in force when it was created.")
+    return ("This backup came from another install — open it with the vault passphrase, recovery code or "
+            "passkey of the member who made it.")
+
+
+def _exported_slots(d: dict, version: int) -> list[dict]:
+    """The slots a credentials payload carries, whatever its version: v5 lists them, v3/v4 carried one."""
+    if version >= 5:
+        return [dict(s) for s in d.get("vault_slots") or []]
+    return [dict(d["vault"])] if d.get("vault") else []
+
+
+def _unlock_options(slots: list[dict], request: Request) -> dict:
+    """Which of the exporter's secrets this page can use to open the file.
+
+    A passkey is offered only where it can work: a passkey answers at the host name it was registered
+    under and nowhere else, and a ceremony offered anywhere else fails with nothing to say why. So it needs
+    a page the browser will run a ceremony on, at the name recorded with the slot."""
+    context = transport.passkey_context(request) if request is not None else {"available": False, "rp_id": None}
+    recovery = next((s for s in slots if s.get("method") == "recovery"), None)
+    return {
+        "passphrase":    any(s.get("method", "passphrase") == "passphrase" for s in slots),
+        "recovery_code": {"issued_at": recovery.get("issued_at")} if recovery else None,
+        "passkeys": [
+            {"credential_id": s["credential_id"], "prf_salt": s["prf_salt"], "label": s.get("label") or "Passkey"}
+            for s in slots
+            if s.get("method") == "passkey" and context["available"]
+            and crypto_service.exported_site_matches(s, context["rp_id"])
+        ],
+        "rp_id": context["rp_id"],
+    }
+
+
+def _backup_deks(body: CredentialsRestoreRequest, slots: list[dict]) -> list[bytes] | None:
+    """The workspace keys the secret in this request opens from the file's slots, or None when the request
+    carries none. Raises `ValueError` when the secret is wrong or names a slot the file does not hold."""
+    if body.passphrase:
+        method, secret, match = "passphrase", body.passphrase, None
+    elif body.recovery_code:
+        method, secret, match = "recovery", body.recovery_code, None
+    elif body.passkey_credential_id and body.passkey_prf_output:
+        method, secret, match = "passkey", body.passkey_prf_output, body.passkey_credential_id
+    else:
+        return None
+    slot = next(
+        (s for s in slots
+         if s.get("method", "passphrase") == method and (match is None or s.get("credential_id") == match)),
+        None,
+    )
+    if slot is None:
+        raise ValueError("this backup does not carry that kind of vault key")
+    return crypto_service.deks_from_exported_slot(slot, secret)
 
 
 @router.post("/restore/credentials", dependencies=[Depends(require_admin_or_local)])
@@ -2376,14 +2444,13 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
 
     d = body.data
     version = d.get("version")
-    if version not in (1, 2, 3, 4):
+    if version not in RESTORABLE_CREDENTIALS_VERSIONS:
         raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
     _verify_payload_content_hash(d)
-    # v3/v4 carry ciphertext + the exporting vault's own key material (v4's is a keypair slot, v3's a
-    # directly-wrapped DEK — `crypto_service` reads either); v2 carries provider-agnostic connections in
-    # plaintext; v1 (legacy) carried plaintext Plaid items — fold those into provider='plaid'
-    # connections so an older credentials export still restores after the cutover.
-    encrypted = version in (3, 4)
+    # v3+ carry ciphertext + the exporting member's own key material (`_exported_slots`); v2 carries
+    # provider-agnostic connections in plaintext; v1 (legacy) carried plaintext Plaid items — fold those
+    # into provider='plaid' connections so an older credentials export still restores after the cutover.
+    encrypted = version >= 3
     if version >= 2:
         connections = [dict(c) for c in d.get("connections", [])]
     else:
@@ -2398,55 +2465,48 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
         ]
     # App-level provider credentials ride the same credentials backup (v2+; legacy v1 had none).
     provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version >= 2 else []
+    slots = _exported_slots(d, version) if encrypted else []
     user = getattr(request.state, "user", None)
 
     # A file whose ciphertext is already valid here needs nothing: the rows go back verbatim — no
-    # passphrase, no re-encryption. Two ways to establish that, and the second exists because the first
+    # secret, no re-encryption. Two ways to establish that, and the second exists because the first
     # answers a narrower question than the one that matters.
     #
-    #   1. The file carries *this* slot (`vault_slot_is_local`). Cheap, and works with the vault still
-    #      locked, since it compares key material rather than using it. The common case: your own backup,
-    #      onto the machine that made it.
+    #   1. One of the file's slots seals the key this install holds now (`exported_slots_hold_live_dek`).
+    #      Cheap, and works with the vault still locked, since it compares stored material rather than
+    #      using it. The common case: a backup taken here, restored here, whatever has happened to anyone's
+    #      passphrase since — short of the key itself being replaced.
     #   2. The file's ciphertext opens under the live DEK. Needs the vault unlocked — it uses the key —
-    #      but it tests the property directly instead of inferring it from who exported the file.
-    #
-    # What (2) adds is everything (1) mistakes for foreign. Whether a restore is a byte copy depends on
-    # the *workspace* DEK, not on identity: every member's slot seals the same DEK, so a colleague's file
-    # restores verbatim on the shared install and (1) would have demanded their passphrase to re-key data
-    # already correct. It also covers a file predating a passphrase *change*, since changing a passphrase
-    # re-wraps the same DEK and leaves stored ciphertext untouched — so the old backup was never stranded
-    # here at all, only on a different install.
+    #      but it tests the property directly, so it also covers a file whose slots no longer exist here.
     verbatim = False
-    if encrypted and user:
-        verbatim = crypto_service.vault_slot_is_local(d.get("vault"), user["id"])
-        if not verbatim and crypto_service.is_unlocked(user["id"]):
+    if encrypted:
+        verbatim = crypto_service.exported_slots_hold_live_dek(slots)
+        if not verbatim and user and crypto_service.is_unlocked(user["id"]):
             verbatim = _payload_opens_with_local_dek(user, connections, provider_configs)
 
     # Otherwise every secret has to be reopened with the key that sealed it and re-sealed under this
-    # workspace's own. For an encrypted file from elsewhere that key comes from the backup's own slot +
-    # the passphrase that went with it; for v1/v2 the payload is already plaintext and there is nothing
-    # to reopen.
+    # workspace's own. For an encrypted file that key comes from one of the file's slots, opened with the
+    # secret that goes with it; for v1/v2 the payload is already plaintext and there is nothing to reopen.
     backup_dek = None
     if encrypted and not verbatim and (connections or provider_configs):
-        vault = d.get("vault") or {}
-        if not (vault.get("wrapped_dek") or vault.get("sealed_dek")):
+        if not slots:
             raise HTTPException(status_code=400, detail={
                 "code": "vault_material_missing",
                 "message": "This credentials backup carries no vault key, so its contents cannot be reopened.",
             })
-        if not body.passphrase:
-            raise HTTPException(status_code=400, detail={
-                "code": "backup_passphrase_required",
-                "message": _foreign_backup_prompt(vault, user),
-            })
         try:
-            backup_dek = crypto_service.unwrap_dek_from_slot(
-                vault, body.passphrase, user_id=vault.get("user_id") or "",
-            )
+            backup_dek = _backup_deks(body, slots)
         except ValueError:
             raise HTTPException(status_code=400, detail={
-                "code": "incorrect_backup_passphrase",
-                "message": "That passphrase does not open this backup's vault key.",
+                "code": "incorrect_backup_secret",
+                "message": "That does not open this backup's vault key.",
+                "unlock_options": _unlock_options(slots, request),
+            })
+        if backup_dek is None:
+            raise HTTPException(status_code=400, detail={
+                "code": "backup_secret_required",
+                "message": _foreign_backup_prompt(slots, user),
+                "unlock_options": _unlock_options(slots, request),
             })
 
     # Re-encrypting restored credentials under the workspace DEK needs the local vault unlocked.
@@ -2588,7 +2648,10 @@ async def restore_backup_file(
 
 @router.post("/restore/credentials-file", dependencies=[Depends(require_admin_or_local)])
 async def restore_credentials_file(request: Request, file: UploadFile = File(...),
-                                   passphrase: str | None = Form(None)):
+                                   passphrase: str | None = Form(None),
+                                   recovery_code: str | None = Form(None),
+                                   passkey_credential_id: str | None = Form(None),
+                                   passkey_prf_output: str | None = Form(None)):
     with backup_temp_file() as staged:
         await _spool_upload(file, staged)
         _require_kind(identify_backup_file(staged), BACKUP_KIND_CREDENTIALS)
@@ -2600,4 +2663,7 @@ async def restore_credentials_file(request: Request, file: UploadFile = File(...
         else:
             staged.seek(0)
             payload = _read_bare_json(staged)
-    return restore_credentials(CredentialsRestoreRequest(data=payload, passphrase=passphrase), request)
+    return restore_credentials(CredentialsRestoreRequest(
+        data=payload, passphrase=passphrase, recovery_code=recovery_code,
+        passkey_credential_id=passkey_credential_id, passkey_prf_output=passkey_prf_output,
+    ), request)

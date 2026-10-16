@@ -186,6 +186,10 @@ export const api = {
     request('/auth/vault/change-passphrase', { method: 'POST', body: JSON.stringify({ old_passphrase, new_passphrase }) }),
   unlockVault: (passphrase) =>
     request('/auth/vault/unlock', { method: 'POST', body: JSON.stringify({ passphrase }) }),
+  // Whether a passphrase being chosen clears the floor, and its strength score — asked while it is typed
+  // (`usePassphraseStrength`), since the estimate's dictionaries live on the server.
+  vaultPassphraseStrength: (passphrase) =>
+    request('/auth/vault/passphrase-strength', { method: 'POST', body: JSON.stringify({ passphrase }) }),
   // Prove with a passkey and set a new passphrase in one request, the passkey sibling of `recoverVault`.
   // One call rather than prove-then-set, so no ceremony is ever spent with no passphrase written. Also
   // the only route by which a passkey-only member gets a first passphrase.
@@ -1260,16 +1264,20 @@ export const api = {
     signalDataMutated()
     return res.json()
   },
-  restoreCredentialsFile: async (file, passphrase = null) => {
+  restoreCredentialsFile: async (file, secret = null) => {
     const fd = new FormData()
     fd.append('file', file)
-    // The passphrase of the vault that PRODUCED the backup — only needed for a file from another
-    // install, whose ciphertext must be reopened before it can be re-keyed under this workspace.
-    if (passphrase) fd.append('passphrase', passphrase)
+    // One secret of the member who PRODUCED the backup — `{ passphrase }`, `{ recovery_code }`, or
+    // `{ passkey_credential_id, passkey_prf_output }` — only needed when the file's ciphertext is not
+    // already valid here and must be reopened before it can be re-keyed under this workspace.
+    for (const [field, value] of Object.entries(secret || {})) {
+      if (value) fd.append(field, value)
+    }
     const res = await trackedFetch('/api/import-export/restore/credentials-file', { method: 'POST', body: fd })
     if (!res.ok) {
       // `buildResponseError` (not a bare Error) so callers can branch on `detail.code` — this endpoint
-      // answers `backup_passphrase_required` / `incorrect_backup_passphrase` / `vault_locked`.
+      // answers `backup_secret_required` / `incorrect_backup_secret` (both with `unlock_options`) /
+      // `vault_locked`.
       throw buildResponseError(await res.json().catch(() => ({ detail: res.statusText })), res.status)
     }
     signalDataMutated()

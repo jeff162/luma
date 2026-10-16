@@ -2740,8 +2740,20 @@ export const HELP_TOPICS = [
               <tr>
                 <td><strong>Set vault passphrase</strong></td>
                 <td>Shown before a vault exists. The passphrase protects the key the credentials are
-                  encrypted with, so it has to be a strong one. The dialog shows what is still missing
-                  and can suggest one.</td>
+                  encrypted with, so it has to be a strong one: long enough, and hard to guess. How hard
+                  is estimated as it is typed, against lists of common words, names and patterns, and
+                  the dialog says what would make it stronger. Several unrelated words work well, and
+                  the dialog can suggest some.</td>
+              </tr>
+              <tr>
+                <td><strong>Your vault passphrase is too easy to guess</strong></td>
+                <td>Shown when a passphrase set under an earlier, weaker rule no longer passes the current
+                  one. It is checked each time it is typed to unlock. When the rule, or the estimate behind
+                  it, changes, the locked strip and a <strong>Confirm your vault passphrase</strong> task
+                  ask for one unlock with the passphrase rather than a passkey, since a passkey cannot be
+                  used to check it; no credentials backup can be taken until then. It still opens the vault, but no
+                  data provider can be connected, and no credentials backup can be taken, until it is
+                  changed in Vault settings. Only the person whose passphrase it is can change it.</td>
               </tr>
               <tr>
                 <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
@@ -4395,40 +4407,45 @@ export const HELP_TOPICS = [
             The <strong>credentials backup</strong> holds the stored credential for each connection and
             the provider secrets entered with <strong>Configure</strong>, encrypted as they are in
             the <HelpLink to="/help/credential-vault">vault</HelpLink>. It needs no further encryption.
-            To open them elsewhere it also carries one unlock method: the vault passphrase of the user
-            who generated the file. Passkeys, the recovery code and other users&apos; passphrases are
-            not in it.
+            To open them elsewhere it also carries the unlock methods of the user who generated the
+            file: their vault passphrase, their recovery code and their passkeys. Other users&apos;
+            unlock methods are not in it. The file is only as hard to break into as the weakest
+            method in it, which is why it cannot be generated while that user&apos;s passphrase fails
+            the current strength rule.
           </li>
         </ul>
 
-        <HelpHeading anchor="credentials-restore-passphrase">The passphrase a credentials restore needs</HelpHeading>
+        <HelpHeading anchor="credentials-restore-passphrase">What a credentials restore asks for</HelpHeading>
         <div className="help-table-scroll">
           <table>
             <thead>
-              <tr><th>Restoring to</th><th>Passphrase asked for</th></tr>
+              <tr><th>Restoring to</th><th>Asked for</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td>The installation that made the backup</td>
-                <td>None, with the vault unlocked. The backup of any user restores, and a passphrase
+                <td>Nothing, with the vault unlocked. The backup of any user restores, and a passphrase
                   changed since the backup makes no difference.</td>
               </tr>
               <tr>
-                <td>The same installation, after <strong>Replace vault key</strong></td>
-                <td>The passphrase the user who generated the file had at the time.</td>
+                <td>The same installation, after <strong>Replace vault key</strong> or a rebuilt vault</td>
+                <td>One of the generating user&apos;s unlock methods as it was at the time: the
+                  passphrase, the recovery code, or a passkey.</td>
               </tr>
               <tr>
                 <td>A different installation</td>
-                <td>The same: the generating user&apos;s passphrase at the time. No other user&apos;s
-                  passphrase opens the file. The vault on the new installation has to exist and be
-                  unlocked, under whatever passphrase was set there.</td>
+                <td>The same. No other user&apos;s passphrase opens the file. A passkey is offered only
+                  where the new installation is reached at the same name the passkey was added at (for
+                  example <code>luma.local</code>), over HTTPS. The vault on the new installation has to
+                  exist and be unlocked, under whatever passphrase was set there.</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p>
-          A passphrase that has been changed is therefore worth keeping for as long as a backup made
-          under it might be restored somewhere else.
+          A passphrase or recovery code that has been replaced is therefore worth keeping, with the date
+          it was replaced, for as long as a backup made under it might be restored somewhere else. The
+          restore names the date the file&apos;s recovery code was issued, to tell which kept code opens it.
         </p>
 
         <HelpHeading anchor="restoring-both">Restoring data and credentials</HelpHeading>

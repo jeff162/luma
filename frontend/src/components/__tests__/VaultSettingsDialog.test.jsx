@@ -68,7 +68,6 @@ const SESSION = {
     vault_unlocked: true,
     vault_proof_seconds_remaining: 300,
     vault_passphrase_min_length: 20,
-    vault_passphrase_min_distinct: 6,
   },
   setCurrentUser: () => {},
 }

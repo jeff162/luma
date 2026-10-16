@@ -17,7 +17,7 @@
 
 import { StrictMode } from 'react'
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { act, render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const vaultResetPreview = vi.fn(async () => ({
@@ -31,6 +31,10 @@ const vaultResetPreview = vi.fn(async () => ({
 const recoverVault = vi.fn(async () => ({ recovery_code: 'NEWCODE1-NEWCODE2', user: {} }))
 const resetVault = vi.fn(async () => ({ connections_needing_relink: 2, revocations: [], unfinished: [], user: {} }))
 const requestVaultReenrolment = vi.fn(async () => ({ user: {} }))
+// The server's guessability verdict on a passphrase being chosen: every long one clears it here.
+const vaultPassphraseStrength = vi.fn(async (passphrase) => ({
+  acceptable: passphrase.length >= 20, score: 4, shortfall: null,
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -38,13 +42,21 @@ vi.mock('../../lib/api.js', () => ({
     recoverVault: (...a) => recoverVault(...a),
     resetVault: (...a) => resetVault(...a),
     requestVaultReenrolment: (...a) => requestVaultReenrolment(...a),
+    vaultPassphraseStrength: (...a) => vaultPassphraseStrength(...a),
   },
 }))
 
 const { VaultRecoveryDialog } = await import('../VaultRecoveryDialog.jsx')
 const { AppSessionProvider } = await import('../../lib/AppSessionContext.jsx')
 
-const SESSION = { currentUser: { vault_passphrase_min_length: 20, vault_passphrase_min_distinct: 6 } }
+const SESSION = { currentUser: { vault_passphrase_min_length: 20 } }
+
+// The dialog holds a new passphrase until the server's verdict on it arrives, so a case that submits one
+// waits for that verdict first.
+async function verdictArrives(passphrase) {
+  await waitFor(() => expect(vaultPassphraseStrength).toHaveBeenCalledWith(passphrase))
+  await act(async () => { await vaultPassphraseStrength.mock.results.at(-1).value })
+}
 const STRONG = 'a replacement passphrase'
 
 function renderDialog(props = {}) {
@@ -129,7 +141,7 @@ describe('the ladder', () => {
     expect(await screen.findByText('A credentials backup is on file')).toBeTruthy()
     // The non-obvious half: a backup opens with the passphrase it was MADE under, so an older one the
     // user still remembers is a complete recovery rather than another dead end.
-    expect(screen.getByText(/passphrase it was made under, not your current one/)).toBeTruthy()
+    expect(screen.getByText(/in force when it was taken, not\s+your current ones/)).toBeTruthy()
   })
 })
 
@@ -159,6 +171,7 @@ describe('recovery code', () => {
     await userEvent.type(screen.getByPlaceholderText('New vault passphrase'), `${STRONG}{Enter}`)
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Confirm new passphrase'))
     expect(recoverVault).not.toHaveBeenCalled()
+    await verdictArrives(STRONG)
 
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), `${STRONG}{Enter}`)
     expect(recoverVault).toHaveBeenCalledWith('SOMECODE', STRONG)
@@ -171,6 +184,7 @@ describe('recovery code', () => {
     await userEvent.type(screen.getByPlaceholderText('Recovery code'), 'SOMECODE')
     await userEvent.type(screen.getByPlaceholderText('New vault passphrase'), STRONG)
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), STRONG)
+    await verdictArrives(STRONG)
     await userEvent.click(screen.getByText('Open the vault').closest('button'))
 
     expect(recoverVault).toHaveBeenCalledWith('SOMECODE', STRONG)
@@ -280,6 +294,7 @@ describe('asking another member to let you back in', () => {
     renderDialog()
     await userEvent.type(await screen.findByPlaceholderText('New passphrase'), REENROL)
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), REENROL)
+    await verdictArrives(REENROL)
     await userEvent.click(screen.getByText('Ask to be let back in').closest('button'))
     await waitFor(() => expect(requestVaultReenrolment).toHaveBeenCalledWith(REENROL))
   })
