@@ -18,7 +18,7 @@
 // narrow rule, which is what delete is for; it is offered on the narrow rule alone, because deleting
 // the broad one strands every row the narrow matcher misses.
 //
-// Dismissal is the nesting half's, and only its. An overlap has no deterministic winner, so a Dismiss
+// Dismissal is the nesting half's, and only its. An overlap's winner is arbitrary, so a Dismiss
 // button there would let the panel call an arithmetic accident settled — the flag comes from the server
 // (`dismissible`) rather than from a `kind` check in the layout, and neither end may sprout its own.
 //
@@ -79,7 +79,7 @@ const RULES = {
   },
 }
 
-// Never dismissible: nothing decides which of the two rules wins, so it stays listed until refined.
+// Never dismissible: which of the two rules wins is decided but not reasoned, so it stays listed until refined.
 const OVERLAP = {
   kind: 'amount_overlap', key: 'amount_overlap:broad:narrow', severity: 'warning', dismissible: false,
   rule_ids: ['broad', 'narrow'], overlap_min: 3000, overlap_max: 4000, winner_rule_id: 'broad',
@@ -218,7 +218,7 @@ describe('RuleFindingsDialog', () => {
     await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledTimes(2))
   })
 
-  it('never offers to dismiss an overlap, which is nondeterminism rather than information', async () => {
+  it('never offers to dismiss an overlap, whose winner is arbitrary rather than informative', async () => {
     renderDialog([OVERLAP])
     await screen.findByText(/Amount ranges that overlap/)
     expect(screen.queryByText('Dismiss')).toBeNull()

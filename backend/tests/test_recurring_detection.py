@@ -25,8 +25,10 @@ from backend.routers.recurring import (
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
     maybe_auto_scan,
+    owe_recurring_rescan,
     payee_keys_for_ids,
     scan_and_store,
+    settle_owed_rescans,
 )
 
 
@@ -728,6 +730,63 @@ class RecurringDetectionTests(unittest.TestCase):
         with self._use_db_path():
             update_rule(rule_id, RuleUpdate(keyword="chef"), on_existing="reject")
         self.assertEqual(len(self._members(series["id"])), 1)  # now matches Green Chef, not Blue Apron
+
+    def test_an_ended_rule_backed_series_keeps_its_rows_from_an_active_payee_series(self):
+        # A rule's matches are the rule's whatever the series' status, so an active payee reading of the
+        # same charges cannot take them. A scoped scan relies on this to leave the series alone.
+        end = date.today()
+        ids = {self._add_txn(payee="Streamly", category="Streaming", amount=15.99,
+                             d=(end - timedelta(days=30 * i)).isoformat()) for i in range(6)}
+        series = self._series_for_rule(self._create_recurring_rule("streamly"))
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET status = 'ended', next_due_date = ? WHERE id = ?",
+                             ((end + timedelta(days=400)).isoformat(), series["id"]))
+                conn.execute(
+                    "INSERT INTO recurring_series (id, payee_key, display_name, category_id, cadence, "
+                    "period_days, source, confirmed) VALUES (?, 'streamly', 'Streamly', ?, 'monthly', 30, "
+                    "'manual', 1)",
+                    (str(uuid.uuid4()), self.cats["Streaming"]),
+                )
+        self._scan()
+        self.assertEqual(self._members(series["id"]), ids)
+
+    def _edit_and_settle(self, txn_id, name):
+        # An edit as every write path makes one: the write, the rescan owed in its transaction, and the
+        # scoped scan that settles it after the commit.
+        with self._use_db_path():
+            with get_db() as conn:
+                prior = payee_keys_for_ids(conn, [txn_id])
+                conn.execute("UPDATE txn SET merchant_name = ?, display_name = ?, raw_name = ? WHERE id = ?",
+                             (name, name, name, txn_id))
+                owe_recurring_rescan(conn, [txn_id], prior_payee_keys=prior)
+            settle_owed_rescans()
+
+    def test_a_scoped_scan_follows_rows_into_and_out_of_a_rule_backed_series(self):
+        end = date.today()
+        ids = [self._add_txn(payee="NYTIMES.COM", category="Streaming", amount=17.0,
+                             d=(end - timedelta(days=30 * i)).isoformat()) for i in range(6)]
+        stranger = self._add_txn(payee="Corner Bakery", category="Streaming", amount=17.0,
+                                 d=(end - timedelta(days=200)).isoformat())
+        series = self._series_for_rule(self._create_recurring_rule("nytimes"))
+        self.assertEqual(self._members(series["id"]), set(ids))
+
+        self._edit_and_settle(ids[0], "Corner Bakery")
+        self._edit_and_settle(stranger, "NYTimes Digital")
+        self.assertEqual(self._members(series["id"]), set(ids[1:]) | {stranger})
+
+    def test_a_scoped_scan_picks_up_a_rule_changed_on_a_path_that_owed_nothing(self):
+        end = date.today()
+        ids = [self._add_txn(payee="NYTIMES.COM", category="Streaming", amount=17.0 + i,
+                             d=(end - timedelta(days=30 * i)).isoformat()) for i in range(6)]
+        other = self._add_txn(payee="Corner Bakery", category="Streaming", amount=5.0, d=end.isoformat())
+        rule_id = self._create_recurring_rule("nytimes")
+        series = self._series_for_rule(rule_id)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE category_rule SET amount_min = 19.5 WHERE id = ?", (rule_id,))
+        self._edit_and_settle(other, "Corner Bakery Cafe")
+        self.assertEqual(self._members(series["id"]), set(ids[3:]))
 
     def test_a_row_cannot_be_forced_into_a_series_it_does_not_match(self):
         # Pinning was withdrawn deliberately. A series is defined by what recurs, so a charge that merely

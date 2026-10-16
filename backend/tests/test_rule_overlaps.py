@@ -348,8 +348,9 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
     """Acknowledging a finding, and the two properties that make the feature trustworthy rather than just
     quiet.
 
-    **An amount overlap can never be dismissed.** It is nondeterminism rather than information — nothing
-    decides which rule categorizes the charge — so it stays listed until the conditions are refined. The
+    **An amount overlap can never be dismissed.** It is an arbitrary outcome rather than information —
+    the ordering's last terms settle it reproducibly, but on no basis that is about these two rules — so it
+    stays listed until the conditions are refined. The
     refusal is enforced where findings are assembled, not only in the panel, so a stored row cannot hide
     a warning however it got there.
 

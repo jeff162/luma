@@ -8,20 +8,29 @@ every shape that was tried and rejected on the way, is in [`../data-model.md`](.
 
 One deferred item remains, and it is a cost question rather than a design one.
 
-## The scoped scan costs what a full scan does
+## A scoped scan still finds its payees' rows by reading the whole window
 
-`scan_and_store` takes an optional `payee_keys` scope, but the payee filter is applied **after a full
-pool load** — so a scoped pass loads the whole ledger and then throws most of it away. Measured on a
-20,000-row synthetic ledger: **~125 ms scoped against ~124 ms unscoped.**
+`scan_and_store` takes a `payee_keys` scope. A scoped pass reads every money-movement row in the window
+(transfer pairing needs all of them) and reconciles a rule-backed series only when an edit touched it or
+its rule changed (`docs/data-model.md` → *Rule-backed series*). What is left is the payee rows: there is
+no way to select a payee's rows in SQL, because the key is derived in Python from the row's names, so the
+pass reads and normalizes the whole window and keeps the rows in scope.
 
-Correctness does not depend on this. `_match_members` filters by each series' own payee, category and
-account, so the pool's breadth changes only cost, never outcome — which is why the scoped path was safe
-to ship unoptimized.
+**Measured 2026-10-15** on a copy of a real ledger (about 19,000 transactions, 6,400 of them in the
+window, four rule-backed series, 43 confirmed):
 
-**What changed is who pays it.** The scan was originally only on the import/sync path, where 125 ms is
-invisible. It now follows **every write that changes what detection reads** (`owe_recurring_rescan`
-keeps membership from going stale), running in the request after the write commits, and the cost grows
-with the ledger rather than with the edit. The frequent callers are single edits in the ledger:
+| | before this pass | after |
+| --- | --- | --- |
+| scoped scan, one payee | ~92 ms | **~62 ms** |
+| full scan | ~145 ms | ~130 ms |
+
+Before, the scoped scan's cost split roughly evenly between running the four rules over the whole window
+and reading and normalizing it. After, reading and normalizing the window is roughly half of what is
+left; re-pairing the money movements once per transfer series is most of the rest.
+
+The scan follows **every write that changes what detection reads** (`owe_recurring_rescan`), running in
+the request after the write commits, so this cost grows with the ledger rather than with the edit. The
+frequent callers are single edits in the ledger:
 
 - a transaction's category set or cleared, its merchant renamed, its amount changed, or one created by
   hand;
@@ -36,16 +45,17 @@ removing an account with its transactions deleted. Account merge, detach and reg
 removed account's transactions, a transfer-pair answer and a global recategorize owe a full scan, which
 no payee scope can narrow.
 
-**Why it has not been taken.** Pushing the filter into SQL needs `payee_key` **materialized** on `txn`
-rather than derived in Python — a column, a backfill, and maintenance at every write site. That is a
-real ongoing obligation traded for a millisecond figure that is not yet uncomfortable.
+**What remains is storing the key, and it is parked.** `payee_key` materialized on `txn`, with an
+index, turns the payee read into a lookup. It needs a column, a backfill, and a migration to recompute it
+whenever `_normalize_payee` or `resolve_txn_name` changes — suspected to be rarely, but the current cost is low so its worth waiting a bit to see if that becomes a frequent event or not. This also needs the keeping the key current at every
+write of `merchant_name`, `display_name` or `raw_name`, which requires:
 
-**The two mitigations already in place**, which are why this is deferred rather than urgent: a no-op
-edit (re-saving the same category) skips the scan entirely, and a bulk edit scans **once for the batch**,
-so the cost is per request rather than per row.
+- **One writer and a guard.** Every name write goes through a helper that also writes the key, with a
+  test that fails on any other. The writes are many and some build their `SET` list dynamically, so the
+  guard is harder to make exact than the trash and account-group ones.
 
-**Revisit threshold.** When either the measured edit latency or the ledger size makes it noticeable —
-call it a ledger past roughly **50,000 rows**, where the same measurement would land nearer 300 ms.
+**Revisit threshold.** When it doesn't seem likely that the field will need to be recalculated of when the measured edit latency makes it noticeable — a scoped scan nearer 150 ms,
+on a ledger with roughly three times today's window.
 
 ## Recency is measured in periods, so a stale series' cadence is biased long
 
@@ -84,7 +94,7 @@ Measured on the reference ledger: **248 pairs across eleven account routes**, of
 (164 pairs) score into movement series and six (**84 pairs, 168 transactions**) never will:
 
 | route | pairs | median gap | why not a series |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | checking → a card paid on no schedule | 41 | 17 d | gaps 1–50 days, amounts $417–$5,646 |
 | checking → a second card | 17 | 33 d | gaps too irregular to snap |
 | a P2P wallet → checking | 12 | 28 d | withdrawals when the balance suits |

@@ -30,10 +30,11 @@ things worth keeping here, both of which look like oversights from the outside.
 
 **Only nesting findings are dismissible, and that is the user's line, not an omission.** Dismissal was
 first built for both kinds and cut back. The reasoning: a nesting pair is information, so acknowledging
-one is exactly right — but an amount overlap means *it is not deterministic which rule gets applied*, and
-a rule set in that state needs refining rather than acknowledging. A dismissed overlap would leave the
-ledger categorized by whichever range happened to be arithmetically smaller while the panel reported
-nothing outstanding. `DISMISSIBLE_KINDS` is checked where findings are assembled rather than only in the
+one is exactly right — but an amount overlap means *which rule gets applied is arbitrary*. Not undefined:
+the ordering's last terms (the amount span, then the rule id) settle it the same way every run. Settled
+by arithmetic rather than by anything about the two rules, though, and a rule set in that state needs
+refining rather than acknowledging. A dismissed overlap would leave the ledger categorized by whichever
+range happened to be arithmetically smaller while the panel reported nothing outstanding. `DISMISSIBLE_KINDS` is checked where findings are assembled rather than only in the
 panel, so a hand-inserted or legacy row cannot hide a warning; there is a test for exactly that.
 
 **Why the key is a fingerprint rather than the rule pair.** Keyed by the pair alone, "this is fine" would

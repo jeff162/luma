@@ -693,7 +693,8 @@ winner; that case is reported, below.
   category are left out.
 - **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored state.
   `rule_overlaps.DISMISSIBLE_KINDS` admits nestings only: a nesting is information, while an amount
-  overlap means nothing decides which rule categorizes the charge. The key carries the pair and the
+  overlap is settled only by the ordering's last terms — reproducibly, but on no basis that is about the
+  two rules. The key carries the pair and the
   redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
   dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.
 
@@ -915,7 +916,12 @@ A rule with `is_recurring` set owns a series (`source='rule'`, `rule_id`, `confi
 membership is the rule's matches, through the same predicate rule apply uses
 (`categorizer.rule_matches_row`). `is_recurring` is a valid rule action on its own.
 
-- It is reconciled against the full window even on a scoped scan, since its members can span payees.
+- **A scoped scan reconciles it only when something could have changed what it holds**, and then
+  against the whole window, since its members can span payees. That is when an edited row is linked to it
+  or its rule matches an edited row as it now stands (`_rule_series_touching`, recorded with the debt as
+  `series:<id>`), or when its rule differs from the one it was last reconciled against
+  (`rule_fingerprint`, compared on every scan so a rule edit on any path is caught). Nothing else can move
+  its rows, because it claims ahead of every other series whatever its status.
 - **Suppress** and **delete** clear the rule's `is_recurring` and drop the series, deleting the rule if
   that leaves it with no action. **End** keeps the flag, so a resubscription can resume it.
 - Deleting the rule, merging it away, or unchecking the flag drops the series.
@@ -986,7 +992,7 @@ and the category.
 - **A paired row is never payee material**, even when its pairs score no rhythm.
   `detect_transfer_series` returns every paired row id, and the payee pass runs over the pool without
   them.
-- The transfer pass runs over the full pool even on a scoped scan.
+- The transfer pass reads every money-movement row in the window even on a scoped scan.
 
 Two obstacles, both tracked in [`backlog/recurring-detection.md`](backlog/recurring-detection.md):
 

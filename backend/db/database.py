@@ -308,13 +308,15 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner. v75
 # removes from every stored rule-suggestion review the transactions that no longer exist. v76 adds
 # `amazon_pending_item.consumed_batch_id`, so undoing an orders import returns the parked items it attached.
-# v78 adds `recurring_rescan_owed`, so a recurring rescan a write owes survives the scan failing.
+# v78 adds `recurring_rescan_owed`, so a recurring rescan a write owes survives the scan failing. v79 adds
+# `recurring_series.rule_fingerprint`, so a scoped scan can leave a rule-backed series alone until an edit
+# or its rule changes what it holds.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 78
+CURRENT_VERSION = 79
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2455,6 +2457,15 @@ def _record_owed_recurring_rescans(conn):
     """)
 
 
+@migration(79)
+def _add_recurring_series_rule_fingerprint(conn):
+    # See the baseline CREATE. Nothing to backfill: NULL differs from every rule, so the next scan that
+    # reaches a rule-backed series reconciles it and records the value.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(recurring_series)").fetchall()}
+    if cols and "rule_fingerprint" not in cols:
+        conn.execute("ALTER TABLE recurring_series ADD COLUMN rule_fingerprint TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3552,7 +3563,12 @@ def init_db(db_path: str | None = None):
                 -- accounts plus the category, so its `payee_key` is a synthetic `transfer:<from>:<to>`
                 -- rather than a name, and it owns BOTH legs of every occurrence it claims. See
                 -- `services/transfer_pairs.py`.
-                counterpart_account_id TEXT REFERENCES account(id) ON DELETE SET NULL
+                counterpart_account_id TEXT REFERENCES account(id) ON DELETE SET NULL,
+                -- Set only on a rule-backed series: the rule's matcher as the series was last reconciled
+                -- against it. A scoped scan reconciles a rule-backed series only when an edit touches it
+                -- or this no longer matches the rule, so a rule edit on any path is picked up without the
+                -- path owing it. NULL = never reconciled, which always differs.
+                rule_fingerprint TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
             -- Payees owed a recurring rescan: recorded in the transaction of the write that made it

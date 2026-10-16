@@ -100,8 +100,8 @@ scale — rather than by feature.
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
   `txn`; the revisit threshold is roughly 50,000 rows.
 - [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** The overlap half of *Rule checkup*
-  on the Rules page reports two things: amount ranges that overlap without containment (a warning —
-  nothing decides which rule claims the charge) and merchant matchers that nest (information — the
+  on the Rules page reports two things: amount ranges that overlap without containment (a warning — the
+  ordering settles it reproducibly but on no principled basis) and merchant matchers that nest (information — the
   winner is not always the one a reader predicts). The mechanism is in `data-model.md` → *Rule checkup*;
   the file keeps the one deferred case, two equal-length keywords matching one row.
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's

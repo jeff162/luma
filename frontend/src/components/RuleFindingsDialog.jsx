@@ -40,9 +40,10 @@
  * **Dismissal is what makes the informational sections usable at real density, and it stops at the
  * overlap.** Most nesting pairs are deliberate, and a list of thirty that never shrinks is one nobody
  * opens twice; a range-drift charge can equally be one the rule was never meant to claim. So both can be
- * acknowledged, one charge or one pair at a time. An **overlap cannot be dismissed**: it is
- * nondeterminism, not information, so waving it through would leave the ledger categorized by an
- * arithmetic accident while the panel called it settled. The server decides this (`dismissible` on each
+ * acknowledged, one charge or one pair at a time. An **overlap cannot be dismissed**: its winner is
+ * arbitrary rather than undefined — the ordering breaks the tie reproducibly, just not for any reason
+ * about these two rules — so waving it through would leave the ledger categorized by an arithmetic
+ * accident while the panel called it settled. The server decides this (`dismissible` on each
  * finding), not the layout here.
  *
  * Dismissed findings are not gone: a *Show dismissed* toggle brings them back, flagged and restorable, so
@@ -531,7 +532,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
               />
               <Section
                 title="Amount ranges that overlap"
-                blurb="Both rules can claim the same charge, and the app has no principled way to choose between them. Refine their conditions until only one applies — these cannot be dismissed, because nothing decides which rule wins."
+                blurb="Both rules can claim the same charge, and the app has no principled way to choose between them. Refine their conditions until only one applies — these cannot be dismissed because it is arbitrary which rule will win."
                 findings={overlapFindings.filter(f => f.kind === 'amount_overlap')}
                 renderCard={finding => (
                   <FindingCard

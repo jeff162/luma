@@ -1379,8 +1379,9 @@ def dismiss_rule_overlap(body: RuleFindingDismissBody):
     rules are right — just "this pair is deliberate". The key carries what made the finding actionable,
     so a later edit that changes the situation produces a different key and surfaces again.
 
-    Only the informational kind may be acknowledged. An amount overlap is nondeterminism — nothing
-    decides which rule categorizes the charge — so it stays listed until the conditions are refined; the
+    Only the informational kind may be acknowledged. An amount overlap is arbitrary rather than undefined
+    — the ordering's last terms settle it the same way every time, but for no reason that is about these
+    two rules — so it stays listed until the conditions are refined; the
     refusal is 400 rather than a silent no-op, since a caller that thinks it dismissed something and did
     not is worse than one that is told."""
     with get_db() as conn:

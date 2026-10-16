@@ -38,10 +38,11 @@ will actually do — the same reason the ordering lives in one function.
 it is not a UI preference — `DISMISSIBLE_KINDS` decides it here, and the filter below refuses to hide a
 non-dismissible finding whatever the table holds, so no stored row can ever suppress a warning. A nesting
 pair is information, and plenty of them are deliberate: a panel that lists thirty forever is one nobody
-opens twice, so acknowledging one is exactly right. An amount overlap is **nondeterminism** — nothing
-decides which of the two rules categorizes the charge — and it stays listed until the conditions are
-refined, because acknowledging it would leave the ledger being categorized by an arithmetic accident with
-the app pretending that was settled.
+opens twice, so acknowledging one is exactly right. An amount overlap is **arbitrary, not undefined** —
+the ordering does settle it, because its last terms (the amount span, then the rule id) break any tie the
+same way every time, but neither term is answering the question of which rule ought to win. So the pair
+stays listed until the conditions are refined: acknowledging it would leave the ledger categorized by an
+arithmetic accident with the app pretending that was settled.
 
 A dismissal is keyed by the finding's `key`, which carries the pair *and what makes it actionable* — for
 a nesting pair, the redundancy verdict. So an acknowledged pair stays hidden through edits that do not
@@ -74,7 +75,8 @@ SEVERITY_INFO = "info"
 _SEVERITY_ORDER = {SEVERITY_WARNING: 0, SEVERITY_INFO: 1}
 
 # Which findings may be acknowledged. Only the informational kind: an `amount_overlap` is a pair of rules
-# with no deterministic winner, so it is not the sort of thing a user can be right about waving through —
+# whose winner is decided but not reasoned — the tiebreak is stable, not meaningful — so it is not the sort
+# of thing a user can be right about waving through —
 # it stays listed until the conditions are refined. Enforced where findings are assembled rather than only
 # in the panel, so a stored dismissal cannot hide a warning.
 DISMISSIBLE_KINDS = ("matcher_nesting",)

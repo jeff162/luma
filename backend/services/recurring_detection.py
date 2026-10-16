@@ -32,6 +32,7 @@ price rise stays in the series that should report it. See `docs/data-model.md` �
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import statistics
 import uuid
@@ -150,39 +151,43 @@ def _snap_to_cadence(median_gap: float):
     return best
 
 
-def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict], date]:
-    """Recent, live transactions eligible for detection, plus the reference "now" (the newest date in
-    the ledger — robust to imported/demo data that lags real today). Trashed and pending rows excluded;
-    account resolved to its effective (top-level) account so merged children fold into the parent."""
-    cutoff = (date.today() - timedelta(days=int(window_months * 30.44))).isoformat()
-    rows = conn.execute(
-        """
-        SELECT t.id,
-               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
-               COALESCE(p.type, a.type) AS effective_account_type,
-               t.category_id, t.category_source, t.amount, t.date,
-               t.merchant_name, t.display_name, t.raw_name,
-               t.owner_id, t.import_evidence_json,
-               -- Whether the row is money movement rather than spending or income, read through the
-               -- category's group exactly as the reports read it. Carried on the pool because transfer
-               -- pairing is gated on it (services/transfer_pairs.py) and re-querying per row would turn
-               -- one scan into thousands of lookups.
-               COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS money_movement
-        FROM   txn t
-        JOIN   account a ON a.id = t.account_id
-        LEFT   JOIN account p ON p.id = a.parent_account_id
-        LEFT   JOIN category c  ON c.id = t.category_id
-        LEFT   JOIN category pc ON pc.id = c.parent_id
-        WHERE  t.trashed_at IS NULL
-          AND  t.is_pending = 0
-          AND  t.date >= ?
-        """,
-        (cutoff,),
-    ).fetchall()
+def _pool_cutoff(window_months: int) -> str:
+    return (date.today() - timedelta(days=int(window_months * 30.44))).isoformat()
 
+
+# Recent, live transactions eligible for detection. Trashed and pending rows excluded; account resolved to
+# its effective (top-level) account so merged children fold into the parent.
+_POOL_SQL = """
+    SELECT t.id,
+           COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+           COALESCE(p.type, a.type) AS effective_account_type,
+           t.category_id, t.category_source, t.amount, t.date,
+           t.merchant_name, t.display_name, t.raw_name,
+           t.owner_id, t.import_evidence_json,
+           -- Whether the row is money movement rather than spending or income, read through the
+           -- category's group exactly as the reports read it. Carried on the pool because transfer
+           -- pairing is gated on it (services/transfer_pairs.py) and re-querying per row would turn
+           -- one scan into thousands of lookups.
+           COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS money_movement
+    FROM   txn t
+    JOIN   account a ON a.id = t.account_id
+    LEFT   JOIN account p ON p.id = a.parent_account_id
+    LEFT   JOIN category c  ON c.id = t.category_id
+    LEFT   JOIN category pc ON pc.id = c.parent_id
+    WHERE  t.trashed_at IS NULL
+      AND  t.is_pending = 0
+      AND  t.date >= ?
+"""
+
+# Narrows the pool to money-movement rows, the only ones transfer pairing reads.
+_MONEY_MOVEMENT_SQL = " AND COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) <> 0"
+
+
+def _pool_rows(conn: sqlite3.Connection, window_months: int, where: str = "", params=()) -> list[dict]:
+    """The detection pool, optionally narrowed by `where` (an `AND …` clause over `_POOL_SQL`'s aliases).
+    A row with no date or no payee key is not a candidate for anything and is left out."""
     pool: list[dict] = []
-    max_date = None
-    for r in rows:
+    for r in conn.execute(_POOL_SQL + where, (_pool_cutoff(window_months), *params)).fetchall():
         d = _parse_date(r["date"])
         if d is None:
             continue
@@ -213,9 +218,36 @@ def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict]
             "display": resolved,
             "sign": 1 if amount >= 0 else -1,
         })
-        if max_date is None or d > max_date:
-            max_date = d
-    return pool, (max_date or date.today())
+    return pool
+
+
+def _pool_rows_by_id(conn: sqlite3.Connection, window_months: int, ids) -> list[dict]:
+    ids = list(ids)
+    rows: list[dict] = []
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        rows += _pool_rows(conn, window_months, f" AND t.id IN ({','.join('?' * len(chunk))})", chunk)
+    return rows
+
+
+def _payee_rows(conn: sqlite3.Connection, window_months: int, payee_keys: set[str]) -> list[dict]:
+    """The pool rows whose payee key is one of `payee_keys`."""
+    return [r for r in _pool_rows(conn, window_months) if r["payee_key"] in payee_keys]
+
+
+def _reference_now(conn: sqlite3.Connection, window_months: int) -> date:
+    """The reference "now": the newest live, posted date in the window, robust to imported/demo data that
+    lags real today. Read with its own query so a scan that loads only part of the pool measures every
+    series against the same date a full scan does."""
+    row = conn.execute(
+        "SELECT MAX(t.date) AS newest FROM (" + _POOL_SQL + ") t", (_pool_cutoff(window_months),)
+    ).fetchone()
+    return _parse_date(row["newest"]) or date.today()
+
+
+def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict], date]:
+    """The whole detection pool plus the reference "now"."""
+    return _pool_rows(conn, window_months), _reference_now(conn, window_months)
 
 
 def _reference_amount(rows: list[dict]) -> float:
@@ -865,14 +897,17 @@ class ReconcileResult(NamedTuple):
 
 
 def _reconcile_priority(series: sqlite3.Row):
-    """Order series so exclusive row-claiming is deterministic and sensible: active before ended,
-    account-scoped before account-agnostic, higher confidence first, then id for a stable tiebreak."""
+    """Order series so exclusive row-claiming is deterministic and sensible: rule-backed first, then
+    active before ended, account-scoped before account-agnostic, higher confidence first, then id for a
+    stable tiebreak."""
     return (
-        1 if series["status"] == "ended" else 0,       # active before ended
         # A rule's matches are the rule's. Membership there is an instruction the user wrote, not a
-        # reading taken off the ledger, so it claims ahead of everything — including a movement, whose
-        # own precedence below exists to beat *inferred* payee series rather than authored ones.
+        # reading taken off the ledger, so it claims ahead of everything, ended or not — including a
+        # movement, whose own precedence below exists to beat *inferred* payee series rather than authored
+        # ones. It is also what lets a scoped scan leave a rule-backed series alone when no edited row
+        # touches it: no other series can take its rows, so nothing outside its own matches can move them.
         0 if series["source"] == "rule" else 1,
+        1 if series["status"] == "ended" else 0,       # active before ended
         # A two-legged movement claims next. Its rows are the ones a payee reading gets *wrong* — the
         # same movement described differently by each institution — so letting a payee series take them
         # first would recreate the per-account fragments the pairing exists to replace.
@@ -920,6 +955,15 @@ def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
     return {r["id"]: r for r in rows}
 
 
+def _rule_fingerprint(series_rules: dict, rule_id: str) -> str:
+    """The matcher a rule-backed series was last reconciled against, as stored in
+    `recurring_series.rule_fingerprint`. A scoped scan compares it with the rule as it stands, so an edit
+    to the rule, made on any of the paths that write one, brings the series back into scope without each
+    of those paths having to say so. A rule that no longer exists has a fingerprint of its own."""
+    rule = series_rules.get(rule_id)
+    return json.dumps(dict(rule), sort_keys=True, default=str) if rule is not None else "missing"
+
+
 def _candidate_members(pool: list[dict], series: sqlite3.Row, series_rules: dict, decisions) -> list[dict]:
     """The rows a series should currently own, before overrides/exclusivity. A rule-backed series
     (`source='rule'`) owns exactly its rule's matches (the shared categorizer predicate, so membership
@@ -938,9 +982,9 @@ def _rule_backed_holdings(conn: sqlite3.Connection, pool: list[dict]) -> set:
     """The rows the rule-backed series will hold, read ahead of the reconcile that assigns them.
 
     A movement about to be created needs to know which rows it may not take, and a rule's matches are
-    the only claim that outranks it — every other holder yields (see `scan_and_store`). Rule-backed
-    series are never out of a scoped scan's reach, so this asks the database directly rather than taking
-    a caller's list.
+    the only claim that outranks it — every other holder yields (see `scan_and_store`). `pool` is the
+    rows the movements would take, so every rule-backed series is asked about those rows alone, whether
+    or not the scan has it in scope.
 
     Deliberately an over-estimate: it stops at candidate membership, where the reconcile goes on to
     thin the rows down by occurrence and exclusivity. Erring this way makes a movement defer to a rule
@@ -1034,6 +1078,9 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict], *,
                 advance_next_due = False
         _write_series_stats(conn, series, occ, advance_next_due=advance_next_due)
         _assign_membership(conn, series["id"], [o["id"] for o in occ])
+        if series["source"] == "rule" and series["rule_id"]:
+            conn.execute("UPDATE recurring_series SET rule_fingerprint = ? WHERE id = ?",
+                         (_rule_fingerprint(series_rules, series["rule_id"]), sid))
         claimed.update(o["id"] for o in occ)
     return ReconcileResult(claimed, resumed)
 
@@ -1085,35 +1132,44 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
 
     `payee_keys` scopes the rebuild. `None` is the full global scan. A set restricts *every* step —
     detection, series partitioning, auto-series removal, reconciliation, and candidate insertion — to
-    those payee keys, leaving every other payee's series and membership exactly as they are. That is the
-    cheap path every owed rescan takes (`settle_owed_rescans`): reprocess only the payees a write touched
-    instead of the whole ledger. It is correct because detection groups by payee (so a scoped pool yields the same
-    per-payee result) and `reconcile_series` never disturbs out-of-scope rows. The one thing a scoped pass
-    skips is the payee-key re-derivation below — a global normalization-repair step the daily full-scan
-    catch-up owns — so a scoped pass trusts the stored keys.
+    those payee keys, leaving every other payee's series and membership exactly as they are, and reads
+    only the rows those steps can match. That is the cheap path every owed rescan takes
+    (`settle_owed_rescans`): reprocess only the payees a write touched instead of the whole ledger. It is
+    correct because detection groups by payee (so a scoped pool yields the same per-payee result) and
+    `reconcile_series` never disturbs out-of-scope rows. The one thing a scoped pass skips is the
+    payee-key re-derivation below — a global normalization-repair step the daily full-scan catch-up owns —
+    so a scoped pass trusts the stored keys.
 
-    Two things are deliberate exceptions to scoping, both because their membership is not decided by a
-    payee. **Rule-backed series**: their members are the rule's matches, which can span payees the scoped
-    pool doesn't hold (varying names — the whole reason a rule is used), so they are always reconciled
-    against the *full* pool and never scoped out of `existing`. That is how a newly imported row matching
-    a recurring rule attaches to its series right away without stamping membership through every insert
-    path. **Payee series holding a paired row**: pairing is decided by the money, so a movement's two legs
-    normally sit in different payee groups, and an edit to one leg's group changes what the other's may
-    claim — the scope is widened to those groups below.
+    Three things are deliberate exceptions to scoping by payee, because their membership is not decided
+    by one. **Movements**: their identity is two accounts, so every money-movement row is read and every
+    transfer series reconciled. **Rule-backed series**: their members are the rule's matches, which can
+    span payees the scope doesn't name (varying names — the whole reason a rule is used). One is in scope
+    when an edited row touches it (`_rule_series_touching`, recorded with the debt) or its rule has changed
+    since it was last reconciled (`_rule_fingerprint`), and then it is reconciled against the whole
+    window. That is how a newly imported row matching a recurring rule attaches to its series right away
+    without stamping membership through every insert path. **Payee series holding a paired row**: pairing
+    is decided by the money, so a movement's two legs normally sit in different payee groups, and an edit
+    to one leg's group changes what the other's may claim — the scope is widened to those groups below.
 
     **Every scan settles the rescans owed within its scope** (see `owe_recurring_rescan`), so a scoped
     scan takes the owed payees into its scope, and one owing a full scan becomes one."""
     owed = _owed_rescans(conn)
     if payee_keys is not None and owed:
         payee_keys = None if _FULL_SCAN_OWED in owed else set(payee_keys) | set(owed)
-    full_pool, ref_now = _load_pool(conn, window_months)
-    # Movements between two tracked accounts are detected first, and always over the FULL pool — the
-    # same exception rule-backed series get, and for the same reason: a movement's identity is its two
-    # accounts, not a payee, so a pool scoped to one payee holds only part of it and would pair the
-    # halves it happens to contain. Cheap because the pass only ever looks at money-movement rows.
+    owed_series: set[str] = set()
+    if payee_keys is not None:
+        owed_series = {k[len(_SERIES_OWED_PREFIX):] for k in payee_keys if k.startswith(_SERIES_OWED_PREFIX)}
+        payee_keys = {k for k in payee_keys if not k.startswith(_SERIES_OWED_PREFIX)}
+    ref_now = _reference_now(conn, window_months)
+    full_pool = _pool_rows(conn, window_months) if payee_keys is None else None
+    # Movements between two tracked accounts are detected first, and always over every money-movement row
+    # in the window: a movement's identity is its two accounts, not a payee, so a pool scoped to one payee
+    # holds only part of it and would pair the halves it happens to contain.
+    movement_pool = ([r for r in full_pool if r["money_movement"]] if full_pool is not None
+                     else _pool_rows(conn, window_months, _MONEY_MOVEMENT_SQL))
     chosen, dismissed = load_transfer_decisions(conn)
     transfer_candidates, paired = detect_transfer_series(
-        full_pool, ref_now, chosen=chosen, dismissed=dismissed)
+        movement_pool, ref_now, chosen=chosen, dismissed=dismissed)
     if payee_keys is not None:
         # Scope is a pure cost knob for the derived path: filtering the pool changes which payees are
         # processed, not the per-payee outcome (see reconcile_series) — with one exception, and it is the
@@ -1128,7 +1184,7 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         # never look at the group that has to give the rows up, and the stale series would survive until
         # the next full scan, sitting in the review list beside a Confirm that makes it permanent.
         payee_keys = payee_keys | _payee_keys_holding(conn, paired)
-        pool = [r for r in full_pool if r["payee_key"] in payee_keys]
+        pool = _payee_rows(conn, window_months, payee_keys)
     else:
         pool = full_pool
     # A rule says which rows belong to its series, so a movement never takes one. Every *other* holder
@@ -1136,7 +1192,10 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # descriptions of one payment, and the pair is that same payment read off the money instead. Whole
     # movements defer, never half of one: an occurrence is a pair, so a candidate that gave up one leg
     # would carry the wrong count and the wrong totals.
-    rule_held = _rule_backed_holdings(conn, full_pool)
+    movement_by_id = {r["id"]: r for r in movement_pool}
+    rule_held = _rule_backed_holdings(conn, [
+        movement_by_id[i] for cand in transfer_candidates for i in cand["member_ids"] if i in movement_by_id
+    ])
     transfer_candidates = [cand for cand in transfer_candidates
                            if not any(i in rule_held for i in cand["member_ids"])]
     # **Every** paired row is withheld from the payee pass, not just the ones a movement series claimed.
@@ -1177,13 +1236,20 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # reconcile below, their rows stay off-limits). Rule-backed series are always in scope — their
     # membership is the rule's matches, which can span payees a scoped pool doesn't contain, so scoping
     # them out would strand new members between full scans.
-    existing = [
-        r for r in conn.execute(
-            f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} "
-            f"FROM recurring_series s").fetchall()
-        if payee_keys is None or r["payee_key"] in payee_keys or r["source"] == "rule"
-        or r["counterpart_account_id"] is not None  # identity is its accounts; a payee scope can't name it
-    ]
+    all_series = conn.execute(
+        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} FROM recurring_series s"
+    ).fetchall()
+    rules_now = _load_series_rules(conn, all_series) if payee_keys is not None else {}
+
+    def _in_scope(r) -> bool:
+        if payee_keys is None or r["counterpart_account_id"] is not None:
+            return True  # a movement's identity is its accounts; a payee scope can't name it
+        if r["source"] == "rule" and r["rule_id"]:
+            return r["status"] != "suppressed" and (
+                r["id"] in owed_series or r["rule_fingerprint"] != _rule_fingerprint(rules_now, r["rule_id"]))
+        return r["payee_key"] in payee_keys
+
+    existing = [r for r in all_series if _in_scope(r)]
     user_owned = [
         r for r in existing
         if r["source"] in ("manual", "rule") or r["confirmed"] == 1 or r["status"] == "suppressed"
@@ -1212,12 +1278,18 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         conn.executemany("DELETE FROM recurring_series WHERE id = ?", [(i,) for i in auto_ids])
 
     # Reconcile the surviving (user-owned) in-scope series via the shared core: exclusive, priority-ordered
-    # membership + stats + ended→resume. Always over the FULL pool: the reconciled set is small (user-owned
-    # series only), so scanning the whole window costs little, and it is what lets a rule-backed series
-    # match its rule across payees a scoped pass wouldn't include. On a full scan this is *every* survivor
-    # (global exclusivity); on a scoped pass reconcile still leaves out-of-scope rows claimed by their own
-    # series alone.
-    reconciled = reconcile_series(conn, user_owned, full_pool, reserved=reserved)
+    # membership + stats + ended→resume. On a full scan this is *every* survivor (global exclusivity); on a
+    # scoped pass reconcile leaves out-of-scope rows claimed by their own series alone. The rows it reads
+    # are what the in-scope series can match: their payees and the money movements, and the whole window
+    # once a rule-backed series is among them, since a rule's matches can span any payee.
+    if full_pool is None and any(r["source"] == "rule" and r["rule_id"] for r in user_owned):
+        full_pool = _pool_rows(conn, window_months)
+    if full_pool is not None:
+        reconcile_pool = full_pool
+    else:
+        pool_ids = {r["id"] for r in pool}
+        reconcile_pool = pool + [r for r in movement_pool if r["id"] not in pool_ids]
+    reconciled = reconcile_series(conn, user_owned, reconcile_pool, reserved=reserved)
     claimed, resumed = reconciled.claimed, reconciled.resumed
 
     # Auto candidates: skip any a user-owned series already covers — same payee+category whose account
@@ -1237,8 +1309,12 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # Category stays part of the identity when both sides *have* one, and that is not a compromise: one
     # payee can carry genuinely different obligations, and collapsing them would destroy a correctly
     # detected series the same way ignoring the price point once did.
+    #
+    # A rule-backed series out of scope still covers: it keeps its rows, and its identity still names them.
+    covering = user_owned + [r for r in all_series if r["source"] == "rule" and r["id"] not in user_owned_ids]
+
     def _covered_by_owned(cand):
-        for r in user_owned:
+        for r in covering:
             if not (r["payee_key"] == cand["payee_key"]
                     and (r["category_id"] == cand["category_id"]
                          or r["category_id"] is None or cand["category_id"] is None)
@@ -1346,6 +1422,9 @@ def payee_keys_for_ids(conn: sqlite3.Connection, ids: list[str]) -> set[str]:
 # and spaces.
 _FULL_SCAN_OWED = "*"
 
+# Owes the rule-backed series named after the prefix. Not a payee key either: a payee key has no colon.
+_SERIES_OWED_PREFIX = "series:"
+
 # A debt is ordinarily settled within seconds of its write committing, so one still standing after this long
 # means the settling scan failed or never ran. Younger debts are left alone: their own settling scan is
 # running, and a second one beside it would only repeat its work.
@@ -1360,10 +1439,11 @@ def _owe(conn: sqlite3.Connection, payee_keys) -> None:
     )
 
 
-# Bulk paths call this once per request, never once per row: the settling scan loads the whole detection
-# window before it filters by payee, and one call per request keeps it to one scan.
+# Bulk paths call this once per request, never once per row: each settling scan reads the window's money
+# movements and its payees' rows, and one call per request keeps it to one scan.
 def owe_recurring_rescan(conn: sqlite3.Connection, txn_ids, *, prior_payee_keys=frozenset()) -> None:
-    """Record, inside the caller's write transaction, that the payees of `txn_ids` need a rescan.
+    """Record, inside the caller's write transaction, that the payees of `txn_ids` need a rescan, and so do
+    the rule-backed series the rows touch (`_rule_series_touching`).
 
     The scope is the payees the rows belong to *now*, plus any they belonged to *before* — a rename moves
     a row between payee groups, so the group it left has to be reconsidered too, and the caller captures
@@ -1374,7 +1454,39 @@ def owe_recurring_rescan(conn: sqlite3.Connection, txn_ids, *, prior_payee_keys=
     put, and one that no longer matches is released for whatever else claims it. The caller runs
     `settle_owed_rescans` once its transaction has committed.
     """
-    _owe(conn, set(prior_payee_keys) | payee_keys_for_ids(conn, [i for i in txn_ids if i]))
+    ids = [i for i in txn_ids if i]
+    _owe(conn, set(prior_payee_keys) | payee_keys_for_ids(conn, ids)
+         | {_SERIES_OWED_PREFIX + sid for sid in _rule_series_touching(conn, ids)})
+
+
+def _rule_series_touching(conn: sqlite3.Connection, txn_ids: list[str]) -> set[str]:
+    """The rule-backed series an edit to these rows can change: one that holds a row now (it may be
+    leaving), and one whose rule matches a row as it now stands (it may be joining). Nothing else about a
+    rule-backed series moves with an edit, because its members are its rule's matches and it claims ahead
+    of every other series (`_reconcile_priority`), so a scoped scan reconciles only these and leaves the
+    rest as they are. A change to the rule itself is caught by the scan instead (`_rule_fingerprint`)."""
+    rule_series = conn.execute(
+        "SELECT * FROM recurring_series WHERE source = 'rule' AND rule_id IS NOT NULL AND status != 'suppressed'"
+    ).fetchall()
+    if not rule_series or not txn_ids:
+        return set()
+    by_id = {r["id"]: r for r in rule_series}
+    touched: set[str] = set()
+    for start in range(0, len(txn_ids), 500):
+        chunk = txn_ids[start:start + 500]
+        touched |= {
+            r["recurring_series_id"] for r in conn.execute(
+                f"SELECT recurring_series_id FROM txn WHERE id IN ({','.join('?' * len(chunk))})", chunk
+            ).fetchall()
+            if r["recurring_series_id"] in by_id
+        }
+    rows = _pool_rows_by_id(conn, _WINDOW_MONTHS_DEFAULT, txn_ids)
+    rules = _load_series_rules(conn, rule_series)
+    for series in rule_series:
+        rule = rules.get(series["rule_id"])
+        if rule is not None and series["id"] not in touched and any(rule_matches_row(rule, row) for row in rows):
+            touched.add(series["id"])
+    return touched
 
 
 def owe_full_recurring_scan(conn: sqlite3.Connection) -> None:

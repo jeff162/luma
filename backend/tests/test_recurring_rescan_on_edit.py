@@ -411,15 +411,15 @@ class RecurringRescanOnEditTests(unittest.TestCase):
         with self._use_db_path():
             with get_db() as conn:
                 owe_recurring_rescan(conn, ids)
-        load_pool = recurring_detection._load_pool
+        reference_now = recurring_detection._reference_now
 
-        def load_then_owe_again(conn, window_months):
-            pool = load_pool(conn, window_months)
+        def read_then_owe_again(conn, window_months):
+            now = reference_now(conn, window_months)
             with get_db() as other:
                 owe_recurring_rescan(other, ids[:1])
-            return pool
+            return now
 
-        with self._use_db_path(), mock.patch.object(recurring_detection, "_load_pool", load_then_owe_again):
+        with self._use_db_path(), mock.patch.object(recurring_detection, "_reference_now", read_then_owe_again):
             self._scan()
         self.assertEqual(self._owed(), {"streamly": 2})
 
