@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from backend.json_utils import safe_json_dict
+from backend.services.recurring_detection import owe_recurring_rescan
 from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 
 IMPORT_SUMMARY_KEY = "import_summary"
@@ -165,7 +166,10 @@ def delete_transactions(conn, where_sql: str, params=(), *, drop_emptied_sync_ca
         """,
         params,
     ).fetchall()
-    release_rule_suggestion_rows(conn, [row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE {where_sql}", params)])
+    ids = [row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE {where_sql}", params)]
+    release_rule_suggestion_rows(conn, ids)
+    # Owed while the rows still exist, since a payee is read off the row. The caller settles it.
+    owe_recurring_rescan(conn, ids)
     removed = conn.execute(f"DELETE FROM txn WHERE {where_sql}", params).rowcount or 0
     for row in released:
         conn.execute(

@@ -136,6 +136,7 @@ from typing import Callable, Iterable, NamedTuple, Optional
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.connection_mapping import provider_account_label
 from backend.services.import_evidence import evidence_field_feeds_text_match
+from backend.services.txn_trash import restore_txns, trash_txns
 from backend.text_utils import sanitize_rule_merchant_text
 
 
@@ -2688,13 +2689,9 @@ def restore_auto_merged_after_detach(conn: sqlite3.Connection,
     if not detached_account_id or not remaining_ids:
         return 0
     placeholders = _placeholders(remaining_ids)
-    cursor = conn.execute(
+    ids = [r["id"] for r in conn.execute(
         f"""
-        UPDATE txn
-        SET    trashed_at = NULL,
-               rejection_reason = NULL,
-               suspect_resolved_at = NULL,
-               dedupe_resolved_by = NULL
+        SELECT id FROM txn
         WHERE  dedupe_resolved_by = 'auto_merge'
           AND  rejection_reason = 'duplicate_confirmed'
           AND  (
@@ -2709,8 +2706,15 @@ def restore_auto_merged_after_detach(conn: sqlite3.Connection,
                )
         """,
         [detached_account_id, *remaining_ids, *remaining_ids, detached_account_id],
+    ).fetchall()]
+    if not ids:
+        return 0
+    conn.executemany(
+        "UPDATE txn SET rejection_reason = NULL, suspect_resolved_at = NULL, dedupe_resolved_by = NULL WHERE id = ?",
+        [(i,) for i in ids],
     )
-    return cursor.rowcount or 0
+    restore_txns(conn, ids)
+    return len(ids)
 
 
 def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
@@ -4059,8 +4063,7 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         conn.execute(
             """
             UPDATE txn
-            SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            SET    suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                    rejection_reason = 'duplicate_confirmed',
                    dedupe_resolved_by = 'user',
                    suspect_duplicate_of = ?,
@@ -4069,6 +4072,7 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
             """,
             (txn_id, existing["id"]),
         )
+        trash_txns(conn, [existing["id"]])
         conn.execute(
             """
             UPDATE txn
@@ -4087,14 +4091,14 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         conn.execute(
             """
             UPDATE txn
-            SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            SET    suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                    rejection_reason = 'duplicate_confirmed',
                    dedupe_resolved_by = 'user'
             WHERE  id = ?
             """,
             (txn_id,),
         )
+        trash_txns(conn, [txn_id])
         return {"resolved": True, "action": "reject"}
     if action in ("keep", "not_duplicate"):
         # **Per-row, and only this row.** Keep used to carry a second, much larger meaning: it recorded
@@ -4443,8 +4447,7 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     conn.executemany(
         """
         UPDATE txn
-        SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-               rejection_reason = 'duplicate_confirmed',
+        SET    rejection_reason = 'duplicate_confirmed',
                suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                dedupe_resolved_by = ?
         WHERE  id = ?
@@ -4454,6 +4457,7 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
             for r in rows
         ],
     )
+    trash_txns(conn, ids)
     # Same-batch transitive clear: a single CSV asserts (via account-column) that rows on
     # different accounts in that file are distinct transactions. If a promoted row Y (now
     # identified with its canonical target X via the merge) had a same-batch sibling Z on a
@@ -4536,12 +4540,12 @@ def restore_rejected_duplicate(conn: sqlite3.Connection, txn_id: str) -> dict:
     conn.execute(
         """
         UPDATE txn
-        SET    trashed_at = NULL,
-               rejection_reason = NULL,
+        SET    rejection_reason = NULL,
                suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                dedupe_resolved_by = NULL
         WHERE  id = ?
         """,
         (txn_id,),
     )
+    restore_txns(conn, [txn_id])
     return {"restored": True}

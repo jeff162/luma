@@ -71,6 +71,7 @@ from backend.services.duplicate_detection import (
 )
 from backend.services.recurring_detection import owe_full_recurring_scan, owe_recurring_rescan, settle_owed_rescans
 from backend.services.review_flagging import owners_not_flagging
+from backend.services.txn_trash import trash_txns
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -1320,12 +1321,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             """The provider dropped a transaction (a canceled pending charge, or a correction): trash the
             local row so it leaves the active ledger. No-op if we never had it."""
             nonlocal removed
-            cur = conn.execute(
-                "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                "WHERE external_transaction_id = ? AND trashed_at IS NULL",
-                (external_transaction_id,),
-            )
-            removed += cur.rowcount or 0
+            removed += len(trash_txns(conn, [
+                r["id"] for r in conn.execute(
+                    "SELECT id FROM txn WHERE external_transaction_id = ?", (external_transaction_id,),
+                ).fetchall()
+            ]))
 
         for connection in connections:
             initial = not connection["initial_sync_complete"]
@@ -1446,9 +1446,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "card_counts":      _card_counts(conn, card_added, card_added0),
                     "requested_windows": list(requested_windows),
                     # The rows this connection added or revised, for the connection card's "review what
-                    # just arrived" report. `touched_ids` is exactly added + advanced-pending + modified —
-                    # the same scope the recurring rescan uses — and deliberately excludes `removed`, which
-                    # trashes rows: a report cannot show them, and offering to categorize a row that has
+                    # just arrived" report. `touched_ids` is exactly added + advanced-pending + modified,
+                    # and deliberately excludes `removed`, which trashes rows: a report cannot show them, and offering to categorize a row that has
                     # left the ledger would be nonsense. Consumed only by the connection summary; the log
                     # does not store it (see `_record_connection_last_sync`).
                     "row_ids":          touched_ids[touched0:],
@@ -1858,9 +1857,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     if cards_touched or touched_ids:
         pair_after_ingest(get_db())
 
-    # New/advanced rows change the recurring picture, so settle the rescan they are owed now rather than
-    # waiting for a manual scan: scoped to the payees this sync touched, not the whole ledger.
-    if touched_ids:
+    # New, advanced and removed rows change the recurring picture, so settle the rescan they are owed now
+    # rather than waiting for a manual scan: scoped to the payees this sync touched, not the whole ledger.
+    if touched_ids or removed:
         settle_owed_rescans()
 
     # `historical_complete` is the client's stop-polling signal: true once no connection has more to deliver

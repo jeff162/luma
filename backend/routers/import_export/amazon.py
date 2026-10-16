@@ -51,7 +51,9 @@ from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
 from backend.services.review_flagging import flags_new_transactions
 from backend.services.rule_suggestion_review import release_rule_suggestion_rows
+from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 from backend.services.txn_summaries import txn_summaries
+from backend.services.txn_trash import trash_txns
 from backend.services.amazon_import import (
     AmazonItem,
     AmazonOrder,
@@ -2036,17 +2038,11 @@ def trash_duplicate_charge(conn: sqlite3.Connection, charge_txn_id: str,
 
     if as_duplicate:
         conn.execute(
-            """UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                              rejection_reason = 'duplicate_confirmed',
-                              dedupe_resolved_by = 'amazon_discard'
+            """UPDATE txn SET rejection_reason = 'duplicate_confirmed', dedupe_resolved_by = 'amazon_discard'
                WHERE id = ?""",
             (charge_txn_id,),
         )
-    else:
-        conn.execute(
-            "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-            (charge_txn_id,),
-        )
+    trash_txns(conn, [charge_txn_id])
 
     matched = False
     if link:
@@ -2108,10 +2104,12 @@ async def amazon_trash_duplicate_charge_endpoint(body: TrashDuplicateChargeReque
     unambiguous. ``as_duplicate`` decides whether it files as a dedupe resolution or an ordinary delete."""
     with get_db() as conn:
         try:
-            return trash_duplicate_charge(conn, body.charge_txn_id, body.order_link_id,
-                                          as_duplicate=body.as_duplicate)
+            result = trash_duplicate_charge(conn, body.charge_txn_id, body.order_link_id,
+                                            as_duplicate=body.as_duplicate)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    settle_owed_rescans()
+    return result
 
 
 def _charge_description(conn: sqlite3.Connection, charge_id: str) -> str:
@@ -2277,13 +2275,13 @@ def _trash_merged_copy(conn: sqlite3.Connection, loser_id: str, survivor_id: str
     the unified dedupe flow's hidden rows, it stays visible/restorable (and empties with the trash).
     Restore clears the tags (see transactions.restore_transaction)."""
     conn.execute(
-        """UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                          suspect_duplicate_of = ?,
+        """UPDATE txn SET suspect_duplicate_of = ?,
                           rejection_reason = 'duplicate_confirmed',
                           dedupe_resolved_by = 'amazon_merge'
            WHERE id = ?""",
         (survivor_id, loser_id),
     )
+    trash_txns(conn, [loser_id])
 
 
 def merge_unaccounted_charges(conn: sqlite3.Connection, charge_txn_ids: list) -> dict:
@@ -2397,9 +2395,11 @@ async def amazon_merge_unaccounted_charges_endpoint(body: MergeUnaccountedCharge
     """Merge an unaccounted duplicate-charge group into its richest copy (trashing the rest)."""
     with get_db() as conn:
         try:
-            return merge_unaccounted_charges(conn, body.charge_txn_ids)
+            result = merge_unaccounted_charges(conn, body.charge_txn_ids)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    settle_owed_rescans()
+    return result
 
 
 class MergeDuplicateChargesRequest(BaseModel):
@@ -2785,7 +2785,9 @@ async def set_funding_category_endpoint(body: FundingCategoryRequest):
 
 def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
     """Undo an applied order: delete its order transaction, restore the charge's prior categorization
-    from the link metadata, and delete the link. Safe to call once per link."""
+    from the link metadata, and delete the link. Safe to call once per link.
+
+    No route calls this; only `tests/test_amazon_enrich.py` does."""
     link = txn_links.get_link(conn, link_id)
     if not link:
         return {"status": "not_found"}
@@ -2804,6 +2806,7 @@ def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
     # Delete the link first so its members' FK rows go, then the order transaction itself.
     txn_links.delete_link(conn, link_id)
     release_rule_suggestion_rows(conn, order_ids)
+    owe_recurring_rescan(conn, [*order_ids, *charge_ids])
     for order_id in order_ids:
         conn.execute("DELETE FROM txn WHERE id = ?", (order_id,))
     return {"status": "reversed", "orders_removed": len(order_ids), "charges_restored": len(charge_ids)}

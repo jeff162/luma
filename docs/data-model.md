@@ -365,6 +365,11 @@ excluded-from-totals categories too.
 `trashed_at IS NOT NULL` soft-deletes a row. Every read path filters it out; the row stays in `txn`
 until the trash is emptied.
 
+Every move into or out of the trash goes through `trash_txns` / `restore_txns`
+(`services/txn_trash.py`), because a move changes what recurring detection reads and so owes a rescan
+(see *When a scan runs*). A flow that also records why a row left writes its dedupe provenance beside the
+move. A move skips rows already in the target state, so trashing again keeps the original `trashed_at`.
+
 **`suspect_duplicate_of`, `suspect_duplicate_reason`, `suspect_resolved_at`** carry the soft-duplicate
 flag (see [Soft duplicates](#soft-duplicates)).
 
@@ -921,9 +926,14 @@ membership is the rule's matches, through the same predicate rule apply uses
 
 - **Scoped**: a completed import or sync reprocesses only the payees it touched. It does not stamp the
   watermark and does not re-derive payee keys.
-- **Every path that writes a category, merchant name, date, amount, trash state or new rows owes the
-  payees it touched a rescan** (`owe_recurring_rescan`), and a path whose effect no payee list can name
-  (a global recategorize, a transfer-pair answer) owes a full one (`owe_full_recurring_scan`). The scope
+- **Every path that writes a category, merchant name, date, amount, trash state, new rows or removes
+  rows owes the payees it touched a rescan** (`owe_recurring_rescan`). Trash moves owe through the trash
+  helpers, and the two hard deletes (`delete_transactions`, `undo_batches`) owe before the rows go, since
+  a payee is read off the row. A path whose effect no payee list can name owes a full one
+  (`owe_full_recurring_scan`): a global recategorize, a transfer-pair answer, and a change to the
+  account a row resolves to, since a series' account scope and the two sides of a movement are read
+  through it. Regrouping goes through `set_account_parent` (`services/account_groups.py`), and a
+  removal that reassigns transactions owes from `reassign_account_references`. The scope
   is the payees the rows belong to now plus those they belonged to before, so the caller reads the prior
   keys before it writes. A no-op edit owes nothing and a bulk edit owes once, because a scan loads the
   whole detection window before it filters by payee.

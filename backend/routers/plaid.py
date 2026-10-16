@@ -21,6 +21,7 @@ from backend.routers.accounts import upsert_connection_accounts, resolve_default
 from backend.routers.providers import establish_connection, require_app_config
 from backend.services import connection_log, crypto_service
 from backend.services.connection_mapping import unmapped_count
+from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.providers import get_adapter
 
 router = APIRouter()
@@ -191,6 +192,7 @@ def repair_connection(body: RepairRequest, request: Request):
             conn, event=connection_log.RECONNECT, provider=PROVIDER, connection_id=connection["id"],
             institution=connection["institution"], detail={"accounts": len(accounts)},
         )
+    settle_owed_rescans()
     return {
         "ok": True, "connection_id": connection["id"], "accounts": len(accounts),
         "unmapped": pending_mapping,

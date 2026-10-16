@@ -38,6 +38,8 @@ import json
 from dataclasses import dataclass
 from typing import Optional
 
+from backend.services.recurring_detection import owe_full_recurring_scan
+
 # What to do with a reference when its account is removed.
 #
 # FOLLOW    - re-point it at the account taking the history over. These are the references whose
@@ -187,9 +189,11 @@ def release_connection_mapping(conn, source_account_id: str) -> None:
 def reassign_account_references(conn, source_account_id: str, target_account_id: str) -> None:
     """Hand everything the source account held over to the target, short of the account row itself.
 
-    Used by both removal paths that keep the history: emptying the account trash (a merged child folds
-    into its parent) and deleting an account with its transactions reassigned.
+    Used by deleting an account with its transactions reassigned. The rows change account, which recurring
+    detection reads as a series' account scope and as the test that a movement runs between two accounts,
+    so the move owes a full recurring scan, settled by the caller after commit.
     """
+    owe_full_recurring_scan(conn)
     _drop_colliding_amazon_overrides(conn, source_account_id, target_account_id)
     for reference in _references_with(FOLLOW, on="on_reassign"):
         _repoint(conn, reference, source_account_id, target_account_id)

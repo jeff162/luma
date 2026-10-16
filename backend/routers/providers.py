@@ -23,6 +23,7 @@ from backend.routers.accounts import resolve_default_owner_id, upsert_connection
 from backend.authorization import require_admin_or_local
 from backend.services import connection_log, crypto_service
 from backend.services.connection_mapping import unmapped_count
+from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.providers import (
     UnknownProviderError,
     get_adapter,
@@ -288,6 +289,7 @@ def establish_connection(request: Request, provider: str, payload: dict,
             provider=provider, connection_id=connection_id, institution=stored_institution,
             detail={"accounts": len(accounts), "unmapped": pending_mapping},
         )
+    settle_owed_rescans()
 
     return {
         "ok": True, "accounts_added": len(accounts), "connection_id": connection_id,
@@ -527,4 +529,5 @@ def refresh_accounts(provider: str, body: RefreshAccountsRequest, request: Reque
             conn, event=connection_log.REFRESH_ACCOUNTS, provider=provider, connection_id=row["id"],
             institution=row["institution"], detail={"accounts": len(accounts)},
         )
+    settle_owed_rescans()
     return {"ok": True, "accounts_added": len(accounts), "connection_id": row["id"]}

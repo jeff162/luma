@@ -114,3 +114,32 @@ def account_group_member_ids(conn: sqlite3.Connection, account_ids: Iterable[Opt
         [*roots, *roots],
     ).fetchall()
     return {r["id"] for r in rows} | roots
+
+
+def set_account_parent(conn: sqlite3.Connection, account_ids: Iterable[str], parent_id: Optional[str]) -> list[str]:
+    """Place accounts under `parent_id`, or take them out of their group when it is None. Every write of
+    `account.parent_account_id` goes through here. Returns the ids whose group changed.
+
+    Changing an account's group changes the effective account of every row on it, and recurring detection
+    reads that twice: as a series' account scope, and as the test that a movement runs between two
+    different accounts. Neither is confined to payees a scoped rescan could name, so a change to an
+    account that holds transactions owes a full recurring scan, which the caller settles after commit.
+    """
+    ids = [i for i in dict.fromkeys(account_ids) if i]
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    changed = [
+        r["id"] for r in conn.execute(
+            f"SELECT id FROM account WHERE id IN ({placeholders}) AND parent_account_id IS NOT ?",
+            [*ids, parent_id],
+        ).fetchall()
+    ]
+    if not changed:
+        return []
+    conn.executemany("UPDATE account SET parent_account_id = ? WHERE id = ?", [(parent_id, i) for i in changed])
+    placeholders = ",".join("?" * len(changed))
+    if conn.execute(f"SELECT 1 FROM txn WHERE account_id IN ({placeholders}) LIMIT 1", changed).fetchone():
+        from backend.services.recurring_detection import owe_full_recurring_scan  # lazy: it imports this module
+        owe_full_recurring_scan(conn)
+    return changed

@@ -22,6 +22,7 @@ from backend.db.database import compact_if_worthwhile, get_db
 from backend.services.recurring_detection import owe_recurring_rescan, payee_keys_for_ids, settle_owed_rescans
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
+from backend.services.txn_trash import restore_txns, trash_txns
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
@@ -1962,10 +1963,8 @@ def trash_transaction(txn_id: str):
         row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
-        conn.execute(
-            "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-            (txn_id,),
-        )
+        trash_txns(conn, [txn_id])
+    settle_owed_rescans()
     return {"ok": True}
 
 
@@ -2206,12 +2205,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> BulkDeclines
                 [flag, *chunk],
             )
     elif kind == "trash":
-        for chunk in _chunk(ids):
-            placeholders = ",".join("?" * len(chunk))
-            conn.execute(
-                f"UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id IN ({placeholders})",
-                chunk,
-            )
+        trash_txns(conn, ids)
     else:
         raise HTTPException(status_code=400, detail=f"unknown bulk action: {kind}")
     return BulkDeclines()
@@ -2270,13 +2264,12 @@ def restore_transaction(txn_id: str):
         # would return to the ledger still filtered out as a removed duplicate.
         conn.execute(
             """UPDATE txn
-               SET trashed_at = NULL,
-                   suspect_duplicate_of = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE suspect_duplicate_of END,
-                   dedupe_resolved_by   = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE dedupe_resolved_by END,
-                   rejection_reason     = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE rejection_reason END
-               WHERE id = ?""",
+               SET suspect_duplicate_of = NULL, dedupe_resolved_by = NULL, rejection_reason = NULL
+               WHERE id = ? AND rejection_reason = 'duplicate_confirmed'""",
             (txn_id,),
         )
+        restore_txns(conn, [txn_id])
+    settle_owed_rescans()
     return {"ok": True}
 
 
@@ -2371,6 +2364,7 @@ def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
         # The shared delete, so each import card a purged row came from stops counting it — its account
         # chip, row count and summary all move together (`services/import_batch_totals.py`).
         removed = delete_transactions(conn, f"trashed_at IS NOT NULL AND {visible}{cutoff}", params)
+    settle_owed_rescans()
     if removed:
         # Attached documents are what makes the purge the *irreversible* half of the trash: trashing a
         # transaction hides its documents with it and a restore brings them back, while this deletes
@@ -2399,6 +2393,7 @@ def restore_rejected_duplicate_endpoint(txn_id: str):
     from backend.services.duplicate_detection import restore_rejected_duplicate
     with get_db() as conn:
         result = restore_rejected_duplicate(conn, txn_id)
+    settle_owed_rescans()
     if not result.get("restored"):
         reason = result.get("reason")
         if reason == "not_found":
@@ -2414,6 +2409,7 @@ def resolve_suspect_duplicate(txn_id: str, body: SuspectResolveBody):
     from backend.services.duplicate_detection import resolve_suspect
     with get_db() as conn:
         result = resolve_suspect(conn, txn_id, action=body.action)
+    settle_owed_rescans()
     if not result.get("resolved"):
         reason = result.get("reason")
         if reason == "not_found":

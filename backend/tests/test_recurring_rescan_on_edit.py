@@ -25,6 +25,7 @@ import sqlite3
 import tempfile
 import unittest
 import uuid
+import re
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -430,3 +431,27 @@ class RecurringRescanOnEditTests(unittest.TestCase):
                 self.assertIsNone(_owed_rescan_task(conn), "a debt the settling scan is about to clear is not news")
                 conn.execute("UPDATE recurring_rescan_owed SET owed_at = datetime('now', '-1 hour')")
                 self.assertIsNotNone(_owed_rescan_task(conn))
+
+    # --- the trash ---------------------------------------------------------------------------------
+
+    def _writers(self, pattern, *, helper, skip=None):
+        backend = Path(__file__).resolve().parents[1]
+        writer = re.compile(pattern, re.IGNORECASE)
+        return [
+            f"{path.relative_to(backend)}:{number}"
+            for path in backend.rglob("*.py")
+            if not ({"tests", "venv"} & set(path.relative_to(backend).parts)) and path.name != helper
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+            if writer.search(line) and not (skip and skip in line)
+        ]
+
+    def test_only_the_trash_helpers_write_trashed_at(self):
+        # A trash move owes a recurring rescan (`services/txn_trash.py`), so a write of `txn.trashed_at`
+        # anywhere else is a move that skipped it. `account.trashed_at` is a different, vestigial column.
+        self.assertEqual(self._writers(r"trashed_at\s*=\s*(NULL|strftime|\?)", helper="txn_trash.py",
+                                       skip="UPDATE account"), [])
+
+    def test_only_set_account_parent_writes_parent_account_id(self):
+        # Regrouping an account owes a full recurring scan (`account_groups.set_account_parent`), so a
+        # write of `account.parent_account_id` anywhere else is a regroup that skipped it.
+        self.assertEqual(self._writers(r"(SET|,)\s*parent_account_id\s*=", helper="account_groups.py"), [])

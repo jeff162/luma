@@ -49,7 +49,9 @@ from backend.services.account_references import (
     replace_account_reference_in_batch_snapshots,
     replace_account_reference_in_profile_column_maps,
 )
+from backend.services.account_groups import set_account_parent
 from backend.services.import_batch_totals import delete_transactions
+from backend.services.recurring_detection import settle_owed_rescans
 
 router = APIRouter()
 
@@ -555,9 +557,10 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             raise HTTPException(status_code=400, detail="An account group cannot be merged into itself")
 
         target_display_name = parent["display_name"] or parent["name"]
+        set_account_parent(conn, group_member_ids, parent["id"])
         conn.executemany(
-            "UPDATE account SET parent_account_id = ?, display_name = ? WHERE id = ?",
-            [(parent["id"], target_display_name, member_id) for member_id in group_member_ids],
+            "UPDATE account SET display_name = ? WHERE id = ?",
+            [(target_display_name, member_id) for member_id in group_member_ids],
         )
         # On merge we have three responsibilities:
         #   1. Fresh-scan the newly-unified group for cross-account duplicates that were never compared at
@@ -573,6 +576,7 @@ def attach_account(account_id: str, body: AccountAttachRequest):
         scan_scope_for_cross_account_duplicates(conn, affected_ids)
         promote_in_group_suspects_to_confirmed(conn, affected_ids)
         clear_account_pair_distinct_for_merge(conn, affected_ids)
+    settle_owed_rescans()
     return {"ok": True}
 
 
@@ -607,11 +611,10 @@ def detach_account(account_id: str):
                 (parent_id, account_id),
             ).fetchall()
             remaining_group_ids.extend(str(row["id"]) for row in sibling_rows)
-        conn.execute(
-            "UPDATE account SET parent_account_id = NULL, display_name = name, trashed_at = NULL WHERE id = ?",
-            (account_id,),
-        )
+        set_account_parent(conn, [account_id], None)
+        conn.execute("UPDATE account SET display_name = name, trashed_at = NULL WHERE id = ?", (account_id,))
         restored = restore_auto_merged_after_detach(conn, account_id, remaining_group_ids)
+    settle_owed_rescans()
     return {"ok": True, "restored_count": restored}
 
 
@@ -686,9 +689,11 @@ def delete_account(account_id: str, transactions: Optional[str] = None,
             if target["trashed_at"]:
                 raise HTTPException(status_code=400, detail="Target account is in the trash")
             _reassign_account_and_delete(conn, account_id, target_id)
-            return {"ok": True, "reassigned": transaction_count, "target_account_id": target_id}
-
-        _delete_account_and_import_history(conn, account_id)
+        else:
+            _delete_account_and_import_history(conn, account_id)
+    settle_owed_rescans()
+    if disposition == "reassign":
+        return {"ok": True, "reassigned": transaction_count, "target_account_id": target_id}
     if transaction_count:
         compact_if_worthwhile(reason="removed an account and its transactions")
     return {"ok": True, "deleted": transaction_count}

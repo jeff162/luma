@@ -41,7 +41,7 @@ import sqlite3
 import uuid
 from typing import Optional
 
-from backend.services.account_groups import effective_account_id
+from backend.services.account_groups import effective_account_id, set_account_parent
 from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.time_utils import utcnow_iso
@@ -324,10 +324,7 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
                 account_id = already["id"]
                 # 'group' still has to place it, since the parent may be newly chosen (or cleared).
                 if mode == "group":
-                    conn.execute(
-                        "UPDATE account SET parent_account_id = ? WHERE id = ?",
-                        (target_account_id, account_id),
-                    )
+                    set_account_parent(conn, [account_id], target_account_id)
             else:
                 _clear_stale_external_id(conn, external_account_id=external_account_id, keep_account_id=None)
                 name = str((choice or {}).get("name") or "").strip() or provider_account_label(row)

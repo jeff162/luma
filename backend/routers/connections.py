@@ -24,6 +24,7 @@ from backend.db.database import compact_if_worthwhile, get_db
 from backend.routers.accounts import resolve_default_owner_id
 from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_dedupe import rescan_connection_duplicates
+from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.connection_mapping import (
     MAPPING_MODES,
     apply_account_mapping,
@@ -163,6 +164,7 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
         awaiting_history = _accounts_awaiting_history(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)
         remaining = unmapped_count(conn, connection_id)
+    settle_owed_rescans()
 
     # `awaiting_history` names accounts with no history yet, so the caller knows a pull is worth running
     # now rather than leaving a just-mapped account looking empty until some later sync collects it.
@@ -273,6 +275,7 @@ def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
             """,
             (connection_id,),
         )
+    settle_owed_rescans()
     compact_if_worthwhile(reason="removed a connection's synced transactions")
 
     return {

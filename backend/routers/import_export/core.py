@@ -70,6 +70,8 @@ from backend.services.categorizer import (
     bump_rule_effect_dates,
 )
 from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
+from backend.services.txn_trash import restore_txns
+from backend.services.account_groups import set_account_parent
 from backend.services.import_evidence import (
     EVIDENCE_ROLE_CATEGORICAL,
     EVIDENCE_ROLE_DESCRIPTIVE,
@@ -841,15 +843,10 @@ def _attach_import_created_account_to_group(conn, account_id: str, target_accoun
         raise HTTPException(status_code=400, detail="Only accounts with the same type can be grouped")
     if account["owner_id"] and target["owner_id"] and not _owners_are_group_compatible(account["owner_id"], target["owner_id"]):
         raise HTTPException(status_code=400, detail="Only accounts with the same owner can be grouped")
+    set_account_parent(conn, [account_id], target["id"])
     conn.execute(
-        """
-        UPDATE account
-        SET parent_account_id = ?,
-            display_name = ?,
-            owner_id = COALESCE(owner_id, ?)
-        WHERE id = ?
-        """,
-        (target["id"], target["display_name"] or target["name"], target["owner_id"], account_id),
+        "UPDATE account SET display_name = ?, owner_id = COALESCE(owner_id, ?) WHERE id = ?",
+        (target["display_name"] or target["name"], target["owner_id"], account_id),
     )
     return target["id"]
 
@@ -2966,12 +2963,11 @@ def _run_uploaded_import(text: str, cfg: dict, filename: str, progress_id: Optio
     with tracked_import(progress_id) as on_progress:
         result = run_import_core(text, cfg, filename=filename, on_progress=on_progress)
 
-    # A completed import is new data, so settle the recurring rescan it owes now instead of waiting for a
-    # manual scan: scoped to the payees this batch touched, not the whole ledger. Settled here, not in
-    # run_import_core, because the core also runs inside the demo loader's own transaction, which scans
-    # once at its end.
-    if result.get("imported") and result.get("batch_id"):
-        settle_owed_rescans()
+    # A completed import is new data, and a replace removes the replaced batch's rows, so settle the
+    # recurring rescan it owes now instead of waiting for a manual scan: scoped to the payees this batch
+    # touched, not the whole ledger. Settled here, not in run_import_core, because the core also runs
+    # inside the demo loader's own transaction, which scans once at its end.
+    settle_owed_rescans()
 
     return result
 
@@ -5498,24 +5494,28 @@ def undo_batches(conn, batch_ids) -> dict:
         reverse_batch_refund_links(conn, batch_id)
         reverse_batch_amazon_links(conn, batch_id)
 
-    restored = conn.execute(
+    twin_ids = [row["id"] for row in conn.execute(
         f"""
-        UPDATE txn
-        SET    trashed_at           = NULL,
-               rejection_reason     = NULL,
-               dedupe_resolved_by   = NULL,
-               suspect_duplicate_of = NULL
+        SELECT id FROM txn
         WHERE  rejection_reason = 'duplicate_confirmed'
           AND  suspect_duplicate_of IN (
                    SELECT id FROM txn WHERE import_batch_id IN ({placeholders})
                )
         """,
         ids,
-    ).rowcount or 0
+    ).fetchall()]
+    conn.executemany(
+        "UPDATE txn SET rejection_reason = NULL, dedupe_resolved_by = NULL, suspect_duplicate_of = NULL WHERE id = ?",
+        [(i,) for i in twin_ids],
+    )
+    restore_txns(conn, twin_ids)
 
-    release_rule_suggestion_rows(conn, [
+    batch_row_ids = [
         row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE import_batch_id IN ({placeholders})", ids)
-    ])
+    ]
+    release_rule_suggestion_rows(conn, batch_row_ids)
+    # Owed while the rows still exist, since a payee is read off the row.
+    owe_recurring_rescan(conn, batch_row_ids)
     deleted = conn.execute(
         f"DELETE FROM txn WHERE import_batch_id IN ({placeholders})", ids
     ).rowcount or 0
@@ -5534,7 +5534,7 @@ def undo_batches(conn, batch_ids) -> dict:
           AND  suspect_duplicate_of NOT IN (SELECT id FROM txn)
         """
     )
-    return {"deleted": deleted, "restored": restored}
+    return {"deleted": deleted, "restored": len(twin_ids)}
 
 
 @router.delete("/batches/{batch_id}")
@@ -5576,6 +5576,7 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         )
         if batch["use_imported_categories"]:
             _remove_imported_batch_categories(conn, batch_id)
+    settle_owed_rescans()
     compact_if_worthwhile(reason="undid an import")
 
     return {"ok": True}

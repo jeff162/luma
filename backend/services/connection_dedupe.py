@@ -31,6 +31,7 @@ from backend.services.duplicate_detection import (
     promote_in_group_suspects_to_confirmed,
     scan_scope_for_cross_account_duplicates,
 )
+from backend.services.txn_trash import trash_txns
 
 # `dedupe_resolved_by` marker for a row the re-scan confirmed as a duplicate. Distinct from
 # 'auto_merge' (which account-detach reverses) and from 'user' (an explicit decision in the duplicate
@@ -153,8 +154,7 @@ def _confirm_duplicate(conn: sqlite3.Connection, txn_id: str, matched_id: Option
     conn.execute(
         """
         UPDATE txn
-        SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        SET    suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                rejection_reason = 'duplicate_confirmed',
                dedupe_resolved_by = ?,
                suspect_duplicate_of = COALESCE(?, suspect_duplicate_of),
@@ -163,6 +163,7 @@ def _confirm_duplicate(conn: sqlite3.Connection, txn_id: str, matched_id: Option
         """,
         (RESCAN_RESOLVED_BY, matched_id, reason_key, txn_id),
     )
+    trash_txns(conn, [txn_id])
 
 
 def rescan_connection_duplicates(conn: sqlite3.Connection, connection) -> dict:
