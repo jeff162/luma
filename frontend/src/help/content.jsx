@@ -499,8 +499,8 @@ export const HELP_TOPICS = [
             <strong>Settle what the import could not.</strong> A card in the import history says
             when something on it needs a decision &mdash; see <HelpLink to="/help/duplicate-report">the duplicate-detection
               report</HelpLink>, <HelpLink to="/help/amazon-reconciliation">Amazon
-              reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
-              reconciliation</HelpLink>.
+                reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
+                  reconciliation</HelpLink>.
           </li>
           <li>
             <strong>Look over what arrived.</strong> The needs-review count on each card opens just
@@ -755,7 +755,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Flagging is optional and is chosen for each account owner. Turning off <strong>Flag new transactions
-          for review</strong> beside an owner, on the <strong>Owners</strong> tab of
+            for review</strong> beside an owner, on the <strong>Owners</strong> tab of
           the <HelpLink to="/help/page-accounts">Accounts</HelpLink> page, lets transactions imported or synced
           into that owner's accounts arrive unflagged. Transactions in an account with no owner are always
           flagged. Transactions already flagged are not changed.
@@ -3125,7 +3125,7 @@ export const HELP_TOPICS = [
             so the purchase counts once. The import&apos;s card says when a match needs a decision
             &mdash; see <HelpLink to="/help/amazon-reconciliation">Amazon
               reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
-              reconciliation</HelpLink>.
+                reconciliation</HelpLink>.
           </li>
           <li>
             <strong>Use the detail.</strong> The order or PayPal transaction is the one to categorize.
@@ -3255,11 +3255,12 @@ export const HELP_TOPICS = [
           more than one if there are multiple Amazon accounts to separate out purchases for some purpose.
         </p>
         <p>
-          <strong> Payment cards in these files</strong> lists all the payment cards
+          <strong> Payment cards</strong> lists all the payment cards
           found in the import set along with the current mapping if these cards have been seen before.
           Any new cards are listed with <strong>Needs mapping</strong>. The mapping is used by {APP_NAME} to
           locate the matching <strong>AMAZON.COM</strong> charge so it can change the category to the
-          specified <strong>Category for the excluded charge.</strong>
+          specified <strong>Category for the excluded charge.</strong> Payment details live in the orders
+          export, so an items file on its own lists no cards.
         </p>
         <p>
           Each card can be:

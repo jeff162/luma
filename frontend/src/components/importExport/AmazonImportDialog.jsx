@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, AppNoticeDialog, Badge, Button, Input, Select, Spinner, Toggle, Tooltip } from '../ui.jsx'
+import { AppDialog, AppNoticeDialog, Badge, Button, COMPACT_ACTION_BTN_STYLE, Input, InsetPanel, Select, Spinner, Toggle, Tooltip } from '../ui.jsx'
 import CategoryPicker from '../CategoryPicker.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
@@ -25,6 +25,56 @@ const FUNDING_NEW = '__new_funding_account__'
 
 const mapLabelStyle = { fontSize: 13, color: 'var(--text)', fontWeight: 600, marginTop: 22, marginBottom: 8 }
 
+// The card label and the "Needs mapping" slot are fixed columns, and the badge keeps its slot on a row
+// that doesn't show one, so every row's account Select starts at the same x whatever the card is called
+// and whatever state it is in. Sized to hold the longest badge without wrapping it.
+//
+// The list is indented under its heading, the step the category tree uses, so the rows read as belonging
+// to it. The widths are what the body has left after that: the label column holds the longest card name
+// measured (a network name plus its last-4) without truncating, and the Select keeps more than the
+// ~225px its longest option needs.
+const CARD_LIST_INDENT = 24
+const CARD_LABEL_WIDTH = 190
+const CARD_BADGE_WIDTH = 120
+
+// The settings are a two-column form: the field's name on the left, what it is set to on the right. The
+// grid is top-aligned because three of the four fields are taller than one line, so each label takes the
+// offset that puts it on its own field's first line rather than floating beside the middle of a box.
+const FORM_LABEL_WIDTH = 160
+const ACCOUNT_FIELD_ID = 'amazon-import-account'
+// Each control is sized to what it holds, not to the column: the label column is what lines the fields
+// up, and stretching a control past its content only moves its own affordance away from the value. This
+// is what the account select's longest option needs; the category picker takes its content's width.
+const ACCOUNT_SELECT_WIDTH = 320
+
+const FIELD_LABEL_TYPE = { fontSize: 13, lineHeight: 1.35 }
+
+// Where a `Badge`'s label starts, measured in from the badge's left edge: its 1px border, its 8px left
+// padding, the 7px category marker and the 4px gap between marker and text (all in `Badge` /
+// `CategoryMarker`, ui.jsx). A caption indented by this starts under the badge's words rather than under
+// the badge itself. Its wash reaches back over the padding, so the text lands on the inset, not past it.
+const BADGE_TEXT_INSET = 20
+const CAPTION_PADDING_X = 8
+
+function FieldLabel({ children, htmlFor, top = 9 }) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      style={{ ...FIELD_LABEL_TYPE, fontWeight: 500, color: 'var(--muted)', paddingTop: top }}
+    >
+      {children}
+    </label>
+  )
+}
+
+// One line of the label's type, to start a field on the label's *second* line. A line rather than a
+// measured offset, so it tracks the type instead of a number taken off a screenshot; it is set in the
+// label's own metrics because a break is otherwise as tall as whatever cell it sits in. Anyone who
+// rewraps the label it aligns with will see this and can decide whether it still belongs.
+function LabelLineSpacer() {
+  return <div aria-hidden="true" style={FIELD_LABEL_TYPE}><br /></div>
+}
+
 // One "Account from file" row for a payment card the scan found in the files: the card label → the
 // account it charges (an existing account, Untracked, or + New). Mirrors the CSV importer's
 // account-mapping rows; the chosen mapping persists to the global funding map (prefilling next time).
@@ -33,7 +83,7 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
   const [newName, setNewName] = useState('')
   const value = instrument.state === 'untracked' ? FUNDING_UNTRACKED
     : instrument.state === 'mapped' ? (instrument.funding_account_id || '')
-    : ''
+      : ''
   const submitNew = async () => {
     const name = newName.trim()
     if (!name) return
@@ -43,22 +93,41 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
   return (
     <div style={{ padding: '9px 0', borderTop: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: '0 0 auto', minWidth: 150, fontSize: 13, color: 'var(--text)' }}>
-          {formatInstrumentLabel(instrument.last4, instrument.network)}
+        {/* The last-4 is what identifies the card, so only the network name gives way when the label is
+            too long for the column; the full label is on the title. */}
+        <div
+          title={formatInstrumentLabel(instrument.last4, instrument.network)}
+          style={{
+            flex: `0 0 ${CARD_LABEL_WIDTH}px`, minWidth: 0, display: 'flex', gap: 4,
+            fontSize: 13, color: 'var(--text)',
+          }}
+        >
+          {(instrument.network || '').trim() ? (
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {instrument.network.trim()}
+            </span>
+          ) : null}
+          <span style={{ flex: '0 0 auto' }}>···{instrument.last4}</span>
         </div>
-        {instrument.state === 'unmapped' ? <Badge label="Needs mapping" toneKey="pending" /> : null}
+        <div style={{ flex: `0 0 ${CARD_BADGE_WIDTH}px` }}>
+          {instrument.state === 'unmapped' ? <Badge label="Needs mapping" toneKey="pending" /> : null}
+        </div>
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Told to fill its cell: left to itself a select takes the width of its widest option, and a
+              long account name then drags the row past the dialog and raises a horizontal scrollbar. The
+              name clips here but the open dropdown still shows it in full. */}
           <Select
             value={creating ? FUNDING_NEW : value}
             onChange={v => { if (v === FUNDING_NEW) { setCreating(true) } else { setCreating(false); onPick(instrument, v) } }}
             options={accountOptions}
             aria-label={`Account for ${formatInstrumentLabel(instrument.last4, instrument.network)}`}
             disabled={disabled}
+            style={{ width: '100%', minWidth: 0 }}
           />
         </div>
       </div>
       {creating && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 8, marginLeft: 160 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, marginLeft: CARD_LABEL_WIDTH + CARD_BADGE_WIDTH + 20 }}>
           <Input value={newName} onChange={setNewName} placeholder="New account name"
             aria-label="New account name" style={{ flex: 1 }} />
           <Button small onClick={submitNew} disabled={disabled || !newName.trim()}>Create</Button>
@@ -100,13 +169,13 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   const fileInputRef = useRef(null)
 
   const loadAccounts = useCallback(
-    () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => {}),
+    () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => { }),
     [],
   )
   useEffect(() => {
     loadAccounts()
-    api.getCategories().then(setCategories).catch(() => {})
-    api.getAmazonFundingCategory().then(setFundingCategory).catch(() => {})
+    api.getCategories().then(setCategories).catch(() => { })
+    api.getAmazonFundingCategory().then(setFundingCategory).catch(() => { })
   }, [loadAccounts])
 
   // Drop a remembered account that no longer exists (deleted, or no longer an Amazon account) once the
@@ -224,13 +293,14 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   const canImport = accountId && files.length > 0 && unresolved.length === 0 && !loading && !busy && !demoLoaded
   const importHint = demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE
     : loading || canImport || files.length === 0 ? ''
-    : !accountId ? 'Choose an account to import into'
-    : unresolved.length ? `Map the card ${formatInstrumentLabel(unresolved[0].last4, unresolved[0].network)} (or mark it untracked)`
-    : ''
+      : !accountId ? 'Choose an account to import into'
+        : unresolved.length ? `Map the card ${formatInstrumentLabel(unresolved[0].last4, unresolved[0].network)} (or mark it untracked)`
+          : ''
 
   return (
     <AppDialog
       title="Import Amazon orders"
+      help={<FeatureExplainer topic="amazon-funding-sources" placement="bottom-left" />}
       onClose={onClose}
       width="min(640px, 100%)"
       actions={(
@@ -244,87 +314,158 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
         </>
       )}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <FeatureExplainer topic="amazon-funding-sources" placement="bottom-left" />
-        <div style={{ ...mapLabelStyle, margin: 0 }}>File(s) to import</div>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
-        {files.map(f => (
-          <div key={f.name} style={{ fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
-        ))}
-      </div>
-      {/* The items file is optional detail for an orders file, so it is often added after the drop. */}
-      <div style={{ marginTop: 8 }}>
-        <Button small variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={demoLoaded}>Add file(s)</Button>
-      </div>
-      {scan?.unrecognized_files?.length ? (
-        <div style={{ marginTop: 8, color: '#b45309', fontSize: 12 }}>
-          Ignored (not an Amazon export): {scan.unrecognized_files.join(', ')}
-        </div>
-      ) : null}
-
-      <div style={mapLabelStyle}>Import into account</div>
-      <Select value={creatingAccount ? NEW_ACCOUNT : accountId} onChange={onAccountChange} options={amazonAccountOptions} />
-      {creatingAccount && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <Input value={newAccountName} onChange={setNewAccountName} placeholder="Account name"
-            aria-label="New account name" style={{ flex: 1 }} />
-          <Button small onClick={createAccount} disabled={savingAccount || !newAccountName.trim()}>
-            {savingAccount ? 'Creating…' : 'Create'}
-          </Button>
-          <Button small variant="ghost" onClick={() => { setCreatingAccount(false); setNewAccountName('Amazon') }}>
-            Cancel
-          </Button>
-        </div>
-      )}
-
-      <div style={mapLabelStyle}>Category for matched card charges</div>
-      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.5, margin: '0 0 6px' }}>
-        The matching <strong>AMAZON.COM</strong> charge is moved into this (excluded) category so Amazon
-        spend counts once. Changes apply to future imports too.
-      </p>
-      {/* Raised above the dialog: the picker portals its dropdown to the body, beneath an AppDialog. */}
-      <CategoryPicker
-        value={fundingCategory?.category_id}
-        categories={categories}
-        showSelectedBadge
-        panelZIndex={1300}
-        onChange={chooseCategory}
-        onCategoryCreated={async () => { setCategories(await api.getCategories().catch(() => categories)) }}
-      />
-      {fundingCategory && !fundingCategory.is_excluded ? (
-        <div style={{ color: '#b45309', fontSize: 12, marginTop: 6 }}>
-          This category isn’t excluded from totals — Amazon spend may be counted twice. Pick an excluded
-          (e.g. Transfers) category.
-        </div>
-      ) : null}
-
-      <div style={mapLabelStyle}>Payment cards in these files</div>
-      {scanning && instruments.length === 0 ? (
-        <Spinner />
-      ) : instruments.length === 0 ? (
-        <div style={{ color: 'var(--muted)', fontSize: 13 }}>No card charges found in these files.</div>
-      ) : (
+      <div
+        style={{
+          display: 'grid', gridTemplateColumns: `${FORM_LABEL_WIDTH}px minmax(0, 1fr)`,
+          columnGap: 16, rowGap: 16, alignItems: 'start',
+        }}
+      >
+        {/* The panel's own padding is what the label clears, so the first filename sits on its line. */}
+        <FieldLabel top={14}>File(s) to import</FieldLabel>
         <div>
-          {instruments.map(inst => (
-            <AmazonPaymentSourceRow
-              key={`${inst.last4}|${inst.network || ''}`}
-              instrument={inst}
-              accountOptions={fundingAccountOptions}
-              disabled={busy || loading}
-              onPick={pickPaymentSource}
-              onCreateAccount={createFundingAccount}
-            />
-          ))}
+          {/* The items file is optional detail for an orders file, so it is often added after the drop. */}
+          {/* Tight rows: the list is scanned, not read, and a dozen files at a comfortable gap ran the
+              panel past the fold on its own. */}
+          <InsetPanel style={{ gap: 2 }}>
+            {files.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>No files selected.</div>
+            ) : files.map(f => (
+              <div key={f.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Leading, so the controls read as one column against the names rather than sitting out
+                    at the panel's edge. The label names the file, since the button no longer follows it. */}
+                <Button
+                  small
+                  variant="ghost"
+                  title="Remove this file"
+                  aria-label={`Remove ${f.name}`}
+                  disabled={loading}
+                  onClick={() => setFiles(prev => prev.filter(other => other.name !== f.name))}
+                  style={{ ...COMPACT_ACTION_BTN_STYLE, flex: '0 0 auto', color: 'var(--danger)' }}
+                >
+                  ×
+                </Button>
+                <div
+                  title={f.name}
+                  style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {f.name}
+                </div>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <Button small variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={demoLoaded}>Add file(s)</Button>
+            </div>
+          </InsetPanel>
+          {scan?.unrecognized_files?.length ? (
+            <div style={{ marginTop: 8, color: '#b45309', fontSize: 12 }}>
+              Ignored (not an Amazon export): {scan.unrecognized_files.join(', ')}
+            </div>
+          ) : null}
         </div>
-      )}
 
-      <div style={{ marginTop: 20 }}>
-        <Toggle
-          checked={applyCategorization}
-          onChange={setApplyCategorization}
-          label="Apply my categorization rules to the imported orders"
-        />
+        <FieldLabel htmlFor={ACCOUNT_FIELD_ID}>Import into account</FieldLabel>
+        <div>
+          {/* The dialog body stretches its own children; inside a form cell the select has to be told. */}
+          <Select
+            id={ACCOUNT_FIELD_ID}
+            value={creatingAccount ? NEW_ACCOUNT : accountId}
+            onChange={onAccountChange}
+            options={amazonAccountOptions}
+            style={{ width: '100%', maxWidth: ACCOUNT_SELECT_WIDTH }}
+          />
+          {creatingAccount && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <Input value={newAccountName} onChange={setNewAccountName} placeholder="Account name"
+                aria-label="New account name" style={{ flex: 1 }} />
+              <Button small onClick={createAccount} disabled={savingAccount || !newAccountName.trim()}>
+                {savingAccount ? 'Creating…' : 'Create'}
+              </Button>
+              <Button small variant="ghost" onClick={() => { setCreatingAccount(false); setNewAccountName('Amazon') }}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <FieldLabel top={2}>Category for matched card charges</FieldLabel>
+        <div>
+          {/* The picker sits on "charges", the label's second line. */}
+          <LabelLineSpacer />
+          {/* Raised above the dialog: the picker portals its dropdown to the body, beneath an AppDialog. */}
+          <CategoryPicker
+            value={fundingCategory?.category_id}
+            categories={categories}
+            showSelectedBadge
+            panelZIndex={1300}
+            style={{ width: 'fit-content', maxWidth: '100%' }}
+            onChange={chooseCategory}
+            onCategoryCreated={async () => { setCategories(await api.getCategories().catch(() => categories)) }}
+          />
+          {fundingCategory && !fundingCategory.is_excluded ? (
+            <div style={{ color: '#b45309', fontSize: 12, marginTop: 6 }}>
+              This category isn’t excluded from totals — Amazon spend may be counted twice. Pick an excluded
+              (e.g. Transfers) category.
+            </div>
+          ) : null}
+          {/* Helper text for the control above it, in the app's usual muted caption rather than a panel
+              of its own: it belongs to the picker, and a box would set it apart from it. */}
+          <p
+            style={{
+              fontSize: 11.5,
+              color: 'var(--muted)',
+              lineHeight: 1.45,
+              margin: `4px 0 0 ${BADGE_TEXT_INSET - CAPTION_PADDING_X}px`,
+              padding: `6px ${CAPTION_PADDING_X}px`,
+              // The old panel's fill without its border: the border is what made it a separate object.
+              background: 'color-mix(in srgb, var(--surface2) 55%, transparent)',
+              borderRadius: 6,
+            }}
+          >
+            Category assigned to the matching <em>AMAZON.COM</em> charges to prevent
+            double counting.
+          </p>
+        </div>
+
+        <FieldLabel top={2}>Categorization</FieldLabel>
+        <div>
+          <Toggle
+            checked={applyCategorization}
+            onChange={setApplyCategorization}
+            label="Apply my rules to the imported orders"
+          />
+        </div>
+      </div>
+
+      {/* The card list is a table of its own, not one field's value, so it keeps the full width below the
+          form rather than sitting in the form's value column. */}
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: 22, paddingTop: 16 }}>
+        <div style={{ ...mapLabelStyle, marginTop: 0 }}>Payment cards</div>
+        <div style={{ marginLeft: CARD_LIST_INDENT }}>
+          {scanning && instruments.length === 0 ? (
+            <Spinner />
+          ) : instruments.length === 0 ? (
+            // Cards are parsed from the orders export's `payments` column, so an items-only drop has none
+            // to show for a structural reason rather than because the orders were all gift-card funded.
+            <div style={{ color: 'var(--muted)', fontSize: 13 }}>
+              {scan && !scan.order_count && scan.has_items
+                ? 'No payment information: payment information is only in the orders file.'
+                : 'No card charges found in these files.'}
+            </div>
+          ) : (
+            <div>
+              {instruments.map(inst => (
+                <AmazonPaymentSourceRow
+                  key={`${inst.last4}|${inst.network || ''}`}
+                  instrument={inst}
+                  accountOptions={fundingAccountOptions}
+                  disabled={busy || loading}
+                  onPick={pickPaymentSource}
+                  onCreateAccount={createFundingAccount}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {error ? <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>{error}</div> : null}
