@@ -19,9 +19,22 @@ account, so the pool's breadth changes only cost, never outcome — which is why
 to ship unoptimized.
 
 **What changed is who pays it.** The scan was originally only on the import/sync path, where 125 ms is
-invisible. It is now on the path of **every category edit** (`owe_recurring_rescan` keeps
-membership from going stale when a recategorization moves a row out of its series), and the cost grows
-with the ledger rather than with the edit.
+invisible. It now follows **every write that changes what detection reads** (`owe_recurring_rescan`
+keeps membership from going stale), running in the request after the write commits, and the cost grows
+with the ledger rather than with the edit. The frequent callers are single edits in the ledger:
+
+- a transaction's category set or cleared, its merchant renamed, its amount changed, or one created by
+  hand;
+- a bulk edit;
+- a transaction trashed or restored, from the ledger, the Trash, the duplicate report or the Amazon
+  reconciliation report;
+- rule actions: edit, apply, widen, delete with revert, cleanup, and the rule-suggestion review actions
+  with their Undo.
+
+The rest are already slow requests or rare: imports, syncs, import undo, emptying the trash, and
+removing an account with its transactions deleted. Account merge, detach and regrouping, reassigning a
+removed account's transactions, a transfer-pair answer and a global recategorize owe a full scan, which
+no payee scope can narrow.
 
 **Why it has not been taken.** Pushing the filter into SQL needs `payee_key` **materialized** on `txn`
 rather than derived in Python — a column, a backfill, and maintenance at every write site. That is a
