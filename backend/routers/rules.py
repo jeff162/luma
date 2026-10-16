@@ -15,6 +15,7 @@ from typing import Literal, Optional
 from backend.db.database import get_db
 from backend.services.categorizer import (
     _amount_rule_matches,
+    normalize_clean_name,
     rule_matches_row,
     recategorize_all,
     source_match_text_from_json,
@@ -624,10 +625,6 @@ def match_rule_for_transaction(txn_id: str):
     return {"rule_id": rule_id}
 
 
-def _normalize_clean_name(value: Optional[str]) -> str:
-    return " ".join((value or "").strip().split()).lower()
-
-
 def _resolve_matcher(clauses, keyword_field) -> tuple[str, Optional[str]]:
     """Resolve a request's `(keyword_to_store, match_expr_json_or_None)` from its optional `clauses` list and
     its plain `keyword` field. >= 2 clauses derive the keyword from the canonical clause texts and store a
@@ -673,11 +670,11 @@ def _classify_rule_collision(existing: dict, existing_tag_ids: set, *, category_
     """
     if category_id and existing["category_id"] and category_id != existing["category_id"]:
         return "conflict"
-    if _normalize_clean_name(clean_name) and _normalize_clean_name(existing["clean_name"]) \
-            and _normalize_clean_name(clean_name) != _normalize_clean_name(existing["clean_name"]):
+    if normalize_clean_name(clean_name) and normalize_clean_name(existing["clean_name"]) \
+            and normalize_clean_name(clean_name) != normalize_clean_name(existing["clean_name"]):
         return "conflict"
     adds_category = bool(category_id) and not existing["category_id"]
-    adds_clean_name = bool(_normalize_clean_name(clean_name)) and not _normalize_clean_name(existing["clean_name"])
+    adds_clean_name = bool(normalize_clean_name(clean_name)) and not normalize_clean_name(existing["clean_name"])
     adds_tags = bool(set(tag_ids or []) - set(existing_tag_ids))
     if adds_category or adds_clean_name or adds_tags:
         return "mergeable"
@@ -690,7 +687,7 @@ def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag
     fields, params = [], []
     if category_id and not target["category_id"]:
         fields.append("category_id = ?"); params.append(category_id)
-    if _normalize_clean_name(clean_name) and not _normalize_clean_name(target["clean_name"]):
+    if normalize_clean_name(clean_name) and not normalize_clean_name(target["clean_name"]):
         fields.append("clean_name = ?"); params.append(clean_name)
     if fields:
         params.append(target["id"])
@@ -1345,9 +1342,15 @@ def cleanup_rules(body: RuleCleanupBody):
 @router.get("/overlaps")
 def rule_overlaps(include_dismissed: bool = Query(False)):
     """Rule pairs that compete for the same transactions — the on-demand check behind the Rules page's
-    *Rule checkup* control. Two kinds: an `amount_overlap` the precedence order cannot
-    meaningfully settle (a warning), and a `matcher_nesting` where one merchant matcher is a subset of
-    the other (information). See `services/rule_overlaps.py` for what qualifies and why.
+    *Rule checkup* control. Three shapes: an `amount_overlap` the precedence order cannot meaningfully
+    settle, a `matcher_co_match` where two unrelated matchers both hit one real transaction, and a
+    `matcher_nesting` where one merchant matcher is a subset of the other (information). The first two
+    come in a `_benign` variant, used when the two rules file identically so the winner changes nothing.
+    See `services/rule_overlaps.py` for what qualifies and why.
+
+    The co-match half scans the ledger, which the rest of this check does not — it is the one question
+    the rules alone cannot answer. That makes this the slowest of the findings endpoints, which is why
+    it is a button rather than a badge.
 
     Nothing is changed: an overlap is an ambiguity in the rules themselves, so it is named rather than
     resolved. `rules` carries each referenced rule once, in the same shape the rules list returns, so
@@ -1379,9 +1382,10 @@ def dismiss_rule_overlap(body: RuleFindingDismissBody):
     rules are right — just "this pair is deliberate". The key carries what made the finding actionable,
     so a later edit that changes the situation produces a different key and surfaces again.
 
-    Only the informational kind may be acknowledged. An amount overlap is arbitrary rather than undefined
-    — the ordering's last terms settle it the same way every time, but for no reason that is about these
-    two rules — so it stays listed until the conditions are refined; the
+    Only findings whose winner changes nothing may be acknowledged — the informational kinds, and the
+    benign variants of the two warnings. A live amount overlap or co-match is arbitrary rather than
+    undefined: the ordering settles it the same way every time, but for no reason that is about these two
+    rules, so it stays listed until the conditions are refined; the
     refusal is 400 rather than a silent no-op, since a caller that thinks it dismissed something and did
     not is worse than one that is told."""
     with get_db() as conn:

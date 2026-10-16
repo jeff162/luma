@@ -4,7 +4,7 @@
 /*
  * What is wrong with the rule set, in one panel, run from the Rules page.
  *
- * Three sections with different intents, and keeping them visually distinct is the point of the layout.
+ * Five sections with different intents, and keeping them visually distinct is the point of the layout.
  *
  * **Charges outside a rule's range** is the only one that arrives on its own. An amount range is a
  * matching gate, so a bill that grows past the bound stops matching: the row loses the rule's category,
@@ -12,15 +12,23 @@
  * That makes it news — it is what the badge on the control counts — and it is the one finding here with
  * a one-click fix, because a bound has one right answer: take in this charge.
  *
- * **Overlapping amount ranges** is work of a different kind: both rules can claim a charge and nothing
- * decides which, so the user has to settle it — this panel deliberately proposes no edit, because an
- * overlap is an ambiguity in the rules themselves and a one-click "fix" would dress a coin flip as a
- * decision. **Nested merchant matchers** is not a defect; it is reported because the winner is not
- * always the rule a reader would guess (scope outranks keyword length), and because a pair filing to one
- * category under one scope has a surplus half worth clearing out.
+ * **Overlapping amount ranges** and **Rules that match the same transaction** are work of a different
+ * kind: both rules can claim a charge and nothing meaningful decides which, so the user has to settle
+ * it. This panel deliberately proposes no edit for either, because the ambiguity is in the rules
+ * themselves and a one-click "fix" would dress a coin flip as a decision. The two differ only in how the
+ * pair reaches that state — one by ranges that overlap, one by two matchers landing in one merchant name
+ * — and the second carries the transaction that proves it, since without a real row there is nothing to
+ * report.
  *
- * The last two are an *audit* — they change only when the user edits a rule — which is why neither is
- * badged and why the whole pairwise check still runs on open rather than on page load.
+ * **Nested merchant matchers** is not a defect; it is reported because the winner is not always the rule
+ * a reader would guess (scope outranks keyword length), and because a pair filing to one category under
+ * one scope has a surplus half worth clearing out. **Competing rules that file the same way** is the
+ * other half of that thought: a pair from either warning section whose two rules apply the same
+ * category, rename and tags is competing over nothing, and belongs out of the warnings entirely.
+ *
+ * Only the drift section arrives on its own. Three of the other four are an *audit* that changes when a
+ * rule is edited — which is why none is badged — and the co-match section also moves when transactions
+ * arrive, since it is the one finding read from the ledger rather than from the rules.
  *
  * Every finding names its rules and offers Edit. **Delete is on the nesting half**, which is the reverse
  * of how it first reads. An overlap is a modelling ambiguity: the answer is to refine the conditions
@@ -37,14 +45,15 @@
  * The delete carries the rules list's own opt-in to re-evaluate the rule's transactions, so this panel
  * does not quietly pick a different answer to that question than the list does.
  *
- * **Dismissal is what makes the informational sections usable at real density, and it stops at the
- * overlap.** Most nesting pairs are deliberate, and a list of thirty that never shrinks is one nobody
- * opens twice; a range-drift charge can equally be one the rule was never meant to claim. So both can be
- * acknowledged, one charge or one pair at a time. An **overlap cannot be dismissed**: its winner is
- * arbitrary rather than undefined — the ordering breaks the tie reproducibly, just not for any reason
- * about these two rules — so waving it through would leave the ledger categorized by an arithmetic
- * accident while the panel called it settled. The server decides this (`dismissible` on each
- * finding), not the layout here.
+ * **Dismissal is what makes the informational sections usable at real density, and the line it stops at
+ * is whether the winner changes anything.** Most nesting pairs are deliberate, and a list of thirty that
+ * never shrinks is one nobody opens twice; a range-drift charge can equally be one the rule was never
+ * meant to claim; a competing pair whose rules file identically resolves to the same ledger either way.
+ * All of those can be acknowledged, one at a time. A **live overlap or co-match cannot be**: its winner
+ * is arbitrary rather than undefined — the ordering breaks the tie reproducibly, just not for any reason
+ * about these two rules — so waving it through would leave the ledger categorized by an accident while
+ * the panel called it settled. The server decides this (`dismissible` on each finding), not the layout
+ * here.
  *
  * Dismissed findings are not gone: a *Show dismissed* toggle brings them back, flagged and restorable, so
  * an acknowledgement made in error is visible rather than lost. The counts in the header always describe
@@ -181,6 +190,21 @@ function effectHandoverNote(broader, narrower) {
   return `The category stays the same, but those transactions would ${clauses.join(', and ')}.`
 }
 
+const isOverlapKind = kind => kind === 'amount_overlap' || kind === 'amount_overlap_benign'
+const isCoMatchKind = kind => kind === 'matcher_co_match' || kind === 'matcher_co_match_benign'
+
+// A co-match card leads with the evidence, because the evidence *is* the finding: these two rules are
+// only in competition if a real transaction matches both, and showing it is also how the user judges
+// whether the pair is worth untangling.
+function coMatchNote(finding) {
+  const amount = formatCurrency(Math.abs(finding.amount))
+  const when = formatDate(finding.txn_date)
+  const also = finding.txn_count > 1
+    ? ` and ${finding.txn_count - 1} other${finding.txn_count === 2 ? '' : 's'}`
+    : ''
+  return `Both rules match “${finding.txn_name}” — ${amount} on ${when}${also}.`
+}
+
 // Why this nesting pair is worth its line — never the generic restatement of the section header, which
 // at real density repeats itself down the whole panel and says nothing card to card.
 function nestingNote(finding, broader, narrower) {
@@ -194,21 +218,26 @@ function nestingNote(finding, broader, narrower) {
 }
 
 function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestore, busy }) {
-  const isOverlap = finding.kind === 'amount_overlap'
+  const isNesting = finding.kind === 'matcher_nesting'
+  const isOverlap = isOverlapKind(finding.kind)
+  const isCoMatch = isCoMatchKind(finding.kind)
+  // Styling follows severity rather than kind now that both warnings have a benign twin: a pair whose
+  // rules file identically is not the thing the red border is for.
+  const isWarning = finding.severity === 'warning'
   const broader = rules[finding.rule_ids[0]]
   const narrower = rules[finding.rule_ids[1]]
   // A nesting pair is worth a second sentence only when the winner is the *broader* rule — that is the
   // case a reader gets wrong, because keyword length is not the first thing precedence looks at.
-  const winnerIsBroader = !isOverlap && finding.winner_rule_id === finding.rule_ids[0]
-  const handover = !isOverlap && finding.narrower_is_redundant && broader && narrower
+  const winnerIsBroader = isNesting && finding.winner_rule_id === finding.rule_ids[0]
+  const handover = isNesting && finding.narrower_is_redundant && broader && narrower
     ? effectHandoverNote(broader, narrower)
     : null
   return (
     <div
       style={{
         padding: '10px 12px', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8,
-        border: `1px solid ${isOverlap ? 'color-mix(in srgb, var(--danger) 26%, var(--border))' : 'var(--border)'}`,
-        background: isOverlap ? 'color-mix(in srgb, var(--danger) 5%, var(--surface))' : 'var(--surface)',
+        border: `1px solid ${isWarning ? 'color-mix(in srgb, var(--danger) 26%, var(--border))' : 'var(--border)'}`,
+        background: isWarning ? 'color-mix(in srgb, var(--danger) 5%, var(--surface))' : 'var(--surface)',
         // Dismissed cards are shown faded rather than restyled, so the toggle reads as "these are set
         // aside" without turning the acknowledged set into a second design to maintain.
         opacity: finding.dismissed ? 0.6 : 1,
@@ -218,7 +247,9 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
       <div style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>
         {isOverlap
           ? <>Both rules claim <strong>{overlapBandText(finding)}</strong>, and neither range is the narrower one.</>
-          : (broader && narrower ? nestingNote(finding, broader, narrower) : null)}
+          : isCoMatch
+            ? coMatchNote(finding)
+            : (broader && narrower ? nestingNote(finding, broader, narrower) : null)}
       </div>
         <DismissAction
           finding={finding}
@@ -234,16 +265,23 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
         onEditRule={onEditRule}
         // Nesting only, and only the narrow rule: an overlap is settled by refining conditions rather
         // than by removing a side, and the broad rule's rows are not the narrow rule's to give up.
-        deletableRuleId={!isOverlap && finding.narrower_is_redundant ? finding.rule_ids[1] : null}
+        deletableRuleId={isNesting && finding.narrower_is_redundant ? finding.rule_ids[1] : null}
         onDelete={onDelete}
         busy={busy}
-        winnerNote={isOverlap ? 'claims them today' : 'wins where both match'}
+        winnerNote={isNesting ? 'wins where both match' : 'claims them today'}
       />
-      {isOverlap ? (
+      {finding.kind === 'amount_overlap' ? (
         <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
           Nothing in the rules decides this one — the winner falls out of which range happens to be
           arithmetically smaller. Refining the two rules&rsquo; conditions until they no longer overlap
           settles it for good, and it stays listed until then.
+        </div>
+      ) : null}
+      {finding.kind === 'matcher_co_match' ? (
+        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+          Neither matcher contains the other, so the longer keyword takes these rows — which decides
+          nothing, since one keyword being longer says nothing about which rule the transaction belongs
+          to. Narrowing whichever matcher is catching rows it was not meant for settles it.
         </div>
       ) : null}
       {handover ? (
@@ -461,8 +499,12 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // The header counts the *open* set from each server's own tally, never the rendered rows: with the
   // toggle on, counting what is on screen would report acknowledged findings as work still to do.
   const openDrift = drift?.count || 0
-  const openOverlaps = overlaps?.counts?.amount_overlap || 0
-  const openNesting = overlaps?.counts?.matcher_nesting || 0
+  const openOverlaps = (overlaps?.counts?.amount_overlap || 0) + (overlaps?.counts?.matcher_co_match || 0)
+  // The informational tally is everything listed for knowledge rather than for action: nesting pairs,
+  // and the competing pairs whose two rules turn out to do the same thing.
+  const openNesting = (overlaps?.counts?.matcher_nesting || 0)
+    + (overlaps?.counts?.amount_overlap_benign || 0)
+    + (overlaps?.counts?.matcher_co_match_benign || 0)
   const dismissedCount = (overlaps?.dismissed_count || 0) + (drift?.dismissed_count || 0)
 
   const summary = () => {
@@ -547,6 +589,22 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
                 )}
               />
               <Section
+                title="Rules that match the same transaction"
+                blurb="Two rules catching different parts of one merchant name. The longer keyword wins, which settles nothing — length only means “more specific” when one matcher sits inside the other, and these do not. Narrow whichever one is reaching too far."
+                findings={overlapFindings.filter(f => f.kind === 'matcher_co_match')}
+                renderCard={finding => (
+                  <FindingCard
+                    key={finding.key}
+                    finding={finding}
+                    rules={overlaps.rules}
+                    onEditRule={onEditRule}
+                    onDismiss={dismissFinding}
+                    onRestore={restoreFinding}
+                    busy={busy}
+                  />
+                )}
+              />
+              <Section
                 title="Merchant matchers that nest"
                 blurb="Nothing is wrong with these — they are listed so it is clear which rule takes the transactions they share. Where both file to the same category, the narrower rule is surplus and can be removed."
                 findings={overlapFindings.filter(f => f.kind === 'matcher_nesting')}
@@ -557,6 +615,25 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
                     rules={overlaps.rules}
                     onEditRule={onEditRule}
                     onDelete={deleteRule}
+                    onDismiss={dismissFinding}
+                    onRestore={restoreFinding}
+                    busy={busy}
+                  />
+                )}
+              />
+              {/* Last, and deliberately not among the warnings above: these pairs compete over an
+                  outcome that is the same either way, so they are listed in case the match is an
+                  accident rather than because anything needs doing. */}
+              <Section
+                title="Competing rules that file the same way"
+                blurb="These pairs contend for the same transactions, but both rules apply the same category, rename and tags — so whichever wins, the result is identical. Listed in case that agreement is a coincidence rather than the intent; dismiss one and it returns if the two ever stop matching."
+                findings={overlapFindings.filter(f => f.kind === 'amount_overlap_benign' || f.kind === 'matcher_co_match_benign')}
+                renderCard={finding => (
+                  <FindingCard
+                    key={finding.key}
+                    finding={finding}
+                    rules={overlaps.rules}
+                    onEditRule={onEditRule}
                     onDismiss={dismissFinding}
                     onRestore={restoreFinding}
                     busy={busy}

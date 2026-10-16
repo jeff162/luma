@@ -156,6 +156,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Import history: retention](scale-and-limits.md#import-history-retention)
 - [A watched folder is listed often and read rarely](scale-and-limits.md#a-watched-folder-is-listed-often-and-read-rarely)
 - [Bulk operations must not accumulate](scale-and-limits.md#bulk-operations-must-not-accumulate)
+- [The rule co-match scan reads the whole ledger](scale-and-limits.md#the-rule-co-match-scan-reads-the-whole-ledger)
 - [The Tasks list is recomputed on every mutation](scale-and-limits.md#the-tasks-list-is-recomputed-on-every-mutation)
 - [Many sessions on one server](scale-and-limits.md#many-sessions-on-one-server)
 - [Measuring performance](scale-and-limits.md#measuring-performance)

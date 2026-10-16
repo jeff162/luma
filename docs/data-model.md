@@ -682,19 +682,32 @@ winner; that case is reported, below.
   category is never reported, and a dismissal does not consume a rule's per-rule cap.
 - **Widening is one transaction** (`POST /rules/{id}/widen`): the bound moves and the rule is applied
   together.
-- **Overlaps** (`GET /rules/overlaps`, `services/rule_overlaps.py`). An **amount overlap** is two rules
-  the ordering separates only by the span term, whose ranges intersect with neither containing the
-  other. A **matcher nesting** is one matcher inside another. `narrower_is_redundant` is set only when
-  the pair files to the same category under the same scope and direction; a scope or direction
-  difference means the narrow rule categorizes rows the broad one cannot reach. Which rule wins is read
-  from `rule_specificity_order_sql`.
+- **Overlaps** (`GET /rules/overlaps`, `services/rule_overlaps.py`). Three ways two rules contend, and
+  all three require their scopes to tie, since a scope difference is a refinement precedence reads
+  first. An **amount overlap** is two rules with the same matcher whose ranges intersect with neither
+  containing the other. A **matcher co-match** is two matchers that neither repeat nor contain each
+  other, both matching a real transaction. A **matcher nesting** is one matcher inside another. Which
+  rule wins is read from `rule_specificity_order_sql`.
+- **The co-match check reads the ledger; nothing else here does.** Whether two unrelated keywords ever
+  land in one merchant name is a fact about the transactions, not about `category_rule`. It matters
+  because precedence settles such a pair on `LENGTH(keyword)`, and that term stands for containment —
+  between matchers that do not nest there is no subset relation for it to stand for, so it decides on
+  nothing. See *Scale and limits* for the scan.
+- **A pair whose rules file identically is information, not a warning.** `_actions_agree` compares
+  category, rename, tags and the recurring flag; where all four match, the winner changes no row and the
+  finding is reported as `amount_overlap_benign` or `matcher_co_match_benign`. The split is by kind
+  rather than severity because dismissibility is keyed on kind, and it rides in the finding key, so an
+  acknowledgement lapses as soon as the two rules stop agreeing.
+- `narrower_is_redundant` (nesting only) is set when the pair files to the same category under the same
+  scope and direction; a scope or direction difference means the narrow rule categorizes rows the broad
+  one cannot reach.
 - Containment is not a finding, since precedence resolves it. Bounds are inclusive, so two rules split
   at one value overlap on that value. Managed rules, trashed rules and rules targeting an inactive
-  category are left out.
+  category are left out; so are pending and trashed transactions, as evidence.
 - **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored state.
-  `rule_overlaps.DISMISSIBLE_KINDS` admits nestings only: a nesting is information, while an amount
-  overlap is settled only by the ordering's last terms — reproducibly, but on no basis that is about the
-  two rules. The key carries the pair and the
+  `rule_overlaps.DISMISSIBLE_KINDS` admits the kinds whose winner changes nothing — nestings and the two
+  benign variants. A live amount overlap or co-match is settled only by the ordering's last terms:
+  reproducibly, but on no basis that is about the two rules. The key carries the pair and the
   redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
   dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.
 
@@ -2423,8 +2436,9 @@ and owed decisions*.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
 - **Dedupe follow-ups**, including the prefix-stripping item and auto-restore after an undo.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
-- **Rule amount overlaps**: substring containment is compared between matchers only.
-  → [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+- **Alternatives in a merchant matcher** (*any of these*), and dropping `display_name` from the
+  matcher haystack once nothing needs the rename feedback loop.
+  → [`backlog/rule-matcher-alternatives.md`](backlog/rule-matcher-alternatives.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
 - **`clean_name` / merchant rename: keep or drop.**

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 // The rule checkup panel. Every finding is derived server-side, so what is worth pinning is what the
-// panel *says* about each kind — because the three kinds mean different things and look similar
-// otherwise, and because two of them come from a different endpoint than the third.
+// panel *says* about each kind — because the kinds mean different things and look similar otherwise,
+// and because the range-drift ones come from a different endpoint than the rest.
 //
 // The range-drift half is the one with a fix attached, and the fix has two halves that must stay
 // together: widening moves the bound *and* re-applies the rule, in one request, since a bound that moves
@@ -18,9 +18,14 @@
 // narrow rule, which is what delete is for; it is offered on the narrow rule alone, because deleting
 // the broad one strands every row the narrow matcher misses.
 //
-// Dismissal is the nesting half's, and only its. An overlap's winner is arbitrary, so a Dismiss
-// button there would let the panel call an arithmetic accident settled — the flag comes from the server
-// (`dismissible`) rather than from a `kind` check in the layout, and neither end may sprout its own.
+// Dismissal follows whether the winner changes anything, not whether the finding is a warning. A live
+// overlap or co-match offers no Dismiss, because waving one through would let the panel call an
+// arbitrary outcome settled; a pair whose two rules file identically does, because the ledger reads the
+// same either way. The flag comes from the server (`dismissible`) rather than from a `kind` check in the
+// layout, and neither end may sprout its own.
+//
+// The co-match card is the one that leads with a transaction. That is not decoration: unlike every other
+// finding here it cannot be derived from the rules alone, so the row is what makes it true.
 //
 // Three more. The per-card sentence must say something specific to that pair — a restatement of the
 // section header repeats itself down a panel of thirty findings and earns nothing. The redundancy flag
@@ -94,6 +99,25 @@ const REDUNDANT = {
   kind: 'matcher_nesting', key: 'matcher_nesting:aji:ajiRestaurant', severity: 'info',
   rule_ids: ['aji', 'ajiRestaurant'], winner_rule_id: 'ajiRestaurant', narrower_is_redundant: true,
   dismissible: true,
+}
+
+// Two matchers that neither repeat nor contain each other, caught on a real row. The card leads with
+// that row, because without it there would be no finding at all.
+const CO_MATCH = {
+  kind: 'matcher_co_match', key: 'matcher_co_match:long:short', severity: 'warning', dismissible: false,
+  rule_ids: ['long', 'short'], winner_rule_id: 'long', txn_count: 3,
+  txn_id: 't9', txn_date: '2026-07-14', txn_name: 'NORTHGATE PRIME SUPPLY', amount: 82.5,
+}
+// The same contention, between two rules that do the same thing — so the winner decides nothing and the
+// pair drops out of the warnings into the acknowledgeable section.
+const CO_MATCH_BENIGN = {
+  ...CO_MATCH, kind: 'matcher_co_match_benign', key: 'matcher_co_match_benign:long:short',
+  severity: 'info', dismissible: true,
+}
+const OVERLAP_BENIGN = {
+  kind: 'amount_overlap_benign', key: 'amount_overlap_benign:broad:narrow', severity: 'info',
+  dismissible: true, rule_ids: ['broad', 'narrow'], overlap_min: 3000, overlap_max: 4000,
+  winner_rule_id: 'broad',
 }
 
 // A charge that missed a rule's maximum by 12%, on the rule that gates the water bill by size.
@@ -302,5 +326,40 @@ describe('RuleFindingsDialog', () => {
     await userEvent.click(await screen.findByLabelText(/Show dismissed/i, { selector: 'input' }))
     await userEvent.click(await screen.findByText('Restore'))
     await waitFor(() => expect(api.restoreRuleRangeDrift).toHaveBeenCalledWith(DRIFT.key))
+  })
+
+  it('leads a co-match card with the transaction that proves it', async () => {
+    // The evidence is the finding: these two rules are only in contention because a real row matched
+    // both, and the row is also how the user judges whether the pair is worth untangling.
+    renderDialog([CO_MATCH])
+    expect(await screen.findByText(/Rules that match the same transaction/)).toBeTruthy()
+    expect(screen.getByText(/NORTHGATE PRIME SUPPLY/)).toBeTruthy()
+    expect(screen.getByText(/and 2 others/)).toBeTruthy()
+  })
+
+  it('offers neither delete nor dismiss on a live co-match', async () => {
+    // Same reasoning as the overlap: the answer is to narrow a matcher, not to pick a side, and the
+    // winner is arbitrary so there is nothing to acknowledge.
+    renderDialog([CO_MATCH])
+    expect(await screen.findByText(/NORTHGATE PRIME SUPPLY/)).toBeTruthy()
+    expect(screen.queryByText('Dismiss')).toBeNull()
+    expect(screen.queryByText('Delete')).toBeNull()
+  })
+
+  it('puts a pair whose rules file the same way out of the warnings and lets it be dismissed', async () => {
+    renderDialog([OVERLAP_BENIGN, CO_MATCH_BENIGN])
+    expect(await screen.findByText(/Competing rules that file the same way/)).toBeTruthy()
+    // Neither warning section appears, because neither pair changes the ledger whichever rule wins.
+    expect(screen.queryByText('Amount ranges that overlap')).toBeNull()
+    expect(screen.queryByText('Rules that match the same transaction')).toBeNull()
+    expect(screen.getAllByText('Dismiss').length).toBe(2)
+  })
+
+  it('dismisses a benign pair through the overlap store', async () => {
+    renderDialog([OVERLAP_BENIGN])
+    await userEvent.click(await screen.findByText('Dismiss'))
+    await waitFor(() => expect(api.dismissRuleOverlap)
+      .toHaveBeenCalledWith(OVERLAP_BENIGN.key, 'amount_overlap_benign'))
+    expect(api.dismissRuleRangeDrift).not.toHaveBeenCalled()
   })
 })

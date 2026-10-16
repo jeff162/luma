@@ -1696,7 +1696,8 @@ export const HELP_TOPICS = [
         <p>
           <strong>Rule checkup</strong> reports rules that compete with each other and charges that
           have drifted outside a rule's amount range. It changes nothing on its own, and carries a
-          count when there is anything to look at.
+          count when there is anything to look at. One of its checks reads the transactions rather than
+          the rules, so the report takes a moment on a large ledger.
         </p>
       </>
     ),
@@ -1810,7 +1811,7 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, which requires refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads. Rule checkup also identifies rules which are essentially duplicates of each other where one can be deleted outright.',
+    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, and two separate keywords that both turn up in one merchant name, each of which requires refining the conditions. It also lists merchant names where one contains the other, which is fine but does not always resolve the way it reads, rules which are essentially duplicates of each other where one can be deleted outright, and pairs that compete over nothing because both rules file the same way.',
     body: () => (
       <>
         <p>
@@ -1845,6 +1846,16 @@ export const HELP_TOPICS = [
             is arbitrary. The way to settle this is to refine the conditions so they do not overlap.
           </li>
           <li>
+            <strong>Rules that match the same transaction</strong> -- two keywords that are unrelated to
+            each other, both turning up in one merchant name, such as <em>northgate</em>
+            and <em>riverstone</em> in "NORTHGATE RIVERSTONE SUPPLY". The longer keyword wins, which
+            settles nothing here: keyword length stands in for being more specific only where one
+            keyword sits inside the other, and these do not. The finding carries the transaction it
+            found and how many others like it there are, since without a real transaction matching both
+            there would be nothing to report. The way to settle it is to narrow whichever keyword is
+            reaching further than intended.
+          </li>
+          <li>
             <strong>Merchant criteria that nest</strong> -- one rule's keyword contained in
             another's, such as <em>northgate</em> and <em>northgate prime</em>. Nothing is wrong
             here, and it is listed only so the outcome is visible: usually the longer keyword wins, but
@@ -1868,10 +1879,21 @@ export const HELP_TOPICS = [
           made about rather than the pair of rules forever, so an edit that changes what the finding says
           -- a narrower rule that becomes surplus and can now be deleted -- raises it again.
         </p>
+        <p>*needs review*</p>
         <p>
-          <strong>Overlapping amount ranges cannot be dismissed.</strong> An overlap means it is
-          genuinely undecided which of the two rules
-          applies to a charge in the shared band, and no acknowledgement makes that decided. These stay
+          <strong>Competing rules that file the same way</strong> is the last section, and it holds
+          pairs from either of the two sections above whose two rules apply the same category, rename,
+          tags and recurring setting. Those pairs contend over an outcome that is identical whichever
+          rule wins -- two spellings of one merchant filing to one place is the usual shape -- so
+          nothing needs refining and they can be dismissed. A dismissal there lapses if the two rules
+          ever stop agreeing, which puts the pair back among the warnings.
+        </p>
+        <p>
+          <strong>Overlapping ranges and rules matching the same transaction cannot be dismissed.</strong>{' '}
+          The outcome in both cases is arbitrary rather than undecided: the same rule wins every time,
+          but for a reason that has nothing to do with the two rules in question -- which range happens
+          to be arithmetically smaller, or which keyword happens to be longer. An acknowledgement would
+          leave the ledger categorized by that accident with the report calling it settled, so these stay
           listed until the conditions are refined.
         </p>
         <p>

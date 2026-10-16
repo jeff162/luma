@@ -21,6 +21,7 @@ The mechanism behind each bound is owned elsewhere:
 - [Import history: retention](#import-history-retention)
 - [A watched folder is listed often and read rarely](#a-watched-folder-is-listed-often-and-read-rarely)
 - [Bulk operations must not accumulate](#bulk-operations-must-not-accumulate)
+- [The rule co-match scan reads the whole ledger](#the-rule-co-match-scan-reads-the-whole-ledger)
 - [The Tasks list is recomputed on every mutation](#the-tasks-list-is-recomputed-on-every-mutation)
 - [Many sessions on one server](#many-sessions-on-one-server)
 - [Measuring performance](#measuring-performance)
@@ -108,6 +109,32 @@ Backup export and restore stream in both directions, and neither holds rows as a
 structure is the dominant memory term, larger than the serialized JSON and the zip together, so
 streaming only the output to a file recovers about a third of the peak. The cost of getting it wrong is
 an operation that dies on a small machine.
+
+## The rule co-match scan reads the whole ledger
+
+`services/rule_overlaps.py` answers every finding from `category_rule` except one. Whether two matchers
+that neither repeat nor contain each other ever land in the same merchant name is a fact about the
+transactions, so that finding takes a scan, and the scan is **deliberately unwindowed** where the
+sibling check (`rule_range_drift`, 90 days) is not: range drift asks whether a recent charge was
+misfiled, while this asks whether two rules are ambiguous — a property of the rule set that a collision
+from years ago still demonstrates, with both rules still live to fire on the next import.
+
+Two things keep it affordable, and both are load-bearing rather than tuning:
+
+- **Row-major, not pair-major.** The natural shape — for each candidate pair, look for a row they share
+  — does not work here, because almost no pair can be excluded from the rules alone: most rules carry
+  neither a scope nor an amount range, so a real rule set offers ~20k candidate pairs against ~19k rows.
+  Matching each *rule* against each row once and reading the pairs off each row's match list is
+  rules × rows, and it discovers the pairs that collide instead of testing a hypothesis about each of
+  twenty thousand. Pairwise would be ~360M evaluations against ~4M.
+- **Each row's haystacks are derived once** (`categorizer.row_match_texts`), not once per rule. That is
+  a 2.4× difference on its own, and it is why `rule_matches_row` is a wrapper over a prepared form.
+
+Measured at ~200 rules against ~19k transactions: about one second, on demand behind a button. It grows
+linearly in ledger size. `MAX_RULES_PER_ROW` bounds the O(k²) pair enumeration on any one row; three is
+the most observed. If this ever crosses a couple of seconds, the dial is a window on the scan, and the
+larger lever is multi-pattern search (one pass per row finding all keywords) rather than a faster set
+representation — the cost is finding the matches, not combining them.
 
 ## The Tasks list is recomputed on every mutation
 

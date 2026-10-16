@@ -189,16 +189,34 @@ def merchant_matcher_matches(rule, text: str, source_text_lc: str, match_source_
     return True
 
 
-def rule_matches_row(rule, row) -> bool:
-    """Does `rule` match transaction `row`? The one shared predicate behind rule apply
-    (rules._apply_rule_to_existing) and rule-backed recurring-series membership
-    (recurring_detection.reconcile_series), so "which rows a rule owns" has a single definition.
+def normalize_clean_name(value: Optional[str]) -> str:
+    """A rule's rename reduced to what it actually *means*, so two spellings of one rename compare equal.
+    Shared because two callers answer the same question and must not drift: the create/edit path deciding
+    whether a proposed rename conflicts with an existing rule's (`routers/rules`), and the checkup deciding
+    whether two rules' effects agree (`services/rule_overlaps`)."""
+    return " ".join((value or "").strip().split()).lower()
 
-    Both args are dict-like. `rule` provides keyword/owner_id/account_id/account_type/amount_min/amount_max/
-    debit_credit/match_source_text; `row` provides display_name/merchant_name/raw_name/amount/owner_id/
-    effective_account_id/effective_account_type and (for match_source_text rules) import_evidence_json. A
-    row whose SELECT omits import_evidence_json simply can't match on source text, which is safe.
-    """
+
+def row_match_texts(row, *, want_source_text: bool) -> tuple[str, str]:
+    """The two lowercased haystacks a merchant matcher is tested against: the joined name fields, and the
+    import source text (empty unless asked for, since pulling it parses JSON).
+
+    Split out so a pass testing *many* rules against one row derives these once instead of once per rule —
+    the whole cost of the rule-overlap co-match scan, which is rules x rows."""
+    text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
+    source_text_lc = ""
+    if want_source_text:
+        try:
+            source_text_lc = source_match_text_from_json(row["import_evidence_json"])
+        except (KeyError, IndexError):
+            source_text_lc = ""
+    return text, source_text_lc
+
+
+def rule_matches_row_prepared(rule, row, text: str, source_text_lc: str) -> bool:
+    """`rule_matches_row` with the row's haystacks already derived (see `row_match_texts`). This is where
+    the predicate actually lives; the one-shot form below is a wrapper, so there is still exactly one
+    definition of "which rows a rule owns"."""
     if rule["owner_id"] is not None and rule["owner_id"] != row["owner_id"]:
         return False
     if rule["account_id"] is not None and rule["account_id"] != row["effective_account_id"]:
@@ -209,16 +227,23 @@ def rule_matches_row(rule, row) -> bool:
     rule_account_type = _dict_get(rule, "account_type")
     if rule_account_type is not None and rule_account_type != _dict_get(row, "effective_account_type"):
         return False
-    text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
-    source_text_lc = ""
-    if rule["match_source_text"]:
-        try:
-            source_text_lc = source_match_text_from_json(row["import_evidence_json"])
-        except (KeyError, IndexError):
-            source_text_lc = ""
     if not merchant_matcher_matches(rule, text, source_text_lc, rule["match_source_text"]):
         return False
     return _amount_rule_matches(row["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
+
+
+def rule_matches_row(rule, row) -> bool:
+    """Does `rule` match transaction `row`? The one shared predicate behind rule apply
+    (rules._apply_rule_to_existing) and rule-backed recurring-series membership
+    (recurring_detection.reconcile_series), so "which rows a rule owns" has a single definition.
+
+    Both args are dict-like. `rule` provides keyword/owner_id/account_id/account_type/amount_min/amount_max/
+    debit_credit/match_source_text; `row` provides display_name/merchant_name/raw_name/amount/owner_id/
+    effective_account_id/effective_account_type and (for match_source_text rules) import_evidence_json. A
+    row whose SELECT omits import_evidence_json simply can't match on source text, which is safe.
+    """
+    text, source_text_lc = row_match_texts(row, want_source_text=bool(rule["match_source_text"]))
+    return rule_matches_row_prepared(rule, row, text, source_text_lc)
 
 
 def _resolve_effective_account(

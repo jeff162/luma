@@ -1,13 +1,19 @@
 """
 The on-demand check for rules that compete for the same transactions.
 
-Two separate findings with opposite intents, and most of these tests exist to pin the boundary between
-them and the much larger set of pairs that must stay silent. An `amount_overlap` is a genuine ambiguity
-(`[300, 4000]` against `[3000, inf)`) and needs the user; a `matcher_nesting` (`amazon` inside
-`amazon prime`) is deterministic, and is reported both because the winner is not always the rule a reader
-would guess and because its narrow half may be surplus. Everything precedence already settles for a
-principled reason — containment, a scope difference — must produce nothing, or the check cries wolf on
-the two-rule split that is the recommended way to model several bills from one biller.
+Findings with opposite intents, and most of these tests exist to pin the boundary between them and the
+much larger set of pairs that must stay silent. An `amount_overlap` is a genuine ambiguity
+(`[300, 4000]` against `[3000, inf)`) and needs the user; a `matcher_co_match` is the same ambiguity
+reached by a different route, two unrelated matchers landing in one merchant name; a `matcher_nesting`
+(`amazon` inside `amazon prime`) is deterministic, and is reported both because the winner is not always
+the rule a reader would guess and because its narrow half may be surplus. Everything precedence already
+settles for a principled reason — containment, a scope difference — must produce nothing, or the check
+cries wolf on the two-rule split that is the recommended way to model several bills from one biller.
+
+The `_benign` variants carry the other half of that: a pair whose two rules file identically is competing
+over nothing, and several tests exist only to stop the check calling that a problem. Note what this does
+to the fixtures — `_rule` twice over makes a pair that *agrees*, so a test about the warning path has to
+use `_differing` or it is quietly testing the benign one.
 
 The `narrower_is_redundant` cases carry their own weight, because the flag gates a delete button and the
 tempting version of it is wrong: same category is not sufficient. A scope or direction difference means
@@ -79,7 +85,8 @@ class RuleOverlapsTests(unittest.TestCase):
 
     def _rule(self, keyword="town of harborline", *, rule_id=None, amount_min=None, amount_max=None,
               owner_id=None, account_id=None, account_type=None, clauses=None, debit_credit="both",
-              is_managed=0, match_source_text=0, deleted_at=None, category_id=_UNSET):
+              is_managed=0, match_source_text=0, deleted_at=None, category_id=_UNSET,
+              clean_name=None):
         rule_id = rule_id or str(uuid.uuid4())
         category_id = self.category_id if category_id is self._UNSET else category_id
         match_expr = None
@@ -96,12 +103,38 @@ class RuleOverlapsTests(unittest.TestCase):
                 conn.execute(
                     """INSERT INTO category_rule
                          (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit,
-                          owner_id, account_id, account_type, match_source_text, is_managed, deleted_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          owner_id, account_id, account_type, match_source_text, is_managed, deleted_at,
+                          clean_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (rule_id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit,
-                     owner_id, account_id, account_type, match_source_text, is_managed, deleted_at),
+                     owner_id, account_id, account_type, match_source_text, is_managed, deleted_at,
+                     clean_name),
                 )
         return rule_id
+
+    def _differing(self, **kwargs):
+        """A rule that *does something different* from the plain `_rule` above — here, a rename the other
+        does not carry. Competing rules only earn a warning when the winner changes the ledger, so a test
+        about which pairs contend has to make them disagree about something or it is testing the benign
+        split by accident. Which effect differs is immaterial; the rename is the cheapest to set up."""
+        return self._rule(clean_name="Harborline Water", **kwargs)
+
+    def _txn(self, name, amount=100.0, date="2026-03-01", account_id=None):
+        txn_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """INSERT INTO txn (id, account_id, date, amount, raw_name, display_name)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (txn_id, account_id or self.checking_id, date, amount, name, name),
+                )
+        return txn_id
+
+    def _amount_findings(self):
+        """Both amount-overlap kinds. The negative tests assert on this rather than on the warning kind
+        alone: a pair that should produce nothing at all must not quietly produce a benign finding."""
+        return [f for f in self._findings()["findings"]
+                if f["kind"] in ("amount_overlap", "amount_overlap_benign")]
 
     def _findings(self, kind=None, include_dismissed=False):
         with self._use_db_path():
@@ -126,7 +159,7 @@ class RuleOverlapsTests(unittest.TestCase):
     def test_ranges_that_overlap_without_containment_are_reported(self):
         # The case ordering cannot answer: a 3500 charge matches both and neither range is the narrower.
         low = self._rule(amount_min=300, amount_max=4000)
-        high = self._rule(amount_min=3000)
+        high = self._differing(amount_min=3000)
         findings = self._findings("amount_overlap")
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["severity"], "warning")
@@ -136,7 +169,7 @@ class RuleOverlapsTests(unittest.TestCase):
 
     def test_the_reported_band_is_the_one_both_rules_claim(self):
         self._rule(amount_min=300, amount_max=4000)
-        self._rule(amount_min=3000)
+        self._differing(amount_min=3000)
         finding = self._findings("amount_overlap")[0]
         self.assertEqual(finding["overlap_min"], 3000.0)
         self.assertEqual(finding["overlap_max"], 4000.0)
@@ -145,22 +178,22 @@ class RuleOverlapsTests(unittest.TestCase):
         # Precedence answers this correctly, and it is the recommended way to split one biller's bills.
         self._rule(amount_min=300)
         self._rule(amount_min=3000)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_a_fully_bounded_range_inside_another_is_not_a_conflict(self):
         self._rule(amount_min=100, amount_max=5000)
         self._rule(amount_min=200, amount_max=260)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_disjoint_ranges_are_not_a_conflict(self):
         self._rule(amount_min=0, amount_max=2999.99)
         self._rule(amount_min=3000)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_ranges_meeting_at_one_value_do_conflict(self):
         # Both bounds are inclusive, so a charge of exactly 3000 really is claimed by both rules.
         self._rule(amount_min=300, amount_max=3000)
-        self._rule(amount_min=3000)
+        self._differing(amount_min=3000)
         findings = self._findings("amount_overlap")
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["overlap_min"], 3000.0)
@@ -170,34 +203,34 @@ class RuleOverlapsTests(unittest.TestCase):
         # No bounds is [0, inf), which contains every range — always containment, never an overlap.
         self._rule()
         self._rule(amount_min=300, amount_max=4000)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_a_scope_difference_leaves_precedence_something_to_decide_with(self):
         # Owner scope outranks the amount term, so this pair has a principled winner and is not reported.
         self._rule(amount_min=300, amount_max=4000, owner_id=SHARED_OWNER_ID)
         self._rule(amount_min=3000)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_rules_on_different_accounts_can_never_contend(self):
         self._rule(amount_min=300, amount_max=4000, account_id=self.checking_id)
         self._rule(amount_min=3000, account_id=self.card_id)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_rules_on_opposite_sides_can_never_contend(self):
         self._rule(amount_min=300, amount_max=4000, debit_credit="debit")
         self._rule(amount_min=3000, debit_credit="credit")
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     def test_a_direction_difference_does_not_rescue_an_overlap(self):
         # The direction term sits *below* the amount span, so span still decides — and decides nothing.
         self._rule(amount_min=300, amount_max=4000, debit_credit="debit")
-        self._rule(amount_min=3000)
+        self._differing(amount_min=3000)
         self.assertEqual(len(self._findings("amount_overlap")), 1)
 
     def test_different_keywords_are_not_an_amount_conflict(self):
         self._rule(keyword="harborline water", amount_min=300, amount_max=4000)
         self._rule(keyword="riverstone gas", amount_min=3000)
-        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(self._amount_findings(), [])
 
     # --- Nested merchant matchers -----------------------------------------------------------------
 
@@ -322,7 +355,7 @@ class RuleOverlapsTests(unittest.TestCase):
         self._rule(keyword="northgate")
         self._rule(keyword="northgate prime")
         self._rule(keyword="town of harborline", amount_min=300, amount_max=4000)
-        self._rule(keyword="town of harborline", amount_min=3000)
+        self._differing(keyword="town of harborline", amount_min=3000)
         result = self._findings()
         self.assertEqual(result["counts"], {"amount_overlap": 1, "matcher_nesting": 1})
         self.assertEqual(result["count"], 2)
@@ -344,6 +377,179 @@ class RuleOverlapsTests(unittest.TestCase):
         self.assertEqual(keyword, "bp")
 
 
+    # --- When the winner changes nothing ----------------------------------------------------------
+    #
+    # A competing pair is only a problem if the rule that wins decides something. Two spellings of one
+    # merchant filing to one category fight forever over an outcome that is identical either way, and the
+    # user may wave that through. Every effect has to agree, though: the tempting version of this check
+    # compares categories and quietly loses a rename or a tag that only one side carried.
+
+    def _tag(self, rule_id, name="Reimbursable"):
+        tag_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT INTO tag (id, name, color) VALUES (?, ?, '#888888')", (tag_id, name))
+                conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule_id, tag_id))
+        return tag_id
+
+    def test_an_overlap_whose_rules_file_identically_is_information(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._rule(amount_min=3000)
+        findings = self._findings("amount_overlap_benign")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "info")
+        # And no warning was raised for the same pair.
+        self.assertEqual(self._findings("amount_overlap"), [])
+
+    def test_a_benign_overlap_may_be_acknowledged(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._rule(amount_min=3000)
+        finding = self._findings("amount_overlap_benign")[0]
+        self.assertTrue(finding["dismissible"])
+        self._dismiss(finding)
+        self.assertEqual(self._findings()["count"], 0)
+
+    def test_a_rename_on_one_side_is_a_real_difference(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._differing(amount_min=3000)
+        self.assertEqual(len(self._findings("amount_overlap")), 1)
+        self.assertEqual(self._findings("amount_overlap_benign"), [])
+
+    def test_a_tag_on_one_side_is_a_real_difference(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._tag(self._rule(amount_min=3000))
+        self.assertEqual(len(self._findings("amount_overlap")), 1)
+
+    def test_a_different_category_is_a_real_difference(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._rule(amount_min=3000, category_id=self._other_category("Water"))
+        self.assertEqual(len(self._findings("amount_overlap")), 1)
+
+    def test_two_tag_only_rules_with_the_same_tags_are_benign(self):
+        # No category on either side, so "same category" says nothing — but the rules genuinely do the
+        # same thing, which is the question that matters.
+        shared = self._rule(amount_min=300, amount_max=4000, category_id=None)
+        other = self._rule(amount_min=3000, category_id=None)
+        tag_id = self._tag(shared)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (other, tag_id))
+        self.assertEqual(len(self._findings("amount_overlap_benign")), 1)
+
+    def test_the_benign_verdict_is_in_the_key_so_an_acknowledgement_lapses(self):
+        # Acknowledging "these two do the same thing" must not also acknowledge them once they stop.
+        first = self._rule(amount_min=300, amount_max=4000)
+        self._rule(amount_min=3000)
+        self._dismiss(self._findings("amount_overlap_benign")[0])
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE category_rule SET clean_name = 'Water' WHERE id = ?", (first,))
+        result = self._findings()
+        self.assertEqual(result["counts"], {"amount_overlap": 1})
+        self.assertEqual(result["dismissed_count"], 0)
+
+    # --- Rules that match one transaction by different parts of its name ---------------------------
+    #
+    # The ambiguity neither other kind can see: two matchers that neither repeat nor contain each other,
+    # both landing in one merchant name. Precedence settles it on keyword length, but length stands for
+    # "a longer substring matches a strict subset", and between matchers that do not nest there is no
+    # subset for it to be about. Unlike every other finding here, it cannot be answered from the rules
+    # alone — whether two unrelated keywords ever co-occur is a fact about the ledger.
+
+    def test_two_unrelated_keywords_matching_one_row_are_reported(self):
+        self._rule(keyword="northgate")
+        self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY")
+        findings = self._findings("matcher_co_match")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "warning")
+        self.assertEqual(findings[0]["txn_count"], 1)
+        self.assertEqual(findings[0]["txn_name"], "NORTHGATE RIVERSTONE SUPPLY")
+
+    def test_unrelated_keywords_alone_are_still_silent(self):
+        # The pre-existing behaviour, and the reason the scan exists: without a row that matches both,
+        # there is nothing to report — the rules themselves cannot say whether they ever meet.
+        self._rule(keyword="northgate")
+        self._differing(keyword="riverstone")
+        self.assertEqual(self._findings("matcher_co_match"), [])
+
+    def test_the_count_and_example_describe_the_collisions(self):
+        self._rule(keyword="northgate")
+        self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY", date="2026-01-05")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY", date="2026-04-09")
+        finding = self._findings("matcher_co_match")[0]
+        self.assertEqual(finding["txn_count"], 2)
+        # The most recent collision is the example, being the one the user can still recognize.
+        self.assertEqual(finding["txn_date"], "2026-04-09")
+
+    def test_the_winner_is_named_and_listed_first(self):
+        # Length decides, on nothing: "riverstone" is longer, so it takes the row.
+        self._rule(keyword="northgate")
+        longer = self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY")
+        finding = self._findings("matcher_co_match")[0]
+        self.assertEqual(finding["winner_rule_id"], longer)
+        self.assertEqual(finding["rule_ids"][0], longer)
+
+    def test_a_co_match_warning_cannot_be_dismissed(self):
+        self._rule(keyword="northgate")
+        self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY")
+        finding = self._findings("matcher_co_match")[0]
+        self.assertFalse(finding["dismissible"])
+        with self.assertRaises(ValueError):
+            self._dismiss(finding)
+
+    def test_a_co_match_whose_rules_file_identically_is_information(self):
+        # Two spellings of one merchant, both filing the same way: the real shape this mostly takes.
+        self._rule(keyword="northgate")
+        self._rule(keyword="nrthgt")
+        self._txn("NORTHGATE / NRTHGT MARKET")
+        findings = self._findings("matcher_co_match_benign")
+        self.assertEqual(len(findings), 1)
+        self.assertTrue(findings[0]["dismissible"])
+
+    def test_a_nesting_pair_is_not_also_reported_as_a_co_match(self):
+        # Nested matchers co-match by definition; the informational nesting finding already has them.
+        self._rule(keyword="northgate")
+        self._rule(keyword="northgate prime")
+        self._txn("NORTHGATE PRIME MARKET")
+        self.assertEqual(self._findings("matcher_co_match"), [])
+        self.assertEqual(self._findings("matcher_co_match_benign"), [])
+        self.assertEqual(len(self._findings("matcher_nesting")), 1)
+
+    def test_identical_matchers_are_not_a_co_match(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._differing(amount_min=3000)
+        self._txn("TOWN OF HARBORLINE", amount=3500)
+        self.assertEqual(self._findings("matcher_co_match"), [])
+        self.assertEqual(len(self._findings("amount_overlap")), 1)
+
+    def test_a_scope_difference_is_resolved_before_matcher_length(self):
+        # Owner scope is a genuine refinement and outranks the keyword term, so this pair has a
+        # principled winner however unrelated the two matchers are.
+        self._rule(keyword="northgate", owner_id=SHARED_OWNER_ID)
+        self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY")
+        self.assertEqual(self._findings("matcher_co_match"), [])
+
+    def test_an_amount_range_that_excludes_the_row_prevents_the_finding(self):
+        self._rule(keyword="northgate", amount_max=50)
+        self._differing(keyword="riverstone")
+        self._txn("NORTHGATE RIVERSTONE SUPPLY", amount=900)
+        self.assertEqual(self._findings("matcher_co_match"), [])
+
+    def test_a_trashed_transaction_is_not_evidence(self):
+        self._rule(keyword="northgate")
+        self._differing(keyword="riverstone")
+        txn_id = self._txn("NORTHGATE RIVERSTONE SUPPLY")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE txn SET trashed_at = '2026-05-01' WHERE id = ?", (txn_id,))
+        self.assertEqual(self._findings("matcher_co_match"), [])
+
+
 class RuleOverlapDismissalTests(RuleOverlapsTests):
     """Acknowledging a finding, and the two properties that make the feature trustworthy rather than just
     quiet.
@@ -360,7 +566,7 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
 
     def test_an_amount_overlap_cannot_be_dismissed(self):
         self._rule(amount_min=300, amount_max=4000)
-        self._rule(amount_min=3000)
+        self._differing(amount_min=3000)
         finding = self._findings("amount_overlap")[0]
         self.assertFalse(finding["dismissible"])
         with self.assertRaises(ValueError):
@@ -370,7 +576,7 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
         # Belt and braces: even a row inserted by hand (or left by an older build) must not suppress a
         # warning, because the filter checks the kind and not just the table.
         self._rule(amount_min=300, amount_max=4000)
-        self._rule(amount_min=3000)
+        self._differing(amount_min=3000)
         finding = self._findings("amount_overlap")[0]
         with self._use_db_path():
             with get_db() as conn:
