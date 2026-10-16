@@ -105,6 +105,12 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   table from `PillGridTable`. Each behavior is optional, so a quiet table reuses the same look.
 - **Column order and widths persist** through `useColumnPreference`, whether or not the table uses
   `PillGridTable`.
+- **Rows that read as columns share one template, and its end track is fixed.** A list whose rows are
+  each their own grid only *looks* columnar: with an `auto` final track the metadata columns land
+  wherever that row's buttons leave them, so one row carrying an extra control pulls its own cells out
+  of line with every other row's. Fix the action track's width and give an oversized control a line of
+  its own beneath it. Below the width where the tracks stop fitting, hold the list's width and scroll
+  it rather than re-flowing, and truncate a long value with its full text in a `title`.
 - **Long lists are windowed** with `WindowedRows`. Column widths must come from the shared grid template
   rather than from browser table auto-sizing, or the columns jump while scrolling. Sort and selection
   stay driven from the full list, never the mounted rows.

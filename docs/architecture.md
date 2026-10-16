@@ -607,6 +607,25 @@ form refuses to import until each one is mapped and an unattended path may not t
   because naming a directory is a statement about the server's filesystem; see `security-model.md` →
   *Reading and deleting outside the data directory*. A restore from another instance switches watching
   off; the verdict is taken before the wipe, since the restore adopts the backup's `instance_id`.
+- **The folder is picked by browsing the server, not the viewer's machine** (`GET
+  /import-export/watch/browse`, same gate, read-only, creates nothing). The browser's own pickers
+  (`webkitdirectory`, `showDirectoryPicker`) choose on the machine the page is open on and yield
+  relative names, so neither can produce the absolute server path the field means; there is no native
+  dialog to fall back on either, since even the desktop build serves itself to the system browser.
+  `ServerFolderPicker` is an inline panel inside `WatchedFolderDialog` — one picker for CSV and
+  marketplace sources alike. It is **controlled by the dialog's path field**: navigating writes the
+  folder into that field, and the field is what the picker lists, so typing a path and walking to it are
+  the same act. A picker holding a current path of its own beside the field left the field looking
+  inert, which is the reason this is stated. Abandoning a browse restores the path the field held when
+  it opened. The list area reserves its height whether or not it has anything in it, so the first click
+  does not grow the dialog; only its border and fill come and go, since a bordered box holding one line
+  of text is indistinguishable from the path field above it. It lists the **files the folder would
+  import** under its subfolders — plain rows, not buttons, since a folder is picked and never a file —
+  because a name like last year's export settles "is this the folder?" in a way a path cannot. Which
+  files those are is decided server-side from `CANDIDATE_SUFFIXES`, the constant the scan itself filters
+  on, so the picker can never offer a file the folder would pass over; the client is told *which files*,
+  never *which extensions*, so the set growing (a statement PDF is the obvious next one) does not reach
+  it.
 
 ### Detail panels
 

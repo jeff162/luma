@@ -84,19 +84,32 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
 
   return (
     <Card style={{ padding: 16, display: 'grid', gap: 12, marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {/* The action sits against the title rather than against the card's far edge: pushed right by a
+          `space-between`, it read as belonging to the page instead of to this panel. Beside the heading
+          rather than under the source list, because that list grows and shrinks with the number of
+          watched folders and a control anchored below it would move every time one is added. */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             Watched folders
             <FeatureExplainer topic="watched-folders" placement="bottom-left" />
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            {status?.last_scan_at ? `Last checked ${formatTimestamp(status.last_scan_at)}` : 'Not checked yet'}
-          </div>
+          </span>
+          <button
+            type="button"
+            onClick={checkNow}
+            disabled={scanning}
+            style={{
+              background: 'none', border: '1px solid var(--border)', borderRadius: 999,
+              color: 'var(--muted)', cursor: scanning ? 'default' : 'pointer',
+              fontSize: 12, padding: '2px 10px', opacity: scanning ? 0.6 : 1,
+            }}
+          >
+            {scanning ? 'Checking…' : 'Check now'}
+          </button>
         </div>
-        <Button variant="ghost" small onClick={checkNow} disabled={scanning}>
-          {scanning ? 'Checking…' : 'Check now'}
-        </Button>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+          {status?.last_scan_at ? `Last checked ${formatTimestamp(status.last_scan_at)}` : 'Not checked yet'}
+        </div>
       </div>
 
       <div style={{ display: 'grid', gap: 4 }}>
@@ -113,7 +126,10 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
       {waiting.length ? (
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={{ fontSize: 12, fontWeight: 600 }}>
-            {waiting.length} {waiting.length === 1 ? 'file needs' : 'files need'} a look
+            {/* "Waiting", not "available": the count also carries a file that errored and one whose
+                post-import delete failed, neither of which can be imported. Each row states its own
+                state and reason, so the heading only has to be a true count. */}
+            {waiting.length} {waiting.length === 1 ? 'file' : 'files'} waiting
           </div>
           {waiting.map(file => (
             <div

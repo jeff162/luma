@@ -413,6 +413,77 @@ class ImportWatchTests(unittest.TestCase):
             self.assertEqual(watch.maybe_auto_scan().get("skipped"), "no_watched_sources")
 
 
+class BrowseDirectoriesTests(unittest.TestCase):
+    """The folder picker's listing. It exists because the path names a directory on the *server*, which
+    the person setting it usually cannot see — and it is read-only on purpose: naming a path and
+    scanning it already lists a directory and imports from it, so listing alone adds no capability."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name) / "downloads"
+        (self.root / "statements").mkdir(parents=True)
+        (self.root / ".cache").mkdir()
+        (self.root / "january.csv").write_text(HEADER + ROW)
+        (self.root / "february.csv").write_text(HEADER + ROW)
+        (self.root / "notes.txt").write_text("not an export")
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_it_lists_the_folders_and_the_files_that_would_be_taken(self):
+        # Naming the files is what makes the choice answerable in the picker: a folder is the right one
+        # because the exports are sitting in it, which the path by itself does not say.
+        result = watch.browse_directories(str(self.root))
+        self.assertEqual([e["name"] for e in result["entries"]], [".cache", "statements"])
+        self.assertEqual([f["name"] for f in result["files"]], ["february.csv", "january.csv"])
+        self.assertEqual(result["file_count"], 2)
+        self.assertIsNone(result["notice"])
+
+    def test_a_file_the_scan_would_not_take_is_not_offered_as_one_it_would(self):
+        # The picker filters on the same constant the scan does, so it can never name a file the folder
+        # would pass over. The set is expected to grow; what must not drift is the two being one list.
+        result = watch.browse_directories(str(self.root))
+        self.assertNotIn("notes.txt", [f["name"] for f in result["files"]])
+        self.assertTrue(all(f["name"].lower().endswith(watch.CANDIDATE_SUFFIXES) for f in result["files"]))
+
+    def test_a_dot_folder_is_marked_rather_than_dropped(self):
+        # The scan ignores dot-prefixed names, so listing them unmarked would offer a folder that can
+        # never take a file; hiding them outright would strand anyone whose exports live under one.
+        entry = next(e for e in watch.browse_directories(str(self.root))["entries"] if e["name"] == ".cache")
+        self.assertTrue(entry["hidden"])
+
+    def test_a_folder_that_is_not_there_is_a_notice_rather_than_a_failure(self):
+        # Removable media and network shares come and go; the same wording the scan itself uses.
+        result = watch.browse_directories(str(self.root / "nope"))
+        self.assertEqual(result["notice"], "This folder is not there right now.")
+        self.assertEqual(result["entries"], [])
+
+    def test_a_file_path_says_so_instead_of_listing_its_folder(self):
+        result = watch.browse_directories(str(self.root / "january.csv"))
+        self.assertEqual(result["notice"], "This path is not a folder.")
+
+    def test_no_path_returns_the_starting_places_and_touches_nothing(self):
+        result = watch.browse_directories(None)
+        self.assertIsNone(result["path"])
+        self.assertEqual(result["entries"], [])
+        self.assertIn("Home", [root["label"] for root in result["roots"]])
+
+    def test_the_walk_up_stops_at_a_root_rather_than_pointing_at_itself(self):
+        # `os.path.dirname` of a root returns the root, which would render as an Up that goes nowhere.
+        self.assertIsNone(watch._parent_of(os.path.abspath(os.sep)))
+        self.assertEqual(watch.browse_directories(str(self.root))["parent"], str(self.root.parent))
+
+    def test_a_huge_folder_is_cut_and_says_so(self):
+        # Read into one response, so it needs the ceiling every other unbounded list has.
+        crowded = Path(self.tempdir.name) / "crowded"
+        crowded.mkdir()
+        for i in range(watch.MAX_BROWSE_ENTRIES + 5):
+            (crowded / f"d{i:04d}").mkdir()
+        result = watch.browse_directories(str(crowded))
+        self.assertEqual(len(result["entries"]), watch.MAX_BROWSE_ENTRIES)
+        self.assertTrue(result["truncated"])
+
+
 class AmazonWatchedFolderTests(unittest.TestCase):
     """An Amazon source watching a folder. The shape is the CSV path's, so what is pinned here is what
     differs: an AZAD export is recognized by its own header rather than by a stored column map, and the

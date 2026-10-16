@@ -117,3 +117,37 @@ data side is cheap. That would let the picker say "added here · also from Coffe
 two intents as separate actions ("remove my copy, keep the inherited one" vs "hide here"), and would
 let bulk add record a force-on without the ambiguity.
 
+
+## A watched folder could take PayPal statement PDFs
+
+**Context (raised 2026-10-16).** A watched folder takes `.csv` only (`watch.CANDIDATE_SUFFIXES`), so a
+statement PDF saved into one is passed over and has to be dropped on the import page by hand. Nothing
+about the statement importer requires a person, which is what makes this a gap rather than a decision:
+
+- `read_statement` turns the PDF's bytes into rows and asks nothing.
+- **The destination resolves itself.** A statement names its PayPal Account ID, and `_statement_accounts`
+  reads the ID → ledger-account tie out of the batches already imported, so for an account with history
+  there is no question to ask.
+- **The refusals are already written for a person** (`_check_assignments`): an unseen PayPal ID, a
+  statement that would land in the wrong account, an account already holding another ID's statements.
+  Those are park reasons as they stand — the same shape as a CSV's unmapped account value.
+- `_imported_hashes` keys on the statement's content hash, so "already taken" is durable.
+- It ends in `run_import_parsed`, the function the watcher already calls, and the single system PayPal
+  source is a `csv_import_profile` row that can carry a `watch_dir` like any other — one folder would
+  then serve its activity CSVs too.
+
+**Suggested approach when picked up.** Four parts:
+
+1. `CANDIDATE_SUFFIXES` becomes per-source — the PayPal source takes `.csv` and `.pdf`, every other
+   source keeps `.csv`, or each one starts trying to parse PDFs.
+2. `_read_file_text` decodes to text; a PDF needs its bytes, so the read branches with the handler.
+3. `_import_ready_file` would gain a third branch. Two is an `if`; **three is the point to make it a
+   dispatch keyed on the source kind**, before a fourth is pasted in beside them.
+4. **Leave zips alone.** The upload path expands a zip of statements; a watched folder should not —
+   expanding an archive found on disk unattended is a wider capability than reading a file someone
+   saved there, and a zip in a downloads folder is usually one nobody has opened.
+
+**Follow-on.** The folder picker lists the files a folder would import, filtered server-side on
+`CANDIDATE_SUFFIXES`, and the client is told *which files* rather than which extensions — so widening
+the set widens the picker with no frontend change. The backend test asserting the picker offers nothing
+the scan would pass over is what keeps the two from drifting.

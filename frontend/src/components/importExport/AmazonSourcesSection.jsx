@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { formatTimestamp } from '../../lib/utils.js'
-import { AppConfirmDialog, AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input, Select, Toggle } from '../ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Input, Select, Toggle } from '../ui.jsx'
+import { SOURCE_ROW_GRID_COLUMNS, TRUNCATED_CELL_STYLE } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import WatchedFolderDialog from './WatchedFolderDialog.jsx'
 
@@ -20,7 +21,18 @@ import WatchedFolderDialog from './WatchedFolderDialog.jsx'
 
 const labelStyle = { fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }
 const cellValueStyle = { fontSize: 12, color: 'var(--muted)' }
-const ROW_GRID = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px auto', columnGap: 12, padding: '10px 16px', alignItems: 'center', fontSize: 13, borderBottom: '1px solid var(--border)' }
+// The same geometry the CSV data-source rows use, from the shared constant rather than a copy of it —
+// these rows sit in the same list, so their columns have to be the same columns.
+const ROW_GRID = {
+  display: 'grid', gridTemplateColumns: SOURCE_ROW_GRID_COLUMNS, columnGap: 12,
+  padding: '10px 16px', alignItems: 'center', fontSize: 13, borderBottom: '1px solid var(--border)',
+}
+// Matching the bare row actions beside it (Folder / Edit); a `Button` here was visibly heavier than
+// every other control on the row.
+const ROW_ACTION_STYLE = {
+  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+  color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '3px 8px',
+}
 
 // What a source's folder setting amounts to, in the words the watched-folder status uses.
 function folderSummary(profile) {
@@ -143,21 +155,25 @@ export default function AmazonSourcesSection({ batches = [] }) {
             {amazonBatches.length} {amazonBatches.length === 1 ? 'file' : 'files'}
           </span>
         </div>
-        <Button small variant="ghost" onClick={() => setEditing({ profile: null })}>＋ Add source</Button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" style={ROW_ACTION_STYLE} onClick={() => setEditing({ profile: null })}>
+            + Add source
+          </button>
+        </div>
       </div>
 
       {profiles.map(profile => (
         <div key={profile.id} style={{ ...ROW_GRID, paddingLeft: 40 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 500 }}>{profile.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+            <div style={{ fontWeight: 500, ...TRUNCATED_CELL_STYLE }} title={profile.name}>{profile.name}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, ...TRUNCATED_CELL_STYLE }}>
               {profile.account_name || 'No account set'}
               {profile.filename_pattern ? ` · files containing “${profile.filename_pattern}”` : ''}
             </div>
           </div>
           <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
             <span style={labelStyle}>Watched folder</span>
-            <span style={{ ...cellValueStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            <span style={{ ...cellValueStyle, ...TRUNCATED_CELL_STYLE }}
               title={profile.watch_notice || folderSummary(profile)}>
               {folderSummary(profile)}
             </span>
@@ -168,11 +184,17 @@ export default function AmazonSourcesSection({ batches = [] }) {
               {countFor(profile.id)} {countFor(profile.id) === 1 ? 'file' : 'files'}
             </span>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={() => setEditing({ profile })}>Edit</Button>
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={() => setWatchProfile(profile)}>Folder</Button>
-            <Button small variant="ghost" style={{ ...COMPACT_ACTION_BTN_STYLE, color: 'var(--danger)' }}
-              onClick={() => setPendingDelete(profile)}>Delete</Button>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+            <button type="button" style={ROW_ACTION_STYLE} onClick={() => setWatchProfile(profile)}>Folder</button>
+            <button type="button" style={ROW_ACTION_STYLE} onClick={() => setEditing({ profile })}>Edit</button>
+            <button
+              type="button"
+              onClick={() => setPendingDelete(profile)}
+              aria-label={`Delete ${profile.name}`}
+              style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }}
+            >
+              ×
+            </button>
           </div>
         </div>
       ))}

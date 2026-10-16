@@ -79,10 +79,18 @@ paths onto this one (`data-model.md` → *Watched import folders*).
 path the server process can reach. Nothing here defends an administrator against themselves — on an
 operator-controlled machine, an operator who can name a directory can already read it.
 
+**The folder picker is the same capability, not a wider one.** `GET /import-export/watch/browse` lists
+one directory's subdirectories behind the same `require_admin_or_local` gate, so that a path on a machine
+the person cannot see need not be typed blind. It is read-only and creates nothing, which is strictly
+less than naming that path and scanning it already does — that lists the directory *and* attempts imports
+from it. What it does change is *reach without intent*: it enumerates directories nobody named, where the
+path field only ever listed one that was.
+
 **The condition to reopen this.** If the login perimeter ever admits an account class that is neither
 administrator nor trusted operator — a guest, a read-only sharer, an API token with narrowed scope —
-"admin-or-local" stops describing who can point the server at a directory, and the delete in particular
-needs re-grading before that class exists.
+"admin-or-local" stops describing who can point the server at a directory. The delete needs re-grading
+before that class exists, and the picker is the first thing to withhold from it, being the sharpest tool
+here for someone who should not be reading the filesystem at all.
 
 ## Why provider credentials are the only things encrypted
 

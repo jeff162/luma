@@ -42,6 +42,7 @@ rather than swallowed.
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,6 +51,7 @@ from pydantic import BaseModel
 
 from backend.app_logging import log_error
 from backend.authorization import require_admin_or_local
+from backend.runtime_config import app_name, data_dir
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
@@ -770,6 +772,112 @@ def watch_status():
         "last_scan_at": last_scan["value"] if last_scan else None,
         "attention": counts,
     }
+
+
+# A directory listing is read into a response whole, so it needs a ceiling like every other unbounded
+# list. A folder with more subdirectories than this is one nobody is picking from by eye anyway; the
+# response says it was cut so the UI can tell the reader to type the path instead of scrolling.
+MAX_BROWSE_ENTRIES = 500
+
+
+def _browse_roots() -> list[dict]:
+    """Where the folder picker starts. Not a confinement — anywhere reachable can still be walked to or
+    typed — but dropping someone at `/` makes them navigate down through directories that are nothing to
+    do with them. These are the three places a watched folder actually tends to be."""
+    roots = [{"label": "Home", "path": str(Path.home())}]
+    try:
+        roots.append({"label": f"{app_name()} data", "path": str(data_dir().resolve())})
+    except OSError:
+        pass
+    if os.name == "nt":
+        # A drive each, since Windows has no single root to walk down from. Only the ones that answer:
+        # an empty optical or card reader slot raises rather than listing.
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = f"{letter}:\\"
+            if os.path.isdir(drive):
+                roots.append({"label": drive, "path": drive})
+    else:
+        roots.append({"label": "Filesystem root", "path": "/"})
+    seen, unique = set(), []
+    for root in roots:
+        if root["path"] not in seen:
+            seen.add(root["path"])
+            unique.append(root)
+    return unique
+
+
+@router.get("/watch/browse", dependencies=[Depends(require_admin_or_local)])
+def browse_directories(path: Optional[str] = None):
+    """List the subdirectories of one directory on the **server**, for the folder picker.
+
+    Read-only and admin-or-local, the same gate as naming the folder — and deliberately no more
+    capability than that gate already carries: an administrator can point a source at any path the
+    process can reach and press *Check now*, which lists that directory *and* tries to import from it.
+    This only lists, and creates nothing (`security-model.md` → *Reading and deleting outside the data
+    directory*).
+
+    **The files are listed, not just counted**, because that is what answers "is this the folder?" — a
+    name like last year's export sitting in it settles the question that a path cannot. Which files
+    those are is decided *here*, from `CANDIDATE_SUFFIXES`, the same constant the scan itself filters
+    on: the picker must never offer a file the folder would not take. The set is expected to grow (a
+    statement PDF is the obvious next one) and to become per-source when it does, at which point this
+    takes the source too — the client is deliberately told *which files*, never *which extensions*, so
+    that change does not reach it.
+
+    An unreadable or missing directory is a notice rather than an error, in the same words
+    `_scan_directory` uses, because removable media and network shares come and go.
+    """
+    target = (path or "").strip()
+    if not target:
+        return {"path": None, "parent": None, "entries": [], "files": [], "file_count": 0,
+                "truncated": False, "notice": None, "roots": _browse_roots()}
+    resolved = os.path.abspath(os.path.expanduser(target))
+    entries, files, file_count, truncated = [], [], 0, False
+    try:
+        with os.scandir(resolved) as scan:
+            for entry in scan:
+                try:
+                    if entry.is_dir():
+                        if len(entries) >= MAX_BROWSE_ENTRIES:
+                            truncated = True
+                            continue
+                        entries.append({"name": entry.name, "path": entry.path,
+                                        "hidden": entry.name.startswith(".")})
+                    elif entry.is_file() and entry.name.lower().endswith(CANDIDATE_SUFFIXES):
+                        # Counted whole and listed up to the cap, so a folder holding more exports than
+                        # fit still reports how many are really in it.
+                        file_count += 1
+                        if len(files) < MAX_BROWSE_ENTRIES:
+                            files.append({"name": entry.name})
+                        else:
+                            truncated = True
+                except OSError:
+                    # A dangling symlink or an entry that vanished mid-walk is not worth failing over.
+                    continue
+    except FileNotFoundError:
+        return _browse_notice(resolved, "This folder is not there right now.")
+    except NotADirectoryError:
+        return _browse_notice(resolved, "This path is not a folder.")
+    except PermissionError:
+        return _browse_notice(resolved, "This folder cannot be read.")
+    except OSError as error:
+        return _browse_notice(resolved, f"This folder could not be read: {error.strerror or error}")
+    entries.sort(key=lambda e: e["name"].lower())
+    files.sort(key=lambda f: f["name"].lower())
+    return {"path": resolved, "parent": _parent_of(resolved), "entries": entries, "files": files,
+            "file_count": file_count, "truncated": truncated, "notice": None, "roots": _browse_roots()}
+
+
+def _browse_notice(resolved: str, notice: str) -> dict:
+    return {"path": resolved, "parent": _parent_of(resolved), "entries": [], "files": [],
+            "file_count": 0, "truncated": False, "notice": notice, "roots": _browse_roots()}
+
+
+def _parent_of(resolved: str) -> Optional[str]:
+    """The directory above, or None at a root — `os.path.dirname` of a root returns the root itself,
+    which would render as an *Up* that goes nowhere."""
+    parent = os.path.dirname(resolved.rstrip(os.sep)) or os.sep
+    return None if os.path.abspath(parent) == os.path.abspath(resolved) else parent
 
 
 @router.post("/watch/scan")

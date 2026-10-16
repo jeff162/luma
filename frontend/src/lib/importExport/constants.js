@@ -59,6 +59,27 @@ export const IMPORTED_CATEGORY_FILTER_DIALOG_TITLE = 'Which accounts have useful
 export const IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION = "Only the checked accounts' categories are applied and used to propose rules — every transaction still imports either way."
 export const IMPORTED_CATEGORY_SCOPE_ALL_LABEL = 'Include all categorized transactions from this data set'
 
+// The File Sources list's row geometry, shared by the CSV data-source rows and the marketplace ones.
+//
+// **The action column is a fixed width, not `auto`.** Each row is its own grid, so with an `auto` end
+// track the two metadata columns sat wherever that row's buttons left them — a row carrying one extra
+// button (PayPal's transfer review) pushed its own Last used and Imported out of line with every other
+// row's. Fixing the track makes the four columns agree by construction, and means a row gaining a
+// button cannot knock the list crooked again. Any control too wide for it goes on a line of its own
+// beneath, rather than widening the column for everybody.
+export const SOURCE_ROW_ACTIONS_WIDTH = 184
+export const SOURCE_ROW_GRID_COLUMNS = `minmax(0, 1fr) 170px 170px ${SOURCE_ROW_ACTIONS_WIDTH}px`
+// Below this the four columns stop fitting, so the list keeps its width and its card scrolls sideways
+// rather than re-flowing into something unreadable. iPad is the narrowest device aimed at, and this
+// leaves the name column usable there.
+export const SOURCE_LIST_MIN_WIDTH = 820
+
+// A single-line cell that truncates rather than wraps. Long values (a source name, a watched path)
+// carry the full text in a `title`, which is what keeps a narrow window legible instead of ragged.
+export const TRUNCATED_CELL_STYLE = {
+  minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+
 // Shown on every import control disabled while demo data is loaded (the backend refuses those imports).
 export const DEMO_IMPORT_DISABLED_MESSAGE = 'Demo Data Loaded: Imports are disabled'
 

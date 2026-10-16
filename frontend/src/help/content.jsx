@@ -3025,6 +3025,14 @@ export const HELP_TOPICS = [
           the same machine the page is open on. On a server, or in a container, it is a folder there
           &mdash; a container additionally needs it mounted, or the path names nothing.
         </p>
+        <p>
+          <strong>Browse</strong> walks that machine&apos;s folders rather than this one&apos;s, which is
+          what makes a path on a server findable without knowing it in advance. Each folder lists the
+          files it holds that this source would import, below its subfolders, since seeing last
+          year&apos;s export sitting in a folder is what says it is the right one. The path can still be
+          typed instead &mdash; a network share the picker cannot reach is named that way. Choosing a
+          folder on the server needs an administrator, as setting the path does.
+        </p>
         <h4>Proving the setup first</h4>
         <p>
           A data source imports on its own only after one of its files has been imported by hand. The

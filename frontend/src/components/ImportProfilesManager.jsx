@@ -23,6 +23,11 @@ import {
   IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE,
   normalizeImportCategoryUsageMode,
 } from '../lib/appConfig.js'
+import {
+  SOURCE_LIST_MIN_WIDTH,
+  SOURCE_ROW_GRID_COLUMNS,
+  TRUNCATED_CELL_STYLE,
+} from '../lib/importExport/constants.js'
 import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
@@ -1223,12 +1228,16 @@ export default function ImportProfilesManager({
       ) : null}
 
       {loading && profiles.length === 0 ? <Spinner /> : (
-        <>
+        // Below its minimum the four columns stop fitting, so the list holds its width and scrolls
+        // sideways inside the card rather than re-flowing. The add/edit panel is `position: fixed`,
+        // so this does not clip it.
+        <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: SOURCE_LIST_MIN_WIDTH }}>
           {profiles.map(profile => (
             <div key={profile.id}>
               <div
                 style={{
-                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px auto', columnGap: 12,
+                  display: 'grid', gridTemplateColumns: SOURCE_ROW_GRID_COLUMNS, columnGap: 12,
                   padding: '10px 16px', alignItems: 'center', fontSize: 13,
                   borderBottom: '1px solid var(--border)',
                 }}
@@ -1237,7 +1246,7 @@ export default function ImportProfilesManager({
                   const stats = profileImportStats.get(profile.id) || { fileCount: 0, rowCount: 0, lastUsed: '' }
                   return (
                     <>
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         {editingNameId === profile.id ? (
                           <TransientTextInput
                             value={nameDraft}
@@ -1279,18 +1288,25 @@ export default function ImportProfilesManager({
                               color: 'var(--text)',
                               cursor: 'pointer',
                               textAlign: 'left',
+                              maxWidth: '100%',
+                              ...TRUNCATED_CELL_STYLE,
                             }}
-                            title="Click to rename this data source"
+                            title={`${profile.name} — click to rename this data source`}
                           >
                             {profile.name}
                           </button>
                         )}
-                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, ...TRUNCATED_CELL_STYLE }}>
                           {profile.filename_pattern ? <span>📁 {profile.filename_pattern} · </span> : null}
                           {profile.account_name ? <span>🏦 {profile.account_name}</span> : null}
                         </div>
                         {profile.watch_dir ? (
-                          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, wordBreak: 'break-all' }}>
+                          // Truncated with the whole path on hover, rather than wrapped: a path broken
+                          // across three ragged lines is what made a narrow window unreadable.
+                          <div
+                            style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, ...TRUNCATED_CELL_STYLE }}
+                            title={profile.watch_notice ? `${profile.watch_dir} · ${profile.watch_notice}` : profile.watch_dir}
+                          >
                             {profile.watch_enabled ? '👁 Watching ' : '👁 Watching paused — '}
                             <span style={{ color: 'var(--text)' }}>{profile.watch_dir}</span>
                             {profile.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {profile.watch_notice}</span> : null}
@@ -1307,20 +1323,10 @@ export default function ImportProfilesManager({
                           {stats.fileCount} {stats.fileCount === 1 ? 'file' : 'files'} · {stats.rowCount.toLocaleString()} {stats.rowCount === 1 ? 'row' : 'rows'}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                        {profile.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
-                          <button
-                            onClick={() => onReviewMoneyMovement(profile.id)}
-                            title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
-                            style={{
-                              background: 'none', border: '1px solid var(--border)',
-                              borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                              fontSize: 12, padding: '3px 8px', whiteSpace: 'nowrap',
-                            }}
-                          >
-                            Review transfer classifications
-                          </button>
-                        ) : null}
+                      {/* The actions column is a fixed width, so a control too wide for it takes a line
+                          of its own beneath rather than widening the column for every row. */}
+                      <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
                         <button
                           onClick={() => setWatchProfile(profile)}
                           style={{
@@ -1354,6 +1360,22 @@ export default function ImportProfilesManager({
                             ×
                           </button>
                         )}
+                        </div>
+                        {/* Muted like its siblings: it is an ordinary row action, and the accent colour
+                            made it read as the row's primary one. */}
+                        {profile.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
+                          <button
+                            onClick={() => onReviewMoneyMovement(profile.id)}
+                            title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
+                            style={{
+                              background: 'none', border: '1px solid var(--border)',
+                              borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
+                              fontSize: 12, padding: '3px 8px', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Review transfer classifications
+                          </button>
+                        ) : null}
                       </div>
                     </>
                   )
@@ -1374,7 +1396,8 @@ export default function ImportProfilesManager({
               + New data source
             </button>
           ) : null}
-        </>
+        </div>
+        </div>
       )}
 
       {watchProfile ? (

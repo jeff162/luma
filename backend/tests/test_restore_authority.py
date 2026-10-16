@@ -8,6 +8,7 @@ same bar because they decide who can read a backup at all, and creating a backup
 server agrees with the Administration page that offers it. Pointing a data source at a **watched folder**
 is here for a different reason of the same shape: it names a directory on the server's filesystem, which is
 global app configuration rather than ledger data, and the folder can be set to delete the files it imports.
+The folder *picker* that fills that field in is held to the same bar, for the same reason.
 
 Checked over HTTP rather than by calling the router functions, because the guard is a route dependency and
 a direct call never passes through it. Each request is shaped to get past body validation, so a refusal
@@ -32,6 +33,9 @@ GUARDED = [
     ("patch", "/api/import-export/backup/recipients/missing", {"json": {"enabled": False}}),
     ("delete", "/api/import-export/backup/recipients/missing", {}),
     ("patch", "/api/import-export/profiles/missing/watch", {"json": {"watch_dir": "/tmp/statements"}}),
+    # Listing the server's folders is held to the same bar as naming one: it reads a filesystem that is
+    # not the ledger, and it is the sharper of the two for anyone who should not be reading it at all.
+    ("get", "/api/import-export/watch/browse?path=/tmp", {}),
 ]
 
 ADMIN_PASSWORD = "admin-password-123"

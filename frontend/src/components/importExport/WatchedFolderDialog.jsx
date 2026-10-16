@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { AppDialog, Button, Input, Select, Toggle } from '../ui.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
+import ServerFolderPicker from './ServerFolderPicker.jsx'
 
 // Where a data source's watched folder is set.
 //
@@ -31,6 +32,10 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
   const [purgeDays, setPurgeDays] = useState(String(profile?.watch_purge_days ?? 30))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [browsing, setBrowsing] = useState(false)
+  // What the field held when Browse was pressed. Navigating writes into the field as it goes, so
+  // abandoning the browse has to put back what was there rather than leave it wherever the walk ended.
+  const [folderBeforeBrowse, setFolderBeforeBrowse] = useState('')
 
   const trimmedFolder = folder.trim()
 
@@ -70,17 +75,39 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
             Folder
             <FeatureExplainer topic="watched-folders" placement="bottom-left" />
           </label>
-          <Input
-            id="watch-folder-path"
-            value={folder}
-            onChange={setFolder}
-            placeholder="/home/me/statements"
-            aria-label="Watched folder path"
-            disabled={!canEdit}
-          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input
+              id="watch-folder-path"
+              value={folder}
+              onChange={setFolder}
+              placeholder="/home/me/statements"
+              aria-label="Watched folder path"
+              disabled={!canEdit}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            {/* Typing stays the primary control: a share the picker cannot walk to, or a path already
+                in hand, should not have to come through it. */}
+            <Button
+              small
+              variant="ghost"
+              onClick={() => { setFolderBeforeBrowse(folder); setBrowsing(true) }}
+              disabled={!canEdit || browsing}
+            >
+              Browse&hellip;
+            </Button>
+          </div>
+          {browsing ? (
+            <ServerFolderPicker
+              path={folder}
+              onPathChange={setFolder}
+              onDone={() => setBrowsing(false)}
+              onCancel={() => { setFolder(folderBeforeBrowse); setBrowsing(false) }}
+            />
+          ) : null}
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
             The folder is read on the machine running {APP_NAME}, which is not necessarily the machine
-            this page is open on. Leave it empty to stop watching altogether.
+            this page is open on &mdash; <strong>Browse</strong> shows that machine&apos;s folders, not
+            this one&apos;s. Leave it empty to stop watching altogether.
           </div>
         </div>
 

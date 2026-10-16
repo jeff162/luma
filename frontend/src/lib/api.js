@@ -1210,6 +1210,10 @@ export const api = {
   autoScanWatchedFolders: ()    => request('/import-export/watch/auto-scan', { method: 'POST' }),
   updateImportProfileWatch: (id, data) =>
     request(`/import-export/profiles/${id}/watch`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // The subdirectories of one folder on the *server*, for the folder picker. Read-only and admin-gated,
+  // like naming the folder itself. No path = the starting roots only.
+  browseServerDirectories: (path) =>
+    request(`/import-export/watch/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   dismissWatchedFile:   (fileId) => request(`/import-export/watch/files/${fileId}`, { method: 'DELETE' }),
   // A parked file's own text, so the ordinary import flow can be opened with it in hand — the file is on
   // the server, and everything downstream of the drop zone works from a File.
