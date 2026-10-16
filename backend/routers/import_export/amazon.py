@@ -738,6 +738,7 @@ def _import_group_to_batch(
     filename: str,
     apply_categorization: bool,
     flag_for_review: bool,
+    profile_id: Optional[str] = None,
 ) -> dict:
     """Create one import batch (one card) and apply every order of a *single source-file group* into it — the
     per-file unit the orchestrator splits a drop into. Returns the batch's counts, investigable detail, the
@@ -746,8 +747,8 @@ def _import_group_to_batch(
     files are re-importable."""
     batch_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO import_batch (id, filename, status, source_kind) VALUES (?, ?, 'completed', ?)",
-        (batch_id, filename, BATCH_SOURCE_KIND),
+        "INSERT INTO import_batch (id, filename, status, source_kind, profile_id) VALUES (?, ?, 'completed', ?, ?)",
+        (batch_id, filename, BATCH_SOURCE_KIND, profile_id),
     )
     counts = {k: 0 for k in _COUNT_KEYS}
     # Investigable detail for the import-detail report: item rows that enriched an order (which usually lives
@@ -853,6 +854,7 @@ def _import_group_to_batch(
     return {
         "batch_id": batch_id,
         "filename": filename,
+        "account_id": account_id,
         "order_count": len(orders),
         "counts": counts,
         "instruments": list(instruments.values()),
@@ -874,6 +876,7 @@ def run_amazon_import(
     filename: str = "amazon.csv",
     apply_categorization: bool = True,
     file_hashes: Optional[list[dict]] = None,
+    profile_id: Optional[str] = None,
 ) -> dict:
     """Import a drop of parsed Amazon orders, split into **one batch (card) per source file** rather than one
     card for the whole drop: orders are grouped by the file they came from (``source_file_hash``), and each
@@ -901,7 +904,7 @@ def run_amazon_import(
         _import_group_to_batch(conn, group_orders, account_id=account_id,
                                filename=_group_label(group_orders, filename),
                                apply_categorization=apply_categorization,
-                               flag_for_review=flag_for_review)
+                               flag_for_review=flag_for_review, profile_id=profile_id)
         for group_orders in groups.values()
     ]
 
@@ -999,6 +1002,10 @@ def _persist_batch_snapshot(conn: sqlite3.Connection, res: dict, file_hashes: li
                                      "already_enriched_items": res["already_enriched_items"],
                                      "discarded_items": res["discarded_items"],
                                      "duplicate_orders": res["duplicate_orders"]},
+                # The Amazon account this card imported into. Recorded rather than derived from the card's
+                # rows because a card need not have any — an items-only card holds parked detail and no
+                # transactions at all, and it still belongs under the account it was imported into.
+                "amazon_account_id": res.get("account_id"),
                 # Per-file content hashes (kept out of import_summary — provenance, not outcome), so a
                 # re-uploaded file is recognized and skipped instead of re-processed as all-duplicates.
                 "amazon_file_hashes": [{"filename": f["filename"], "hash": f["hash"]} for f in file_hashes]}
@@ -2495,16 +2502,16 @@ def _exclude_charge(conn: sqlite3.Connection, charge_id: str) -> dict:
     return prior
 
 
-async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozenset()):
+async def _read_amazon_uploads(files, known_files: "dict | None" = None):
     """Decode + parse the uploaded AZAD files into
-    ``(orders, items_by_order, names, unrecognized, already_imported, file_hashes)``. Shared by the scan and
+    ``(orders, items_by_order, names, unrecognized, skipped, file_hashes)``. Shared by the scan and
     import endpoints; files are sniffed by header, so upload order and file names don't matter.
 
-    Each file is content-hashed: one whose hash is in ``known_hashes`` (a file a completed import already
-    took — or a second copy earlier in this same upload) is **skipped** and listed in ``already_imported``,
-    so a re-import reports "already imported" instead of producing a confusing all-duplicates batch (the
-    file already has its card). ``file_hashes`` carries ``{filename, hash}`` for the files actually taken,
-    for the batch to persist; ``names`` likewise lists only the files taken."""
+    Each file is content-hashed and one whose hash has been seen already is **skipped** rather than
+    re-processed into a confusing all-duplicates batch. ``known_files`` maps a hash a *completed* import
+    already took to its ``{filename, batch_id}`` (see :func:`_imported_amazon_file_hashes`). ``file_hashes``
+    carries ``{filename, hash}`` for the files actually taken, for the batch to persist; ``names`` likewise
+    lists only the files taken."""
     named_texts = []
     for upload in files:
         content = await upload.read()
@@ -2513,24 +2520,42 @@ async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozense
         except UnicodeDecodeError:
             text = content.decode("latin-1")
         named_texts.append((upload.filename, text))
-    return read_amazon_exports(named_texts, known_hashes)
+    return read_amazon_exports(named_texts, known_files)
 
 
-def read_amazon_exports(named_texts, known_hashes: "set | frozenset" = frozenset()):
+def read_amazon_exports(named_texts, known_files: "dict | None" = None):
     """The decoding-free half of `_read_amazon_uploads`: `(filename, text)` pairs in, the same six-tuple
-    out. Kept separate so an in-process caller (the demo loader) parses files exactly as an upload is."""
+    out. Kept separate so an in-process caller (the demo loader) parses files exactly as an upload is.
+
+    A skipped file is reported as ``{filename, reason, matched_filename, matched_batch_id}``, because the
+    two ways a hash repeats need different sentences and only one of them is about a past import: a file
+    matching ``known_files`` was taken by a completed card (``reason='already_imported'``, with that card
+    named), while a second copy of a file *inside this same drop* was never imported at all
+    (``reason='duplicate_in_drop'``, naming the copy that was taken). Reporting both as "already imported"
+    sent a reader looking in the ledger for rows that were never created."""
     orders: list[AmazonOrder] = []
     items_by_order: dict[str, list[AmazonItem]] = {}
     names: list[str] = []
     unrecognized: list[str] = []
-    already_imported: list[str] = []
+    skipped: list[dict] = []
     file_hashes: list[dict] = []
-    seen_hashes: set = set(known_hashes)
+    known = dict(known_files or {})
+    # Hash → the name it was taken under earlier *in this drop*, which is what a within-drop duplicate
+    # is told to look at. Kept apart from `known` so the two reasons stay distinguishable.
+    taken_here: dict = {}
     for raw_filename, text in named_texts:
         filename = raw_filename or "amazon.csv"
         content_hash = make_import_file_hash(text)
-        if content_hash in seen_hashes:
-            already_imported.append(filename)
+        if content_hash in known:
+            prior = known[content_hash]
+            skipped.append({"filename": filename, "reason": "already_imported",
+                            "matched_filename": prior.get("filename"),
+                            "matched_batch_id": prior.get("batch_id")})
+            continue
+        if content_hash in taken_here:
+            skipped.append({"filename": filename, "reason": "duplicate_in_drop",
+                            "matched_filename": taken_here[content_hash],
+                            "matched_batch_id": None})
             continue
         kind, rows = read_export(text)
         # Tag each parsed row with the file it came from so the import-detail report can answer
@@ -2551,18 +2576,21 @@ def read_amazon_exports(named_texts, known_hashes: "set | frozenset" = frozenset
             unrecognized.append(raw_filename or "(unnamed)")
             continue
         names.append(filename)
-        seen_hashes.add(content_hash)
+        taken_here[content_hash] = filename
         file_hashes.append({"filename": filename, "hash": content_hash})
-    return orders, items_by_order, names, unrecognized, already_imported, file_hashes
+    return orders, items_by_order, names, unrecognized, skipped, file_hashes
 
 
-def _imported_amazon_file_hashes(conn: sqlite3.Connection) -> set:
-    """Content hashes of every file a *completed* Amazon import has taken (persisted per batch in the config
-    snapshot — an undone batch's files can be re-imported). Batches imported before hashing existed simply
-    aren't listed, so their files aren't skipped."""
-    hashes: set = set()
+def _imported_amazon_file_hashes(conn: sqlite3.Connection) -> dict:
+    """Every file a *completed* Amazon import has taken, as ``content hash → {filename, batch_id}``
+    (persisted per batch in the config snapshot — an undone batch's files can be re-imported). Batches
+    imported before hashing existed simply aren't listed, so their files aren't skipped.
+
+    The card is carried, not just the hash, because a skipped file's notice names the card that already
+    covers it — "this file is in *that* import" is the only form of the message a reader can act on."""
+    taken: dict = {}
     rows = conn.execute(
-        "SELECT config_snapshot FROM import_batch WHERE source_kind = ? AND status = 'completed'",
+        "SELECT id, config_snapshot FROM import_batch WHERE source_kind = ? AND status = 'completed'",
         (BATCH_SOURCE_KIND,),
     ).fetchall()
     for r in rows:
@@ -2574,8 +2602,8 @@ def _imported_amazon_file_hashes(conn: sqlite3.Connection) -> set:
             continue
         for f in snap.get("amazon_file_hashes") or []:
             if isinstance(f, dict) and f.get("hash"):
-                hashes.add(f["hash"])
-    return hashes
+                taken.setdefault(f["hash"], {"filename": f.get("filename"), "batch_id": r["id"]})
+    return taken
 
 
 def _scan_instruments(conn, orders, account_id: Optional[str]) -> list[dict]:
@@ -2626,7 +2654,7 @@ async def amazon_scan_endpoint(
     what an import would take."""
     with get_db() as conn:
         known = _imported_amazon_file_hashes(conn)
-    orders, items_by_order, names, unrecognized, already_imported, _hashes = await _read_amazon_uploads(files, known)
+    orders, items_by_order, names, unrecognized, skipped, _hashes = await _read_amazon_uploads(files, known)
     with get_db() as conn:
         instruments = _scan_instruments(conn, orders, account_id)
     return {
@@ -2635,7 +2663,7 @@ async def amazon_scan_endpoint(
         "has_items": bool(items_by_order),
         "names": names,
         "unrecognized_files": unrecognized,
-        "already_imported_files": already_imported,
+        "skipped_uploads": skipped,
     }
 
 
@@ -2644,6 +2672,7 @@ async def amazon_import_endpoint(
     files: list[UploadFile] = File(...),
     account_id: str = Form(...),
     apply_categorization: bool = Form(True),
+    profile_id: Optional[str] = Form(None),
 ):
     """Import one or both AZAD exports (orders + items) into the chosen Amazon account. Files are
     sniffed by header, so upload order doesn't matter and either file alone is accepted (degrading as
@@ -2657,13 +2686,13 @@ async def amazon_import_endpoint(
             })
         known = _imported_amazon_file_hashes(conn)
 
-    orders, items_by_order, names, unrecognized, already_imported, file_hashes = await _read_amazon_uploads(files, known)
+    orders, items_by_order, names, unrecognized, skipped, file_hashes = await _read_amazon_uploads(files, known)
     if not orders and not items_by_order:
-        if already_imported:
-            # Every usable file was already imported — nothing to do, and deliberately *no new batch* (the
-            # files already have their cards). The import form's host reports it from this summary.
+        if skipped:
+            # Every usable file was skipped — nothing to do, and deliberately *no new batch* (the files
+            # already have their cards). The import form's host reports it from this summary.
             return {"batch_id": None, "batches": [], "order_count": 0, "counts": {}, "instruments": [],
-                    "already_imported_files": already_imported, "unrecognized_files": unrecognized}
+                    "skipped_uploads": skipped, "unrecognized_files": unrecognized}
         raise HTTPException(status_code=400, detail={
             "code": "unrecognized_files",
             "message": "None of the uploaded files looked like an Amazon orders or items export.",
@@ -2677,9 +2706,10 @@ async def amazon_import_endpoint(
         summary = run_amazon_import(
             conn, merged, account_id=account_id, filename=", ".join(names) or "amazon",
             apply_categorization=apply_categorization, file_hashes=file_hashes,
+            profile_id=_valid_amazon_profile_id(conn, profile_id),
         )
     summary["unrecognized_files"] = unrecognized
-    summary["already_imported_files"] = already_imported
+    summary["skipped_uploads"] = skipped
     return summary
 
 
@@ -2810,3 +2840,167 @@ def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
     for order_id in order_ids:
         conn.execute("DELETE FROM txn WHERE id = ?", (order_id,))
     return {"status": "reversed", "orders_removed": len(order_ids), "charges_restored": len(charge_ids)}
+
+
+# -------------------------------------------------------------------------------------------------
+# Amazon import profiles
+#
+# A saved Amazon source: which Amazon account its files import into, and optionally a directory on the
+# server to watch. They are rows in `csv_import_profile` carrying `source_kind = 'marketplace:amazon'`
+# — the table already holds every field one needs (name, account, apply-categorization, filename
+# pattern, and the whole `watch_*` block), and reusing it means the watched-folder machinery (the scan
+# loop, the per-file watermark, the purge, the admin gate on naming a directory, the status view) works
+# for Amazon without a second copy of any of it. The CSV-only columns (`column_map`, `date_format`,
+# `header_fingerprint`) stay unused on these rows: an AZAD export is recognized by its header
+# (`sniff_kind`), so there is no mapping to save.
+#
+# What a profile buys over the one remembered last-used account: two people's exports, landing in two
+# Amazon accounts, each with their own directory — which is the same shape as keeping two copies of a
+# CSV data source for two accounts at one institution.
+
+
+class AmazonProfileBody(BaseModel):
+    name: str
+    account_id: Optional[str] = None
+    apply_categorization: bool = True
+    # Substring, case-insensitive, matched against the filename — the same meaning the CSV sources give
+    # it. It is what lets one watched directory hold several people's exports, and what preselects a
+    # profile when a file is dropped by hand.
+    filename_pattern: Optional[str] = None
+
+
+def _amazon_profile_row(conn: sqlite3.Connection, row) -> dict:
+    d = dict(row)
+    return {
+        "id": d["id"],
+        "name": d["name"],
+        "account_id": d.get("account_id"),
+        "account_name": d.get("account_name"),
+        "apply_categorization": bool(d.get("apply_categorization")),
+        "filename_pattern": d.get("filename_pattern") or "",
+        "watch_dir": d.get("watch_dir") or "",
+        "watch_enabled": bool(d.get("watch_enabled")),
+        "watch_purge_mode": d.get("watch_purge_mode") or "never",
+        "watch_purge_days": d.get("watch_purge_days"),
+        "watch_notice": d.get("watch_notice"),
+        "watch_last_scan_at": d.get("watch_last_scan_at"),
+    }
+
+
+def _list_amazon_profiles(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT p.*, COALESCE(a.display_name, a.name) AS account_name
+        FROM   csv_import_profile p
+        LEFT JOIN account a ON a.id = p.account_id
+        WHERE  p.source_kind = ?
+        ORDER  BY p.name
+        """,
+        (BATCH_SOURCE_KIND,),
+    ).fetchall()
+    return [_amazon_profile_row(conn, r) for r in rows]
+
+
+def _valid_amazon_profile_id(conn: sqlite3.Connection, profile_id: Optional[str]) -> Optional[str]:
+    """The profile id to stamp on a card, or None. A dropped-by-hand import may name no profile, and one
+    naming a profile that has since been deleted is still a perfectly good import — the card simply has
+    no source to group under, exactly as every Amazon card did before profiles existed."""
+    pid = (profile_id or "").strip()
+    if not pid:
+        return None
+    row = conn.execute(
+        "SELECT 1 FROM csv_import_profile WHERE id = ? AND source_kind = ?", (pid, BATCH_SOURCE_KIND)
+    ).fetchone()
+    return pid if row else None
+
+
+def _assert_amazon_account(conn: sqlite3.Connection, account_id: Optional[str]) -> Optional[str]:
+    """A profile's account must be an Amazon account that still exists — it is the one thing the
+    unattended path cannot ask about, so it is checked where it is set rather than where it is used."""
+    aid = (account_id or "").strip()
+    if not aid:
+        return None
+    row = conn.execute(
+        "SELECT type FROM account WHERE id = ? AND trashed_at IS NULL", (aid,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=400, detail="Unknown account")
+    if str(row["type"] or "").lower() != "amazon":
+        raise HTTPException(status_code=400, detail="An Amazon source must import into an Amazon account.")
+    return aid
+
+
+def _assert_amazon_profile_name(conn: sqlite3.Connection, name: str, *, profile_id: Optional[str] = None) -> str:
+    """Names are unique across *all* data sources, Amazon or CSV, because they are one list to the
+    reader and the CSV side already enforces it over the whole table."""
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Enter a name for this source.")
+    clash = conn.execute(
+        "SELECT 1 FROM csv_import_profile WHERE LOWER(name) = LOWER(?) AND id IS NOT ?",
+        (cleaned, profile_id),
+    ).fetchone()
+    if clash:
+        raise HTTPException(status_code=400, detail=f'A data source named "{cleaned}" already exists.')
+    return cleaned
+
+
+@router.get("/amazon/profiles")
+async def list_amazon_profiles_endpoint():
+    with get_db() as conn:
+        return {"profiles": _list_amazon_profiles(conn)}
+
+
+@router.post("/amazon/profiles")
+async def create_amazon_profile_endpoint(body: AmazonProfileBody):
+    profile_id = str(uuid.uuid4())
+    with get_db() as conn:
+        name = _assert_amazon_profile_name(conn, body.name)
+        account_id = _assert_amazon_account(conn, body.account_id)
+        conn.execute(
+            """
+            INSERT INTO csv_import_profile
+              (id, name, source_kind, account_id, apply_categorization, filename_pattern, column_map)
+            VALUES (?,?,?,?,?,?,'{}')
+            """,
+            (profile_id, name, BATCH_SOURCE_KIND, account_id,
+             1 if body.apply_categorization else 0, (body.filename_pattern or "").strip() or None),
+        )
+        created = next((p for p in _list_amazon_profiles(conn) if p["id"] == profile_id), None)
+    return {"profile": created}
+
+
+@router.patch("/amazon/profiles/{profile_id}")
+async def update_amazon_profile_endpoint(profile_id: str, body: AmazonProfileBody):
+    with get_db() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM csv_import_profile WHERE id = ? AND source_kind = ?", (profile_id, BATCH_SOURCE_KIND)
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="Source not found")
+        name = _assert_amazon_profile_name(conn, body.name, profile_id=profile_id)
+        account_id = _assert_amazon_account(conn, body.account_id)
+        conn.execute(
+            """
+            UPDATE csv_import_profile
+            SET    name = ?, account_id = ?, apply_categorization = ?, filename_pattern = ?
+            WHERE  id = ?
+            """,
+            (name, account_id, 1 if body.apply_categorization else 0,
+             (body.filename_pattern or "").strip() or None, profile_id),
+        )
+        updated = next((p for p in _list_amazon_profiles(conn) if p["id"] == profile_id), None)
+    return {"profile": updated}
+
+
+@router.delete("/amazon/profiles/{profile_id}")
+async def delete_amazon_profile_endpoint(profile_id: str):
+    """Delete the source. Its cards stay: `import_batch.profile_id` is ON DELETE SET NULL, and a card is
+    the provenance of transactions still in the ledger, so it outlives the setting that produced it."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM csv_import_profile WHERE id = ? AND source_kind = ?", (profile_id, BATCH_SOURCE_KIND)
+        )
+        if not cur.rowcount:
+            raise HTTPException(status_code=404, detail="Source not found")
+        # `import_watch_file.profile_id` cascades, so the folder's watermark goes with the source.
+    return {"deleted": profile_id}

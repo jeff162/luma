@@ -1624,9 +1624,16 @@ nothing later reports, while every other mistake is visible on the file's card. 
 The interactive flow's fallback to an exact name match is not used here, since nobody is present to
 approve it. A blank account cell is not an unmapped account; the import refuses that row and records it.
 
+**A marketplace source** (`source_kind = 'marketplace:amazon'`) watches a folder the same way, and
+parks on the same principle with its own list: the file is not an Amazon export, the source names no
+Amazon account or one that no longer exists, the source has no completed batch yet, or any paying card
+in the file has no funding account mapped. The last is the counterpart of an unmapped account value —
+resolving it wrong moves a charge into the wrong account quietly.
+
 **`import_watch_file` is a cache**: `(size, mtime)` per file plus the reason a file is waiting. It is
 left out of backups because it describes a filesystem the restoring machine does not have. The durable
-record of a file having been taken is `import_batch.file_content_hash`.
+record of a file having been taken is `import_batch.file_content_hash` — or, for a marketplace card,
+the hashes in its `config_snapshot`.
 
 - A **parked** file is retried on every scan, since its fix happens in the ledger.
 - A file whose **import raised** is not retried until it changes or someone opens it by hand, because
@@ -1698,9 +1705,16 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   automatic pass offers those charges to that order again; linking one by hand clears it.
 - **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import
   replace restore each linked charge's prior and delete the link before deleting the batch's rows.
-- The batch has `source_kind = 'marketplace:amazon'`. `config_snapshot` holds the `import_summary` and
-  `amazon_file_hashes`. An upload whose hash matches a **completed** batch's file is skipped; an undone
-  batch's files, and files with discarded rows, are not remembered.
+- The batch has `source_kind = 'marketplace:amazon'`. `config_snapshot` holds the `import_summary`,
+  `amazon_file_hashes` and `amazon_account_id` — the Amazon account the card imported into, which the
+  import history groups a vendor's cards by. It is recorded rather than derived from the card's rows,
+  since an items-only card has none; cards predating it were backfilled from their rows (migration v80),
+  and one with no rows to read stays unattributed. An upload whose hash matches a **completed** batch's
+  file is skipped; an undone batch's files, and files with discarded rows, are not remembered.
+- **A card may name a saved Amazon source** (`profile_id`), which holds the account, the categorize
+  toggle, a filename pattern and a watched folder. The source is a `csv_import_profile` row marked
+  `marketplace:amazon`; deleting it leaves its cards, which are the provenance of rows still in the
+  ledger.
 
 **The funding-source map** (`amazon_funding_map`) says which account an order's paying instrument
 charges, because imported ledgers rarely carry card masks.

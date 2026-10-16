@@ -974,11 +974,12 @@ export const api = {
       return res.json()
     })
   },
-  importAmazon: (files, accountId, applyCategorization = true) => {
+  importAmazon: (files, accountId, applyCategorization = true, profileId = null) => {
     const fd = new FormData()
     for (const f of files) fd.append('files', f)
     fd.append('account_id', accountId)
     fd.append('apply_categorization', applyCategorization ? 'true' : 'false')
+    if (profileId) fd.append('profile_id', profileId)
     return trackedFetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -1048,6 +1049,13 @@ export const api = {
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),
   saveAmazonFundingSource:    (body) => request('/import-export/amazon/funding-sources', { method: 'PUT', body: JSON.stringify(body) }),
   deleteAmazonFundingSource:  (id)   => request(`/import-export/amazon/funding-sources/${id}`, { method: 'DELETE' }),
+  // Saved Amazon sources: which Amazon account a drop lands in, and optionally a folder to watch. Stored
+  // as `csv_import_profile` rows marked `marketplace:amazon`, so the watched-folder settings go through
+  // the shared `updateImportProfileWatch` below rather than through these.
+  getAmazonProfiles:          ()     => request('/import-export/amazon/profiles'),
+  createAmazonProfile:        (body) => request('/import-export/amazon/profiles', { method: 'POST', body: JSON.stringify(body) }),
+  updateAmazonProfile:        (id, body) => request(`/import-export/amazon/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteAmazonProfile:        (id)   => request(`/import-export/amazon/profiles/${id}`, { method: 'DELETE' }),
   // Shared (tenant-wide) "Group Imported Categories" workspace draft. Not a per-user preference — it
   // stages the one shared category tree, so it lives in import_workflow_state, not ui_preference.
   getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),

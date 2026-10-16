@@ -310,13 +310,15 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `amazon_pending_item.consumed_batch_id`, so undoing an orders import returns the parked items it attached.
 # v78 adds `recurring_rescan_owed`, so a recurring rescan a write owes survives the scan failing. v79 adds
 # `recurring_series.rule_fingerprint`, so a scoped scan can leave a rule-backed series alone until an edit
-# or its rule changes what it holds.
+# or its rule changes what it holds. v80 records on each Amazon card the Amazon account it imported
+# into, which the import history groups a vendor's cards by; older cards are backfilled from their rows,
+# and a card with none (an items-only card holding parked detail) is left unattributed.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 79
+CURRENT_VERSION = 80
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2466,6 +2468,55 @@ def _add_recurring_series_rule_fingerprint(conn):
         conn.execute("ALTER TABLE recurring_series ADD COLUMN rule_fingerprint TEXT")
 
 
+def _backfill_amazon_batch_account(conn):
+    # The Amazon account a card imported into is now recorded on the card (`config_snapshot
+    # .amazon_account_id`), because the import history groups a vendor's cards by account and a card
+    # need not have rows to derive one from. Older cards are backfilled from the rows they created:
+    # every order in a drop lands in the one chosen account, so a card's transactions name it exactly.
+    # A card with no rows — an items-only card holding parked detail, every row discarded — has nothing
+    # to read, and is left unattributed rather than guessed at.
+    #
+    # Guarded on the tables and the columns, not just the tables: the isolated per-migration tests
+    # hand-build minimal schemas holding only what the migration under test reads, and run the whole
+    # chain over them.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"import_batch", "txn"} <= tables:
+        return
+    batch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    txn_columns = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if not {"config_snapshot", "source_kind"} <= batch_columns or not {"account_id", "import_batch_id"} <= txn_columns:
+        return
+    rows = conn.execute(
+        """
+        SELECT b.id, b.config_snapshot,
+               (SELECT t.account_id FROM txn t
+                WHERE  t.import_batch_id = b.id AND t.account_id IS NOT NULL
+                LIMIT  1) AS account_id
+        FROM   import_batch b
+        WHERE  b.source_kind = 'marketplace:amazon'
+        """
+    ).fetchall()
+    for row in rows:
+        if not row["account_id"]:
+            continue
+        try:
+            snapshot = json.loads(row["config_snapshot"]) if row["config_snapshot"] else {}
+        except (TypeError, ValueError):
+            snapshot = {}
+        if not isinstance(snapshot, dict) or snapshot.get("amazon_account_id"):
+            continue
+        snapshot["amazon_account_id"] = row["account_id"]
+        conn.execute(
+            "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+            (json.dumps(snapshot), row["id"]),
+        )
+
+
+@migration(80)
+def _record_amazon_batch_account(conn):
+    _backfill_amazon_batch_account(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2509,6 +2560,7 @@ POST_RESTORE_DATA_INIT = {
     72: _remove_stored_source_restatements,
     75: _release_missing_rule_suggestion_rows,
     77: _normalize_leaf_category_type,
+    80: _backfill_amazon_batch_account,
 }
 
 

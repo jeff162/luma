@@ -79,7 +79,6 @@ class AmazonOrder:
     tax: Optional[float] = None
     shipping: Optional[float] = None
     refund: Optional[float] = None
-    recipient: Optional[str] = None
     order_url: Optional[str] = None
     # The orders file's concatenated `items` text (e.g. "Air Widget; Widget Picks; "). Used as the
     # description of the single coarse row when an order is activated before its per-item detail arrives.
@@ -193,7 +192,6 @@ def parse_order_rows(rows: list[dict]) -> list[AmazonOrder]:
                 tax=parse_money(row.get("tax")),
                 shipping=parse_money(row.get("shipping")),
                 refund=parse_money(row.get("refund")),
-                recipient=(row.get("to") or "").strip() or None,
                 order_url=(row.get("order url") or "").strip() or None,
                 items_summary=(row.get("items") or "").strip() or None,
                 payment_legs=parse_payments(row.get("payments")),

@@ -556,9 +556,20 @@ import-batch and undo contracts as a CSV. Matching rules, report buckets and lin
   effective account, and a group the user marked *Not duplicates* (`amazon_charge_distinct`) does not
   re-flag. `merge_duplicate_charges` calls it too, so a merge is validated server-side, and refuses when
   an order links several charges.
-- **Each batch stores an `import_summary` and the content hashes of its files** in `config_snapshot`
-  (`GET /amazon/import-detail/{batch_id}`). A re-uploaded file is recognized and skipped; a file with
-  discarded rows stays re-importable, and undoing a card frees the files it took.
+- **Each batch stores an `import_summary`, the content hashes of its files, and the Amazon account it
+  imported into** in `config_snapshot` (`GET /amazon/import-detail/{batch_id}`). A re-uploaded file is
+  recognized and skipped; a file with discarded rows stays re-importable, and undoing a card frees the
+  files it took. The account is recorded rather than derived from the card's rows, because a card need
+  not have any — an items-only card holds parked detail and no transactions — and the history groups a
+  vendor's cards by account. A skipped file is reported with *why*: `already_imported` names the card
+  that already covers it, while `duplicate_in_drop` names the copy taken earlier in the same upload and
+  says nothing was imported, since there is no card and no rows to go looking for.
+- **A saved Amazon source** (`csv_import_profile` with `source_kind = 'marketplace:amazon'`) holds the
+  Amazon account its files import into, the categorize toggle, a filename pattern and the `watch_*`
+  block. Two people's exports are two sources, each with its own account and folder. The CSV-only
+  columns stay unused — an AZAD export is recognized by its header — and `GET /profiles` leaves these
+  rows out, because the CSV mapping editor has nothing to show for one. A card stamped with a source
+  still belongs to the vendor's history row, not to a data-source row (`dataSourceRows.js`).
 - The reconciliation and import-detail dialogs are App-level detached viewers on
   `useDetachedReportViewer`.
 
@@ -569,6 +580,13 @@ Adding another marketplace vendor: `building-a-connector.md` → *Adding a marke
 A data source may name a directory on the **server**; a file that appears there is imported through
 `run_import_parsed` (`watch.py`). The result is an ordinary import batch, so its duplicates, refused
 rows and rule suggestions appear on the usual file card.
+
+A **marketplace source** watches a folder the same way, forking in `_import_ready_file` to
+`run_amazon_import` instead. The refusal rule is the same — park anything the saved source does not
+answer — but the questions differ: there is no header fingerprint to check (an AZAD export is
+recognized by `read_export`), and what must be answered instead is the Amazon account and the funding
+account of every paying card the file names. An unmapped card parks the file, because the interactive
+form refuses to import until each one is mapped and an unattended path may not take the looser option.
 
 - **Scanning is request-driven; there is no scheduler.** The app has per-identity database paths, so a
   timer thread would have no tenant to run as. `POST /import-export/watch/auto-scan` scans only if one
@@ -581,7 +599,9 @@ rows and rule suggestions appear on the usual file card.
   `import_batch.file_content_hash`. The table is a cache and is outside backups (`data-model.md` →
   *Watched import folders*).
 - **Anything the stored mapping does not answer parks the file** and raises a Task, which opens the
-  ordinary import flow with the file pre-seeded (`GET /import-export/watch/files/{id}/content`).
+  ordinary import flow with the file pre-seeded (`GET /import-export/watch/files/{id}/content`). A
+  parked file is retried on every pass, so mapping the account (or the Amazon funding card) in the
+  import form is what lets the folder resume on its own.
 - A source's `filename_pattern` is a secondary filter, so several sources can share one directory.
 - **Settings are admin-gated** (`PATCH /import-export/profiles/{id}/watch`, `require_admin_or_local`),
   because naming a directory is a statement about the server's filesystem; see `security-model.md` →

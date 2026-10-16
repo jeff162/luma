@@ -4,7 +4,7 @@
 // exactly the kind of thing a backend field rename would silently break, so these pin it.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeImportOutcome, buildMultiFileResult, formatSkippedImportMessage, mergeMoneyMovementProposals } from '../importOutcome.js'
+import { summarizeImportOutcome, buildMultiFileResult, formatSkippedImportMessage, mergeMoneyMovementProposals, skippedFileReason, skippedFileNoticeTitle } from '../importOutcome.js'
 
 describe('summarizeImportOutcome', () => {
   it('returns an all-zero shape for a null source', () => {
@@ -154,5 +154,43 @@ describe('mergeMoneyMovementProposals', () => {
   it('tolerates empty / malformed input', () => {
     expect(mergeMoneyMovementProposals([])).toEqual([])
     expect(mergeMoneyMovementProposals([[{ count: 1 }], null])).toEqual([])
+  })
+})
+
+// The two reasons an Amazon export is skipped read very differently to someone holding the files. Only
+// `already_imported` happened before and has a card; a `duplicate_in_drop` file was never imported, so
+// telling the reader it "was imported before" sends them hunting the ledger for rows that are not there.
+describe('skippedFileReason', () => {
+  it('names the card an already-imported file is covered by', () => {
+    expect(skippedFileReason({ filename: '2025-orders.csv', reason: 'already_imported', matched_filename: '2024-orders.csv' }))
+      .toBe("Already imported as 2024-orders.csv — that file's card covers it.")
+  })
+
+  it('says nothing was imported when the match is another file in the same drop', () => {
+    const line = skippedFileReason({ filename: '2025-items.csv', reason: 'duplicate_in_drop', matched_filename: '2025-orders.csv' })
+    expect(line).toContain('2025-orders.csv')
+    expect(line).toContain('nothing was imported from it')
+    expect(line).not.toContain('Already imported')
+  })
+
+  it('still reads as a sentence when the matched file is unknown', () => {
+    expect(skippedFileReason({ filename: 'a.csv', reason: 'already_imported' }))
+      .toBe('Already imported — an existing file card covers it.')
+    expect(skippedFileReason({ filename: 'a.csv', reason: 'duplicate_in_drop' }))
+      .toBe('Identical to another file in this import — nothing was imported from it.')
+  })
+})
+
+describe('skippedFileNoticeTitle', () => {
+  it('takes the wording of the reason when every file shares one', () => {
+    expect(skippedFileNoticeTitle([{ reason: 'duplicate_in_drop' }]))
+      .toBe('1 file duplicated another in this import')
+    expect(skippedFileNoticeTitle([{ reason: 'already_imported' }, { reason: 'already_imported' }]))
+      .toBe('2 files were already imported')
+  })
+
+  it('falls back to a neutral title for a mixed batch', () => {
+    expect(skippedFileNoticeTitle([{ reason: 'duplicate_in_drop' }, { reason: 'already_imported' }]))
+      .toBe('2 files were skipped')
   })
 })

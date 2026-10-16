@@ -413,5 +413,157 @@ class ImportWatchTests(unittest.TestCase):
             self.assertEqual(watch.maybe_auto_scan().get("skipped"), "no_watched_sources")
 
 
+class AmazonWatchedFolderTests(unittest.TestCase):
+    """An Amazon source watching a folder. The shape is the CSV path's, so what is pinned here is what
+    differs: an AZAD export is recognized by its own header rather than by a stored column map, and the
+    question the saved source has to answer is which real account each paying card charges. An unmapped
+    card parks the file, because resolving it wrong moves a charge into the wrong account silently —
+    the same reason an unmapped account value parks a CSV."""
+
+    ORDERS_CSV = (
+        "order id,order url,items,to,date,total,shipping,shipping_refund,gift,tax,refund,payments\n"
+        '111-000,,Air Widget; ,J,2024-11-19,37.32,0,,,2.19,,"Test Card ending in 4321: 2024-11-19: $37.32; "\n'
+    )
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "watch.db"
+        self.watched = Path(self.tempdir.name) / "amazon"
+        self.watched.mkdir()
+        init_db(str(self.db_path))
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
+                   VALUES ('acc-amz', NULL, 'manual', 'Amazon', 'Amazon', 'amazon')"""
+            )
+            conn.execute(
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
+                   VALUES ('acc-card', NULL, 'manual', 'Card', 'Card', 'credit')"""
+            )
+            conn.execute(
+                """
+                INSERT INTO csv_import_profile
+                  (id, name, source_kind, account_id, apply_categorization, column_map,
+                   watch_dir, watch_enabled)
+                VALUES ('amz-1', 'Amazon household', 'marketplace:amazon', 'acc-amz', 0, '{}', ?, 1)
+                """,
+                (str(self.watched),),
+            )
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _map_card(self):
+        # Through the service, so the mapping is keyed exactly as the import form's would be — the
+        # network label is part of an instrument's identity, and a row keyed without it is a different
+        # card that never matches.
+        from backend.services import amazon_funding
+        with get_db(str(self.db_path)) as conn:
+            amazon_funding.upsert_funding_source(
+                conn, last4="4321", network="Test Card", funding_account_id="acc-card")
+
+    def _prove_source(self):
+        """The one hand import an Amazon source needs before it may run on its own — here, a card of its
+        own so `_source_has_completed_batch` is satisfied without re-deriving the import."""
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(
+                """INSERT INTO import_batch (id, filename, status, source_kind, profile_id)
+                   VALUES ('b-proof', 'proof.csv', 'completed', 'marketplace:amazon', 'amz-1')"""
+            )
+
+    def _drop(self, name, body=None):
+        path = self.watched / name
+        path.write_text(body if body is not None else self.ORDERS_CSV)
+        stamp = time.time() - (watch.QUIET_SECONDS + 5)
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def _scan_twice(self):
+        with self._use_db_path():
+            watch.scan_watched_sources()
+            return watch.scan_watched_sources()
+
+    def _file_state(self, name):
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT state, reason FROM import_watch_file WHERE filename = ?", (name,)
+            ).fetchone()
+        return (row["state"], row["reason"]) if row else (None, None)
+
+    def test_an_orders_export_in_the_folder_is_imported_onto_a_card_of_its_source(self):
+        self._prove_source()
+        self._map_card()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        self.assertEqual(self._file_state("2024-orders.csv"), (watch.WATCH_STATE_IMPORTED, None))
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                """SELECT profile_id, row_count FROM import_batch
+                   WHERE filename = '2024-orders.csv' AND source_kind = 'marketplace:amazon'"""
+            ).fetchone()
+        self.assertEqual((row["profile_id"], row["row_count"]), ("amz-1", 1))
+
+    def test_a_file_whose_paying_card_is_unmapped_is_parked_rather_than_guessed_at(self):
+        self._prove_source()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        state, reason = self._file_state("2024-orders.csv")
+        self.assertEqual(state, watch.WATCH_STATE_PARKED)
+        self.assertIn("4321", reason)
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) AS n FROM txn").fetchone()["n"], 0)
+
+    def test_parking_clears_itself_once_the_card_is_mapped(self):
+        """A parked file is retried every pass because its refusal is about the ledger, which is fixed
+        somewhere else — mapping the card in the import form is what lets the folder resume."""
+        self._prove_source()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        self.assertEqual(self._file_state("2024-orders.csv")[0], watch.WATCH_STATE_PARKED)
+        self._map_card()
+        with self._use_db_path():
+            watch.scan_watched_sources()
+        self.assertEqual(self._file_state("2024-orders.csv")[0], watch.WATCH_STATE_IMPORTED)
+
+    def test_a_source_with_nothing_imported_by_hand_takes_nothing_on_its_own(self):
+        self._map_card()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        state, reason = self._file_state("2024-orders.csv")
+        self.assertEqual(state, watch.WATCH_STATE_PARKED)
+        self.assertIn("by hand", reason)
+
+    def test_a_csv_that_is_not_an_amazon_export_is_parked_not_read_through_some_other_mapping(self):
+        self._prove_source()
+        self._map_card()
+        self._drop("bank.csv", "Date,Description,Amount\n2026-02-03,Corner Market,12.50\n")
+        self._scan_twice()
+        state, reason = self._file_state("bank.csv")
+        self.assertEqual(state, watch.WATCH_STATE_PARKED)
+        self.assertIn("not an Amazon", reason)
+
+    def test_a_file_already_imported_is_recognized_by_content_not_re_imported(self):
+        self._prove_source()
+        self._map_card()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        self._drop("2024-orders-copy.csv")
+        self._scan_twice()
+        self.assertEqual(self._file_state("2024-orders-copy.csv")[0], watch.WATCH_STATE_DUPLICATE)
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute(
+                """SELECT COUNT(*) AS n FROM import_batch
+                   WHERE source_kind = 'marketplace:amazon' AND id != 'b-proof'""").fetchone()["n"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

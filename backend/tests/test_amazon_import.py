@@ -99,7 +99,6 @@ class OrderRowTests(unittest.TestCase):
         self.assertEqual(o.order_date, "2024-12-22")
         self.assertEqual(o.total, 9.55)
         self.assertEqual(o.tax, 0.56)
-        self.assertEqual(o.recipient, "Test User")
         self.assertTrue(o.has_order_detail)
         self.assertFalse(o.has_item_detail)
         self.assertEqual(o.payment_legs[0].last4, "4321")

@@ -650,29 +650,55 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_reimported_file_is_skipped_by_hash(self):
         # A file a completed import already took is recognized by content hash on a later upload — skipped
         # (no re-parse, no new all-duplicates card) and reported as already imported, whatever its name.
+        # The skip names the card that covers it, which is what the notice tells the reader to look at.
         import asyncio
         from backend.routers.import_export.amazon import _imported_amazon_file_hashes, _read_amazon_uploads
-        orders, _items, names, _unrec, already, hashes = asyncio.run(
+        orders, _items, names, _unrec, skipped, hashes = asyncio.run(
             _read_amazon_uploads([self._Upload("2016-orders.csv", self._ORDERS_CSV)]))
-        self.assertEqual((names, already, len(hashes)), (["2016-orders.csv"], [], 1))
+        self.assertEqual((names, skipped, len(hashes)), (["2016-orders.csv"], [], 1))
         with self._use_db_path(), get_db() as conn:
-            run_amazon_import(conn, orders, account_id="amazon", filename="2016-orders.csv", file_hashes=hashes)
+            summary = run_amazon_import(conn, orders, account_id="amazon", filename="2016-orders.csv",
+                                        file_hashes=hashes)
             known = _imported_amazon_file_hashes(conn)
-        self.assertEqual(known, {hashes[0]["hash"]})
-        orders2, _i2, names2, _u2, already2, hashes2 = asyncio.run(
+        self.assertEqual(set(known), {hashes[0]["hash"]})
+        orders2, _i2, names2, _u2, skipped2, hashes2 = asyncio.run(
             _read_amazon_uploads([self._Upload("2016-orders copy.csv", self._ORDERS_CSV)], known))
         self.assertEqual((orders2, names2, hashes2), ([], [], []))
-        self.assertEqual(already2, ["2016-orders copy.csv"])
+        self.assertEqual(skipped2, [{"filename": "2016-orders copy.csv", "reason": "already_imported",
+                                     "matched_filename": "2016-orders.csv",
+                                     "matched_batch_id": summary["batch_id"]}])
 
-    def test_same_file_twice_in_one_upload_is_skipped(self):
-        # Two copies of the same file in a single upload: the first is taken, the second skipped.
+    def test_same_file_twice_in_one_upload_is_skipped_as_a_duplicate_in_the_drop(self):
+        # Two copies of the same file in a single upload: the first is taken, the second skipped. The skip
+        # is reported as a duplicate *within this drop*, not as "already imported" — nothing was imported
+        # before, so there is no card to look at and no rows to go looking for in the ledger. This is what
+        # an export saved twice under two names (an items file holding the orders export) looks like.
         import asyncio
         from backend.routers.import_export.amazon import _read_amazon_uploads
-        _orders, _items, names, _unrec, already, hashes = asyncio.run(
+        _orders, _items, names, _unrec, skipped, hashes = asyncio.run(
             _read_amazon_uploads([self._Upload("a.csv", self._ORDERS_CSV), self._Upload("a (1).csv", self._ORDERS_CSV)]))
         self.assertEqual(names, ["a.csv"])
-        self.assertEqual(already, ["a (1).csv"])
+        self.assertEqual(skipped, [{"filename": "a (1).csv", "reason": "duplicate_in_drop",
+                                    "matched_filename": "a.csv", "matched_batch_id": None}])
         self.assertEqual(len(hashes), 1)
+
+    def test_a_card_with_no_rows_still_records_the_account_it_was_imported_into(self):
+        # An items-only card creates no transactions, so the account cannot be read back from the ledger
+        # — and the import history groups cards by account. Recording it at import is what keeps such a
+        # card under the account it belongs to instead of in the leftovers.
+        import json
+        oid = _cash_order().order_id
+        items_by_order = {oid: [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA",
+                                           source_file="2016-items.csv", source_file_hash="H-ITEMS")]}
+        with self._use_db_path(), get_db() as conn:
+            result = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
+                                       filename="2016-items.csv",
+                                       file_hashes=[{"filename": "2016-items.csv", "hash": "H-ITEMS"}])
+            batch_id = result["batches"][0]["batch_id"]
+            row_count, snapshot = conn.execute(
+                "SELECT row_count, config_snapshot FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+        self.assertEqual(row_count, 0)
+        self.assertEqual(json.loads(snapshot)["amazon_account_id"], "amazon")
 
     def test_items_before_orders_are_parked_and_auto_attached(self):
         # An items file imported before its orders file: its per-item detail is **parked** (not lost), and its
@@ -692,7 +718,7 @@ class AmazonOrdersTests(unittest.TestCase):
                                       filename="2016-items.csv", file_hashes=items_hashes)
             self.assertEqual(first["counts"]["items_discarded"], 1)   # parked, shown as "no matching order" on its card
             self.assertEqual([b["filename"] for b in first["batches"]], ["2016-items.csv"])
-            self.assertEqual(_imported_amazon_file_hashes(conn), set())   # items file stays re-importable
+            self.assertEqual(set(_imported_amazon_file_hashes(conn)), set())   # items file stays re-importable
             self.assertEqual(conn.execute(
                 "SELECT COUNT(*) FROM amazon_pending_item WHERE order_id = ?", (oid,)).fetchone()[0], 1)
 
@@ -701,7 +727,7 @@ class AmazonOrdersTests(unittest.TestCase):
                                        file_hashes=[{"filename": "2016-orders.csv", "hash": "H-ORDERS"}])
             self.assertEqual(orders["counts"]["items_attached_from_parked"], 1)
             # Both files are now remembered (the items file's hash moved onto the orders card on consolidation).
-            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-ORDERS", "H-ITEMS"})
+            self.assertEqual(set(_imported_amazon_file_hashes(conn)), {"H-ORDERS", "H-ITEMS"})
             row = conn.execute(
                 """SELECT t.import_evidence_json FROM txn t
                    JOIN txn_link_member m ON m.txn_id = t.id
@@ -845,7 +871,7 @@ class AmazonOrdersTests(unittest.TestCase):
             self.assertEqual([b["filename"] for b in result["batches"]], ["orders.csv, items.csv"])
             cards = conn.execute("SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall()
             self.assertEqual([c["filename"] for c in cards], ["orders.csv, items.csv"])   # one card
-            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-O", "H-I"})   # both files remembered
+            self.assertEqual(set(_imported_amazon_file_hashes(conn)), {"H-O", "H-I"})   # both files remembered
 
     def test_items_enriching_two_orders_cards_stays_separate(self):
         # An items file that enriches orders spread across two separate orders cards can't be folded into a
@@ -881,7 +907,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertIsNone(summary["batch_id"])   # a multi-card drop has no single top-level batch id
         self.assertEqual(summary["order_count"], 2)
         self.assertEqual(row_counts, {"2016-orders.csv": 1, "2017-orders.csv": 1})
-        self.assertEqual(known, {"H1", "H2"})
+        self.assertEqual(set(known), {"H1", "H2"})
 
     def test_orders_and_items_of_one_period_share_a_card(self):
         # An orders file and its items file (same period) are two halves of one dataset — they fold into a
@@ -900,7 +926,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(len(summary["batches"]), 1)
         self.assertEqual(summary["batches"][0]["filename"], "2016-orders.csv, 2016-items.csv")
         self.assertEqual(summary["counts"]["orders_imported"], 1)
-        self.assertEqual(known, {"H-O", "H-I"})
+        self.assertEqual(set(known), {"H-O", "H-I"})
 
     # ---- batch-level run + undo -------------------------------------------------------------------
 

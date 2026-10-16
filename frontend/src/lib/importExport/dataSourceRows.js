@@ -8,11 +8,52 @@
 
 import { byCoverage } from './importHistoryWindow.js'
 
+// One marketplace vendor's cards, split into a subtree per account they imported into: with two Amazon
+// accounts in one ledger, a flat list interleaves two people's order history and there is nothing on a
+// card that says whose it is. The account is read from `amazon_account_id`, recorded on the card at
+// import (and backfilled onto older ones from their rows).
+//
+// A card with no account recorded is one with no rows to backfill from — in practice an items-only card
+// holding detail until its orders file arrives. That is what its group is named for, and the group falls
+// back to naming the absence when its cards are not all in that state.
+export function buildMarketplaceAccountGroups(batches) {
+  const groups = new Map()
+  for (const batch of batches) {
+    const key = batch.amazon_account_id || ''
+    if (!groups.has(key)) {
+      groups.set(key, { key: key || 'unattributed', accountId: batch.amazon_account_id || null,
+                        label: batch.amazon_account_name || '', batches: [] })
+    }
+    const group = groups.get(key)
+    // An account renamed between imports leaves older cards carrying the older name; the newest card's
+    // name wins, which is the one the account list also shows.
+    if (!group.label && batch.amazon_account_name) group.label = batch.amazon_account_name
+    group.batches.push(batch)
+  }
+  const unattributed = groups.get('')
+  if (unattributed) {
+    const allWaiting = unattributed.batches.every(b => Number(b.unmatched_item_count || 0) > 0)
+    unattributed.label = allWaiting ? 'Waiting for orders file' : 'No account recorded'
+  }
+  // Named accounts first, alphabetically; the unattributed group last, since it is a leftover rather
+  // than a peer of the accounts.
+  return [...groups.values()].sort((a, b) => {
+    if (!a.accountId !== !b.accountId) return a.accountId ? -1 : 1
+    return a.label.localeCompare(b.label)
+  })
+}
+
 export function buildDataSourceRows({ profiles = [], batches = [], manualDraftRecord = null }) {
+  // A marketplace card belongs to its vendor's row even when it names a saved source, because a
+  // marketplace source is stored as a `csv_import_profile` row too. Tested on the card rather than on
+  // the profile list, so this holds however the two are fetched.
+  const isMarketplaceBatch = batch => typeof batch.source_kind === 'string' && batch.source_kind.startsWith('marketplace:')
   const savedSourceRows = profiles.map(profile => {
     // Cards run by the period they cover (`byCoverage`); `latestBatch` stays the most recently
     // imported, since "Last used" is a fact about the source rather than about its newest data.
-    const profileBatches = batches.filter(batch => batch.profile_id === profile.id).sort(byCoverage)
+    const profileBatches = batches
+      .filter(batch => batch.profile_id === profile.id && !isMarketplaceBatch(batch))
+      .sort(byCoverage)
     const latestBatch = [...profileBatches].sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0] || null
     return {
       key: `profile:${profile.id}`,
@@ -25,10 +66,12 @@ export function buildDataSourceRows({ profiles = [], batches = [], manualDraftRe
   })
   // Marketplace imports (Amazon, …) carry `source_kind` of `marketplace:<vendor>` and never have a CSV
   // profile; they group under their own vendor entry rather than the "unknown data source" bucket.
-  const isMarketplaceBatch = batch => typeof batch.source_kind === 'string' && batch.source_kind.startsWith('marketplace:')
+  // A marketplace card *may* now carry a `profile_id` (a saved Amazon source), and it still belongs to
+  // the vendor rather than to a data-source row of its own — so the `profile_id` test that used to send
+  // such a card to the CSV mapping row is gone from here and from the profile rows above.
   const marketplaceByVendor = new Map()
   for (const batch of batches) {
-    if (batch.profile_id || !isMarketplaceBatch(batch)) continue
+    if (!isMarketplaceBatch(batch)) continue
     const vendor = batch.source_kind.split(':')[1] || 'marketplace'
     if (!marketplaceByVendor.has(vendor)) marketplaceByVendor.set(vendor, [])
     marketplaceByVendor.get(vendor).push(batch)
@@ -45,6 +88,7 @@ export function buildDataSourceRows({ profiles = [], batches = [], manualDraftRe
       profile: null,
       hasImportedCategories: byImport.some(b => b.has_imported_categories),
       batches: [...byImport].sort(byCoverage),
+      accountGroups: buildMarketplaceAccountGroups([...byImport].sort(byCoverage)),
       latestBatch: byImport[0],
       manualDraftRecord: null,
     })

@@ -110,6 +110,11 @@ IGNORED_PREFIXES = (".", "~$", ".~lock.")
 # land in one are not this source's to read.
 CANDIDATE_SUFFIXES = (".csv",)
 
+# A marketplace source (`csv_import_profile.source_kind`) watches a folder exactly as a CSV source does,
+# but its files go through the vendor's own importer rather than a column map. Spelled here rather than
+# imported from `amazon` to keep this module's import of that one lazy (it imports `core`, as this does).
+AMAZON_SOURCE_KIND = "marketplace:amazon"
+
 # An unattended path picks its own files, so it needs its own ceiling — the interactive import is
 # bounded by what a person is willing to select. Read into memory whole, like every other import, so
 # the cap is about the machine rather than about the format.
@@ -436,6 +441,9 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
     except OSError as error:
         return {"state": WATCH_STATE_ERROR, "reason": f"This file could not be read: {error.strerror or error}"}
 
+    if str(profile.get("source_kind") or "") == AMAZON_SOURCE_KIND:
+        return _import_ready_amazon_file(profile, candidate, text)
+
     content_hash = make_import_file_hash(text)
     with get_db() as conn:
         existing_batch_id = _already_imported(conn, content_hash)
@@ -479,6 +487,102 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
 
     return {"state": WATCH_STATE_IMPORTED, "content_hash": content_hash,
             "batch_id": result.get("batch_id"), "imported": int(result.get("imported") or 0),
+            "reason": None}
+
+
+def _import_ready_amazon_file(profile: dict, candidate: dict, text: str) -> dict:
+    """The marketplace half of `_import_ready_file`: one AZAD export out of an Amazon source's folder.
+
+    The shape is the CSV path's, and so is the refusal rule — *park anything the saved source does not
+    answer* — but the questions differ. There is no column map to check a header against, because an
+    AZAD export is recognized by its own header (`read_export`); what the saved source has to answer
+    instead is which Amazon account the orders land in and which real account each paying card charges.
+    An unmapped card is the exact analogue of an unmapped account value: resolving it wrong moves a
+    charge into the wrong ledger account quietly, and the interactive form refuses to import until every
+    card is mapped, so the unattended path must refuse too rather than take the looser option.
+
+    Orders and items files are scanned independently, which is correct: the importer accepts either
+    alone, parks an items file's detail until its orders arrive, and folds the two cards together
+    whichever lands first.
+    """
+    # Lazy, like core.py's own: `amazon` imports `core`, which this module also imports from.
+    from .amazon import (
+        _imported_amazon_file_hashes,
+        _scan_instruments,
+        read_amazon_exports,
+        run_amazon_import,
+    )
+    from backend.services.amazon_import import merge
+
+    content_hash = make_import_file_hash(text)
+    with get_db() as conn:
+        taken = _imported_amazon_file_hashes(conn)
+    if content_hash in taken:
+        prior = taken[content_hash]
+        return {"state": WATCH_STATE_DUPLICATE, "content_hash": content_hash,
+                "batch_id": prior.get("batch_id"),
+                "reason": "This exact file has been imported already."}
+
+    try:
+        orders, items_by_order, names, unrecognized, _skipped, file_hashes = read_amazon_exports(
+            [(candidate["filename"], text)])
+    except Exception as error:   # a malformed export is the file's problem, not this scan's
+        return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                "reason": f"This file could not be read as an Amazon export: {error}"}
+    if unrecognized or (not orders and not items_by_order):
+        return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                "reason": "This file is not an Amazon orders or items export. Only the files this "
+                          "source is for belong in its folder — set a filename pattern if it shares one."}
+
+    account_id = str(profile.get("account_id") or "").strip()
+    with get_db() as conn:
+        if not _source_has_completed_batch(conn, profile["id"]):
+            return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                    "reason": "Import one file from this source by hand first, so its setup is proven."}
+        if not account_id:
+            return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                    "reason": "This source has no Amazon account set."}
+        account = conn.execute(
+            "SELECT type FROM account WHERE id = ? AND trashed_at IS NULL", (account_id,)
+        ).fetchone()
+        if not account:
+            return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                    "reason": "The Amazon account this source imports into no longer exists."}
+        # Only an orders file names paying cards; an items file carries no instrument at all, so this
+        # resolves to the empty list and the file goes straight through.
+        unmapped = sorted({
+            inst["last4"] for inst in _scan_instruments(conn, orders, account_id)
+            if inst.get("state") == "unmapped"
+        })
+    if unmapped:
+        return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                "reason": f"No funding account is mapped for the card{'' if len(unmapped) == 1 else 's'} "
+                          f"ending {_quoted_list(unmapped)}. Import this file by hand to map them, after "
+                          "which this folder runs on its own again."}
+
+    try:
+        with get_db() as conn:
+            summary = run_amazon_import(
+                conn, merge(orders, items_by_order), account_id=account_id,
+                filename=", ".join(names) or candidate["filename"],
+                apply_categorization=bool(profile.get("apply_categorization")),
+                file_hashes=file_hashes, profile_id=profile["id"],
+            )
+    except HTTPException as error:
+        detail = error.detail
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        return {"state": WATCH_STATE_PARKED, "reason": str(message), "content_hash": content_hash}
+    except Exception as error:
+        log_error(f"[import-watch] Amazon import failed for {candidate['filename']}: {error}", exc_info=error)
+        return {"state": WATCH_STATE_ERROR, "reason": f"The import failed: {error}",
+                "content_hash": content_hash}
+
+    counts = summary.get("counts") or {}
+    # One file, so the drop produced one card and `batch_id` is it. `imported` is the order rows the
+    # card carries, which is what the scan summary counts — an items file legitimately imports none.
+    return {"state": WATCH_STATE_IMPORTED, "content_hash": content_hash,
+            "batch_id": summary.get("batch_id"),
+            "imported": int(counts.get("orders_imported") or 0) + int(counts.get("non_cash") or 0),
             "reason": None}
 
 

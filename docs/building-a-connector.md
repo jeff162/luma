@@ -277,8 +277,15 @@ than a second parser.
 4. **A dedicated import form** — a dialog the Data Import drop zone opens when it recognizes the
    vendor's files, and a row in the File Sources tab's data-source list, which is the home for the
    vendor's setup help. The importer stamps each batch with `import_batch.source_kind =
-   'marketplace:<vendor>'`, so the import history groups the batches under the vendor; they have no CSV
-   profile.
+   'marketplace:<vendor>'`, so the import history groups the batches under the vendor rather than under
+   a CSV data source. **Saved sources are rows in `csv_import_profile` marked with that same
+   `source_kind`**, not a table of their own: that table already carries the account, the filename
+   pattern and the whole `watch_*` block, so reusing it hands the vendor the watched-folder machinery
+   (scan loop, per-file watermark, purge, admin gate) with no second copy of any of it. The CSV-only
+   columns stay unused, and `GET /profiles` filters these rows out so they do not reach the column-
+   mapping editor. A vendor that supports a watched folder forks in `watch._import_ready_file` and
+   states its own parking rules, which answer the same question a CSV's do: what has the saved source
+   left unanswered that only a person can settle.
 5. **A funding-source → account map**, only if the export names the paying card rather than which of the
    user's accounts it hit. A user-maintained map keys each payment instrument to the account it charges,
    so the importer can constrain its charge search to that account; imported ledgers rarely carry masks,

@@ -169,3 +169,36 @@ export function mergeMoneyMovementProposals(proposalLists) {
     (a, b) => (Number(b.money_movement) - Number(a.money_movement)) || (b.count - a.count) || a.type.localeCompare(b.type),
   )
 }
+
+// Why one dropped Amazon export was skipped, as the import form's notice states it. The two reasons the
+// backend reports (`read_amazon_exports`) need different sentences, and conflating them is what made the
+// notice misleading: only `already_imported` is about a past import, and only it has a card to point at.
+// A `duplicate_in_drop` file was never imported at all — it is a second copy of a file in the same drop,
+// which is what an export saved twice under two names looks like — so saying "imported before" sent a
+// reader to the ledger to look for rows that are not there. `skip` is a `skipped_uploads` entry.
+export function skippedFileReason(skip) {
+  const matched = String(skip?.matched_filename || '').trim()
+  if (skip?.reason === 'duplicate_in_drop') {
+    return matched
+      ? `Identical to ${matched}, also in this import — nothing was imported from it.`
+      : 'Identical to another file in this import — nothing was imported from it.'
+  }
+  return matched
+    ? `Already imported as ${matched} — that file's card covers it.`
+    : 'Already imported — an existing file card covers it.'
+}
+
+// The notice's title. The two reasons get their own wording where a batch is all of one kind, because
+// that title is the whole message for a reader who does not open the list.
+export function skippedFileNoticeTitle(skips) {
+  const entries = Array.isArray(skips) ? skips : []
+  const count = entries.length
+  const plural = count === 1 ? '' : 's'
+  if (entries.every(s => s?.reason === 'duplicate_in_drop')) {
+    return `${count} file${plural} duplicated another in this import`
+  }
+  if (entries.every(s => s?.reason !== 'duplicate_in_drop')) {
+    return `${count} file${plural} ${count === 1 ? 'was' : 'were'} already imported`
+  }
+  return `${count} file${plural} ${count === 1 ? 'was' : 'were'} skipped`
+}

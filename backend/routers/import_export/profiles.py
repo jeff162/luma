@@ -284,11 +284,15 @@ def list_profiles():
     # the profile instead turned it into a ghost: invisible here, yet still blocking its own name
     # in `_assert_profile_name_available` (which scans all rows), so it could be neither edited,
     # deleted, nor recreated. List every profile and let the user manage it.
+    # Marketplace sources (Amazon) live in this table too — the watched-folder block and the account are
+    # the same fields — but they have no column map to edit and their own editor and history row. Listing
+    # them here would put them in the CSV mapping manager, which has nothing to show for one.
     with get_db() as conn:
         rows = conn.execute("""
             SELECT p.*, COALESCE(a.display_name, a.name) AS account_name
             FROM   csv_import_profile p
             LEFT JOIN account a ON a.id = p.account_id
+            WHERE  p.source_kind IS NULL OR p.source_kind NOT LIKE 'marketplace:%'
             ORDER BY p.name
         """).fetchall()
     result = []

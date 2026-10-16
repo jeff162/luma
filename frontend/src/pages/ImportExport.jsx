@@ -5,11 +5,11 @@ import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { formatTimestamp } from '../lib/utils.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { sniffAmazonExportKind } from '../lib/amazonDetect.js'
 import { PaypalStatementImportDialog } from '../components/importExport/PaypalStatementImportDialog.jsx'
 import { AmazonImportDialog } from '../components/importExport/AmazonImportDialog.jsx'
+import AmazonSourcesSection from '../components/importExport/AmazonSourcesSection.jsx'
 import {
   Card,
   PageHeader,
@@ -4174,7 +4174,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
               onDataChange={handleManagerDataChange}
               onProfileCreated={handleManagerProfileCreated}
               onReviewMoneyMovement={reviewMoneyMovementForProfile}
-              systemRows={<AmazonSourceRow batches={batches} />}
+              systemRows={<AmazonSourcesSection batches={batches} />}
             />
           </Card>
         </>
@@ -4322,42 +4322,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
 // control follows the "creating is available wherever assigning is" rule (inline create). The drop zone is
 // a small local control, not the CSV `ImportUploadStage`, which is coupled to the data-source /
 // header-fingerprint flow this import does not use.
-// Amazon in the data-source list. It is a source with no saved mapping to edit — its files are recognized
-// by their columns when dropped above, and its settings are asked for by the import form — so the row
-// exists to say that it is one, to hold the help on producing the export, and to show its use.
-function AmazonSourceRow({ batches }) {
-  const amazonBatches = batches.filter(b => b.source_kind === 'marketplace:amazon')
-  const lastUsed = amazonBatches.map(b => b.imported_at || '').sort().pop() || ''
-  const labelStyle = { fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }
-  return (
-    <div style={{
-      display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px auto', columnGap: 12,
-      padding: '10px 16px', alignItems: 'center', fontSize: 13, borderBottom: '1px solid var(--border)',
-    }}>
-      <div>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 500 }}>
-          Amazon
-          <FeatureExplainer topic="amazon-import" placement="bottom-left" />
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-          Order history exported by the AZAD browser extension
-        </div>
-      </div>
-      <div style={{ display: 'grid', gap: 2 }}>
-        <span style={labelStyle}>Last used</span>
-        <span style={{ fontSize: 12, color: 'var(--muted)' }}>{formatTimestamp(lastUsed) || 'Never used'}</span>
-      </div>
-      <div style={{ display: 'grid', gap: 2 }}>
-        <span style={labelStyle}>Imported</span>
-        <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-          {amazonBatches.length} {amazonBatches.length === 1 ? 'file' : 'files'}
-        </span>
-      </div>
-      <span title="This data source is managed by the system and can't be deleted." style={{ color: 'var(--muted)', fontSize: 14, padding: '2px 6px', cursor: 'default' }}>🔒</span>
-    </div>
-  )
-}
-
 const IMPORT_TABS = [['import', 'Data Import'], ['sources', 'File Sources'], ['connections', 'Connections']]
 const IMPORT_TAB_STORAGE_KEY = 'import.activeTab'
 // `?tab=history` is the Data Import tab under the name it had while the history was a tab of its own.

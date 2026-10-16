@@ -3259,6 +3259,36 @@ export const HELP_TOPICS = [
           Re-importing is always safe: files are recognized by <em>content</em>. Orders are keyed using their Amazon
           order id, so overlapping exports are handled correctly.
         </p>
+        <p>*needs review*</p>
+        <p>
+          A file whose content has been seen before is skipped, and the notice says which case it is. A
+          file that an earlier import already took names the card that covers it. A file that is
+          identical to <em>another file in the same drop</em> was never imported at all &mdash; the usual
+          cause is an export saved twice under two names, such as an Items file holding a second copy
+          of the Orders export. Re-export the missing one and drop both again.
+        </p>
+        <p><strong>Saved Amazon sources:</strong></p>
+        <p>
+          A saved source records which Amazon account a set of files imports into, so the import form
+          arrives filled in rather than being answered each time. Sources are added on
+          the <strong>File Sources</strong> tab, under <strong>Amazon</strong>. Each one holds an
+          account, whether rules are applied on import, and optionally a <strong>filename
+            pattern</strong> &mdash; text the filename contains, which selects the source automatically
+          when a matching file is dropped.
+        </p>
+        <p>
+          Several sources are the point where more than one person&apos;s order history is tracked:
+          one source per Amazon account, each with its own name and pattern, keeps the imports apart.
+          The import history then lists each account&apos;s files under its own heading.
+        </p>
+        <p>
+          A source can also name a <strong>folder to watch</strong> on the machine running {APP_NAME},
+          through <strong>Folder</strong> on its row. Amazon exports saved into that folder are imported
+          without the form being opened. A file is only taken once the source has imported one file by
+          hand, and a file naming a payment card that has no mapping is held rather than guessed at
+          &mdash; it appears in <strong>Tasks</strong>, and importing it by hand once maps the card and
+          lets the folder carry on by itself.
+        </p>
       </>
     ),
   },

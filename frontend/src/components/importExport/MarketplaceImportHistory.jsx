@@ -137,14 +137,17 @@ function hasImportDetailPills(vendor, summary) {
 // `focusedBatchIds` are the cards the history is landing on, marked the way the generic row marks its own.
 export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpenLedger, onUndo, onMarkReviewed, focusedBatchIds }) {
   const { label, batches, latestBatch } = row
+  // The vendor's cards, split per account they imported into. One account is the ordinary case and gets
+  // no header — the subtree would be a box around the whole list, naming what the row above already
+  // says. Headers appear once there is something to tell apart.
+  const accountGroups = row.accountGroups?.length ? row.accountGroups : [{ key: 'all', label: '', batches }]
+  const showAccountHeaders = accountGroups.length > 1
   const RowAction = VENDOR_ROW_ACTION[row.vendor] || null
   const canExpand = batches.length > 0
   const fileCountLabel = batches.length === 1 ? '1 imported file' : `${batches.length} imported files`
   // Actionable reconciliation items across this vendor's files (duplicates to resolve, split matches to
   // confirm), surfaced as a warning chip on the collapsed card so it's visible without expanding.
   const totalAttention = batches.reduce((sum, b) => sum + Number(b.recon_attention_count || 0), 0)
-  // Only the recent cards are listed, the rest reachable through the year archive under them.
-  const { recent: recentBatches, archive: archivedBatches } = partitionImportHistory(batches)
   const renderBatchCard = b => {
     const summary = summarizeImportOutcome(b)
     const needsReview = Number(b.needs_review_count || 0)
@@ -277,8 +280,27 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
 
       {canExpand && expanded ? (
         <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
-          {recentBatches.map(renderBatchCard)}
-          <ImportHistoryArchive archive={archivedBatches} revealIds={focusedBatchIds} renderBatch={renderBatchCard} />
+          {accountGroups.map(group => {
+            // Each account keeps its own recency window and year archive, so one account's backfill of
+            // old years cannot push another account's recent cards out of sight.
+            const { recent, archive } = partitionImportHistory(group.batches)
+            return (
+              <div key={group.key}>
+                {showAccountHeaders ? (
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline', gap: 8, padding: '7px 16px 7px 32px', fontSize: 12,
+                    color: 'var(--muted)', background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))',
+                    borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)',
+                  }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>{group.label}</span>
+                    <span>{group.batches.length} {group.batches.length === 1 ? 'file' : 'files'}</span>
+                  </div>
+                ) : null}
+                {recent.map(renderBatchCard)}
+                <ImportHistoryArchive archive={archive} revealIds={focusedBatchIds} renderBatch={renderBatchCard} />
+              </div>
+            )
+          })}
         </div>
       ) : null}
     </div>

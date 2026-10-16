@@ -191,7 +191,7 @@ def _import_amazon_orders(conn, amazon_account_id: str, card_account_id: str, ch
     items_text = _render_csv(
         ["order id", "order url", "order date", "quantity", "description", "item url", "price",
          "subscribe & save", "ASIN", "category"], items)
-    parsed, items_by_order, names, _unrecognized, _already, file_hashes = read_amazon_exports(
+    parsed, items_by_order, names, _unrecognized, _skipped, file_hashes = read_amazon_exports(
         [("amazon-orders.csv", orders_text), ("amazon-items.csv", items_text)])
     run_amazon_import(conn, merge(parsed, items_by_order), account_id=amazon_account_id,
                       filename=", ".join(names), file_hashes=file_hashes)

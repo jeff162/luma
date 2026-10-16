@@ -4858,6 +4858,18 @@ def list_batches():
                              if isinstance(x, dict) and x.get("date")]
                     newest = max(dates) if dates else None
                 d["newest_txn_date"] = newest
+                # The Amazon account the card imported into, which the history groups its cards by. Read
+                # from the snapshot rather than from the card's rows because an items-only card has none
+                # and still belongs under its account; cards imported before this was recorded were
+                # backfilled from their rows, and the handful that had none stay unattributed.
+                amazon_account_id = snapshot.get("amazon_account_id") or None
+                d["amazon_account_id"] = amazon_account_id
+                d["amazon_account_name"] = None
+                if amazon_account_id:
+                    row = conn.execute(
+                        "SELECT COALESCE(display_name, name) AS n FROM account WHERE id = ?", (amazon_account_id,)
+                    ).fetchone()
+                    d["amazon_account_name"] = row["n"] if row else None
             result.append(d)
 
         # A card with a share of the PayPal reconciliation — a PayPal file, or a sync of a connection that
