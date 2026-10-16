@@ -12,6 +12,31 @@ export function formatDate(dateStr) {
   return format(parseISO(dateStr), 'MMM d, yyyy')
 }
 
+// **The backend's timestamps are UTC and say so nowhere.** `utcnow_iso()` emits
+// `2026-10-16T21:53:00.123456` and SQLite's `datetime('now')` column defaults emit
+// `2026-10-16 21:53:00` — both UTC, neither carrying a `Z` or an offset. `new Date` is specified to
+// read a zone-less *date-time* as **local**, so every displayed time came out shifted by the viewer's
+// own offset: four hours late in New York. Worse for the relative form, which clamps a
+// seemingly-future value to zero and so read a sync from three hours ago as "just now" — the one
+// thing that label exists to rule out.
+//
+// Corrected on the way in rather than at the writer, because the rows already in every database are
+// naive: changing what the backend writes would fix new timestamps and leave every stored one wrong.
+//
+// Anything that already states a zone passes through untouched, as do a `Date`, a number, and a
+// date-only string — `new Date('2026-10-16')` is UTC by specification already, and appending to it
+// would change which day it lands on.
+const ZONELESS_DATETIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/
+
+export function parseTimestamp(value) {
+  if (value == null) return new Date(NaN)
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (ZONELESS_DATETIME.test(trimmed)) return new Date(`${trimmed.replace(' ', 'T')}Z`)
+  }
+  return new Date(value)
+}
+
 // A past moment ("last used", "last synced") as an absolute date and time. This is the default, and the
 // right choice wherever a timestamp sits in a list beside other timestamps: absolute values compare
 // against each other, and a column of "2h ago" / "3h ago" makes the reader do arithmetic to order rows
@@ -22,7 +47,7 @@ export function formatDate(dateStr) {
 // empty-state wording.
 export function formatTimestamp(value) {
   if (!value) return null
-  const parsed = new Date(value)
+  const parsed = parseTimestamp(value)
   if (Number.isNaN(parsed.getTime())) return null
   return parsed.toLocaleString([], {
     year: 'numeric',
@@ -48,7 +73,7 @@ export function formatTimestamp(value) {
 // not happened reads as a bug in the app rather than as a disagreement about the time.
 export function formatRelativeTimestamp(value, now = Date.now()) {
   if (!value) return null
-  const parsed = new Date(value)
+  const parsed = parseTimestamp(value)
   if (Number.isNaN(parsed.getTime())) return null
   const seconds = Math.max(0, Math.round((now - parsed.getTime()) / 1000))
   if (seconds < 45) return 'just now'

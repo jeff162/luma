@@ -16,7 +16,7 @@
 // boundary (the hour it crosses from minutes into hours) slows down on its own.
 
 import { useEffect, useMemo, useState } from 'react'
-import { formatRelativeTimestamp, formatTimestamp } from './utils.js'
+import { formatRelativeTimestamp, formatTimestamp, parseTimestamp } from './utils.js'
 
 const MINUTE = 60 * 1000
 
@@ -36,7 +36,9 @@ export function useRelativeTimestamp(value) {
 
   useEffect(() => {
     if (!value) return undefined
-    const parsed = new Date(value)
+    // The same UTC-aware parse the label uses, or the refresh cadence is computed from an age four
+    // hours out and the label stops being re-rendered when it actually changes.
+    const parsed = parseTimestamp(value)
     if (Number.isNaN(parsed.getTime())) return undefined
     let timer = null
     let alive = true

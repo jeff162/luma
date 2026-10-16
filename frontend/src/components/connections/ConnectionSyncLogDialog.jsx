@@ -26,6 +26,7 @@ import {
   historyDepthSummary, requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
 } from '../../lib/syncLogSummary.js'
 import { connectionProviderLabel } from '../../lib/connectionSummary.js'
+import { parseTimestamp } from '../../lib/utils.js'
 
 // A stable default, so an omitted prop does not read as a new selection on every render.
 const EMPTY_IDS = []
@@ -115,7 +116,7 @@ function EventRow({ entry, summary, when }) {
 function SyncLogRow({ entry }) {
   // Degrade gracefully if a timestamp can't be parsed (e.g. a pre-fix malformed value) — show the raw
   // string rather than "Invalid Date".
-  const parsedWhen = entry.started_at ? new Date(entry.started_at) : null
+  const parsedWhen = entry.started_at ? parseTimestamp(entry.started_at) : null
   const when = parsedWhen && !isNaN(parsedWhen) ? parsedWhen.toLocaleString() : (entry.started_at || '—')
   const summary = connectionEventSummary(entry)
   if (summary) return <EventRow entry={entry} summary={summary} when={when} />
