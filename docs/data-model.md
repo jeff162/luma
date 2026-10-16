@@ -2402,8 +2402,6 @@ and owed decisions*.
 - **Import-source field registry remainder**: report columns drawn from the registry, and structured
   `(field, op, value)` rule matchers.
   → [`backlog/import-source-field-registry.md`](backlog/import-source-field-registry.md)
-- **Folding money-movement recognition into the rule-suggestion engine.**
-  → [`backlog/paypal-money-movement-recognition.md`](backlog/paypal-money-movement-recognition.md)
 - **Recurring detection**: the pool-load cost of a scoped scan, the long-cadence bias on stale series,
   and showing a transfer pair that is not a series.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)

@@ -116,12 +116,6 @@ scale — rather than by feature.
   **filtering and search** by account type: structured filters (the safe half, shippable alone) and the
   `accttype:`/`acctname:` free-text grammar (a design pass, not a feature), which must compile into the
   rule matcher's own `match_expr` rather than fork a second matcher.
-- [paypal-money-movement-recognition.md](paypal-money-movement-recognition.md) — **shipped; deferred
-  remainder only.** PayPal source recognition, force-captured `Type`/`Item Title`, and the user-approved,
-  account-type-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are
-  folded into the main docs; the code citations were repointed at them 2026-09-03. What remains: fold the
-  dedicated review into the generic rule-suggestion engine (cluster by `Type`), which today clusters by
-  merchant name only — so nameless money-movement rows never cluster at all.
 - [transaction-attachments.md](transaction-attachments.md) — **reduced 2026-09-03 to the unbuilt
   extraction tiers.** Phase 1 shipped 2026-08-24 — the `document` table and on-disk store, the
   format-agnostic ingestion seam (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text
@@ -279,6 +273,7 @@ at the first public release, so it cannot point at anything completed before tha
 | Path | Disposed | Fed | File kept? |
 | --- | --- | --- | --- |
 | `docs/backlog/write-lock-contention.md` | 2026-10-15 | **architecture** (*Database concurrency*) — a write and its recurring rescan divided at the commit, and a read endpoint never holding the lock past its own write; **data-model** (*When a scan runs*) — the owed rescan, recorded inside the write and settled by any scan, with its generation and overdue rules; **scale-and-limits** (*Many sessions on one server*) — the browser lane's stall, which outlived the fix and turned out to be Python's interpreter lock, the stress run and how to read it | **No** — deleted. Both defects shipped, and the stall was resolved by capping the lane |
+| `docs/backlog/paypal-money-movement-recognition.md` | 2026-10-15 | Nothing new — the durable half was already in **data-model** (*PayPal source recognition*). Its one deferred item, folding the money-movement review into the generic rule-suggestion engine, was dropped rather than built; why the review stays its own surface is the header comment on `MoneyMovementReviewDialog.jsx` | **No** — deleted |
 | `docs/backlog/import-source-header-evolution.md` | 2026-10-09 | **data-model** — the fingerprint as the last imported file's layout (learned on import, older file takes it back, recognized sources excluded), the capture panel's blind spot that let an added column go uncaptured, and the single `ParsedFile.fingerprint` definition; **ui-patterns** (*Import mapping persistence*) — continuing past the header warning applies the source's mapping rather than re-inferring, and the one thing it drops | **No** — deleted the day it was written. Written as a plan, built in the same session; nothing in it was left unstarted and no code ever cited it |
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
@@ -318,5 +313,5 @@ already begun to decay, naming sections their own file no longer had.
 
 | Path | What it owed | State |
 | --- | --- | --- |
-| `docs/backlog/paypal-money-movement-recognition.md` | Two citations (`services/money_movement.py`, `routers/import_export/core.py`), repointed to `data-model.md`. Also carried a **stale deferred item** — migrating the rules from account-id to account-type scope, which shipped in migration v13 on 2026-07-21 — removed on 2026-09-03 along with the copy of it in `data-model.md` → *Open* | Kept, 28 lines — the fold into the generic rule suggester is unstarted |
+| `docs/backlog/paypal-money-movement-recognition.md` | Two citations (`services/money_movement.py`, `routers/import_export/core.py`), repointed to `data-model.md`. Also carried a **stale deferred item** — migrating the rules from account-id to account-type scope, which shipped in migration v13 on 2026-07-21 — removed on 2026-09-03 along with the copy of it in `data-model.md` → *Open* | Kept, 28 lines; deleted 2026-10-15 when the fold into the generic rule suggester was dropped (see the table above) |
 | `docs/backlog/paypal-amazon-enrichment.md` | **Seven** citations (`lib/api.js`, `routers/import_export/amazon.py`, `services/txn_links.py`, `import_enrichment.py`, `amazon_funding.py`, `amazon_import.py`, `db/database.py`), every one naming a section the file no longer had, repointed to `data-model.md` / `architecture.md` / `mechanism-index.md` | Kept, 64 lines — AZAD ingestion, manual un-suppress, enrich re-derive and the column-centric rework are unstarted |

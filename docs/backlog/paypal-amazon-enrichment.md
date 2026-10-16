@@ -45,7 +45,7 @@ Where the shipped design is documented:
   on and deliberately high-precision, but there is no in-report action to *undo* a specific pairing the user
   disagrees with. (The related "DB-backed editable `Type` vocabulary with an add-this-type prompt" is
   effectively delivered by the user-approved PayPal `Type` rules — see
-  `paypal-money-movement-recognition.md`; a manual per-pair un-suppress for the *structural* pairs is what
+  `data-model.md` → *PayPal source recognition*; a manual per-pair un-suppress for the *structural* pairs is what
   remains.)
 - **Enrich re-derive from stored raw values.** Capture happens at import time, so already-imported rows
   carry only what was captured then; picking up newly-selected evidence columns needs a re-import. A

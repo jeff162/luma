@@ -8,8 +8,13 @@ import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackd
  * Review (and later edit) which PayPal transaction `Type` values are money movement, routing the checked
  * ones to the excluded "Money movement" category. Money-movement types are pre-checked on a first pass;
  * a re-opened review reflects the current state via each proposal's `already_ruled`. Checking a new type
- * creates its (account-scoped) rule; unchecking one that was ruled removes it — so this is the "changed
- * my mind" surface too. The user always decides; nothing is auto-applied. `onApply({ add, remove })`.
+ * creates its (account-type-scoped) rule; unchecking one that was ruled removes it — so this is the
+ * "changed my mind" surface too. The user always decides; nothing is auto-applied. `onApply({ add, remove })`.
+ *
+ * This stays its own surface rather than folding into the generic rule-suggestion review. That review
+ * proposes merchant-keyword rules toward a category the file stated, accepts only, and works per batch;
+ * these rows carry no category, their rules match `Type` scoped to the PayPal account type and are
+ * app-managed, and this review removes as well as adds across every import from the source.
  */
 export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, onOpenReport, applying = false, editing = false }) {
   // Start checked = every type already routed to Money movement, plus (on the post-import auto-review, not
