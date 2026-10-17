@@ -8,26 +8,10 @@
  * padding.
  *
  * `CornerTab` draws the muted tab: a button when given `onClick`, a label otherwise. A host that needs a
- * different control in the corner takes the geometry alone from `cornerTabStyle`.
+ * different control in the corner takes the geometry alone from `cornerTabStyle` (`lib/cornerTab.js`).
  */
 
-const RADIUS_BY_CORNER = {
-  // CSS order: top-left, top-right, bottom-right, bottom-left.
-  'top-left': r => `${r}px 0 ${r}px 0`,
-  'top-right': r => `0 ${r}px 0 ${r}px`,
-  'bottom-right': r => `${r}px 0 ${r}px 0`,
-  'bottom-left': r => `0 ${r}px 0 ${r}px`,
-}
-
-export function cornerTabStyle({ corner, radius }) {
-  const [vertical, horizontal] = corner.split('-')
-  return {
-    position: 'absolute',
-    [vertical]: -1,
-    [horizontal]: -1,
-    borderRadius: RADIUS_BY_CORNER[corner](radius),
-  }
-}
+import { cornerTabStyle } from '../lib/cornerTab.js'
 
 const SIZES = {
   md: { minHeight: 26, padding: '4px 14px', fontSize: 12 },

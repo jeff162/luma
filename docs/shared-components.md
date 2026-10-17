@@ -82,7 +82,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `Button`'s `progress` | A long action reporting progress on the button that started it. | `components/ui.jsx` |
 | `COMPACT_ACTION_BTN_STYLE` with `variant="ghost"` | An action repeated on every row. | `components/ui.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
-| `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx` |
+| `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
 | `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions. | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 

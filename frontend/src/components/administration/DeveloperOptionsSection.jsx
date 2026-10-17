@@ -6,7 +6,7 @@ import { api } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { localStore, sessionStore } from '../../lib/browserStorage.js'
 import { Card, Button, AppConfirmDialog } from '../ui.jsx'
-import { cornerTabStyle } from '../CornerTab.jsx'
+import { cornerTabStyle } from '../../lib/cornerTab.js'
 
 function clearBrowserStoredState() {
   localStore.clear()
