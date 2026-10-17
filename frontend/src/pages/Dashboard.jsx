@@ -2723,6 +2723,15 @@ export default function Dashboard() {
   }
 
   const pieGroupRows = viewIsIncome ? incomeRows : groupRows
+  // The drill tiles show the selected row's figure from the lists as they stand, not from the copy taken
+  // when it was drilled into: an edit refreshes the lists in place, and a copy would keep the old total.
+  // A row the refreshed list no longer holds has nothing left in the period.
+  const selectedGroupTotal = selectedGroup
+    ? [...groupRows, ...incomeRows].find(r => r.group_id === selectedGroup.group_id)?.total ?? 0
+    : 0
+  const selectedCatTotal = selectedCat
+    ? (selectedGroup ? catRows : topCatRows).find(r => r.category_id === selectedCat.category_id)?.total ?? 0
+    : 0
   const coloredGroupRows = assignColors(pieGroupRows, 'group_color')
   const coloredCatRows = assignColors(catRows, 'category_color')
   const coloredTopCatRows = assignColors(topCatRows, 'category_color')
@@ -2984,13 +2993,13 @@ export default function Dashboard() {
                   {selectedGroup && level !== 'groups' && (
                     <Card style={{ padding: '14px 24px' }}>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{selectedGroup.group_name}</div>
-                      <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedGroup.total)}</div>
+                      <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedGroupTotal)}</div>
                     </Card>
                   )}
                   {selectedCat && level === 'transactions' && (
                     <Card style={{ padding: '14px 24px' }}>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{selectedCat.category_name}</div>
-                      <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedCat.total)}</div>
+                      <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedCatTotal)}</div>
                     </Card>
                   )}
                 </div>
