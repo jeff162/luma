@@ -111,6 +111,18 @@ const SPENDING_VIEW_BY_BUILTIN_OPTIONS = [
 // selection (`spendingViewBy`) is per-user. The picker exposes each saved report as a value of
 // `${TAG_REPORT_PREFIX}${id}`, alongside the two built-in `group` and `category` options and a
 // `+ Tag report` action that opens the builder.
+// A slot written by more than one caller (its scope effect, the in-place refresh after an edit or a sync,
+// a drill) receives overlapping requests routinely, and only the newest may land. The ticket counts calls
+// rather than comparing the query: two loads of one query still differ when the ledger changed between
+// them, and an older answer arriving last would otherwise win.
+function useLatestRequest() {
+  const seq = useRef(0)
+  return useCallback(() => {
+    const ticket = ++seq.current
+    return () => ticket === seq.current
+  }, [])
+}
+
 function makeTagReportId() {
   return `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
@@ -1955,12 +1967,23 @@ export default function Dashboard() {
       accountId, tagIds, ownerIds, ...summaryFilters,
     })
     : null
+  // One ticket per slot the in-place refresh shares with a scope effect or a drill (see useLatestRequest).
+  const beginSingleTotals = useLatestRequest()
+  const beginCompareTotals = useLatestRequest()
+  const beginCashFlowTrend = useLatestRequest()
+  const beginTrendGroups = useLatestRequest()
+  const beginTagSignatureBuckets = useLatestRequest()
+  const beginGroupCategories = useLatestRequest()
+  const beginCompareCategories = useLatestRequest()
+
   // The tag report's pie is aggregated server-side (/summary/by-tag-signature) so it can't truncate on a
   // large period the way the old client-side aggregation over a capped /transactions fetch did. The
   // report's tags define the slices (selected_tag_ids); the shared filters narrow the rows. Extracted as
   // a callback so both the scope-change effect and the `luma:transactions-changed` handler can reload it.
-  const loadTagSignatureBuckets = useCallback(() => (
-    api.getTagSignatureTotals(
+  // Resolves to null when a newer load has started since, which callers leave unapplied.
+  const loadTagSignatureBuckets = useCallback(() => {
+    const isLatest = beginTagSignatureBuckets()
+    return api.getTagSignatureTotals(
       (activeTagReport?.tagIds || []).join(','),
       {
         date_start: dateStart || undefined,
@@ -1972,8 +1995,8 @@ export default function Dashboard() {
         exclude_expense: viewIsIncome,
       },
       summaryFilters,
-    ).then(resp => (Array.isArray(resp) ? resp : []))
-  ), [activeTagReport, dateStart, dateEnd, accountId, ownerIds, tagIds, viewIsIncome, summaryFilters])
+    ).then(resp => (isLatest() ? (Array.isArray(resp) ? resp : []) : null))
+  }, [activeTagReport, dateStart, dateEnd, accountId, ownerIds, tagIds, viewIsIncome, summaryFilters, beginTagSignatureBuckets])
   useEffect(() => {
     if (mode !== 'single' || !activeTagReport) {
       setTagSignatureBuckets([])
@@ -1984,7 +2007,7 @@ export default function Dashboard() {
     setTagModeLoading(true)
     loadTagSignatureBuckets().then(buckets => {
       if (cancelled) return
-      setTagSignatureBuckets(buckets)
+      if (buckets) setTagSignatureBuckets(buckets)
       setTagModeLoading(false)
     }).catch(() => {
       if (cancelled) return
@@ -2317,6 +2340,7 @@ export default function Dashboard() {
   // the drill-reset that a real mode/filter navigation does. The top-half summary respects the selected
   // date slice; the bottom-half trend reads all of history and only highlights the slice.
   const loadSingleTotals = useCallback(async () => {
+    const isLatest = beginSingleTotals()
     const isIncomeView = activeFrame === DASHBOARD_VIEW_INCOME
     // The cash-flow frame reports both directions, so neither side is excluded from the category
     // breakdown it reads; the spending and income frames each keep to their own half.
@@ -2327,11 +2351,12 @@ export default function Dashboard() {
       api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds,
         !isCashFlowView && !isIncomeView, !isCashFlowView && isIncomeView, summaryFilters),
     ])
+    if (!isLatest()) return
     setGroupRows(g.filter(r => r.category_type !== 'income'))
     setIncomeRows(g.filter(r => r.category_type === 'income'))
     setSingleTrendRows(tr)
     setTopCatRows(c)
-  }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeFrame])
+  }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeFrame, beginSingleTotals])
 
   // The trend keys on the *explicit* pick, not the Dashboard default: with no chip it is not tied to a
   // period, so it opens monthly with nothing highlighted, and an explicit "All time" is rangeless and
@@ -2454,13 +2479,15 @@ export default function Dashboard() {
   // transaction-change refresh so an edit updates them without resetting the user's drill.
   const loadCompareTotals = useCallback(async () => {
     if (!periodA || !periodB) return
+    const isLatest = beginCompareTotals()
     const [a, b] = await Promise.all([
       fetchPeriodGroupTotals(periodA, accountId, tagIds, ownerIds, summaryFilters),
       fetchPeriodGroupTotals(periodB, accountId, tagIds, ownerIds, summaryFilters),
     ])
+    if (!isLatest()) return
     setCmpGroupsA(a)
     setCmpGroupsB(b)
-  }, [periodA, periodB, accountId, tagIds, ownerIds, summaryFilters])
+  }, [periodA, periodB, accountId, tagIds, ownerIds, summaryFilters, beginCompareTotals])
 
   const loadTrendSeries = useCallback(async () => {
     // Fetch the full visible history (20-year bound) so the window chooser and Annual totals can reach
@@ -2476,13 +2503,15 @@ export default function Dashboard() {
   // into. Same 20-year window as the other trends, so the window chooser reaches every year in the data. The
   // yearly rows are a second call rather than a sum of the monthly ones — see buildCashFlowAnnualSeries.
   const loadCashFlowTrend = useCallback(async () => {
+    const isLatest = beginCashFlowTrend()
     const [rows, yearRows] = await Promise.all([
       api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, summaryFilters),
       api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, { ...summaryFilters, granularity: 'year' }),
     ])
+    if (!isLatest()) return
     setCashFlowTrendRows(rows)
     setCashFlowAnnualRows(yearRows)
-  }, [accountId, tagIds, ownerIds, summaryFilters])
+  }, [accountId, tagIds, ownerIds, summaryFilters, beginCashFlowTrend])
 
   // The picker offers the groups with transactions in the window on screen, under the same filters — the
   // groups the averages table lists at "All groups". Keyed on the window's dates rather than the object,
@@ -2490,9 +2519,11 @@ export default function Dashboard() {
   const loadTrendGroups = useCallback(async () => {
     if (!trendWindowStart || !trendWindowEnd) return
     const wantIncome = activeFrame === DASHBOARD_VIEW_INCOME
+    const isLatest = beginTrendGroups()
     const g = await api.getGroupTotals(undefined, accountId || undefined, trendWindowStart, trendWindowEnd, ownerIds, undefined, tagIds, summaryFilters)
+    if (!isLatest()) return
     setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
-  }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame, trendWindowStart, trendWindowEnd])
+  }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame, trendWindowStart, trendWindowEnd, beginTrendGroups])
 
   useEffect(() => {
     if (mode !== 'single') return
@@ -2516,28 +2547,30 @@ export default function Dashboard() {
       loadSingleTotals()
       loadSpanTrend()
       if (selectedGroup?.group_id) {
+        const isLatest = beginGroupCategories()
         api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
-          .then(setCatRows)
+          .then(rows => { if (isLatest()) setCatRows(rows) })
       }
       // The tag report is a separate data path from the group/category totals above, so refresh its
       // buckets too — otherwise recategorizing a transaction out of a tagged category (e.g. from the
       // TagDetail panel) leaves the wedges stale.
       if (activeTagReport) {
-        loadTagSignatureBuckets().then(setTagSignatureBuckets).catch(() => { })
+        loadTagSignatureBuckets().then(buckets => { if (buckets) setTagSignatureBuckets(buckets) }).catch(() => { })
       }
     } else if (mode === 'compare') {
       loadCompareTotals()
       if (cmpGroup?.group_id) {
+        const isLatest = beginCompareCategories()
         Promise.all([
           fetchPeriodCatTotals(periodA, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
           fetchPeriodCatTotals(periodB, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
-        ]).then(([a, b]) => { setCmpCatsA(a); setCmpCatsB(b) })
+        ]).then(([a, b]) => { if (isLatest()) { setCmpCatsA(a); setCmpCatsB(b) } })
       }
     } else if (mode === 'trends') {
       if (viewIsCashFlow) loadCashFlowTrend()
       else { loadTrendSeries(); loadTrendGroups() }
     }
-  }, [mode, viewIsCashFlow, loadSingleTotals, loadSpanTrend, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets])
+  }, [mode, viewIsCashFlow, loadSingleTotals, loadSpanTrend, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets, beginGroupCategories, beginCompareCategories])
   useEffect(() => {
     window.addEventListener('luma:transactions-changed', refreshTotalsInPlace)
     return () => window.removeEventListener('luma:transactions-changed', refreshTotalsInPlace)
@@ -2596,13 +2629,14 @@ export default function Dashboard() {
     // `finally`, so a failure propagates exactly as it did before — the spinner is the only thing this
     // changes. `setLevel` not having run is what leaves the view where it started.
     try {
+      const isLatest = beginGroupCategories()
       const rows = await api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
-      setCatRows(rows)
+      if (isLatest()) setCatRows(rows)
       setLevel('categories')
     } finally {
       setDrillLoading(false)
     }
-  }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters])
+  }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters, beginGroupCategories])
 
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
   // queued group isn't present in this slice (e.g. zero spend that month), drop the queue
@@ -2673,12 +2707,15 @@ export default function Dashboard() {
     setDrillLoading(true)
     setCmpGroup(groupRow)
     try {
+      const isLatest = beginCompareCategories()
       const [a, b] = await Promise.all([
         fetchPeriodCatTotals(periodA, groupId, accountId, tagIds, ownerIds, summaryFilters),
         fetchPeriodCatTotals(periodB, groupId, accountId, tagIds, ownerIds, summaryFilters),
       ])
-      setCmpCatsA(a)
-      setCmpCatsB(b)
+      if (isLatest()) {
+        setCmpCatsA(a)
+        setCmpCatsB(b)
+      }
       setCmpLevel('categories')
     } finally {
       setDrillLoading(false)
