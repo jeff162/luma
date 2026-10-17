@@ -19,6 +19,7 @@ import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
 import RuleFindingsDialog from '../components/RuleFindingsDialog.jsx'
 import { RuleMatcherText } from '../components/RuleSummary.jsx'
+import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../components/detailShared.jsx'
 import { formatRuleMatcher } from '../lib/ruleMatcher.js'
 import { formatDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
@@ -283,6 +284,11 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
   // choice made about an edit the user then abandoned.
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteReconcile, setDeleteReconcile] = useState(false)
+  // A floating panel that moves and resizes, so it can sit beside the rule checkup that opened it.
+  const geometry = useRestorablePanelGeometry('ui.rules.editorPanel', { fallbackWidth: 760, fallbackHeight: 900 })
+  // Until it has a remembered place, it opens one step down and right of center, so a checkup opened
+  // behind it keeps its header in view.
+  const chrome = useDetailPanelChrome(onCancel, { forceFloating: true, stackIndex: geometry.initialPosition ? 0 : 1, ...geometry })
 
   if (!rule) return null
 
@@ -332,41 +338,23 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
   }
 
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      zIndex: 120,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '28px 32px',
-      background: 'rgba(10, 15, 26, 0.38)',
-      backdropFilter: 'blur(2px)',
-    }}>
-      <Card style={{
-        width: 'min(760px, 100%)',
-        maxHeight: 'calc(100vh - 160px)',
-        padding: 0,
-        overflow: 'hidden',
-        boxShadow: '0 24px 70px rgba(0,0,0,0.28)',
-        border: '1px solid color-mix(in srgb, var(--accent) 18%, var(--border))',
-      }}>
-        <div style={{
-          padding: '12px 20px',
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--surface2)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}>
+    <DetailPanelShell
+      {...chrome}
+      onClose={onCancel}
+      bodyPadding={0}
+      header={(
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 600 }}>Edit rule</div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
               Update conditions and actions without leaving the rules list
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+          {/* The header is the drag handle; a press on a control here is a press, not the start of a drag. */}
+          <div
+            onMouseDown={event => event.stopPropagation()}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0, cursor: 'default' }}
+          >
             <label
               title="Re-evaluate the transactions this rule previously categorized: rows this edit no longer covers revert (to another matching rule or uncategorized) instead of keeping this rule's old category. Off leaves existing categorizations as they are."
               style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', cursor: working ? 'not-allowed' : 'pointer', marginRight: 4 }}
@@ -411,7 +399,8 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
             </button>
           </div>
         </div>
-        <div style={{ maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
+      )}
+    >
           {error ? (
             <div style={{ padding: '8px 20px 0', fontSize: 12, color: 'var(--danger)' }}>
               {error}
@@ -428,8 +417,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
             hideFooterActions
             onDraftChange={setDraftState}
           />
-        </div>
-      </Card>
 
       {/* Portalled: `AppDialog` does not portal itself, and mounted here it would stack and position
           against this overlay's own fixed, blurred backdrop rather than the viewport. See
@@ -462,7 +449,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
         </AppConfirmDialog>,
         document.body,
       ) : null}
-    </div>
+    </DetailPanelShell>
   )
 }
 
@@ -505,6 +492,9 @@ export default function Rules() {
   const [cleanupWindow, setCleanupWindow] = useUserPreference('ui.rules.cleanupWindow', '')
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [findingsOpen, setFindingsOpen] = useState(false)
+  // Bumped when a rule edit or delete is saved, so an open checkup re-runs its checks (it stays mounted,
+  // hidden, while a rule it opened is edited).
+  const [checkupRefreshKey, setCheckupRefreshKey] = useState(0)
   const [rangeDriftCount, setRangeDriftCount] = useState(0)
   const {
     pendingCount: recategorizePendingCount,
@@ -712,6 +702,7 @@ export default function Rules() {
     setCollision(null)
     if (fromEdit) {
       setEditingRuleId(null)
+      setCheckupRefreshKey(key => key + 1)
       loadRules()
       loadRecategorizePreview()
     } else {
@@ -741,6 +732,7 @@ export default function Rules() {
     }
     if (applyToExisting) await txnMutations.applyRule(editingRuleId)
     setEditingRuleId(null)
+    setCheckupRefreshKey(key => key + 1)
     loadRules()
     loadRecategorizePreview()
   }
@@ -748,6 +740,7 @@ export default function Rules() {
   async function handleDelete(id, reconcile = false) {
     await api.deleteRule(id, { reconcile })
     if (editingRuleId === id) setEditingRuleId(null)
+    setCheckupRefreshKey(key => key + 1)
     loadRules()
     loadRecategorizePreview()
   }
@@ -1098,8 +1091,18 @@ export default function Rules() {
 
       {/* Mounted only while open, so its local working/error/reconcile state can't leak into the next
           edit session (the component otherwise renders null but stays mounted). */}
+      {/* The editor and the checkup float above the page and can be moved freely, but the rules list
+          behind them stays out of reach while either is open: a click on another rule's edit control
+          would swap the editor's rule and drop unsaved changes. Sits just under the panel stack. */}
+      {editingRule || findingsOpen ? (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(10, 15, 26, 0.38)' }} />
+      ) : null}
+
       {editingRule ? (
         <EditRuleOverlay
+          // Keyed by rule: "Open the other rule" swaps the rule in place, and the form seeds its fields
+          // only when it mounts.
+          key={editingRule.id}
           rule={editingRule}
           categories={categories}
           owners={owners}
@@ -1166,8 +1169,11 @@ export default function Rules() {
           // Closing re-reads the badge: widening a range or dismissing a charge inside the panel is
           // exactly what changes it, and a badge still showing the old number reads as a failed action.
           onClose={() => { setFindingsOpen(false); loadRangeDriftCount() }}
-          onEditRule={id => { setFindingsOpen(false); loadRangeDriftCount(); openEditForm(id) }}
+          // The editor opens as a second floating panel above this one, which stays open with its
+          // results so the two can be arranged side by side.
+          onEditRule={openEditForm}
           onRulesChanged={() => { loadRules(); loadRecategorizePreview() }}
+          refreshKey={checkupRefreshKey}
         />
       ) : null}
 

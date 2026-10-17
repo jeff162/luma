@@ -849,6 +849,9 @@ export function DetailPanelShell({
   // scroll has to stay with the list, since that is what drives its paging. The cost is that a short
   // list leaves empty room below it, so this is for list panels rather than the chart+list ones.
   fillHeight = false,
+  // A body that lays out its own sections edge to edge (a form whose sections carry their own padding
+  // and full-width dividers) passes 0, so the shell's inset does not double it.
+  bodyPadding = '20px 24px',
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
@@ -951,7 +954,7 @@ export function DetailPanelShell({
             instead of silently clipping at the bottom. The transaction list inside still owns
             its own bounded scroll for the rows; the outer scroll here is for the panel-level
             content stack. */}
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: bodyPadding, display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
         {onResizeStart && PANEL_RESIZE_HANDLES.map(handle => (

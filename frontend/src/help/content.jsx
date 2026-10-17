@@ -1818,7 +1818,7 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, and two separate keywords that both turn up in one merchant name, each of which requires refining the conditions. It also lists merchant names where one contains the other, which is fine but does not always resolve the way it reads, rules which are essentially duplicates of each other where one can be deleted outright, and pairs that compete over nothing because both rules file the same way.',
+    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, and two separate keywords that both turn up in one merchant name, each of which requires refining the conditions. It also lists merchant names where one contains the other, pairs where an owner or account limit lets the shorter keyword win, rules which are essentially duplicates of each other where one can be deleted outright, and pairs that compete over nothing because both rules file the same way.',
     body: () => (
       <>
         <p>
@@ -1843,6 +1843,7 @@ export const HELP_TOPICS = [
           found, and each rule can be opened for editing from there. The report also lists{' '}
           <HelpLink to="/help/rule-amount-drift">charges that have drifted out of a rule's range</HelpLink>.
         </p>
+        <p>*needs review*</p>
         <p>
           Rule checkup reports:
         </p>
@@ -1864,19 +1865,19 @@ export const HELP_TOPICS = [
             reaching further than intended.
           </li>
           <li>
-            <strong>Merchant criteria that nest</strong> -- one rule's keyword contained in
-            another's, such as <em>northgate</em> and <em>northgate prime</em>. Nothing is wrong
-            here, and it is listed only so the outcome is visible: usually the longer keyword wins, but
-            because scope is settled first, a short keyword scoped to an owner or an account matches transactions
-            that otherwise would be matched to the longer keyword.
+            <strong>Merchant matchers that nest</strong> -- one rule's keyword contained in
+            another's, such as <em>northgate</em> and <em>northgate prime</em>, with no owner or account
+            limit on the shorter one that the longer one lacks. Nothing is wrong here: the longer keyword
+            wins where both match, and the pair is listed so that is visible. Where both rules take the
+            same action, and the shorter one takes every charge the longer one does, the longer one changes
+            nothing, so the finding offers to <strong>delete</strong> it, recoverable from the rules trash.
           </li>
           <li>
-            <strong>A nesting pair can also be surplus.</strong> Where both rules file to the same
-            category and carry the same owner, account and debit/credit limits, the narrower one changes
-            nothing -- the broader rule would file those transactions identically, so the finding
-            offers to <strong>delete</strong> it, recoverable from the rules trash. The offer appears on
-            the narrower rule alone. Where the two differ in a rename or a tag,
-            the finding says what those transactions would gain or lose before anything is removed.
+            <strong>Rules where a limit decides</strong> -- the same nesting, but the shorter keyword is
+            limited to an owner or an account the longer one is not. Neither rule contains the other, and
+            because owner and account limits count before keyword length, the shorter keyword wins on
+            that owner's or account's transactions. It is listed only when a real transaction matches both
+            and the two rules do different things to it.
           </li>
         </ul>
         <p>
@@ -1893,8 +1894,9 @@ export const HELP_TOPICS = [
           pairs from either of the two sections above whose two rules apply the same category, rename,
           tags and recurring setting. Those pairs contend over an outcome that is identical whichever
           rule wins -- two spellings of one merchant filing to one place is the usual shape -- so
-          nothing needs refining and they can be dismissed. A dismissal there lapses if the two rules
-          ever stop agreeing, which puts the pair back among the warnings.
+          nothing needs refining and they can be dismissed. Where every transaction one of the two rules
+          matches is matched by the other as well, the finding offers to delete it. A dismissal there
+          lapses if the two rules ever stop agreeing, which puts the pair back among the warnings.
         </p>
         <p>
           <strong>Overlapping ranges and rules matching the same transaction cannot be dismissed.</strong>{' '}

@@ -11,12 +11,10 @@
 // out to it would loosen the rule for nothing.
 //
 // The properties that break quietly, and the delete's placement is the one most likely to be "corrected"
-// back to where it looks like it belongs. **Delete is on the nesting half, not the overlap half.** An
-// overlap is a modelling ambiguity whose answer is to refine the conditions, so removing a side is
-// picking a winner rather than fixing anything — the panel must offer no removal and no amount edit
-// there. A nesting pair whose two rules file to one category under one scope has a genuinely surplus
-// narrow rule, which is what delete is for; it is offered on the narrow rule alone, because deleting
-// the broad one strands every row the narrow matcher misses.
+// back to where it looks like it belongs. **Delete appears only on the rule the server marks removable**
+// (`removable_rule_id`), never on an overlap that changes the outcome. That overlap is a modelling
+// ambiguity whose answer is to refine the conditions, so removing a side is picking a winner rather than
+// fixing anything — the panel must offer no removal and no amount edit there.
 //
 // Dismissal follows whether the winner changes anything, not whether the finding is a warning. A live
 // overlap or co-match offers no Dismiss, because waving one through would let the panel call an
@@ -27,12 +25,10 @@
 // The co-match card is the one that leads with a transaction. That is not decoration: unlike every other
 // finding here it cannot be derived from the rules alone, so the row is what makes it true.
 //
-// Three more. The per-card sentence must say something specific to that pair — a restatement of the
-// section header repeats itself down a panel of thirty findings and earns nothing. The redundancy flag
-// covers the *category* only, so a rename or tag held by one rule and not the other has to be called out
-// before the delete, or it changes hands silently. And a pair meeting at a single amount has to name
-// that amount rather than render an empty-looking range, since capping one rule at the other's floor
-// produces exactly that.
+// Two more. The per-card sentence must say something specific to that pair — a restatement of the
+// section header repeats itself down a panel of thirty findings and earns nothing. And a pair meeting at
+// a single amount has to name that amount rather than render an empty-looking range, since capping one
+// rule at the other's floor produces exactly that.
 
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
@@ -48,6 +44,10 @@ vi.mock('../../lib/api.js', () => ({
     getRuleRangeDrift: vi.fn(), updateRule: vi.fn(),
     dismissRuleRangeDrift: vi.fn(), restoreRuleRangeDrift: vi.fn(),
   },
+}))
+// Panel geometry is remembered as a user preference; nothing here exercises that.
+vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
+  useUserPreference: (_key, fallback) => [fallback, () => {}],
 }))
 vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn() } }))
 
@@ -75,7 +75,7 @@ const RULES = {
   },
   aji: {
     id: 'aji', keyword: 'aji', clauses: ['aji'], amount_min: null, amount_max: null, debit_credit: 'both',
-    category_id: 'c5', category_name: 'Restaurants', clean_name: 'AJI Newton', match_source_text: 1, tags: [],
+    category_id: 'c5', category_name: 'Restaurants', match_source_text: 1, tags: [],
   },
   ajiRestaurant: {
     id: 'ajiRestaurant', keyword: 'aji restaurant', clauses: ['aji restaurant'],
@@ -92,13 +92,19 @@ const OVERLAP = {
 // Categories differ, so the narrow rule is doing work of its own and is not removable.
 const NESTING = {
   kind: 'matcher_nesting', key: 'matcher_nesting:short:long', severity: 'info',
-  rule_ids: ['short', 'long'], winner_rule_id: 'long', narrower_is_redundant: false, dismissible: true,
+  rule_ids: ['short', 'long'], winner_rule_id: 'long', removable_rule_id: null, dismissible: true,
 }
-// The shape the user actually has: one category, one scope, so the narrow half is surplus.
+// The shape the user actually has: both rules do the same thing, so the narrow half is surplus.
 const REDUNDANT = {
   kind: 'matcher_nesting', key: 'matcher_nesting:aji:ajiRestaurant', severity: 'info',
-  rule_ids: ['aji', 'ajiRestaurant'], winner_rule_id: 'ajiRestaurant', narrower_is_redundant: true,
+  rule_ids: ['aji', 'ajiRestaurant'], winner_rule_id: 'ajiRestaurant', removable_rule_id: 'ajiRestaurant',
   dismissible: true,
+}
+// The shorter keyword wins on the owner limit only it carries.
+const SCOPE_SPLIT = {
+  kind: 'matcher_scope_split', key: 'matcher_scope_split:long:short', severity: 'info', dismissible: true,
+  rule_ids: ['short', 'long'], winner_rule_id: 'short', deciding_scope: 'owner', removable_rule_id: null,
+  txn_count: 1, txn_id: 't8', txn_date: '2026-06-03', txn_name: 'NORTHGATE PRIME', amount: 40,
 }
 
 // Two matchers that neither repeat nor contain each other, caught on a real row. The card leads with
@@ -153,21 +159,21 @@ function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissed
   txnMutations.widenRuleRange.mockResolvedValue({ updated: 1 })
   const onEditRule = vi.fn()
   const onRulesChanged = vi.fn()
-  render(<RuleFindingsDialog onClose={vi.fn()} onEditRule={onEditRule} onRulesChanged={onRulesChanged} />)
-  return { onEditRule, onRulesChanged }
+  const onClose = vi.fn()
+  const dialog = props => (
+    <RuleFindingsDialog onClose={onClose} onEditRule={onEditRule} onRulesChanged={onRulesChanged} {...props} />
+  )
+  const { rerender } = render(dialog({}))
+  return { onEditRule, onRulesChanged, rerender: props => rerender(dialog(props)) }
 }
 
 describe('RuleFindingsDialog', () => {
-  it('explains a nesting pair only when the broader rule is the one that wins', async () => {
-    renderDialog([NESTING])
-    await screen.findByText(/Merchant matchers that nest/)
-    // The narrower matcher wins, which is what a reader expects — nothing to explain.
-    expect(screen.queryByText(/rule wins here/)).toBeNull()
-
-    cleanup()
-    renderDialog([{ ...NESTING, winner_rule_id: 'short' }])
-    await screen.findByText(/Merchant matchers that nest/)
-    expect(screen.getByText(/rule wins here/)).toBeTruthy()
+  it('says which limit lets the shorter keyword win, and what that changes', async () => {
+    renderDialog([SCOPE_SPLIT])
+    await screen.findByText(/Rules where a limit decides/)
+    const note = screen.getByText(/#1 is limited to Alex/).textContent
+    expect(note).toMatch(/NORTHGATE PRIME/)
+    expect(note).toMatch(/#1 files to Shopping where #2 files to Subscriptions/)
   })
 
   it('separates the kinds and counts them apart', async () => {
@@ -225,28 +231,28 @@ describe('RuleFindingsDialog', () => {
     await screen.findByText(/Amount ranges that overlap/)
     expect(screen.getAllByText('Edit').length).toBe(2)
     expect(screen.queryByText('Delete')).toBeNull()
-    expect(screen.getByText(/Refining the two rules/)).toBeTruthy()
+    expect(screen.getByText(/Which rule wins is arbitrary/)).toBeTruthy()
   })
 
   it('offers no delete on a nesting pair whose narrow rule files elsewhere', async () => {
     renderDialog([NESTING])
     await screen.findByText(/Merchant matchers that nest/)
     expect(screen.queryByText('Delete')).toBeNull()
-    expect(screen.getByText(/doing work of its own/)).toBeTruthy()
+    expect(screen.getByText('#2 files to Subscriptions where #1 files to Shopping.')).toBeTruthy()
   })
 
-  it('dismisses a finding and re-runs the check', async () => {
+  it('dismisses an overlap finding in place, without re-running the ledger scan', async () => {
     renderDialog([NESTING])
     await userEvent.click(await screen.findByText('Dismiss'))
     expect(api.dismissRuleOverlap).toHaveBeenCalledWith(NESTING.key, 'matcher_nesting')
-    await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Nothing left to look at — 1 dismissed.')).toBeTruthy()
+    expect(api.getRuleOverlaps).toHaveBeenCalledTimes(1)
   })
 
   it('never offers to dismiss an overlap, whose winner is arbitrary rather than informative', async () => {
     renderDialog([OVERLAP])
     await screen.findByText(/Amount ranges that overlap/)
     expect(screen.queryByText('Dismiss')).toBeNull()
-    expect(screen.getByText(/stays listed until then/)).toBeTruthy()
   })
 
   it('hides the reveal control until there is something dismissed to reveal', async () => {
@@ -255,22 +261,36 @@ describe('RuleFindingsDialog', () => {
     expect(screen.queryByLabelText(/Show dismissed/)).toBeNull()
   })
 
-  it('reveals dismissed findings on request, and offers to restore them', async () => {
-    renderDialog([NESTING], { dismissedCount: 3 })
-    await userEvent.click(await screen.findByLabelText(/Show dismissed \(3\)/))
-    await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledWith({ includeDismissed: true }))
-
-    cleanup()
+  it('reveals dismissed findings on request, and restores one in place', async () => {
     renderDialog([{ ...NESTING, dismissed: true }], { dismissedCount: 1 })
+    await screen.findByText('Nothing left to look at — 1 dismissed.')
+    expect(screen.queryByText('Restore')).toBeNull()
+    await userEvent.click(screen.getByLabelText(/Show dismissed \(1\)/))
     await userEvent.click(await screen.findByText('Restore'))
     expect(api.restoreRuleOverlap).toHaveBeenCalledWith(NESTING.key)
+    expect(await screen.findByText('1 for information')).toBeTruthy()
+    // Revealing and restoring are drawn from the one fetch, which already carried the dismissed set.
+    expect(api.getRuleOverlaps).toHaveBeenCalledTimes(1)
+    expect(api.getRuleOverlaps).toHaveBeenCalledWith({ includeDismissed: true })
+  })
+
+  it('re-runs its checks when an edit it opened is saved, and not before', async () => {
+    const { rerender } = renderDialog([NESTING])
+    await screen.findByText(/Merchant matchers that nest/)
+    rerender({})
+    expect(api.getRuleOverlaps).toHaveBeenCalledTimes(1)
+    rerender({ refreshKey: 1 })
+    await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledTimes(2))
+    // The results stay on screen while it re-runs.
+    expect(screen.getByText(/Merchant matchers that nest/)).toBeTruthy()
   })
 
   it('never counts a revealed dismissal as work still to do', async () => {
     renderDialog([{ ...NESTING, dismissed: true }], { dismissedCount: 1 })
+    await userEvent.click(await screen.findByLabelText(/Show dismissed \(1\)/))
     // Not "0 to settle, 1 for information" — the one on screen is already acknowledged.
-    expect(await screen.findByText('Nothing left to look at — 1 dismissed.')).toBeTruthy()
-    expect(screen.getByText('Restore')).toBeTruthy()
+    expect(await screen.findByText('Restore')).toBeTruthy()
+    expect(screen.getByText('Nothing left to look at — 1 dismissed.')).toBeTruthy()
     expect(screen.queryByText('Dismiss')).toBeNull()
   })
 
@@ -353,6 +373,12 @@ describe('RuleFindingsDialog', () => {
     expect(screen.queryByText('Amount ranges that overlap')).toBeNull()
     expect(screen.queryByText('Rules that match the same transaction')).toBeNull()
     expect(screen.getAllByText('Dismiss').length).toBe(2)
+  })
+
+  it('offers to delete a benign pair\'s rule only where the other matches its every transaction', async () => {
+    renderDialog([{ ...CO_MATCH_BENIGN, removable_rule_id: 'short' }])
+    expect(await screen.findByText(/#2 has no transactions outside #1’s/)).toBeTruthy()
+    expect(screen.getAllByText('Delete').length).toBe(1)
   })
 
   it('dismisses a benign pair through the overlap store', async () => {

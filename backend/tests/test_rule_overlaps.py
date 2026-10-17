@@ -15,10 +15,10 @@ over nothing, and several tests exist only to stop the check calling that a prob
 to the fixtures — `_rule` twice over makes a pair that *agrees*, so a test about the warning path has to
 use `_differing` or it is quietly testing the benign one.
 
-The `narrower_is_redundant` cases carry their own weight, because the flag gates a delete button and the
-tempting version of it is wrong: same category is not sufficient. A scope or direction difference means
-the broad rule is not a superset after all, and removing the narrow rule would strand the rows the broad
-one cannot reach.
+The `removable_rule_id` cases carry their own weight, because the flag gates a delete button and the
+tempting version of it is wrong: same category is not sufficient. A rename or tag only one rule carries,
+or a range or direction the broad rule does not cover, means removing the narrow rule would change or
+strand rows the broad one does not handle the same way.
 """
 
 from __future__ import annotations
@@ -278,13 +278,39 @@ class RuleOverlapsTests(unittest.TestCase):
         self._rule(keyword="north")
         self.assertEqual(self._findings("matcher_nesting"), [])
 
-    def test_the_winner_is_not_always_the_longer_keyword(self):
-        # The whole reason this finding is worth reading: scope outranks keyword length, so the short
-        # owner-scoped rule takes that owner's rows from the longer global one.
-        scoped = self._rule(keyword="northgate", owner_id=SHARED_OWNER_ID)
+    def test_a_limit_only_the_shorter_keyword_carries_is_a_split_not_a_nesting(self):
+        # Neither rule contains the other: one is limited to an account, the other has the longer keyword.
+        # Scope outranks keyword length, so the short account-scoped rule takes that account's rows.
+        self._txn("NORTHGATE PRIME 0412")
+        scoped = self._differing(keyword="northgate", account_id=self.checking_id)
         self._rule(keyword="northgate prime")
-        finding = self._findings("matcher_nesting")[0]
+        self.assertEqual(self._findings("matcher_nesting"), [])
+        finding = self._findings("matcher_scope_split")[0]
+        self.assertEqual(finding["rule_ids"][0], scoped)
         self.assertEqual(finding["winner_rule_id"], scoped)
+        self.assertEqual(finding["deciding_scope"], "account")
+        self.assertEqual(finding["txn_count"], 1)
+
+    def test_a_split_no_transaction_shows_is_not_reported(self):
+        # Without a row matching both, the pair is hypothetical.
+        self._differing(keyword="northgate", account_id=self.checking_id)
+        self._rule(keyword="northgate prime")
+        self.assertEqual(self._findings()["findings"], [])
+
+    def test_a_split_whose_rules_do_the_same_thing_is_not_reported(self):
+        # Whichever wins, the row ends up the same.
+        self._txn("NORTHGATE PRIME 0412")
+        self._rule(keyword="northgate", account_id=self.checking_id)
+        self._rule(keyword="northgate prime")
+        self.assertEqual(self._findings()["findings"], [])
+
+    def test_a_limit_on_the_longer_keyword_still_nests(self):
+        # The longer keyword is also the more limited rule, so it matches a subset of the other's rows.
+        broad = self._rule(keyword="northgate")
+        narrow = self._rule(keyword="northgate prime", account_id=self.checking_id)
+        finding = self._findings("matcher_nesting")[0]
+        self.assertEqual(finding["rule_ids"], [broad, narrow])
+        self.assertEqual(finding["removable_rule_id"], narrow)
 
     def test_nesting_is_not_reported_when_the_two_can_never_match_one_row(self):
         # Text nests, but no charge satisfies both amount windows, so they never contend.
@@ -301,34 +327,32 @@ class RuleOverlapsTests(unittest.TestCase):
         # The user's actual shape: `aji` and `aji restaurant` both filing to Restaurants. The narrow rule
         # changes no categorization, so it is the removable half.
         self._rule(keyword="northgate")
-        self._rule(keyword="northgate prime")
-        self.assertTrue(self._findings("matcher_nesting")[0]["narrower_is_redundant"])
+        narrow = self._rule(keyword="northgate prime")
+        self.assertEqual(self._findings("matcher_nesting")[0]["removable_rule_id"], narrow)
 
     def test_a_different_category_is_not_redundant(self):
         # The narrow rule is the whole reason those rows are filed where they are.
         other = self._other_category("Subscriptions")
         self._rule(keyword="northgate")
         self._rule(keyword="northgate prime", category_id=other)
-        self.assertFalse(self._findings("matcher_nesting")[0]["narrower_is_redundant"])
+        self.assertIsNone(self._findings("matcher_nesting")[0]["removable_rule_id"])
 
-    def test_a_scope_difference_is_not_redundant_even_with_one_category(self):
-        # Text nesting alone does not make the broad rule a superset: scoped to one owner, it never
-        # reaches another owner's rows, so deleting the global narrow rule would strand them.
-        self._rule(keyword="northgate", owner_id=SHARED_OWNER_ID)
+    def test_a_rename_only_the_narrow_rule_carries_is_not_redundant(self):
+        # Deleting it would change those transactions' name, so the two rules do not do the same thing.
+        self._rule(keyword="northgate")
+        self._differing(keyword="northgate prime")
+        self.assertIsNone(self._findings("matcher_nesting")[0]["removable_rule_id"])
+
+    def test_a_narrower_amount_range_on_the_broad_rule_is_not_redundant(self):
+        # The broad rule stops at $50, so the narrow rule's larger charges would be left to nothing.
+        self._rule(keyword="northgate", amount_max=50)
         self._rule(keyword="northgate prime")
-        self.assertFalse(self._findings("matcher_nesting")[0]["narrower_is_redundant"])
+        self.assertIsNone(self._findings("matcher_nesting")[0]["removable_rule_id"])
 
     def test_a_direction_difference_is_not_redundant(self):
         self._rule(keyword="northgate", debit_credit="debit")
         self._rule(keyword="northgate prime")
-        self.assertFalse(self._findings("matcher_nesting")[0]["narrower_is_redundant"])
-
-    def test_a_tag_only_pair_is_not_redundant(self):
-        # Neither rule assigns a category, so "files to the same category" says nothing about them and
-        # the narrow rule's tags would be lost with it.
-        self._rule(keyword="northgate", category_id=None)
-        self._rule(keyword="northgate prime", category_id=None)
-        self.assertFalse(self._findings("matcher_nesting")[0]["narrower_is_redundant"])
+        self.assertIsNone(self._findings("matcher_nesting")[0]["removable_rule_id"])
 
     def test_unrelated_keywords_do_not_nest(self):
         self._rule(keyword="northgate")
@@ -532,6 +556,21 @@ class RuleOverlapsTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertTrue(findings[0]["dismissible"])
 
+    def test_a_benign_pair_offers_to_remove_the_rule_whose_every_transaction_the_other_matches(self):
+        self._txn("HARBORLINE WATER")
+        self._txn("HARBORLINE GAS")
+        self._rule(keyword="harborline")
+        water = self._rule(keyword="water")
+        self.assertEqual(self._findings("matcher_co_match_benign")[0]["removable_rule_id"], water)
+
+    def test_a_benign_pair_where_each_rule_has_its_own_transactions_offers_no_removal(self):
+        self._txn("HARBORLINE WATER")
+        self._txn("HARBORLINE GAS")
+        self._txn("CITY WATER")
+        self._rule(keyword="harborline")
+        self._rule(keyword="water")
+        self.assertIsNone(self._findings("matcher_co_match_benign")[0]["removable_rule_id"])
+
     def test_a_nesting_pair_is_not_also_reported_as_a_co_match(self):
         # Nested matchers co-match by definition; the informational nesting finding already has them.
         self._rule(keyword="northgate")
@@ -646,13 +685,13 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
         self.assertEqual(self._findings()["dismissed_count"], 0)
 
     def test_a_dismissal_survives_an_edit_that_changes_nothing_material(self):
-        # Renaming what a rule does is not a reason to re-ask a question already answered.
+        # Giving both rules the same new rename leaves the pair exactly as it was answered.
         self._rule(keyword="northgate")
-        narrow = self._rule(keyword="northgate prime")
+        self._rule(keyword="northgate prime")
         self._dismiss(self._findings("matcher_nesting")[0])
         with self._use_db_path():
             with get_db() as conn:
-                conn.execute("UPDATE category_rule SET clean_name = 'Northgate Prime' WHERE id = ?", (narrow,))
+                conn.execute("UPDATE category_rule SET clean_name = 'Northgate'")
         self.assertEqual(self._findings()["count"], 0)
 
     def test_a_pair_that_becomes_removable_surfaces_again(self):
@@ -662,7 +701,7 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
         self._rule(keyword="northgate")
         narrow = self._rule(keyword="northgate prime", category_id=other)
         first = self._findings("matcher_nesting")[0]
-        self.assertFalse(first["narrower_is_redundant"])
+        self.assertIsNone(first["removable_rule_id"])
         self._dismiss(first)
         self.assertEqual(self._findings()["count"], 0)
         with self._use_db_path():
@@ -670,7 +709,7 @@ class RuleOverlapDismissalTests(RuleOverlapsTests):
                 conn.execute("UPDATE category_rule SET category_id = ? WHERE id = ?", (self.category_id, narrow))
         reopened = self._findings("matcher_nesting")
         self.assertEqual(len(reopened), 1)
-        self.assertTrue(reopened[0]["narrower_is_redundant"])
+        self.assertEqual(reopened[0]["removable_rule_id"], narrow)
 
     def test_a_dismissal_whose_pair_dissolves_is_simply_never_matched(self):
         self._rule(keyword="northgate")

@@ -130,7 +130,9 @@ Two things keep it affordable, and both are load-bearing rather than tuning:
 - **Each row's haystacks are derived once** (`categorizer.row_match_texts`), not once per rule. That is
   a 2.4× difference on its own, and it is why `rule_matches_row` is a wrapper over a prepared form.
 
-Measured at ~200 rules against ~19k transactions: about one second, on demand behind a button. It grows
+Measured at ~200 rules against ~19k transactions: about a second and a half, on demand behind a
+button. The panel re-runs it only for a change that can alter findings (an edited, deleted or widened
+rule); a dismissal, a restore and *Show dismissed* are drawn from the result already in hand. It grows
 linearly in ledger size. `MAX_RULES_PER_ROW` bounds the O(k²) pair enumeration on any one row; three is
 the most observed. If this ever crosses a couple of seconds, the dial is a window on the scan, and the
 larger lever is multi-pattern search (one pass per row finding all keywords) rather than a faster set

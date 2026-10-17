@@ -15,6 +15,10 @@ import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EditRuleOverlay } from '../Rules.jsx'
 
+// Panel geometry is remembered as a user preference; nothing here exercises that.
+vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
+  useUserPreference: (_key, fallback) => [fallback, () => {}],
+}))
 vi.mock('../../components/RuleForm.jsx', () => ({
   default: forwardRef(function RuleFormStub(props, ref) {
     void ref

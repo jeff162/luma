@@ -20,27 +20,22 @@
  * — and the second carries the transaction that proves it, since without a real row there is nothing to
  * report.
  *
- * **Nested merchant matchers** is not a defect; it is reported because the winner is not always the rule
- * a reader would guess (scope outranks keyword length), and because a pair filing to one category under
- * one scope has a surplus half worth clearing out. **Competing rules that file the same way** is the
- * other half of that thought: a pair from either warning section whose two rules apply the same
- * category, rename and tags is competing over nothing, and belongs out of the warnings entirely.
+ * **Nested merchant matchers** is not a defect; it is reported so the outcome is visible, and because a
+ * pair whose two rules do the same thing has a surplus half worth clearing out. **Rules where a limit
+ * decides** is the case a reader gets wrong: one keyword sits inside the other, but an owner or account
+ * limit only the shorter one carries puts it first. **Competing rules that file the same way** is a
+ * pair from either warning section whose two rules do the same thing, so it is competing over nothing
+ * and belongs out of the warnings entirely.
  *
  * Only the drift section arrives on its own. Three of the other four are an *audit* that changes when a
  * rule is edited — which is why none is badged — and the co-match section also moves when transactions
  * arrive, since it is the one finding read from the ledger rather than from the rules.
  *
- * Every finding names its rules and offers Edit. **Delete is on the nesting half**, which is the reverse
- * of how it first reads. An overlap is a modelling ambiguity: the answer is to refine the conditions
- * until the rules are unambiguous, and deleting one of them picks a side instead of fixing the model. A
- * nesting pair where both rules file to the same category under the same scope has a genuinely surplus
- * half — the narrow rule changes nothing — and removing it is the whole maintenance action. Delete is
- * offered on the **narrow** rule only: deleting the broad one would strand every row the narrow matcher
- * does not reach.
- *
- * What the card must say, because the flag deliberately does not cover it: `narrower_is_redundant` is
- * about the *category*. A rename or a tag carried by only one of the two rules does change hands when
- * the narrow rule goes, so that difference is read off the rules here and stated before the fact.
+ * Every finding names its rules, as #1 (top) and #2, and offers Edit. **Delete is offered only where
+ * removing a rule changes nothing** — the server's `removable_rule_id`: a nesting pair's inner rule when
+ * both rules do the same thing, or a benign pair's rule whose every transaction the other also matches.
+ * An overlap that changes the outcome offers none: the answer is to refine the conditions, and deleting
+ * one of the rules picks a side instead of fixing the model.
  *
  * The delete carries the rules list's own opt-in to re-evaluate the rule's transactions, so this panel
  * does not quietly pick a different answer to that question than the list does.
@@ -60,12 +55,15 @@
  * the open set, so turning the toggle on never makes it look like there is more to do.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner, EmptyState } from './ui.jsx'
+import { Button, Spinner, EmptyState } from './ui.jsx'
+import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from './detailShared.jsx'
 import RuleSummary from './RuleSummary.jsx'
+import CornerTab from './CornerTab.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
+import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 
 // A finding's contested band, said the way it reads: a range where the two ranges genuinely overlap,
 // a single figure where they meet at one value (capping one rule at the other's floor leaves exactly
@@ -77,9 +75,8 @@ function overlapBandText(finding) {
 }
 
 // Edit, plus Delete on the one rule a finding says is surplus. Delete confirms in place and carries the
-// same re-evaluate opt-in the rules list offers, defaulted off. Off is the safe reading here rather than
-// the useful one: the rows keep the category they have, which is the same category either way, and the
-// broad rule's rename and tags reach them on the next categorization pass instead of immediately.
+// same re-evaluate opt-in the rules list offers, defaulted off: the other rule does the same thing, so
+// the rows already read as they would after a re-evaluation.
 function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
   const [confirming, setConfirming] = useState(false)
   const [reconcile, setReconcile] = useState(false)
@@ -106,7 +103,7 @@ function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
       <label
-        title="Also re-evaluate the transactions this rule categorized, so they fall to the broader rule straight away and pick up its rename and tags. Off leaves them as they are until the next categorization pass."
+        title="Also re-evaluate the transactions this rule categorized now. Off leaves them as they are; the other rule takes them on the next categorization pass."
         style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
       >
         <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={busy} />
@@ -127,10 +124,10 @@ function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
   )
 }
 
-function RulePair({ finding, rules, onEditRule, deletableRuleId, onDelete, busy, winnerNote }) {
+function RulePair({ finding, rules, onEditRule, onDelete, busy }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {finding.rule_ids.map(id => {
+      {finding.rule_ids.map((id, index) => {
         const rule = rules[id]
         if (!rule) return null
         const isWinner = finding.winner_rule_id === id
@@ -144,18 +141,17 @@ function RulePair({ finding, rules, onEditRule, deletableRuleId, onDelete, busy,
               flexWrap: 'wrap',
             }}
           >
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginTop: 1, ...fadedIfDismissed(finding) }}>#{index + 1}</span>
+            <div style={{ flex: 1, minWidth: 0, ...fadedIfDismissed(finding) }}>
               <RuleSummary rule={rule} showConditions />
             </div>
             {isWinner ? (
-              <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', marginTop: 2 }}>
-                {winnerNote}
-              </span>
+              <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', marginTop: 2, ...fadedIfDismissed(finding) }}>wins</span>
             ) : null}
             <RuleActions
               ruleId={id}
               onEditRule={onEditRule}
-              onDelete={deletableRuleId === id ? onDelete : null}
+              onDelete={finding.removable_rule_id === id ? onDelete : null}
               busy={busy}
             />
           </div>
@@ -165,38 +161,52 @@ function RulePair({ finding, rules, onEditRule, deletableRuleId, onDelete, busy,
   )
 }
 
-// What a redundant rule still takes with it. `narrower_is_redundant` is about the category only, so a
-// rename or a tag carried by just one of the two rules changes hands on removal — stated before the
-// fact, because it is invisible in a panel that has just called the rule surplus.
-function effectHandoverNote(broader, narrower) {
-  const broaderTagIds = new Set((broader.tags || []).map(tag => tag.id))
-  const narrowerTagIds = new Set((narrower.tags || []).map(tag => tag.id))
-  const gains = []
-  const losses = []
-  const namedTags = tags => (tags.length === 1 ? `the tag ${tags[0].name}` : `${tags.length} tags`)
-
-  if (broader.clean_name && broader.clean_name !== narrower.clean_name) gains.push(`the rename to “${broader.clean_name}”`)
-  const gainedTags = (broader.tags || []).filter(tag => !narrowerTagIds.has(tag.id))
-  if (gainedTags.length) gains.push(namedTags(gainedTags))
-
-  if (narrower.clean_name && narrower.clean_name !== broader.clean_name) losses.push(`its rename to “${narrower.clean_name}”`)
-  const lostTags = (narrower.tags || []).filter(tag => !broaderTagIds.has(tag.id))
-  if (lostTags.length) losses.push(namedTags(lostTags))
-
-  if (!gains.length && !losses.length) return null
-  const clauses = []
-  if (gains.length) clauses.push(`pick up ${gains.join(' and ')}`)
-  if (losses.length) clauses.push(`lose ${losses.join(' and ')}`)
-  return `The category stays the same, but those transactions would ${clauses.join(', and ')}.`
+// How two rules' actions differ, as phrases naming each rule by its label ("#1", "#2"); empty when they
+// do the same thing. Compares what `rule_overlaps._actions_agree` compares.
+function actionDifferences(first, second, [firstLabel, secondLabel]) {
+  const parts = []
+  if ((first.category_id || null) !== (second.category_id || null)) {
+    const files = rule => (rule.category_name ? `files to ${rule.category_name}` : 'sets no category')
+    parts.push(`${firstLabel} ${files(first)} where ${secondLabel} ${files(second)}`)
+  }
+  const renameOf = rule => (rule.clean_name || '').trim()
+  if (renameOf(first).toLowerCase() !== renameOf(second).toLowerCase()) {
+    const renames = rule => (renameOf(rule) ? `renames to “${renameOf(rule)}”` : 'keeps the name')
+    parts.push(`${firstLabel} ${renames(first)} where ${secondLabel} ${renames(second)}`)
+  }
+  const tagKey = rule => (rule.tag_ids || []).slice().sort().join(',')
+  if (tagKey(first) !== tagKey(second)) parts.push(`${firstLabel} and ${secondLabel} add different tags`)
+  if (Boolean(first.is_recurring) !== Boolean(second.is_recurring)) {
+    parts.push(`only ${first.is_recurring ? firstLabel : secondLabel} tracks a recurring series`)
+  }
+  return parts
 }
+
+const sentence = parts => {
+  const text = parts.join('; ')
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`
+}
+
+// Dismissed cards fade their content rather than the whole card, so the set-aside text reads as set aside
+// while Restore, Edit and the other controls still look as available as they are. A corner tab names the
+// state where the eye starts, since a fade alone only hints at it.
+const fadedIfDismissed = finding => (finding.dismissed ? { opacity: 0.6 } : null)
+
+function DismissedTab({ finding, borderColor }) {
+  if (!finding.dismissed) return null
+  return <CornerTab corner="top-left" size="sm" borderColor={borderColor}>Dismissed</CornerTab>
+}
+
+// A dismissed card's extra top padding clears its corner tab.
+const cardPadding = finding => (finding.dismissed ? '28px 12px 10px' : '10px 12px')
 
 const isOverlapKind = kind => kind === 'amount_overlap' || kind === 'amount_overlap_benign'
 const isCoMatchKind = kind => kind === 'matcher_co_match' || kind === 'matcher_co_match_benign'
 
-// A co-match card leads with the evidence, because the evidence *is* the finding: these two rules are
-// only in competition if a real transaction matches both, and showing it is also how the user judges
+// A card about a real collision leads with the evidence, because the evidence *is* the finding: these
+// rules only compete if a real transaction matches both, and showing it is also how the user judges
 // whether the pair is worth untangling.
-function coMatchNote(finding) {
+function evidenceNote(finding) {
   const amount = formatCurrency(Math.abs(finding.amount))
   const when = formatDate(finding.txn_date)
   const also = finding.txn_count > 1
@@ -205,52 +215,67 @@ function coMatchNote(finding) {
   return `Both rules match “${finding.txn_name}” — ${amount} on ${when}${also}.`
 }
 
-// Why this nesting pair is worth its line — never the generic restatement of the section header, which
-// at real density repeats itself down the whole panel and says nothing card to card.
 function nestingNote(finding, broader, narrower) {
-  if (finding.narrower_is_redundant) {
-    return `Both file to ${broader.category_name} under the same scope, so the narrower rule changes nothing.`
-  }
-  if (broader.category_name && narrower.category_name && broader.category_name !== narrower.category_name) {
-    return `The narrower rule files to ${narrower.category_name} where the broader one files to ${broader.category_name}, so it is doing work of its own.`
-  }
-  return 'Their scopes differ, so the broader rule does not reach everything the narrower one does.'
+  const differences = actionDifferences(narrower, broader, ['#2', '#1'])
+  if (differences.length) return sentence(differences)
+  return finding.removable_rule_id
+    ? 'Both rules take the same action.'
+    : 'Both rules take the same action, but #1 does not take every charge #2 does, so #2 is still needed.'
+}
+
+// The limit that put #1 first, named the way the rule's own summary names it.
+function decidingLimit(finding, winner) {
+  if (finding.deciding_scope === 'owner') return winner.owner_name
+  if (finding.deciding_scope === 'account') return winner.account_name
+  if (finding.deciding_scope === 'account_type') return ACCOUNT_TYPE_LABEL[winner.account_type] ?? winner.account_type
+  return null
+}
+
+function scopeSplitNote(finding, winner, other) {
+  const limit = decidingLimit(finding, winner)
+  const differences = actionDifferences(winner, other, ['#1', '#2'])
+  return `${evidenceNote(finding)} #1 is limited to ${limit}, and owner and account limits count before keyword length, so #1 wins where both match. ${sentence(differences)}`
+}
+
+// Said only on a pair that offers a Delete, because that is the claim the Delete rests on.
+function coverageNote(finding) {
+  const index = finding.rule_ids.indexOf(finding.removable_rule_id)
+  if (index < 0) return null
+  return `#${index + 1} has no transactions outside #${2 - index}’s.`
 }
 
 function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestore, busy }) {
-  const isNesting = finding.kind === 'matcher_nesting'
-  const isOverlap = isOverlapKind(finding.kind)
-  const isCoMatch = isCoMatchKind(finding.kind)
+  const first = rules[finding.rule_ids[0]]
+  const second = rules[finding.rule_ids[1]]
   // Styling follows severity rather than kind now that both warnings have a benign twin: a pair whose
   // rules file identically is not the thing the red border is for.
   const isWarning = finding.severity === 'warning'
-  const broader = rules[finding.rule_ids[0]]
-  const narrower = rules[finding.rule_ids[1]]
-  // A nesting pair is worth a second sentence only when the winner is the *broader* rule — that is the
-  // case a reader gets wrong, because keyword length is not the first thing precedence looks at.
-  const winnerIsBroader = isNesting && finding.winner_rule_id === finding.rule_ids[0]
-  const handover = isNesting && finding.narrower_is_redundant && broader && narrower
-    ? effectHandoverNote(broader, narrower)
-    : null
+  const isBenign = finding.kind === 'amount_overlap_benign' || finding.kind === 'matcher_co_match_benign'
+  let note = null
+  if (isOverlapKind(finding.kind)) {
+    note = `Both rules claim ${overlapBandText(finding)}, and neither range completely contains the other.`
+    if (finding.kind === 'amount_overlap') note += ' Which rule wins is arbitrary. Adjust the ranges so they do not overlap.'
+  } else if (isCoMatchKind(finding.kind)) {
+    note = evidenceNote(finding)
+  } else if (first && second) {
+    note = finding.kind === 'matcher_scope_split'
+      ? scopeSplitNote(finding, first, second)
+      : nestingNote(finding, first, second)
+  }
+  if (isBenign && finding.removable_rule_id) note = `${note} ${coverageNote(finding)}`
+  const borderColor = isWarning ? 'color-mix(in srgb, var(--danger) 26%, var(--border))' : 'var(--border)'
   return (
     <div
       style={{
-        padding: '10px 12px', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8,
-        border: `1px solid ${isWarning ? 'color-mix(in srgb, var(--danger) 26%, var(--border))' : 'var(--border)'}`,
+        position: 'relative', padding: cardPadding(finding), borderRadius: 10,
+        display: 'flex', flexDirection: 'column', gap: 8,
+        border: `1px solid ${borderColor}`,
         background: isWarning ? 'color-mix(in srgb, var(--danger) 5%, var(--surface))' : 'var(--surface)',
-        // Dismissed cards are shown faded rather than restyled, so the toggle reads as "these are set
-        // aside" without turning the acknowledged set into a second design to maintain.
-        opacity: finding.dismissed ? 0.6 : 1,
       }}
     >
+      <DismissedTab finding={finding} borderColor={borderColor} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-      <div style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>
-        {isOverlap
-          ? <>Both rules claim <strong>{overlapBandText(finding)}</strong>, and neither range is the narrower one.</>
-          : isCoMatch
-            ? coMatchNote(finding)
-            : (broader && narrower ? nestingNote(finding, broader, narrower) : null)}
-      </div>
+        <div style={{ fontSize: 12.5, flex: 1, minWidth: 0, ...fadedIfDismissed(finding) }}>{note}</div>
         <DismissAction
           finding={finding}
           onDismiss={onDismiss}
@@ -259,40 +284,7 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
           title="Acknowledge this pair — it stops being listed until the situation changes"
         />
       </div>
-      <RulePair
-        finding={finding}
-        rules={rules}
-        onEditRule={onEditRule}
-        // Nesting only, and only the narrow rule: an overlap is settled by refining conditions rather
-        // than by removing a side, and the broad rule's rows are not the narrow rule's to give up.
-        deletableRuleId={isNesting && finding.narrower_is_redundant ? finding.rule_ids[1] : null}
-        onDelete={onDelete}
-        busy={busy}
-        winnerNote={isNesting ? 'wins where both match' : 'claims them today'}
-      />
-      {finding.kind === 'amount_overlap' ? (
-        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-          Nothing in the rules decides this one — the winner falls out of which range happens to be
-          arithmetically smaller. Refining the two rules&rsquo; conditions until they no longer overlap
-          settles it for good, and it stays listed until then.
-        </div>
-      ) : null}
-      {finding.kind === 'matcher_co_match' ? (
-        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-          Neither matcher contains the other, so the longer keyword takes these rows — which decides
-          nothing, since one keyword being longer says nothing about which rule the transaction belongs
-          to. Narrowing whichever matcher is catching rows it was not meant for settles it.
-        </div>
-      ) : null}
-      {handover ? (
-        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{handover}</div>
-      ) : null}
-      {winnerIsBroader ? (
-        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-          Worth a look: the <em>broader</em> rule wins here, because its owner or account scope is
-          considered before keyword length.
-        </div>
-      ) : null}
+      <RulePair finding={finding} rules={rules} onEditRule={onEditRule} onDelete={onDelete} busy={busy} />
     </div>
   )
 }
@@ -344,17 +336,19 @@ function driftNote(finding) {
 function RangeDriftCard({ finding, rules, onEditRule, onWiden, onDismiss, onRestore, busy }) {
   const rule = rules[finding.rule_id]
   const outside = finding.kind === 'rule_range'
+  const borderColor = outside ? 'color-mix(in srgb, var(--warning) 30%, var(--border))' : 'var(--border)'
   return (
     <div
       style={{
-        padding: '10px 12px', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8,
-        border: `1px solid ${outside ? 'color-mix(in srgb, var(--warning) 30%, var(--border))' : 'var(--border)'}`,
+        position: 'relative', padding: cardPadding(finding), borderRadius: 10,
+        display: 'flex', flexDirection: 'column', gap: 8,
+        border: `1px solid ${borderColor}`,
         background: outside ? 'color-mix(in srgb, var(--warning) 5%, var(--surface))' : 'var(--surface)',
-        opacity: finding.dismissed ? 0.6 : 1,
       }}
     >
+      <DismissedTab finding={finding} borderColor={borderColor} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-        <div style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, flex: 1, minWidth: 0, ...fadedIfDismissed(finding) }}>
           <div style={{ fontWeight: 620, marginBottom: 2 }}>{finding.txn_name}</div>
           {driftNote(finding)}
           {/* Why it matters beyond one category. Said only where the charge actually fell out: an edge
@@ -380,7 +374,7 @@ function RangeDriftCard({ finding, rules, onEditRule, onWiden, onDismiss, onRest
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, ...fadedIfDismissed(finding) }}>
             <RuleSummary rule={rule} showConditions />
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -417,7 +411,28 @@ function Section({ title, blurb, findings, renderCard }) {
 
 const EMPTY = { count: 0, counts: {}, dismissed_count: 0, findings: [], rules: {} }
 
-export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged }) {
+// A check's result with one finding's dismissal flipped, the open counts following it. Exact for the
+// overlap check, whose findings are fixed by the rules alone; not for range drift, where a dismissal
+// frees a place under the per-rule cap for a charge that was not listed.
+function withDismissal(result, key, dismissed) {
+  const finding = result.findings.find(item => item.key === key)
+  if (!finding || Boolean(finding.dismissed) === dismissed) return result
+  const delta = dismissed ? -1 : 1
+  return {
+    ...result,
+    findings: result.findings.map(item => (item.key === key ? { ...item, dismissed } : item)),
+    counts: { ...result.counts, [finding.kind]: (result.counts[finding.kind] || 0) + delta },
+    count: result.count + delta,
+    dismissed_count: result.dismissed_count - delta,
+  }
+}
+
+// A floating panel that moves and resizes, and stays open while a rule it opened is edited, so the two
+// windows can sit side by side. `refreshKey` changing says an edit was saved, so the checks run again
+// with the current results still showing.
+export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged, refreshKey = 0 }) {
+  const geometry = useRestorablePanelGeometry('ui.rules.checkupPanel', { fallbackWidth: 760, fallbackHeight: 760 })
+  const chrome = useDetailPanelChrome(onClose, { forceFloating: true, ...geometry })
   const [overlaps, setOverlaps] = useState(null)
   const [drift, setDrift] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -427,15 +442,15 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // Two checks, fetched together and kept apart. They answer different questions over different inputs —
   // one pairwise over the rule set, one over the recent ledger — so merging them server-side would have
   // meant one endpoint that recomputes both whenever either is asked for, including for the page badge
-  // that only ever needs the cheaper half.
-  const load = useCallback(async () => {
-    const [overlapResult, driftResult] = await Promise.all([
-      api.getRuleOverlaps({ includeDismissed: showDismissed }).catch(() => EMPTY),
-      api.getRuleRangeDrift({ includeDismissed: showDismissed }).catch(() => EMPTY),
-    ])
-    setOverlaps(overlapResult)
-    setDrift(driftResult)
-  }, [showDismissed])
+  // that only ever needs the cheaper half. Both are fetched with their dismissed findings, and *Show
+  // dismissed* only filters what is drawn, so the toggle never re-runs the overlap check's ledger scan.
+  const loadDrift = useCallback(async () => {
+    setDrift(await api.getRuleRangeDrift({ includeDismissed: true }).catch(() => EMPTY))
+  }, [])
+  const loadOverlaps = useCallback(async () => {
+    setOverlaps(await api.getRuleOverlaps({ includeDismissed: true }).catch(() => EMPTY))
+  }, [])
+  const load = useCallback(() => Promise.all([loadOverlaps(), loadDrift()]), [loadOverlaps, loadDrift])
 
   useEffect(() => {
     let live = true
@@ -443,31 +458,44 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
     return () => { live = false }
   }, [load])
 
-  // Every mutation here re-runs both checks rather than splicing one card out of the list, because each
-  // of them can change findings other than the one acted on: a delete dissolves every pair its rule
-  // appeared in, widening a range can settle an overlap, and a dismissal changes the counts the header
-  // reports. Previous results stay on screen while it re-runs, so the list does not blink back through a
-  // spinner.
+  // A delete or a widened range can change findings other than the one acted on — a delete dissolves
+  // every pair its rule appeared in, widening a range can settle an overlap — so those re-run both
+  // checks. A dismissal changes only its own finding, so an overlap dismissal is applied to the list in
+  // place, sparing the ledger scan; a drift dismissal re-runs the drift check alone, which is cheap and
+  // is the only way to see the charge the freed place under the per-rule cap now lists. Previous results
+  // stay on screen while a check re-runs, so the list does not blink back through a spinner.
   //
-  // A failed action says so, and the check re-runs anyway, so the panel shows what is actually saved. It
-  // used to do neither: a failure left the list as it was with no word that anything had gone wrong, and
-  // whatever half of a change had landed only surfaced the next time the panel opened.
-  async function withRefresh(action) {
+  // A failed action says so, and its checks re-run anyway, so the panel shows what is actually saved.
+  async function runAction(action, { reload = load, onSaved = null } = {}) {
     if (busy) return
     setBusy(true)
     setActionError(null)
+    let failed = false
     try {
       await action()
+      onSaved?.()
     } catch (err) {
+      failed = true
       setActionError(`Could not save that change: ${err?.message || 'the request failed.'}`)
     } finally {
-      // `load` catches its own failures, so this always settles.
-      await load()
+      // The loads catch their own failures, so this always settles.
+      const refresh = failed ? load : reload
+      if (refresh) await refresh()
       setBusy(false)
     }
   }
 
-  const deleteRule = (ruleId, reconcile) => withRefresh(async () => {
+  // An edit saved from the panel can change any finding, so it re-runs both checks. Skipped on mount,
+  // where the effect above has already loaded.
+  const seenRefreshKey = useRef(refreshKey)
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return
+    seenRefreshKey.current = refreshKey
+    runAction(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey])
+
+  const deleteRule = (ruleId, reconcile) => runAction(async () => {
     await api.deleteRule(ruleId, { reconcile })
     onRulesChanged?.()
   })
@@ -478,23 +506,25 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // rounds the bound outwards and preserves hand categorizations (`widen_rule_range`). What happens to
   // the rule's series follows on its own — the row takes the category back, and the detector claims it on
   // its next pass.
-  const widenRange = finding => withRefresh(async () => {
+  const widenRange = finding => runAction(async () => {
     await txnMutations.widenRuleRange(finding.rule_id, finding.bound, Math.abs(Number(finding.amount) || 0))
     onRulesChanged?.()
   })
 
   // Each family keeps its own dismissal store, so the finding's kind picks the endpoint.
   const isDrift = finding => finding.kind === 'rule_range' || finding.kind === 'rule_range_edge'
-  const dismissFinding = finding => withRefresh(() => (isDrift(finding)
-    ? api.dismissRuleRangeDrift(finding.key, finding.kind)
-    : api.dismissRuleOverlap(finding.key, finding.kind)))
-  const restoreFinding = finding => withRefresh(() => (isDrift(finding)
-    ? api.restoreRuleRangeDrift(finding.key)
-    : api.restoreRuleOverlap(finding.key)))
+  const setOverlapDismissal = (finding, dismissed) => () => setOverlaps(prev => withDismissal(prev, finding.key, dismissed))
+  const dismissFinding = finding => (isDrift(finding)
+    ? runAction(() => api.dismissRuleRangeDrift(finding.key, finding.kind), { reload: loadDrift })
+    : runAction(() => api.dismissRuleOverlap(finding.key, finding.kind), { reload: null, onSaved: setOverlapDismissal(finding, true) }))
+  const restoreFinding = finding => (isDrift(finding)
+    ? runAction(() => api.restoreRuleRangeDrift(finding.key), { reload: loadDrift })
+    : runAction(() => api.restoreRuleOverlap(finding.key), { reload: null, onSaved: setOverlapDismissal(finding, false) }))
 
   const loading = overlaps == null || drift == null
-  const overlapFindings = overlaps?.findings || []
-  const driftFindings = drift?.findings || []
+  const listed = findings => (showDismissed ? findings : findings.filter(finding => !finding.dismissed))
+  const overlapFindings = listed(overlaps?.findings || [])
+  const driftFindings = listed(drift?.findings || [])
   const nothingListed = !overlapFindings.length && !driftFindings.length
   // The header counts the *open* set from each server's own tally, never the rendered rows: with the
   // toggle on, counting what is on screen would report acknowledged findings as work still to do.
@@ -503,9 +533,33 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // The informational tally is everything listed for knowledge rather than for action: nesting pairs,
   // and the competing pairs whose two rules turn out to do the same thing.
   const openNesting = (overlaps?.counts?.matcher_nesting || 0)
+    + (overlaps?.counts?.matcher_scope_split || 0)
     + (overlaps?.counts?.amount_overlap_benign || 0)
     + (overlaps?.counts?.matcher_co_match_benign || 0)
   const dismissedCount = (overlaps?.dismissed_count || 0) + (drift?.dismissed_count || 0)
+
+  // One section of rule-pair cards. Delete is wired for every section; a card offers it only on the
+  // rule the server marked removable.
+  const pairSection = (title, blurb, kinds) => (
+    <Section
+      title={title}
+      blurb={blurb}
+      findings={overlapFindings.filter(f => kinds.includes(f.kind))}
+      renderCard={finding => (
+        <FindingCard
+          key={finding.key}
+          finding={finding}
+          rules={overlaps.rules}
+          onEditRule={onEditRule}
+          onDelete={deleteRule}
+          onDismiss={dismissFinding}
+          onRestore={restoreFinding}
+          busy={busy}
+        />
+      )}
+    />
+  )
+
 
   const summary = () => {
     if (loading) return 'Checking rules…'
@@ -520,16 +574,17 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   }
 
   return (
-    <OverlayBackdrop zIndex={1400} tint="rgba(15, 23, 42, 0.42)">
-      <FloatingPanel style={{ width: 'min(760px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>Rule checkup</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>{summary()}</div>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1 }}>×</button>
-        </FloatingPanelHeader>
-
+    <DetailPanelShell
+      {...chrome}
+      onClose={onClose}
+      bodyPadding={0}
+      header={(
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 600 }}>Rule checkup</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>{summary()}</div>
+        </div>
+      )}
+    >
         {actionError ? (
           <div
             role="alert"
@@ -572,74 +627,34 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
                   />
                 )}
               />
-              <Section
-                title="Amount ranges that overlap"
-                blurb="Both rules can claim the same charge, and the app has no principled way to choose between them. Refine their conditions until only one applies — these cannot be dismissed because it is arbitrary which rule will win."
-                findings={overlapFindings.filter(f => f.kind === 'amount_overlap')}
-                renderCard={finding => (
-                  <FindingCard
-                    key={finding.key}
-                    finding={finding}
-                    rules={overlaps.rules}
-                    onEditRule={onEditRule}
-                    onDismiss={dismissFinding}
-                    onRestore={restoreFinding}
-                    busy={busy}
-                  />
-                )}
-              />
-              <Section
-                title="Rules that match the same transaction"
-                blurb="Two rules catching different parts of one merchant name. The longer keyword wins, which settles nothing — length only means “more specific” when one matcher sits inside the other, and these do not. Narrow whichever one is reaching too far."
-                findings={overlapFindings.filter(f => f.kind === 'matcher_co_match')}
-                renderCard={finding => (
-                  <FindingCard
-                    key={finding.key}
-                    finding={finding}
-                    rules={overlaps.rules}
-                    onEditRule={onEditRule}
-                    onDismiss={dismissFinding}
-                    onRestore={restoreFinding}
-                    busy={busy}
-                  />
-                )}
-              />
-              <Section
-                title="Merchant matchers that nest"
-                blurb="Nothing is wrong with these — they are listed so it is clear which rule takes the transactions they share. Where both file to the same category, the narrower rule is surplus and can be removed."
-                findings={overlapFindings.filter(f => f.kind === 'matcher_nesting')}
-                renderCard={finding => (
-                  <FindingCard
-                    key={finding.key}
-                    finding={finding}
-                    rules={overlaps.rules}
-                    onEditRule={onEditRule}
-                    onDelete={deleteRule}
-                    onDismiss={dismissFinding}
-                    onRestore={restoreFinding}
-                    busy={busy}
-                  />
-                )}
-              />
+              {pairSection(
+                'Amount ranges that overlap',
+                'Two rules with partially overlapping ranges match a transaction. Adjust the rules so that only one applies.',
+                ['amount_overlap'],
+              )}
+              {pairSection(
+                'Rules that match the same transaction',
+                'Two rules whose keywords don’t contain each other match the same transaction with different results. Adjust the rules so only one applies.',
+                ['matcher_co_match'],
+              )}
+              {pairSection(
+                'Merchant matchers that nest',
+                'One rule’s keyword contains the other’s, so the longer one wins where both match. When both take the same action, the longer one can be removed. Edit the rules if that is not the intention.',
+                ['matcher_nesting'],
+              )}
+              {pairSection(
+                'Rules where a limit decides',
+                'One rule’s keyword contains the other’s, but the shorter one has an owner or account limit the longer one lacks, so it wins where both match. Edit the rules if that is not the intention.',
+                ['matcher_scope_split'],
+              )}
               {/* Last, and deliberately not among the warnings above: these pairs compete over an
                   outcome that is the same either way, so they are listed in case the match is an
                   accident rather than because anything needs doing. */}
-              <Section
-                title="Competing rules that file the same way"
-                blurb="These pairs contend for the same transactions, but both rules apply the same category, rename and tags — so whichever wins, the result is identical. Listed in case that agreement is a coincidence rather than the intent; dismiss one and it returns if the two ever stop matching."
-                findings={overlapFindings.filter(f => f.kind === 'amount_overlap_benign' || f.kind === 'matcher_co_match_benign')}
-                renderCard={finding => (
-                  <FindingCard
-                    key={finding.key}
-                    finding={finding}
-                    rules={overlaps.rules}
-                    onEditRule={onEditRule}
-                    onDismiss={dismissFinding}
-                    onRestore={restoreFinding}
-                    busy={busy}
-                  />
-                )}
-              />
+              {pairSection(
+                'Competing rules that file the same way',
+                'These rules have transactions in common and take the same actions. If neither has transactions outside the common set, one could be removed.',
+                ['amount_overlap_benign', 'matcher_co_match_benign'],
+              )}
             </>
           )}
         </div>
@@ -660,7 +675,6 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
           ) : null}
           <Button variant="ghost" onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Button>
         </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
+    </DetailPanelShell>
   )
 }

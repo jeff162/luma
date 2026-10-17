@@ -23,12 +23,18 @@ the range containing it. This module reports the two cases worth a human's atten
   `category_rule` alone**: whether two unrelated keywords ever land in one merchant name is a fact about
   the ledger, so it takes a scan (`_co_matching_pairs`).
 
-- **`matcher_nesting` (info).** One rule's merchant matcher matches a strict subset of the other's rows
-  (`amazon` and `amazon prime`). Nothing is wrong and nothing is ambiguous — this is reported for two
-  reasons. The winner is not always the one a reader expects, since keyword length only decides *after*
-  scope, so an owner-scoped `amazon` rule beats a global `amazon prime` rule on that owner's rows. And
-  where both rules file to the same category under the same scope, the narrow one is **redundant** —
-  `narrower_is_redundant` marks that, and it is the pair the user can simply delete half of.
+- **`matcher_nesting` (info).** One rule matches a subset of the other's rows: its matcher sits inside
+  the other's (`amazon` and `amazon prime`) and its owner and account limits sit inside the other's too.
+  Nothing is ambiguous — the inner rule wins where both match — and it is decided from the rules alone.
+  It is reported so the outcome is visible, and because where the two rules do the same thing the inner
+  one is surplus: `removable_rule_id` names it, and it is the pair the user can simply delete half of.
+
+- **`matcher_scope_split` (info).** One matcher sits inside the other's, but the outer rule carries an
+  owner or account limit the inner one lacks, so neither rule contains the other: an owner-scoped
+  `amazon` against a global `amazon prime`. Precedence settles it on the limit, which is a reason the
+  user would recognize, but the winner is not the one a reader expects. Reported only when a real
+  transaction matches both and the two rules do different things to it, since otherwise the pair
+  changes nothing anyone would see.
 
 **Either warning drops to information when the two rules do the same thing** (`_actions_agree`:
 category, rename, tags and the recurring flag all equal), as `amount_overlap_benign` and
@@ -38,15 +44,17 @@ problem the user must refine trains them to ignore the panel. The split is by *k
 severity because dismissibility is decided by kind, and it rides in the finding's key, so an
 acknowledgement lapses the moment the two stop agreeing.
 
-The action each kind carries follows from that split, and it is the reverse of what it first looks like.
-The *ambiguous* pair offers no removal: the answer there is to refine the conditions until the rules are
-unambiguous, and deleting one is picking a side rather than fixing the model. The *nesting* pair does,
-because a rule that adds nothing to the categorization is simply surplus.
+The action each kind carries follows from that split. The *ambiguous* pair offers no removal: the answer
+there is to refine the conditions until the rules are unambiguous, and deleting one is picking a side
+rather than fixing the model. A pair whose two rules do the same thing can offer one, through
+`removable_rule_id`, but only where deleting that rule changes nothing: a nesting pair's inner rule, from
+the rules alone, and a benign pair's rule whose every transaction the other rule also matches, read off
+the ledger scan.
 
-The kinds cannot collide. `amount_overlap` requires identical matcher text and `matcher_nesting`
-requires one matcher inside the other; `matcher_co_match` takes what is left, matchers that are neither
-the same nor nested. All three require the two rules' scopes to tie, because a scope difference is a
-real refinement that precedence reads before any of this.
+The kinds cannot collide. `amount_overlap` requires identical matcher text and the two nesting kinds
+require one matcher inside the other; `matcher_co_match` takes what is left, matchers that are neither
+the same nor nested. The overlap and co-match kinds require the two rules' scopes to tie, because a
+scope difference is a real refinement that precedence reads before any of this.
 
 **Which rule wins is read from the engine's own ordering rather than re-decided here.** The rule ids are
 pulled once in precedence order and compared by rank, so this module cannot drift from what the import
@@ -63,9 +71,9 @@ stays listed until the conditions are refined: acknowledging it would leave the 
 arithmetic accident with the app pretending that was settled.
 
 A dismissal is keyed by the finding's `key`, which carries the pair *and what makes it actionable* — for
-a nesting pair, the redundancy verdict. So an acknowledged pair stays hidden through edits that do not
-change the situation, and comes back when one does: a pair that becomes redundant re-raises the offer to
-delete its surplus half. A dismissal whose pair later dissolves entirely simply stops matching anything,
+a nesting pair, the redundancy verdict, and for a benign pair, whether one half is removable. So an
+acknowledged pair stays hidden through edits that do not change the situation, and comes back when one
+does: a pair that becomes redundant re-raises the offer to delete its surplus half. A dismissal whose pair later dissolves entirely simply stops matching anything,
 which is why nothing prunes them.
 
 App-managed rules (the money-movement Type rules) are excluded: their matchers and bounds are the app's,
@@ -75,7 +83,7 @@ or targeting a deactivated category — are excluded for the same reason.
 Cost, all of it on demand. The first two kinds are one pairwise pass over the eligible rules, ordered
 cheapest-discriminator first (amount arithmetic, then scope identity, then the string work). The
 co-match scan is a second pass shaped the other way round — see `_co_matching_pairs` for why pairwise
-is not an option there — and is the expensive half: rules x rows, around a second on a ledger of ~20k
+is not an option there — and is the expensive half: rules x rows, about a second and a half on ~20k
 transactions and ~200 rules.
 """
 
@@ -104,6 +112,7 @@ _SEVERITY_ORDER = {SEVERITY_WARNING: 0, SEVERITY_INFO: 1}
 KIND_AMOUNT_OVERLAP = "amount_overlap"
 KIND_AMOUNT_OVERLAP_BENIGN = "amount_overlap_benign"
 KIND_MATCHER_NESTING = "matcher_nesting"
+KIND_SCOPE_SPLIT = "matcher_scope_split"
 KIND_CO_MATCH = "matcher_co_match"
 KIND_CO_MATCH_BENIGN = "matcher_co_match_benign"
 
@@ -113,7 +122,7 @@ KIND_CO_MATCH_BENIGN = "matcher_co_match_benign"
 # finding stays listed until the conditions are refined — the stable tiebreak settles it, but settling is
 # not deciding. Enforced where findings are assembled rather than only in the panel, so a stored dismissal
 # cannot hide a warning.
-DISMISSIBLE_KINDS = (KIND_MATCHER_NESTING, KIND_AMOUNT_OVERLAP_BENIGN, KIND_CO_MATCH_BENIGN)
+DISMISSIBLE_KINDS = (KIND_MATCHER_NESTING, KIND_SCOPE_SPLIT, KIND_AMOUNT_OVERLAP_BENIGN, KIND_CO_MATCH_BENIGN)
 
 # A row matching more than this many rules contributes no pairs. The pair enumeration below is O(k^2) in
 # that count, and a row drawing dozens of rules is itself the finding — reporting hundreds of pairs off it
@@ -228,6 +237,28 @@ def _scopes_can_share_a_row(a: dict, b: dict, account_types: dict[str, str | Non
     return True
 
 
+def _scope_within(inner: dict, outer: dict, account_types: dict[str, str | None]) -> bool:
+    """Does every row `inner`'s owner and account limits admit also pass `outer`'s? True when `outer`
+    sets no limit `inner` does not share — an account limit satisfies an account-type limit when the
+    account is of that type."""
+    if outer["owner_id"] is not None and outer["owner_id"] != inner["owner_id"]:
+        return False
+    if outer["account_id"] is not None and outer["account_id"] != inner["account_id"]:
+        return False
+    if outer["account_type"] is not None and outer["account_type"] != inner["account_type"]:
+        if inner["account_id"] is None or account_types.get(inner["account_id"]) != outer["account_type"]:
+            return False
+    return True
+
+
+def _deciding_scope(winner: dict, other: dict) -> str | None:
+    """The limit that put `winner` first, read in the order precedence reads them."""
+    for axis in ("owner_id", "account_id", "account_type"):
+        if winner[axis] is not None and other[axis] is None:
+            return axis.removesuffix("_id")
+    return None
+
+
 def _scopes_identical(a: dict, b: dict) -> bool:
     """Do the two rules tie on every precedence term above the amount span? That is what makes a range
     overlap unresolvable: with the scopes and the keyword equal, span is the only thing left deciding,
@@ -315,8 +346,12 @@ def _load_scan_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def _co_matching_pairs(conn: sqlite3.Connection, rules: list[dict]) -> dict[tuple[str, str], dict]:
-    """`(rule_id, rule_id) -> {count, example row}` for every pair of rules some live transaction matches.
+def _co_matching_pairs(
+    conn: sqlite3.Connection, rules: list[dict],
+) -> tuple[dict[tuple[str, str], dict], dict[str, int]]:
+    """`(rule_id, rule_id) -> {count, example row}` for every pair of rules some live transaction matches,
+    and `rule_id -> rows it matches`. Together they say whether one rule's every row is shared with
+    another: its own count equals the pair's.
 
     **Row-major on purpose, and that is the whole performance design.** The obvious shape — take each
     candidate pair and look for a row they share — is unworkable here: almost no pair can be excluded from
@@ -332,9 +367,12 @@ def _co_matching_pairs(conn: sqlite3.Connection, rules: list[dict]) -> dict[tupl
     """
     want_source = any(rule["match_source_text"] for rule in rules)
     pairs: dict[tuple[str, str], dict] = {}
+    rule_counts: dict[str, int] = {}
     for row in _load_scan_rows(conn):
         text, source_text_lc = row_match_texts(row, want_source_text=want_source)
         matched = [rule["id"] for rule in rules if rule_matches_row_prepared(rule, row, text, source_text_lc)]
+        for rule_id in matched:
+            rule_counts[rule_id] = rule_counts.get(rule_id, 0) + 1
         if len(matched) < 2 or len(matched) > MAX_RULES_PER_ROW:
             continue
         matched.sort()
@@ -347,10 +385,10 @@ def _co_matching_pairs(conn: sqlite3.Connection, rules: list[dict]) -> dict[tupl
                     pairs[(first, second)] = {"count": 1, "row": row}
                 else:
                     entry["count"] += 1
-    return pairs
+    return pairs, rule_counts
 
 
-def _co_match_findings(conn, rules: list[dict], texts: dict, rank, tags) -> list[dict]:
+def _co_match_findings(rules: list[dict], texts: dict, rank, tags, pairs, rule_counts) -> list[dict]:
     """Pairs of rules that both match a real transaction without either matcher containing the other.
 
     The ambiguity the other two kinds cannot see. `amount_overlap` needs identical matcher text and
@@ -369,7 +407,7 @@ def _co_match_findings(conn, rules: list[dict], texts: dict, rank, tags) -> list
     """
     by_id = {rule["id"]: rule for rule in rules}
     findings = []
-    for (first_id, second_id), evidence in _co_matching_pairs(conn, rules).items():
+    for (first_id, second_id), evidence in pairs.items():
         first, second = by_id[first_id], by_id[second_id]
         texts_a, texts_b = texts[first_id], texts[second_id]
         if texts_a == texts_b:
@@ -378,20 +416,35 @@ def _co_match_findings(conn, rules: list[dict], texts: dict, rank, tags) -> list
             continue
         if not _scopes_identical(first, second):
             continue
-        findings.append(
-            _co_match_finding(first, second, evidence, _actions_agree(first, second, tags), rank)
-        )
+        benign = _actions_agree(first, second, tags)
+        removable = _removable_by_coverage(first, second, evidence, rule_counts, rank) if benign else None
+        findings.append(_co_match_finding(first, second, evidence, benign, removable, rank))
     return findings
 
 
-def _co_match_finding(a: dict, b: dict, evidence: dict, benign: bool, rank) -> dict:
+def _removable_by_coverage(a: dict, b: dict, evidence: dict | None, rule_counts: dict[str, int], rank) -> str | None:
+    """For two rules that do the same thing: the one whose every transaction the other also matches, so
+    deleting it changes no row. Where each covers the other, the one that loses where both match. None
+    when neither is covered, or when no transaction matches both."""
+    shared = (evidence or {}).get("count", 0)
+    if not shared:
+        return None
+    covered = [rule["id"] for rule in (a, b) if rule_counts.get(rule["id"], 0) == shared]
+    if not covered:
+        return None
+    if len(covered) == 2:
+        winner = _winner(a["id"], b["id"], rank)
+        return b["id"] if winner == a["id"] else a["id"]
+    return covered[0]
+
+
+def _co_match_finding(a: dict, b: dict, evidence: dict, benign: bool, removable: str | None, rank) -> dict:
     """Two rules whose matchers overlap in no way a reader could predict, caught matching one real row.
 
     Listed winner first, because the one useful thing to say about such a pair is which of them is
     currently taking the rows. The key is built from the sorted ids rather than that order, so an edit
     elsewhere that flips the winner does not silently lapse an acknowledgement.
     """
-    row = evidence["row"]
     winner = _winner(a["id"], b["id"], rank)
     other = b["id"] if winner == a["id"] else a["id"]
     kind = KIND_CO_MATCH_BENIGN if benign else KIND_CO_MATCH
@@ -399,21 +452,29 @@ def _co_match_finding(a: dict, b: dict, evidence: dict, benign: bool, rank) -> d
     return {
         "kind": kind,
         "severity": SEVERITY_INFO if benign else SEVERITY_WARNING,
-        "key": f"{kind}:{low}:{high}",
+        "key": f"{kind}:{low}:{high}" + (":r" if removable else ""),
         "rule_ids": [winner, other],
         "winner_rule_id": winner,
-        # How often the pair has actually collided, and one row to look at. A pair that has met once is a
-        # different thing from one that has met two hundred times, and the count is the only honest way to
-        # say which this is.
+        "removable_rule_id": removable,
+        **_evidence_fields(evidence),
+        # Most-collided first within the section: the pair touching two hundred rows is the one worth
+        # opening, and it is not necessarily the one with the longest matcher.
+        "sort_width": -evidence["count"],
+        "sort_label": _matcher_label(_matcher_texts(a)),
+    }
+
+
+def _evidence_fields(evidence: dict) -> dict:
+    """How often a pair has actually collided, and one row to look at. A pair that has met once is a
+    different thing from one that has met two hundred times, and the count is the only honest way to say
+    which this is."""
+    row = evidence["row"]
+    return {
         "txn_count": evidence["count"],
         "txn_id": row["id"],
         "txn_date": row["date"],
         "txn_name": row["display_name"] or row["merchant_name"] or row["raw_name"],
         "amount": round(float(row["amount"] or 0.0), 2),
-        # Most-collided first within the section: the pair touching two hundred rows is the one worth
-        # opening, and it is not necessarily the one with the longest matcher.
-        "sort_width": -evidence["count"],
-        "sort_label": _matcher_label(_matcher_texts(a)),
     }
 
 
@@ -440,6 +501,7 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
     # A rule with no matcher text can never fire, and would otherwise nest into every other rule (the
     # empty clause list makes `_texts_nest` vacuously true).
     rules = [rule for rule in rules if texts[rule["id"]].alternatives or texts[rule["id"]].filters]
+    pairs, rule_counts = _co_matching_pairs(conn, rules)
 
     findings: list[dict] = []
     for index, first in enumerate(rules):
@@ -458,19 +520,29 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
                     continue
                 if _range_contains(range_a, range_b) or _range_contains(range_b, range_a):
                     continue
+                benign = _actions_agree(first, second, tags)
+                evidence = pairs.get(tuple(sorted((first["id"], second["id"]))))
                 findings.append(
                     _amount_overlap_finding(
-                        first, second, range_a, range_b, rank,
-                        benign=_actions_agree(first, second, tags),
+                        first, second, range_a, range_b, rank, benign=benign,
+                        removable=_removable_by_coverage(first, second, evidence, rule_counts, rank) if benign else None,
                     )
                 )
             else:
                 if _texts_nest(texts_a, texts_b):
-                    findings.append(_nesting_finding(first, second, texts_a, rank))
+                    outer, inner = first, second
                 elif _texts_nest(texts_b, texts_a):
-                    findings.append(_nesting_finding(second, first, texts_b, rank))
+                    outer, inner = second, first
+                else:
+                    continue
+                if _scope_within(inner, outer, account_types):
+                    findings.append(_nesting_finding(outer, inner, texts[outer["id"]], ranges, tags, rank))
+                    continue
+                evidence = pairs.get(tuple(sorted((first["id"], second["id"]))))
+                if evidence and not _actions_agree(first, second, tags):
+                    findings.append(_scope_split_finding(first, second, evidence, rank))
 
-    findings.extend(_co_match_findings(conn, rules, texts, rank, tags))
+    findings.extend(_co_match_findings(rules, texts, rank, tags, pairs, rule_counts))
 
     # Warnings first, then the broadest matcher, so the rules reaching furthest sit at the top of the
     # informational section where they are worth a look.
@@ -536,7 +608,7 @@ def _winner(first_id: str, second_id: str, rank: dict[str, int]) -> str:
     return first_id if rank.get(first_id, 0) <= rank.get(second_id, 0) else second_id
 
 
-def _amount_overlap_finding(a: dict, b: dict, range_a, range_b, rank, *, benign: bool) -> dict:
+def _amount_overlap_finding(a: dict, b: dict, range_a, range_b, rank, *, benign: bool, removable: str | None) -> dict:
     """The pair is listed lower range first, which is the order the two read in as a number line.
 
     `benign` splits the kind rather than only the severity, because dismissibility is decided by kind —
@@ -551,8 +623,9 @@ def _amount_overlap_finding(a: dict, b: dict, range_a, range_b, rank, *, benign:
     return {
         "kind": kind,
         "severity": SEVERITY_INFO if benign else SEVERITY_WARNING,
-        "key": f"{kind}:{low['id']}:{high['id']}",
+        "key": f"{kind}:{low['id']}:{high['id']}" + (":r" if removable else ""),
         "rule_ids": [low["id"], high["id"]],
+        "removable_rule_id": removable,
         # The band both rules claim — what makes the finding concrete rather than a statement about
         # bounds. Always finite: two ranges that are both open at the top contain one another, and
         # containment is excluded above.
@@ -564,35 +637,26 @@ def _amount_overlap_finding(a: dict, b: dict, range_a, range_b, rank, *, benign:
     }
 
 
-def _narrower_is_redundant(broader: dict, narrower: dict) -> bool:
-    """Does the narrower rule add nothing to *categorization*, so that deleting it would leave every row
-    it owns filed exactly as it is now?
+def _narrower_is_redundant(broader: dict, narrower: dict, ranges, tags) -> bool:
+    """Would deleting the narrower rule leave every row it owns exactly as it is now?
 
-    Two conditions, and the second is the one that is easy to miss. Both rules must assign the **same
-    category** — otherwise the narrow rule is the whole reason those rows are filed where they are. And
-    their **scopes must be identical**, because text nesting alone does not make the broader rule a
-    superset: an owner-scoped `aji` rule does not reach another owner's rows, so a global `aji restaurant`
-    rule is what categorizes those, and removing it would strand them.
-
-    Note the deliberate limit: this is about the *category*. A rename or a tag that only the narrow rule
-    carries is lost with it, and one that only the broad rule carries starts applying to rows it did not
-    reach before. Neither shows up here — the panel reads that difference off the rules themselves and
-    says so, rather than this flag quietly meaning "identical in every respect".
+    The pair already nests on text and on owner and account limits. The broader rule must also do the
+    same thing (`_actions_agree`: category, rename, tags and the recurring flag), take every charge the
+    narrower one does (its amount range contains the other's, and its direction is no narrower) — or
+    some of the narrower rule's rows would be left to nothing, or to a rule doing something else.
     """
-    if broader["category_id"] is None or broader["category_id"] != narrower["category_id"]:
+    if not _actions_agree(broader, narrower, tags):
         return False
-    return (
-        broader["owner_id"] == narrower["owner_id"]
-        and broader["account_id"] == narrower["account_id"]
-        and broader["account_type"] == narrower["account_type"]
-        and str(broader["debit_credit"] or "both") == str(narrower["debit_credit"] or "both")
-    )
+    if not _range_contains(ranges[broader["id"]], ranges[narrower["id"]]):
+        return False
+    direction = str(broader["debit_credit"] or "both")
+    return direction == "both" or direction == str(narrower["debit_credit"] or "both")
 
 
-def _nesting_finding(broader: dict, narrower: dict, broader_texts: MerchantMatcher, rank) -> dict:
+def _nesting_finding(broader: dict, narrower: dict, broader_texts: MerchantMatcher, ranges, tags, rank) -> dict:
     """Listed broader matcher first: the finding reads as "this wide rule also catches what that
     narrow one is for"."""
-    redundant = _narrower_is_redundant(broader, narrower)
+    redundant = _narrower_is_redundant(broader, narrower, ranges, tags)
     return {
         "kind": "matcher_nesting",
         "severity": SEVERITY_INFO,
@@ -604,7 +668,27 @@ def _nesting_finding(broader: dict, narrower: dict, broader_texts: MerchantMatch
         "winner_rule_id": _winner(broader["id"], narrower["id"], rank),
         # The removable one, when it is removable: the narrow rule is the redundant half of a nesting
         # pair, never the broad one, whose deletion would strand every row the narrow matcher misses.
-        "narrower_is_redundant": redundant,
+        "removable_rule_id": narrower["id"] if redundant else None,
         "sort_width": _matcher_width(broader_texts),
         "sort_label": _matcher_label(broader_texts),
+    }
+
+
+def _scope_split_finding(a: dict, b: dict, evidence: dict, rank) -> dict:
+    """Listed winner first, with the limit that put it there, because that is the surprise: the shorter
+    keyword can win, on an owner or account limit the longer one lacks."""
+    winner_id = _winner(a["id"], b["id"], rank)
+    winner, other = (a, b) if winner_id == a["id"] else (b, a)
+    low, high = sorted((a["id"], b["id"]))
+    return {
+        "kind": KIND_SCOPE_SPLIT,
+        "severity": SEVERITY_INFO,
+        "key": f"{KIND_SCOPE_SPLIT}:{low}:{high}",
+        "rule_ids": [winner["id"], other["id"]],
+        "winner_rule_id": winner["id"],
+        "deciding_scope": _deciding_scope(winner, other),
+        "removable_rule_id": None,
+        **_evidence_fields(evidence),
+        "sort_width": -evidence["count"],
+        "sort_label": _matcher_label(_matcher_texts(winner)),
     }
