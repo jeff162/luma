@@ -74,6 +74,7 @@ from typing import Optional
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pypdf import PdfReader
 
+from backend.app_logging import log_warning
 from backend.db.database import current_db_path
 from backend.time_utils import utcnow_iso
 
@@ -664,11 +665,21 @@ def file_digest(path: Path) -> Optional[str]:
     return digest.hexdigest()
 
 
-def delete_document_file(document_id: str) -> None:
-    """Remove a document's file. Absent is success: the row is what says a document exists, and a
-    delete that has to reconcile with a file already gone is the ordinary consequence of the
-    file-first write order."""
-    document_file_path(document_id).unlink(missing_ok=True)
+def delete_document_file(document_id: str) -> bool:
+    """Remove a document's file, returning whether it is gone. Absent is success: the row is what says a
+    document exists, and a delete that has to reconcile with a file already gone is the ordinary
+    consequence of the file-first write order.
+
+    Every caller runs this after the row's removal has committed, so a file that cannot be removed now
+    is left as litter for the next sweep rather than raised: Windows refuses to delete a file any handle
+    holds open, such as a viewer still reading it, and raising would report a completed delete as a
+    server error."""
+    try:
+        document_file_path(document_id).unlink(missing_ok=True)
+    except PermissionError as exc:
+        log_warning(f"[documents] left {document_id} for the next sweep: {exc}")
+        return False
+    return True
 
 
 def stored_document_ids() -> set[str]:
@@ -716,8 +727,8 @@ def sweep_unreferenced_files(conn: sqlite3.Connection, min_age_seconds: float = 
                     continue
             except FileNotFoundError:
                 continue
-        delete_document_file(document_id)
-        removed.append(document_id)
+        if delete_document_file(document_id):
+            removed.append(document_id)
     return removed
 
 

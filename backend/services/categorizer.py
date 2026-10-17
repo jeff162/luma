@@ -504,6 +504,36 @@ def category_lock_for(category_source, category_overridden) -> int:
     return 1 if category_overridden else 0
 
 
+# Rows per statement when reading the rows a categorization pass covers. A whole-ledger pass reads them a
+# page at a time rather than as one list (`scale-and-limits.md` → *Three independent bounds*), and a scoped
+# pass splits its id list, since one statement can bind only so many values.
+_CANDIDATE_PAGE = 500
+
+
+def _recategorize_candidates(conn: sqlite3.Connection, txn_ids: Optional[list[str]], columns: str):
+    """The rows a categorization pass may change (`category_overridden = 0`, not feature-owned), yielded a
+    page at a time: every row when `txn_ids` is None, else those of `txn_ids`. Keyset-paged on the id, which
+    no pass rewrites, so the caller may update rows between pages."""
+    base = f"""SELECT {columns}
+               FROM   txn t
+               JOIN   account a ON a.id = t.account_id
+               LEFT   JOIN account p ON p.id = a.parent_account_id
+               WHERE  t.category_overridden = 0 AND {_NOT_FEATURE_OWNED_SQL}"""
+    if txn_ids is not None:
+        ids = list(dict.fromkeys(txn_ids))
+        for start in range(0, len(ids), _CANDIDATE_PAGE):
+            chunk = ids[start:start + _CANDIDATE_PAGE]
+            yield from conn.execute(f"{base} AND t.id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+        return
+    after = ""
+    while True:
+        page = conn.execute(f"{base} AND t.id > ? ORDER BY t.id LIMIT ?", (after, _CANDIDATE_PAGE)).fetchall()
+        yield from page
+        if len(page) < _CANDIDATE_PAGE:
+            return
+        after = page[-1]["id"]
+
+
 def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] = None,
                      retain_unmatched: bool = True) -> int:
     """Re-run the rules over the `category_overridden = 0` rows — `rule`, uncategorized, `cleared`, and
@@ -542,15 +572,9 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     # the guard is stated by source anyway because that is the actual invariant ("automatic
     # categorization never touches a split's category"), and a guard that only holds via a second
     # field's current value is one refactor away from being wrong.
-    where = ["category_overridden = 0", _NOT_FEATURE_OWNED_SQL]
-    params: list = []
-    if txn_ids is not None:
-        if not txn_ids:
-            return 0
-        where.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
-        params.extend(txn_ids)
-    txns = conn.execute(
-        f"""SELECT
+    if txn_ids is not None and not txn_ids:
+        return 0
+    txns = _recategorize_candidates(conn, txn_ids, """
                t.id,
                t.date,
                t.merchant_name,
@@ -566,13 +590,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                t.import_evidence_json,
                t.imported_category,
                t.trashed_at,
-               COALESCE(p.type, a.type) AS effective_account_type
-           FROM   txn t
-           JOIN   account a ON a.id = t.account_id
-           LEFT   JOIN account p ON p.id = a.parent_account_id
-           WHERE  {' AND '.join(where)}""",
-        params,
-    ).fetchall()
+               COALESCE(p.type, a.type) AS effective_account_type""")
 
     rules = load_categorization_rules(conn)
     rules_by_id = {rule["id"]: rule for rule in rules}
@@ -670,8 +688,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     # The Rules page uses this to decide whether "re-run categorization" is the
     # likely next action, so the preview must mirror the same override-skipping,
     # enrichment-skipping, and rule-matching contract as the real recategorize pass.
-    txns = conn.execute(
-        f"""SELECT
+    txns = _recategorize_candidates(conn, None, """
                t.id,
                t.merchant_name,
                t.display_name,
@@ -683,13 +700,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                t.category_id,
                t.display_name_source,
                t.import_evidence_json,
-               COALESCE(p.type, a.type) AS effective_account_type
-           FROM   txn t
-           JOIN   account a ON a.id = t.account_id
-           LEFT   JOIN account p ON p.id = a.parent_account_id
-           WHERE  category_overridden = 0
-             AND  {_NOT_FEATURE_OWNED_SQL}"""
-    ).fetchall()
+               COALESCE(p.type, a.type) AS effective_account_type""")
 
     rules = load_categorization_rules(conn)
     rule_tags_by_id = load_rule_tags_by_id(conn)
