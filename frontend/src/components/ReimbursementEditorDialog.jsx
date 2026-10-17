@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import ClaimPortionPicker from './ClaimPortionPicker.jsx'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import {
@@ -284,7 +285,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   async function confirmComplete() {
     setError('')
     try {
-      const updated = await api.completeReimbursement(reimbursement.id, {
+      const updated = await txnMutations.completeReimbursement(reimbursement.id, {
         category_id: nothingToMove ? null : completeCategory,
         target_txn_id: nothingToMove ? null : (completeTarget || null),
       })
@@ -300,7 +301,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   async function reopenReimbursement() {
     setError('')
     try {
-      publish(await api.reopenReimbursement(reimbursement.id))
+      publish(await txnMutations.reopenReimbursement(reimbursement.id))
     } catch (err) {
       setError(err?.message || 'This reimbursement could not be reopened.')
     }

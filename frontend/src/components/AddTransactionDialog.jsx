@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import {
   DIRECTIONS,
@@ -89,10 +90,10 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
     setSaving(true)
     setError('')
     try {
-      const created = createdRef.current || await api.createTransaction(built.payload)
+      const created = createdRef.current || await txnMutations.createTransaction(built.payload)
       createdRef.current = created
       if (splitParts?.length) {
-        const saved = await api.saveSplit(created.id, splitParts)
+        const saved = await txnMutations.saveSplit(created.id, splitParts)
         onCreated?.({ ...created, is_split: true, split_parts: saved.parts, split_part_count: saved.parts.length })
       } else {
         onCreated?.(created)

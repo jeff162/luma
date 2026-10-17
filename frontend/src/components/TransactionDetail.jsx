@@ -360,7 +360,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   // and may hand back a different category — patching only the amount would leave the category badge
   // beside it stating the old one until something refetched.
   async function handleSaveAmount(nextAmount) {
-    const updated = await api.updateAmount(detailTxn.id, nextAmount)
+    const updated = await txnMutations.updateAmount(detailTxn.id, nextAmount)
     patchDetailTxn({
       amount: updated.amount,
       category_id: updated.category_id,

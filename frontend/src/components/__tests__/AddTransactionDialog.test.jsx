@@ -14,12 +14,16 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AddTransactionDialog from '../AddTransactionDialog.jsx'
 import { api } from '../../lib/api.js'
+import { txnMutations } from '../../lib/txnMutations.js'
+
+vi.mock('../../lib/txnMutations.js', async importOriginal => ({
+  ...await importOriginal(),
+  txnMutations: { createTransaction: vi.fn(), saveSplit: vi.fn() },
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
     getAccounts: vi.fn(),
-    createTransaction: vi.fn(),
-    saveSplit: vi.fn(),
     // The split editor opened from here is handed a draft, so it reads nothing — these exist only so a
     // stray call would fail loudly rather than being swallowed as an undefined function.
     getSplit: vi.fn(),
@@ -77,13 +81,13 @@ describe('AddTransactionDialog', () => {
   })
 
   it('sends the amount it showed', async () => {
-    api.createTransaction.mockResolvedValue({ id: 't1' })
+    txnMutations.createTransaction.mockResolvedValue({ id: 't1' })
     open()
     await screen.findByLabelText('Amount')
     await fillBasics()
     await userEvent.click(screen.getByRole('button', { name: 'Received' }))
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
-    await waitFor(() => expect(api.createTransaction).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.createTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ account_id: 'a1', payee: 'Corner Cafe', amount: -12.5 }),
     ))
   })
@@ -105,11 +109,11 @@ describe('AddTransactionDialog', () => {
     await screen.findByLabelText('Amount')
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
     expect(await screen.findByText(/Enter who this was paid to/)).toBeTruthy()
-    expect(api.createTransaction).not.toHaveBeenCalled()
+    expect(txnMutations.createTransaction).not.toHaveBeenCalled()
   })
 
   it('surfaces a refusal from the server rather than closing as if it worked', async () => {
-    api.createTransaction.mockRejectedValue(new Error('date must be YYYY-MM-DD'))
+    txnMutations.createTransaction.mockRejectedValue(new Error('date must be YYYY-MM-DD'))
     open()
     await screen.findByLabelText('Amount')
     await fillBasics()
@@ -127,8 +131,8 @@ describe('AddTransactionDialog', () => {
   it('divides a transaction as it is entered, creating it and its items together', async () => {
     // The split editor is opened on a draft, so nothing is saved until this form's own button: the
     // transaction is created first, then its items, because the items need its id.
-    api.createTransaction.mockResolvedValue({ id: 't1' })
-    api.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
+    txnMutations.createTransaction.mockResolvedValue({ id: 't1' })
+    txnMutations.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
     open()
     await screen.findByLabelText('Amount')
     await fillBasics()
@@ -145,10 +149,10 @@ describe('AddTransactionDialog', () => {
 
     // The picker is replaced by the ledger's own marker for a split.
     expect(await screen.findByRole('button', { name: 'Split (2)' })).toBeTruthy()
-    expect(api.saveSplit).not.toHaveBeenCalled()
+    expect(txnMutations.saveSplit).not.toHaveBeenCalled()
 
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
-    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledWith('t1', [
+    await waitFor(() => expect(txnMutations.saveSplit).toHaveBeenCalledWith('t1', [
       { category_id: 'coffee', amount: 8, label: '' },
       { category_id: 'coffee', amount: 4.5, label: '' },
     ]))
@@ -157,8 +161,8 @@ describe('AddTransactionDialog', () => {
   it('does not enter the transaction twice when only its items failed to save', async () => {
     // The row is already in the ledger at that point, so pressing the button again finishes the job
     // rather than starting it over.
-    api.createTransaction.mockResolvedValue({ id: 't1' })
-    api.saveSplit.mockRejectedValueOnce(new Error('every item needs a category'))
+    txnMutations.createTransaction.mockResolvedValue({ id: 't1' })
+    txnMutations.saveSplit.mockRejectedValueOnce(new Error('every item needs a category'))
     open()
     await screen.findByLabelText('Amount')
     await fillBasics()
@@ -173,19 +177,19 @@ describe('AddTransactionDialog', () => {
 
     expect(await screen.findByText(/transaction was entered, but its items could not be saved/)).toBeTruthy()
 
-    api.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
+    txnMutations.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
-    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(2))
-    expect(api.createTransaction).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(txnMutations.saveSplit).toHaveBeenCalledTimes(2))
+    expect(txnMutations.createTransaction).toHaveBeenCalledTimes(1)
   })
 
   it('leaves the category empty by default, so the rules get first refusal', async () => {
-    api.createTransaction.mockResolvedValue({ id: 't1' })
+    txnMutations.createTransaction.mockResolvedValue({ id: 't1' })
     open()
     await screen.findByLabelText('Amount')
     await fillBasics()
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
-    await waitFor(() => expect(api.createTransaction).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.createTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ category_id: null }),
     ))
   })

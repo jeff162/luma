@@ -31,6 +31,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude, formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
 import { round2 } from '../lib/manualTransaction.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
@@ -236,7 +237,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setSaving(true)
     setError(null)
     try {
-      const saved = await api.saveSplit(txn.id, parts)
+      const saved = await txnMutations.saveSplit(txn.id, parts)
       onSaved?.({ is_split: true, parts: saved.parts })
       onClose()
     } catch (err) {
@@ -255,7 +256,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setSaving(true)
     setError(null)
     try {
-      await api.deleteSplit(txn.id)
+      await txnMutations.deleteSplit(txn.id)
       onSaved?.({ is_split: false, parts: [] })
       onClose()
     } catch (err) {

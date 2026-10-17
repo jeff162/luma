@@ -14,6 +14,12 @@ import userEvent from '@testing-library/user-event'
 import ReimbursementsReportDialog from '../ReimbursementsReportDialog.jsx'
 import { ownerChipLabels } from '../OwnerChip.jsx'
 import { api } from '../../lib/api.js'
+import { txnMutations } from '../../lib/txnMutations.js'
+
+vi.mock('../../lib/txnMutations.js', async importOriginal => ({
+  ...await importOriginal(),
+  txnMutations: { completeReimbursement: vi.fn(), reopenReimbursement: vi.fn() },
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -24,8 +30,6 @@ vi.mock('../../lib/api.js', () => ({
     createReimbursement: vi.fn(),
     removeReimbursementTransaction: vi.fn(),
     deleteReimbursement: vi.fn(),
-    completeReimbursement: vi.fn(),
-    reopenReimbursement: vi.fn(),
   },
 }))
 
@@ -241,13 +245,13 @@ describe('completing from the board', () => {
   const SHORT = { ...SQUARE, id: 'link-8', counterparty: 'Tickets', repaid: -50, residual: 22 }
 
   it('completes a fully repaid record in one click, and offers it back', async () => {
-    api.completeReimbursement.mockResolvedValue({})
+    txnMutations.completeReimbursement.mockResolvedValue({})
     open({ total: 0, reimbursements: [SQUARE], loose: [] })
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
-    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith('link-9', {}))
+    await waitFor(() => expect(txnMutations.completeReimbursement).toHaveBeenCalledWith('link-9', {}))
 
     await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(api.reopenReimbursement).toHaveBeenCalledWith('link-9'))
+    await waitFor(() => expect(txnMutations.reopenReimbursement).toHaveBeenCalledWith('link-9'))
   })
 
   it('leaves a record with a residual to the editor, where its destination is chosen', async () => {

@@ -14,14 +14,18 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SplitEditorDialog from '../SplitEditorDialog.jsx'
 import { api } from '../../lib/api.js'
+import { txnMutations } from '../../lib/txnMutations.js'
 import { BUSY_INDICATOR_DELAY_MS, PAINT_GATE_DELAY_MS } from '../../lib/useBusyIndicator.js'
+
+vi.mock('../../lib/txnMutations.js', async importOriginal => ({
+  ...await importOriginal(),
+  txnMutations: { saveSplit: vi.fn(), deleteSplit: vi.fn() },
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
     getSplit: vi.fn(),
     getSplitSuggestion: vi.fn(),
-    saveSplit: vi.fn(),
-    deleteSplit: vi.fn(),
   },
 }))
 
@@ -56,8 +60,8 @@ async function amountFields() {
 beforeEach(() => {
   api.getSplit.mockResolvedValue({ txn_id: 't1', amount: 100, is_split: false, parts: [] })
   api.getSplitSuggestion.mockResolvedValue({ available: false, parts: [] })
-  api.saveSplit.mockResolvedValue({ parts: [] })
-  api.deleteSplit.mockResolvedValue({ ok: true })
+  txnMutations.saveSplit.mockResolvedValue({ parts: [] })
+  txnMutations.deleteSplit.mockResolvedValue({ ok: true })
 })
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
@@ -90,7 +94,7 @@ describe('splitting a draft transaction', () => {
     await user.type(fields[1], '40')
     await user.click(screen.getByText('Save split'))
 
-    expect(api.saveSplit).not.toHaveBeenCalled()
+    expect(txnMutations.saveSplit).not.toHaveBeenCalled()
     expect(onSaved).toHaveBeenCalledWith({
       is_split: true,
       parts: [
@@ -132,7 +136,7 @@ describe('splitting a draft transaction', () => {
     })
     await user.click(await screen.findByText('Remove split'))
 
-    expect(api.deleteSplit).not.toHaveBeenCalled()
+    expect(txnMutations.deleteSplit).not.toHaveBeenCalled()
     expect(onSaved).toHaveBeenCalledWith({ is_split: false, parts: [] })
   })
 })
@@ -157,7 +161,7 @@ describe('split editor remainder gate', () => {
     await user.type(fields[1], '30')   // 90 of 100 — short by ten
     await user.click(screen.getByText('Save split'))
 
-    expect(api.saveSplit).not.toHaveBeenCalled()
+    expect(txnMutations.saveSplit).not.toHaveBeenCalled()
   })
 
   it('saves once the parts account for the whole amount', async () => {
@@ -177,8 +181,8 @@ describe('split editor remainder gate', () => {
     expect(screen.getByText('Fully allocated')).toBeTruthy()
 
     await user.click(screen.getByText('Save split'))
-    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
-    expect(api.saveSplit.mock.calls[0][1]).toEqual([
+    await waitFor(() => expect(txnMutations.saveSplit).toHaveBeenCalledTimes(1))
+    expect(txnMutations.saveSplit.mock.calls[0][1]).toEqual([
       { category_id: 'groceries', amount: 60, label: '' },
       { category_id: 'hardware', amount: 40, label: '' },
     ])
@@ -314,7 +318,7 @@ describe('split editor remainder gate', () => {
 
   it("shows the backend's refusal instead of failing silently", async () => {
     const user = userEvent.setup()
-    api.saveSplit.mockRejectedValue(new Error('Two parts of a split cannot use the same category — combine them into one part.'))
+    txnMutations.saveSplit.mockRejectedValue(new Error('Two parts of a split cannot use the same category — combine them into one part.'))
     renderEditor()
     const fields = await amountFields()
 
@@ -444,8 +448,8 @@ describe('split editor on a deposit', () => {
     expect(screen.getByText('Fully allocated')).toBeTruthy()
 
     await user.click(screen.getByText('Save split'))
-    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
-    expect(api.saveSplit.mock.calls[0][1]).toEqual([
+    await waitFor(() => expect(txnMutations.saveSplit).toHaveBeenCalledTimes(1))
+    expect(txnMutations.saveSplit.mock.calls[0][1]).toEqual([
       { category_id: 'groceries', amount: -120, label: '' },
       { category_id: 'hardware', amount: -80, label: '' },
     ])
@@ -484,8 +488,8 @@ describe('split editor labels', () => {
     await user.type(labels[0], 'Pantry restock')
     await user.click(screen.getByText('Save split'))
 
-    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
-    expect(api.saveSplit.mock.calls[0][1]).toEqual([
+    await waitFor(() => expect(txnMutations.saveSplit).toHaveBeenCalledTimes(1))
+    expect(txnMutations.saveSplit.mock.calls[0][1]).toEqual([
       { category_id: 'groceries', amount: 60, label: 'Pantry restock' },
       { category_id: 'hardware', amount: 40, label: '' },
     ])

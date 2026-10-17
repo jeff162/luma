@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude, formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import {
   claimRemainder,
@@ -238,11 +239,11 @@ export default function ReimbursementsReportDialog({
     setBusy(true)
     setError('')
     try {
-      await api.completeReimbursement(entry.id, {})
+      await txnMutations.completeReimbursement(entry.id, {})
       setUndo({
         title: 'Completed',
         description: `${entryLabel(entry)} is finished and has left this list.`,
-        reverse: () => api.reopenReimbursement(entry.id),
+        reverse: () => txnMutations.reopenReimbursement(entry.id),
       })
       afterChange()
     } catch (err) {

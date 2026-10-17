@@ -147,6 +147,46 @@ export const txnMutations = {
     notifyTransactionsChanged()
     return result
   },
+
+  async createTransaction(body) {
+    const result = await api.createTransaction(body)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // A split moves the row's money between categories, so every category total it touches moves too.
+  async saveSplit(txnId, parts) {
+    const result = await api.saveSplit(txnId, parts)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  async deleteSplit(txnId) {
+    const result = await api.deleteSplit(txnId)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // An amount is a rule condition, so the server re-runs the rules and may move the row's category too.
+  async updateAmount(txnId, amount) {
+    const result = await api.updateAmount(txnId, amount)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // Completing settles a residual by rewriting a member's allocations, and reopening restores them. The
+  // other reimbursement writes change only the link's claims, which no aggregate reads.
+  async completeReimbursement(linkId, body) {
+    const result = await api.completeReimbursement(linkId, body)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  async reopenReimbursement(linkId) {
+    const result = await api.reopenReimbursement(linkId)
+    notifyTransactionsChanged()
+    return result
+  },
 }
 
 // Build the in-place row patch for an inline single-row category edit, so every categorize surface

@@ -15,6 +15,12 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ReimbursementEditorDialog from '../ReimbursementEditorDialog.jsx'
 import { api } from '../../lib/api.js'
+import { txnMutations } from '../../lib/txnMutations.js'
+
+vi.mock('../../lib/txnMutations.js', async importOriginal => ({
+  ...await importOriginal(),
+  txnMutations: { completeReimbursement: vi.fn(), reopenReimbursement: vi.fn() },
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -24,7 +30,6 @@ vi.mock('../../lib/api.js', () => ({
     updateReimbursement: vi.fn(),
     addReimbursementClaims: vi.fn(),
     removeReimbursementTransaction: vi.fn(),
-    completeReimbursement: vi.fn(),
     uncompleteReimbursement: vi.fn(),
     deleteReimbursement: vi.fn(),
     getReimbursementSettings: vi.fn(),
@@ -122,7 +127,7 @@ describe('completing', () => {
     open(record())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: 'Mark complete' }))
-    expect(api.completeReimbursement).not.toHaveBeenCalled()
+    expect(txnMutations.completeReimbursement).not.toHaveBeenCalled()
   })
 
   it('offers the reversal, and no settle action, once it is settled', async () => {
@@ -135,7 +140,7 @@ describe('completing', () => {
   })
 
   it('surfaces a refusal from the server rather than closing as if it worked', async () => {
-    api.completeReimbursement.mockRejectedValue(new Error('That transaction does not have enough left in the Reimbursable group'))
+    txnMutations.completeReimbursement.mockRejectedValue(new Error('That transaction does not have enough left in the Reimbursable group'))
     open(record())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: /Choose category|Movies/ }))
@@ -143,7 +148,7 @@ describe('completing', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
     // Asserted alongside the message so the test cannot pass by the picker click silently failing and
     // the request never going out at all.
-    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.completeReimbursement).toHaveBeenCalledWith(
       'link-1', { category_id: 'movies', target_txn_id: 't1' },
     ))
     expect(screen.getByText(/does not have enough left/)).toBeTruthy()
@@ -164,10 +169,10 @@ describe('completing one that was repaid in full', () => {
   it('completes in one click, with no category and no target', async () => {
     // Balanced is the one case with nothing to decide, so it must not route through the panel that
     // exists to ask where a residual goes.
-    api.completeReimbursement.mockResolvedValue({ ...square(), completed: true })
+    txnMutations.completeReimbursement.mockResolvedValue({ ...square(), completed: true })
     open(square())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
-    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.completeReimbursement).toHaveBeenCalledWith(
       'link-1', { category_id: null, target_txn_id: null },
     ))
     expect(screen.queryByRole('button', { name: 'Move and complete' })).toBeNull()
@@ -306,17 +311,17 @@ describe('writing one off when nobody paid', () => {
     open(unpaid())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Move and complete' }))
-    expect(api.completeReimbursement).not.toHaveBeenCalled()
+    expect(txnMutations.completeReimbursement).not.toHaveBeenCalled()
   })
 
   it('books the whole residual against the expense once a category is chosen', async () => {
-    api.completeReimbursement.mockResolvedValue({ ...unpaid(), completed: true })
+    txnMutations.completeReimbursement.mockResolvedValue({ ...unpaid(), completed: true })
     open(unpaid())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: /Choose category|Movies/ }))
     await userEvent.click(await screen.findByText('Movies & Events'))
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
-    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.completeReimbursement).toHaveBeenCalledWith(
       'link-1', { category_id: 'movies', target_txn_id: 't1' },
     ))
   })
@@ -446,7 +451,7 @@ describe('completing from a host with no category list', () => {
 
   it('loads the categories itself, so the leftover can be moved into a real one', async () => {
     api.getCategories.mockResolvedValue(CATEGORIES)
-    api.completeReimbursement.mockResolvedValue({ ...record(), completed: true })
+    txnMutations.completeReimbursement.mockResolvedValue({ ...record(), completed: true })
     openWithoutCategories(record())
 
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
@@ -454,7 +459,7 @@ describe('completing from a host with no category list', () => {
     await userEvent.click(await screen.findByText('Movies & Events'))
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
 
-    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
+    await waitFor(() => expect(txnMutations.completeReimbursement).toHaveBeenCalledWith(
       'link-1', { category_id: 'movies', target_txn_id: 't1' },
     ))
     expect(api.getCategories).toHaveBeenCalledTimes(1)
