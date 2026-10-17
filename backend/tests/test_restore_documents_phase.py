@@ -170,6 +170,26 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertEqual(ctx.exception.detail["code"], "restore_documents_pending")
 
+    def test_a_pending_phase_refuses_a_document_upload_before_it_writes_a_file(self):
+        # The phase ends with a sweep that keeps no grace period, so a file an upload writes before its row
+        # lands would be swept from under it.
+        from fastapi import UploadFile
+        from starlette.datastructures import Headers
+
+        from backend.routers.documents import store_document
+        from backend.services.documents import stored_document_ids
+
+        with self._use_db_path():
+            with get_db() as conn:
+                set_restore_state(conn, RESTORE_PHASE_DOCUMENTS, "/tmp/whatever.zip", "id@when")
+            before = stored_document_ids()
+            upload = UploadFile(file=io.BytesIO(b"Receipt for one coffee"), filename="receipt.txt",
+                                headers=Headers({"content-type": "text/plain"}))
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(store_document(upload))
+            self.assertEqual(stored_document_ids(), before)
+        self.assertEqual(ctx.exception.detail["code"], "restore_documents_pending")
+
     def test_a_second_restore_is_refused_while_one_is_in_flight(self):
         self._seed_complete()
         archive = self._write_archive()

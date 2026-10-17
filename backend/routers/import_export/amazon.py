@@ -52,6 +52,7 @@ from backend.services.reconciliation_attention import batch_attention
 from backend.services.review_flagging import flags_new_transactions
 from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
+from backend.services.restore_state import require_no_pending_restore
 from backend.services.txn_summaries import txn_summaries
 from backend.services.txn_trash import trash_txns
 from backend.services.amazon_import import (
@@ -2676,14 +2677,15 @@ async def amazon_import_endpoint(
 ):
     """Import one or both AZAD exports (orders + items) into the chosen Amazon account. Files are
     sniffed by header, so upload order doesn't matter and either file alone is accepted (degrading as
-    documented). This endpoint owns only the HTTP/multipart envelope and the demo guard; the work is
-    :func:`run_amazon_import`, kept callable in-process."""
+    documented). This endpoint owns only the HTTP/multipart envelope and the demo and restore guards; the
+    work is :func:`run_amazon_import`, kept callable in-process."""
     with get_db() as conn:
         if is_demo_data_loaded(conn):
             raise HTTPException(status_code=409, detail={
                 "code": "demo_data_loaded",
                 "message": "Clear the demo data before importing your own data.",
             })
+        require_no_pending_restore(conn, "importing")
         known = _imported_amazon_file_hashes(conn)
 
     orders, items_by_order, names, unrecognized, skipped, file_hashes = await _read_amazon_uploads(files, known)

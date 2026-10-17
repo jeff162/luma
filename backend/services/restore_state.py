@@ -69,8 +69,9 @@ def require_no_pending_restore(conn: sqlite3.Connection, action: str) -> None:
 
     The same gate the demo-data marker applies, for a related reason: between the ledger commit and the
     last file written, the ledger is correct but incomplete on disk, and anything that *adds* data in
-    that window — an import, a sync, a second restore — either races the file writes or is erased by the
-    sweep that ends the phase, which reconciles the directory against the ledger as it then stands.
+    that window — an import, a sync, an attached document, a second restore — either races the file
+    writes or is erased by the sweep that ends the phase, which reconciles the directory against the
+    ledger as it then stands.
     Refusing is honest; the alternative is losing whatever arrived during the gap.
     """
     state = get_restore_state(conn)

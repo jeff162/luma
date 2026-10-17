@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.services.restore_state import require_no_pending_restore
 from backend.services.documents import (
     MAX_DOCUMENT_BYTES,
     DocumentMove,
@@ -93,6 +94,7 @@ async def store_document(file: UploadFile = File(...)):
     check, which here asks whether the file is already among the stored ones."""
     prepared = await _prepare_upload(file)
     with get_db() as conn:
+        require_no_pending_restore(conn, "adding a document")
         existing = find_duplicate_attachment(conn, None, prepared.sha256)
         if existing:
             return {"document": existing, "already_stored": True}
@@ -126,6 +128,7 @@ async def attach_transaction_document(txn_id: str, file: UploadFile = File(...))
     """
     prepared = await _prepare_upload(file)
     with get_db() as conn:
+        require_no_pending_restore(conn, "adding a document")
         _require_transaction(conn, txn_id)
         existing = find_duplicate_attachment(conn, txn_id, prepared.sha256)
         if existing:
@@ -197,6 +200,7 @@ def edit_document_text(document_id: str, body: DocumentText):
     """Edit a text document, which replaces it: the response is the document now in its place, under a
     new id (see `replace_document_text` for why). The old file goes only once the swap has committed."""
     with get_db() as conn:
+        require_no_pending_restore(conn, "editing a document")
         try:
             document = replace_document_text(conn, document_id, body.text)
         except DocumentRejected as exc:

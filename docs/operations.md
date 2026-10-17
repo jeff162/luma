@@ -342,7 +342,8 @@ same reason.
 
 **Files are not transactional, so the documents phase is resumable.** A restore that fails partway can
 leave the database cleanly rolled back and the documents directory half-rewritten. A marker in the data
-database carries the operation across that gap, and an import or a sync refuses while it is set.
+database carries the operation across that gap, and an import, a sync or adding a document refuses while
+it is set, since the sweep that ends the phase would remove a file whose row it has not seen.
 
 **Restoring requires admin**, as does creating a backup (`security-model.md` → *Identity and the network
 perimeter*). With sign-in protection off there is no role to check, and any session may.
