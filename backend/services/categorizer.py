@@ -215,15 +215,22 @@ def merchant_matcher_matches(rule, text: str, source_text_lc: str, match_source_
     """Does the rule's merchant matcher fire on ``text`` (already lowercased, the joined name fields)?
     At least one alternative, when the rule has any, and every filter must be satisfied. A text is
     satisfied when it is a substring of ``text`` — or, when the rule matches source text, of
-    ``source_text_lc``. This is the one predicate every match site shares."""
-    def found(needle: str) -> bool:
-        in_name = bool(text) and needle in text
-        return in_name or (bool(match_source_text) and bool(source_text_lc) and needle in source_text_lc)
+    ``source_text_lc``. This is the one predicate every match site shares.
 
-    matcher = merchant_matcher(rule["keyword"], _dict_get(rule, "match_expr"))
-    if matcher.alternatives and not any(found(needle) for needle in matcher.alternatives):
-        return False
-    return all(found(needle) for needle in matcher.filters)
+    Plain loops rather than a helper closure and generators, because this runs once per rule per row —
+    millions of times in a checkup scan — and those cost twice as much here."""
+    alternatives, filters = merchant_matcher(rule["keyword"], _dict_get(rule, "match_expr"))
+    source = source_text_lc if match_source_text else ""
+    if alternatives:
+        for needle in alternatives:
+            if (text and needle in text) or (source and needle in source):
+                break
+        else:
+            return False
+    for needle in filters:
+        if not ((text and needle in text) or (source and needle in source)):
+            return False
+    return True
 
 
 def normalize_clean_name(value: Optional[str]) -> str:
