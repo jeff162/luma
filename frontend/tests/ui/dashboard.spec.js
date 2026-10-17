@@ -301,9 +301,13 @@ test('removing a tag from a drilled transaction moves the report behind it', asy
   const before = Number((await count.textContent()).match(/(\d+) transactions/)[1])
   expect(before).toBeGreaterThan(1)
 
-  // The demo seeds Discretionary on the Dining/Entertainment categories, so the row carries it as an
-  // inherited chip and unchecking it writes the per-transaction block.
-  await page.getByRole('button', { name: /^Discretionary \(inherited from/ }).first().click()
+  // The demo seeds Discretionary on Dining Out, so a Corner Bistro row carries it as an inherited chip and
+  // unchecking it writes the per-transaction block. Named rather than taken as the first chip, because
+  // for the moment it is blocked the row really has lost the tag, and `transactions.spec.js` reads
+  // Discretionary off another Dining Out row while this runs beside it.
+  const inheritedChip = page.getByRole('button', { name: /^Discretionary \(inherited from/ })
+  await page.locator('div').filter({ hasText: 'The Corner Bistro' }).filter({ has: inheritedChip }).last()
+    .getByRole('button', { name: /^Discretionary \(inherited from/ }).click()
   // `click` rather than `uncheck`/`check`: the box is driven by the row's tags as the write answers, so
   // its state does not change in the same tick as the click and Playwright's own state check races it.
   const choice = page.getByRole('checkbox', { name: /^Discretionary/ })

@@ -13,8 +13,15 @@ test('category tags inherit onto transactions (leaf and group level)', async ({ 
   await expect(
     page.getByRole('button', { name: 'Essential Expenses (inherited from group)' }).first(),
   ).toBeVisible()
+  // Read off Sushi House rather than whichever Dining Out row comes first: `dashboard.spec.js` blocks the
+  // tag on a Corner Bistro row for a moment while running beside this, and that row is the newest.
+  // The search keeps a Sushi House row inside the list's rendered window; the chip is then read off that
+  // row, so it cannot be satisfied by a row the search has not yet removed.
+  await page.getByRole('searchbox', { name: 'Search transactions' }).fill('Sushi House')
+  const discretionary = page.getByRole('button', { name: 'Discretionary (inherited from category)' })
   await expect(
-    page.getByRole('button', { name: 'Discretionary (inherited from category)' }).first(),
+    page.locator('div').filter({ hasText: 'Sushi House' }).filter({ has: discretionary }).last()
+      .getByRole('button', { name: 'Discretionary (inherited from category)' }),
   ).toBeVisible()
 })
 
