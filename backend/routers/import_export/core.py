@@ -4589,6 +4589,8 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
             raise HTTPException(status_code=400, detail="Selected duplicates cannot be imported from this batch")
         if uncategorized_ids:
             recategorize_all(conn, txn_ids=uncategorized_ids)
+        # Forced rows are new data like any import's, so they owe their payees a rescan, settled below.
+        owe_recurring_rescan(conn, imported_ids)
 
         chosen_rows = [int(entry.get("row") or 0) for entry in duplicate_rows if body.import_all or int(entry.get("row") or 0) in selected_rows]
         if chosen_rows:
@@ -4663,6 +4665,7 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
         match_orders_after_ingest(get_db(), txn_ids=imported_ids)
         pair_refunds_after_ingest(get_db())
         pair_after_ingest(get_db())
+        settle_owed_rescans()
 
     return {
         "batch_id": batch_id,
