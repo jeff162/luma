@@ -104,7 +104,7 @@ changing — or answering questions about — shared systems, persistence, invar
 
 ### Developer flag
 
-Set it in `.env` (or the shell) to expose Developer options on the main Settings page and add a toggle to add the database path to the navigation panel.
+Set it in `.env` (or the shell) to expose Developer options on the main Settings page which are useful for clearing browser data. 
 
 ```bash
 LUMA_DEVELOPER_OPTIONS=true
