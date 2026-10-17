@@ -705,13 +705,12 @@ separately:
 | Category | the first matching rule, in precedence order, that sets one |
 | Rename | the first matching rule that sets one, which need not be the rule that set the category |
 | Tags | every matching rule: they are added together |
-| Recurring series | not decided here; see *Rule-backed series* |
+| Recurring series | the first matching rule that is recurring, decided by the recurring scan; see *Rule-backed series* |
 
 So which of two matching rules wins changes a row only where both set a category and the categories
 differ, or both rename and the names differ. A category or rename only one of them sets applies either
-way, and both rules' tags apply either way. Two recurring rules are the exception: each owns a series, a
-row belongs to one series, and the recurring scan does not order rule-backed series by rule precedence,
-so the series a row lands in is not the winning rule's. The rule checkup's test for this is
+way, and both rules' tags apply either way. Two recurring rules count the same way as two categories: a
+row belongs to one series, so only the winner's series gets it. The rule checkup's test for this is
 `rule_overlaps._outcomes_agree`.
 
 Deleting a rule is a different question from which rule wins: its tags, rename and series go with it
@@ -991,20 +990,21 @@ A rule with `is_recurring` set owns a series (`source='rule'`, `rule_id`, `confi
 membership is the rule's matches, through the same predicate rule apply uses
 (`categorizer.rule_matches_row`). `is_recurring` is a valid rule action on its own.
 
-- **A scoped scan reconciles it only when something could have changed what it holds**, and then
-  against the whole window, since its members can span payees. That is when an edited row is linked to it
-  or its rule matches an edited row as it now stands (`_rule_series_touching`, recorded with the debt as
-  `series:<id>`), or when its rule differs from the one it was last reconciled against
-  (`rule_fingerprint`, compared on every scan so a rule edit on any path is caught). Nothing else can move
-  its rows, because it claims ahead of every other series whatever its status.
+- **A scoped scan reconciles the rule-backed series only when something could have changed what one
+  holds**, and then all of them, against the whole window, since their members can span payees. That is
+  when an edited row is linked to one or its rule matches an edited row as it now stands
+  (`_rule_series_touching`, recorded with the debt as `series:<id>`), or when one's rule differs from the
+  one it was last reconciled against (`rule_fingerprint`, compared on every scan so a rule edit on any
+  path is caught). Nothing else can move their rows, because they claim ahead of every other series
+  whatever their status. Creating, editing or removing one relinks them all at once
+  (`relink_rule_series`).
 - **Suppress** and **delete** clear the rule's `is_recurring` and drop the series, deleting the rule if
   that leaves it with no action. **End** keeps the flag, so a resubscription can resume it.
 - Deleting the rule, merging it away, or unchecking the flag drops the series.
-- **Two rule-backed series can match one row, and rule precedence does not decide which holds it.** A row
-  belongs to one series, and the reconcile orders rule-backed series by `_reconcile_priority`: active
-  before ended, account-scoped before not, then series id. So where two recurring rules match one row,
-  the series it lands in can belong to the rule that lost the category, and the rule checkup treats any
-  two recurring rules matching one row as contending.
+- **Two rule-backed series can match one row, and rule precedence decides which holds it**, ahead of
+  status, so the row's series and its category come from the same rule (`_reconcile_priority`, ranked by
+  `rule_specificity_order_sql`). They are reconciled together, never one alone, because reconcile does
+  not take a row from a series outside the set it is given.
 
 ### When a scan runs
 

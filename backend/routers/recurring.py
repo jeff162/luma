@@ -32,6 +32,7 @@ from backend.services.recurring_detection import (
     COUNTERPART_SCOPE_ACCOUNT_SQL,
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
+    relink_rule_series,
     auto_scan_due,
     maybe_auto_scan,
     owe_full_recurring_scan,
@@ -372,6 +373,8 @@ def suppress_series(series_id: str):
             _clear_backing_rule_flag(conn, series)
             conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (series_id,))
             conn.execute("DELETE FROM recurring_series WHERE id = ?", (series_id,))
+            # Its rows go to another recurring rule that matches them, if any.
+            relink_rule_series(conn)
             return {"ok": True, "deleted": True}
         # Record which rows it held *before* dropping the links, because after this they are
         # unrecoverable: membership is the detector's judgement — a periodicity fit over one charge per
@@ -624,4 +627,7 @@ def delete_series(series_id: str):
         # key error there. Clearing membership up front makes delete work regardless of the FK action.
         conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (series_id,))
         conn.execute("DELETE FROM recurring_series WHERE id = ?", (series_id,))
+        if series["source"] == "rule":
+            # Its rows go to another recurring rule that matches them, if any.
+            relink_rule_series(conn)
         return {"ok": True}

@@ -43,7 +43,7 @@ from typing import NamedTuple
 from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.services.account_groups import effective_account_id_sql
-from backend.services.categorizer import rule_matches_row, rule_scope_account_sql
+from backend.services.categorizer import rule_matches_row, rule_scope_account_sql, rule_specificity_order_sql
 from backend.services.transfer_pairs import (
     group_key, pair_money_movements, pairs_by_movement,
 )
@@ -896,17 +896,22 @@ class ReconcileResult(NamedTuple):
     resumed: int          # ended series reactivated by a resubscribe charge
 
 
-def _reconcile_priority(series: sqlite3.Row):
-    """Order series so exclusive row-claiming is deterministic and sensible: rule-backed first, then
-    active before ended, account-scoped before account-agnostic, higher confidence first, then id for a
-    stable tiebreak."""
+def _reconcile_priority(series: sqlite3.Row, rule_rank: dict[str, int]):
+    """Order series so exclusive row-claiming is deterministic and sensible: rule-backed first, in rule
+    precedence, then active before ended, account-scoped before account-agnostic, higher confidence first,
+    then id for a stable tiebreak."""
+    is_rule = series["source"] == "rule" and series["rule_id"]
     return (
         # A rule's matches are the rule's. Membership there is an instruction the user wrote, not a
         # reading taken off the ledger, so it claims ahead of everything, ended or not — including a
         # movement, whose own precedence below exists to beat *inferred* payee series rather than authored
-        # ones. It is also what lets a scoped scan leave a rule-backed series alone when no edited row
-        # touches it: no other series can take its rows, so nothing outside its own matches can move them.
-        0 if series["source"] == "rule" else 1,
+        # ones. It is also what lets a scoped scan leave the rule-backed series alone when no edited row
+        # touches one: no other series can take their rows.
+        0 if is_rule else 1,
+        # Between two rule-backed series matching one row, the rule that wins its category takes it, ended
+        # or not, so a row's series and its category come from the same rule (`docs/data-model.md` → *How
+        # matching rules combine*). A rule no longer live sorts last; its series has no members anyway.
+        rule_rank.get(series["rule_id"], len(rule_rank)) if is_rule else 0,
         1 if series["status"] == "ended" else 0,       # active before ended
         # A two-legged movement claims next. Its rows are the ones a payee reading gets *wrong* — the
         # same movement described differently by each institution — so letting a payee series take them
@@ -916,6 +921,15 @@ def _reconcile_priority(series: sqlite3.Row):
         -(series["confidence"] or 0.0),                # higher confidence first
         series["id"],                                  # stable
     )
+
+
+def _rule_precedence_rank(conn: sqlite3.Connection) -> dict[str, int]:
+    """rule_id -> position in the categorization precedence order (0 wins), read from the engine's own
+    ordering so a series cannot rank its rule differently from how the rule categorizes."""
+    rows = conn.execute(
+        f"SELECT id FROM category_rule WHERE deleted_at IS NULL ORDER BY {rule_specificity_order_sql('')}"
+    ).fetchall()
+    return {row["id"]: index for index, row in enumerate(rows)}
 
 
 def _load_overrides(conn: sqlite3.Connection) -> dict:
@@ -1054,8 +1068,12 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict], *,
     # including the user's own answers to ties, or reconcile would quietly hand back a different set.
     decisions = load_transfer_decisions(conn)
 
+    rule_rank = (_rule_precedence_rank(conn)
+                 if any(s["source"] == "rule" and s["rule_id"] for s in series_list) else {})
+
     resumed = 0
-    for series in sorted((s for s in series_list if s["status"] != "suppressed"), key=_reconcile_priority):
+    for series in sorted((s for s in series_list if s["status"] != "suppressed"),
+                         key=lambda s: _reconcile_priority(s, rule_rank)):
         sid = series["id"]
         excluded = excludes.get(sid, frozenset())
         members = [m for m in _candidate_members(pool, series, series_rules, decisions)
@@ -1096,11 +1114,30 @@ def link_series_members(conn: sqlite3.Connection, series_id: str, *, window_mont
     ).fetchone()
     if series is None:
         return 0
-    pool, _ = _load_pool(conn, window_months)
-    reconcile_series(conn, [series], pool)
+    # A rule-backed series is linked together with the others, since rule precedence decides which of
+    # them holds a row both rules match (see `scan_and_store`).
+    if series["source"] == "rule" and series["rule_id"]:
+        relink_rule_series(conn, window_months=window_months)
+    else:
+        pool, _ = _load_pool(conn, window_months)
+        reconcile_series(conn, [series], pool)
     return conn.execute(
         "SELECT COUNT(*) FROM txn WHERE recurring_series_id = ?", (series_id,)
     ).fetchone()[0]
+
+
+def relink_rule_series(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT) -> None:
+    """Reconcile every rule-backed series together, now. Called when one is created, edited or removed:
+    rule precedence decides which of two holds a row both rules match, so a change to one can move rows
+    into or out of another, and a removed one leaves rows another rule may claim."""
+    rule_series = conn.execute(
+        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} FROM recurring_series s "
+        f"WHERE s.source = 'rule' AND s.rule_id IS NOT NULL AND s.status != 'suppressed'"
+    ).fetchall()
+    if not rule_series:
+        return
+    pool, _ = _load_pool(conn, window_months)
+    reconcile_series(conn, rule_series, pool)
 
 
 def _payee_keys_holding(conn: sqlite3.Connection, txn_ids: set[str]) -> set[str]:
@@ -1143,10 +1180,10 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     Three things are deliberate exceptions to scoping by payee, because their membership is not decided
     by one. **Movements**: their identity is two accounts, so every money-movement row is read and every
     transfer series reconciled. **Rule-backed series**: their members are the rule's matches, which can
-    span payees the scope doesn't name (varying names — the whole reason a rule is used). One is in scope
-    when an edited row touches it (`_rule_series_touching`, recorded with the debt) or its rule has changed
-    since it was last reconciled (`_rule_fingerprint`), and then it is reconciled against the whole
-    window. That is how a newly imported row matching a recurring rule attaches to its series right away
+    span payees the scope doesn't name (varying names — the whole reason a rule is used). They are in scope
+    when an edited row touches one (`_rule_series_touching`, recorded with the debt) or one's rule has
+    changed since it was last reconciled (`_rule_fingerprint`), and then all of them are reconciled against
+    the whole window, since rule precedence decides which of two holds a row both rules match. That is how a newly imported row matching a recurring rule attaches to its series right away
     without stamping membership through every insert path. **Payee series holding a paired row**: pairing
     is decided by the money, so a movement's two legs normally sit in different payee groups, and an edit
     to one leg's group changes what the other's may claim — the scope is widened to those groups below.
@@ -1241,12 +1278,21 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     ).fetchall()
     rules_now = _load_series_rules(conn, all_series) if payee_keys is not None else {}
 
+    def _rule_series_due(r) -> bool:
+        return r["status"] != "suppressed" and (
+            r["id"] in owed_series or r["rule_fingerprint"] != _rule_fingerprint(rules_now, r["rule_id"]))
+
+    # The rule-backed series are reconciled together or not at all. Two can match one row, and rule
+    # precedence decides which holds it, so a change to one can move rows into or out of another; and
+    # reconcile never takes a row from a series outside the set it is given.
+    rule_series_due = payee_keys is None or any(
+        _rule_series_due(r) for r in all_series if r["source"] == "rule" and r["rule_id"])
+
     def _in_scope(r) -> bool:
         if payee_keys is None or r["counterpart_account_id"] is not None:
             return True  # a movement's identity is its accounts; a payee scope can't name it
         if r["source"] == "rule" and r["rule_id"]:
-            return r["status"] != "suppressed" and (
-                r["id"] in owed_series or r["rule_fingerprint"] != _rule_fingerprint(rules_now, r["rule_id"]))
+            return rule_series_due and r["status"] != "suppressed"
         return r["payee_key"] in payee_keys
 
     existing = [r for r in all_series if _in_scope(r)]
@@ -1463,8 +1509,9 @@ def _rule_series_touching(conn: sqlite3.Connection, txn_ids: list[str]) -> set[s
     """The rule-backed series an edit to these rows can change: one that holds a row now (it may be
     leaving), and one whose rule matches a row as it now stands (it may be joining). Nothing else about a
     rule-backed series moves with an edit, because its members are its rule's matches and it claims ahead
-    of every other series (`_reconcile_priority`), so a scoped scan reconciles only these and leaves the
-    rest as they are. A change to the rule itself is caught by the scan instead (`_rule_fingerprint`)."""
+    of every other series (`_reconcile_priority`), so an edit touching none of them leaves them alone; one
+    touching any brings them all into the scan, since they share rows by rule precedence. A change to the
+    rule itself is caught by the scan instead (`_rule_fingerprint`)."""
     rule_series = conn.execute(
         "SELECT * FROM recurring_series WHERE source = 'rule' AND rule_id IS NOT NULL AND status != 'suppressed'"
     ).fetchall()

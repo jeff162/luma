@@ -42,9 +42,9 @@ one rule to apply: every matching rule contributes, and precedence decides each 
 (`categorizer.categorize_transaction`). The category is the first matching rule's that sets one, the
 rename likewise, and the tags are every matching rule's. So the winner decides a row only where both
 rules set a category and the categories differ, or both rename and the names differ. The recurring flag
-is the one action outside that engine: each recurring rule owns a series, a row belongs to one series,
-and between two rule-backed series the recurring scan does not read rule precedence at all
-(`recurring_detection._reconcile_priority`), so two recurring rules always contend. A pair can compete
+is decided the same way outside that engine: each recurring rule owns a series, a row belongs to one,
+and the series of the first matching recurring rule takes it (`recurring_detection._reconcile_priority`),
+so two recurring rules contend just as two categories do. A pair can compete
 forever over an outcome that is identical whichever side wins — two spellings of one merchant filing to
 one category is the common shape — and calling that a problem the user must refine trains them to
 ignore the panel. The split is by *kind* rather than only severity because dismissibility is decided by
@@ -314,8 +314,8 @@ def _outcomes_agree(a: dict, b: dict) -> bool:
     This is the question that decides whether a competing pair is a problem at all. Each action is
     decided on its own (see the module docstring): a category or rename only one rule sets applies either
     way, and both rules' tags are added either way. So the winner matters only where both set a category
-    and they differ, both rename and the names differ, or both own a recurring series, which the
-    recurring scan does not order by rule precedence.
+    and they differ, both rename and the names differ, or both own a recurring series, since a row joins
+    only the winner's.
     """
     if a["category_id"] is not None and b["category_id"] is not None and a["category_id"] != b["category_id"]:
         return False

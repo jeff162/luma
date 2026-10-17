@@ -751,6 +751,44 @@ class RecurringDetectionTests(unittest.TestCase):
         self._scan()
         self.assertEqual(self._members(series["id"]), ids)
 
+    # Two recurring rules matching one row: the row joins the series of the rule that wins its category,
+    # so the series and the category never come from different rules.
+
+    def _prime_and_plain_charges(self):
+        end = date.today()
+        prime = {self._add_txn(payee="NORTHGATE PRIME", category="Streaming", amount=14.99,
+                               d=(end - timedelta(days=30 * i)).isoformat()) for i in range(6)}
+        plain = {self._add_txn(payee="NORTHGATE MARKET", category="Streaming", amount=40.0 + i,
+                               d=(end - timedelta(days=30 * i + 9)).isoformat()) for i in range(6)}
+        return prime, plain
+
+    def _assert_the_longer_rule_takes_the_shared_rows(self, first, second):
+        prime, plain = self._prime_and_plain_charges()
+        rules = {keyword: self._create_recurring_rule(keyword) for keyword in (first, second)}
+        prime_series = self._series_for_rule(rules["northgate prime"])["id"]
+        plain_series = self._series_for_rule(rules["northgate"])["id"]
+        self.assertEqual(self._members(prime_series), prime)
+        self.assertEqual(self._members(plain_series), plain)
+        self._scan()
+        self.assertEqual(self._members(prime_series), prime)
+        self.assertEqual(self._members(plain_series), plain)
+
+    def test_the_longer_recurring_rule_takes_the_rows_both_match_when_made_second(self):
+        self._assert_the_longer_rule_takes_the_shared_rows("northgate", "northgate prime")
+
+    def test_the_longer_recurring_rule_takes_the_rows_both_match_when_made_first(self):
+        self._assert_the_longer_rule_takes_the_shared_rows("northgate prime", "northgate")
+
+    def test_removing_the_winning_recurring_rule_hands_its_rows_to_the_other(self):
+        prime, plain = self._prime_and_plain_charges()
+        plain_series = self._series_for_rule(self._create_recurring_rule("northgate"))["id"]
+        prime_rule = self._create_recurring_rule("northgate prime")
+        from backend.routers.rules import update_rule, RuleUpdate
+        with self._use_db_path():
+            update_rule(prime_rule, RuleUpdate(is_recurring=False, category_id=self.cats["Streaming"]),
+                        on_existing="reject")
+        self.assertEqual(self._members(plain_series), prime | plain)
+
     def _edit_and_settle(self, txn_id, name):
         # An edit as every write path makes one: the write, the rescan owed in its transaction, and the
         # scoped scan that settles it after the commit.

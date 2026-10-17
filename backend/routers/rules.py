@@ -36,6 +36,7 @@ from backend.services.recurring_detection import (
     _normalize_payee,
     owe_recurring_rescan,
     payee_keys_for_ids,
+    relink_rule_series,
     resolve_txn_name,
     settle_owed_rescans,
 )
@@ -50,11 +51,14 @@ _CADENCE_DAYS = {name: int(round(days)) for name, days in CADENCES}
 def _drop_recurring_series_for_rule(conn, rule_id: str) -> None:
     """Remove any recurring series backed by this rule (unlink its members and its override rows first, so
     nothing dangles). Used when a rule's recurring flag is cleared, the rule is deleted, or an edit merges
-    the rule away."""
-    for s in conn.execute("SELECT id FROM recurring_series WHERE rule_id = ?", (rule_id,)).fetchall():
+    the rule away. The rows it held go to another recurring rule that matches them, if any."""
+    dropped = conn.execute("SELECT id FROM recurring_series WHERE rule_id = ?", (rule_id,)).fetchall()
+    for s in dropped:
         conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (s["id"],))
         conn.execute("DELETE FROM recurring_membership_override WHERE series_id = ?", (s["id"],))
         conn.execute("DELETE FROM recurring_series WHERE id = ?", (s["id"],))
+    if dropped:
+        relink_rule_series(conn)
 
 
 def _matcher_series_name(rule) -> str:
