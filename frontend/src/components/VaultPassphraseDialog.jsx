@@ -3,8 +3,8 @@
 
 // The credential-vault passphrase dialog — the surface `useVaultGate` asks the host to render for its
 // `mode` ('set' to mint the workspace vault, 'unlock' to open it for this session). Extracted from the
-// Connections tab when Backup / Restore became its second host: restoring a credentials backup re-keys
-// secrets under the workspace DEK, so it needs the same gate and the same prompt.
+// Connections tab when Backup / Restore became its second host: restoring an older standalone credentials
+// backup re-keys secrets under the workspace DEK, so it needs the same gate and the same prompt.
 //
 // A third mode, 'change', rewraps the DEK under a new passphrase. It is not a gate mode — nothing awaits
 // it — but it asks for the same fields against the same floor, and a separate dialog would be the same
@@ -53,9 +53,10 @@ function PassphraseStrengthMeter({ score }) {
   )
 }
 
-// Credentials backups the vault's current wrapping would strand. Fetched when the change dialog opens,
-// because it is only ever true of *this* moment: a change rewraps the DEK, and every file exported before
-// it stays restorable with the old passphrase alone. A failure to fetch leaves the list empty, which is
+// Backups carrying the vault's current wrapping, which a change would strand. Fetched when the change
+// dialog opens, because it is only ever true of *this* moment: a change rewraps the DEK, and every file
+// exported before it puts the old wrap back when restored, so the vault then opens with the old passphrase
+// alone. A failure to fetch leaves the list empty, which is
 // the right degradation — the general caution below is unconditional and covers the same ground less
 // specifically.
 function useStrandedBackups(active) {
@@ -261,9 +262,9 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{MISMATCH}</div>
         ) : null}
         {/* The consequence a passphrase change has that nothing else on screen would reveal: the same DEK
-            is rewrapped, so stored ciphertext is untouched and backups still restore here, but any
-            credentials backup already written carries the OLD wrap, and on another system opens only
-            with the old passphrase (or the recovery code it carries) — permanently. Named
+            is rewrapped, so stored ciphertext is untouched, but any backup already written carries the
+            OLD wrap, and restoring it — here or on another system — puts the vault back as it was, so it
+            then opens only with the old passphrase (or the recovery code it carries). Named
             by date where the record knows of one, since "you have a backup from this date" is actionable
             in a way that "if you hold any backup…" is not. The general line stays for files exported
             before that record existed. */}
@@ -275,14 +276,15 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           }}>
             {stranded.length ? (
               <>
-                <b>Keep your current passphrase.</b> {stranded.length === 1 ? 'A credentials backup' : 'Credentials backups'} taken
+                <b>Keep your current passphrase.</b> {stranded.length === 1 ? 'A backup' : 'Backups'} taken
                 {' '}{stranded.map(b => formatDate(String(b.exported_at).slice(0, 10))).join(', ')}
-                {' '}can only be restored on another system with it, even after this change.
+                {' '}put the vault back as it was, so after restoring one the vault opens only with it, even
+                after this change.
               </>
             ) : (
               <>
-                <b>Keep your current passphrase.</b> Any credentials backup taken before now can only be
-                restored on another system with it, even after this change.
+                <b>Keep your current passphrase.</b> Any backup taken before now puts the vault back as it
+                was, so after restoring it the vault opens only with it, even after this change.
               </>
             )}
           </div>

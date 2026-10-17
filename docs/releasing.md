@@ -340,7 +340,7 @@ cheapest runner, so macOS is not the first place it is ever exercised.
 
 ### Reviewing the vault's cryptography
 
-What protects a provider credential in a copied database or a credentials backup is how long guessing the
+What protects a provider credential in a copied database or a backup is how long guessing the
 vault passphrase takes, and both halves of that answer move: hardware gets faster, and a weakness turns up
 in an algorithm. So the choices below are checked against current guidance at least once a year, as a
 step of the release that falls due (*Release checklist*), and changed when they fall behind. Unless noted,

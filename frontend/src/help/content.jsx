@@ -2650,8 +2650,7 @@ export const HELP_TOPICS = [
             <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
             stored credential. Needed when a restore brings back a connection's credential without
             its accounts, which is reported on the <strong>Tasks</strong> page (see{' '}
-            <HelpLink to="/help/data-and-backups#restoring-both">restoring data and
-              credentials</HelpLink>).
+            <HelpLink to="/help/data-and-backups#restoring">restoring a backup</HelpLink>).
           </li>
           <li>
             <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
@@ -2751,9 +2750,9 @@ export const HELP_TOPICS = [
                   one. It is checked each time it is typed to unlock. When the rule, or the estimate behind
                   it, changes, the locked strip and a <strong>Confirm your vault passphrase</strong> task
                   ask for one unlock with the passphrase rather than a passkey, since a passkey cannot be
-                  used to check it; no credentials backup can be taken until then. It still opens the vault, but no
-                  data provider can be connected, and no credentials backup can be taken, until it is
-                  changed in Vault settings. Only the person whose passphrase it is can change it.</td>
+                  used to check it; backups leave the data provider credentials out until then. It still opens
+                  the vault, but no data provider can be connected, and backups leave the credentials out,
+                  until it is changed in Vault settings. Only the person whose passphrase it is can change it.</td>
               </tr>
               <tr>
                 <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
@@ -2783,7 +2782,7 @@ export const HELP_TOPICS = [
                 <td><strong>Can&apos;t open it?</strong></td>
                 <td>Shown while the vault is locked, for a forgotten passphrase. It lists the ways back
                   in, cheapest first: a passkey, another person who can open the vault, the recovery
-                  code, a credentials backup. The last resort rebuilds the vault. That keeps the ledger
+                  code, a backup holding the vault. The last resort rebuilds the vault. That keeps the ledger
                   and each connection&apos;s account mapping, and every connection has to be
                   reconnected.</td>
               </tr>
@@ -4274,7 +4273,7 @@ export const HELP_TOPICS = [
           <li>
             Everything crosses the network unencrypted, sign-in passwords and the vault passphrase
             included. A vault passphrase read off the network opens the data provider credentials in
-            any copy of the database or of a credentials backup.
+            any copy of the database or of a backup.
           </li>
           <li>Passkeys are unavailable.</li>
           <li>
@@ -4428,32 +4427,89 @@ export const HELP_TOPICS = [
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
         <HelpHeading anchor="backups">Backups</HelpHeading>
+        <p>*needs review*</p>
         <p>
           Backups are made and restored by an administrator, under <strong>Backup / Restore</strong> on
-          the <HelpLink to="/help/page-administration">Administration</HelpLink> page. There are two,
-          and each holds what the other does not.
+          the <HelpLink to="/help/page-administration">Administration</HelpLink> page. A backup holds
+          everything, in two parts, and what to put back is chosen when restoring.
         </p>
         <ul>
           <li>
-            The <strong>data backup</strong> holds the ledger: categories, rules, owners, accounts and
-            transactions. For each data connection it holds everything except the credential: that the
-            connection exists, its account mapping and how far it had synced. If the transaction data
-            is considered sensitive, {APP_NAME} can generate key pairs to build strongly encrypted
-            backup files.
+            <strong>Financial data</strong> &mdash; the ledger: categories, rules, owners, accounts,
+            transactions, attached documents and preferences. For each data connection it holds
+            everything except the credential: that the connection exists, its account mapping and how
+            far it had synced.
           </li>
           <li>
-            The <strong>credentials backup</strong> holds the stored credential for each connection and
-            the provider secrets entered with <strong>Configure</strong>, encrypted as they are in
-            the <HelpLink to="/help/credential-vault">vault</HelpLink>. It needs no further encryption.
-            To open them elsewhere it also carries the unlock methods of the user who generated the
-            file: their vault passphrase, their recovery code and their passkeys. Other users&apos;
-            unlock methods are not in it. The file is only as hard to break into as the weakest
-            method in it, which is why it cannot be generated while that user&apos;s passphrase fails
-            the current strength rule.
+            <strong>Accounts &amp; secrets</strong> &mdash; the sign-in accounts and settings, password
+            hashes and two-factor secrets included, the backup keys, and the stored credential for each
+            connection and the provider secrets entered with <strong>Configure</strong>, encrypted as
+            they are in the <HelpLink to="/help/credential-vault">vault</HelpLink>. To open the
+            credentials it carries the unlock methods of the user who made the backup: their vault
+            passphrase, their recovery code and their passkeys. Other users' unlock methods are not in
+            it.
           </li>
         </ul>
+        <p>
+          The file is only as hard to break into as the weakest unlock method in it. So the credentials
+          are left out while that user's passphrase fails the current strength rule, or has not been
+          checked against it since the rule changed, and when that user cannot open the vault. The rest
+          of the backup is still made, and the page says beforehand that the credentials will be missing.
+        </p>
+        <p>
+          A backup can be encrypted to a backup key, and {APP_NAME} can generate the key pairs. That
+          protects what the file holds in plain text: the transactions, the password hashes and the
+          two-factor secrets. The data provider credentials are protected by the vault whether or not
+          the file is encrypted.
+        </p>
 
-        <HelpHeading anchor="credentials-restore-passphrase">What a credentials restore asks for</HelpHeading>
+        <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
+        <p>
+          The restore offers each part the file holds, both ticked. Each part replaces what is there,
+          whichever installation it lands on.
+        </p>
+        <ul>
+          <li>
+            Restoring the financial data replaces the ledger and never removes a credential. A
+            connection that is both in the backup and on the installation keeps its credential and goes
+            back to the sync position it had when the backup was made, so the next sync fetches what
+            has arrived since. A connection in the backup that the installation does not have is created
+            without a credential, waiting to be reconnected. A connection on the installation that the
+            backup does not mention keeps its credential and loses its account
+            list. <strong>Refresh accounts</strong> in the connection's menu fetches the list again.
+          </li>
+          <li>
+            Restoring the accounts &amp; secrets replaces the sign-in accounts, the sign-in setting, the
+            backup keys, the vault and the credentials, and signs everyone out. The vault then opens for
+            the user who made the backup, with the passphrase, recovery code or passkey in force when it
+            was taken. Other users ask for vault access again. A credential added since the backup was
+            made is cleared, and its connection has to be reconnected.
+          </li>
+          <li>
+            A backup made without the credentials keeps the vault and credentials already on the
+            installation, as long as someone among the restored accounts can open the vault. Otherwise
+            the credentials are cleared and every connection has to be reconnected.
+          </li>
+          <li>
+            When the backup turns sign-in on, the restore first asks for the username and password of an
+            administrator in it, so someone can still sign in afterwards.
+          </li>
+        </ul>
+        <p>
+          A passphrase or recovery code that has been replaced is worth keeping, with the date it was
+          replaced, for as long as a backup made under it might be restored.
+        </p>
+        <p>
+          A backup made before <strong>Respond to an exposure</strong> was used
+          in <HelpLink to="/help/vault-settings#exposure">Vault settings</HelpLink> holds credentials
+          the providers no longer accept.
+        </p>
+
+        <HelpHeading anchor="credentials-restore-passphrase">Restoring an older credentials backup</HelpHeading>
+        <p>
+          Earlier versions made a separate credentials backup. It still restores, into the vault already
+          on the installation, and replaces only the credentials.
+        </p>
         <div className="help-table-scroll">
           <table>
             <thead>
@@ -4467,60 +4523,19 @@ export const HELP_TOPICS = [
               </tr>
               <tr>
                 <td>The same installation, after <strong>Replace vault key</strong> or a rebuilt vault</td>
-                <td>One of the generating user&apos;s unlock methods as it was at the time: the
-                  passphrase, the recovery code, or a passkey.</td>
+                <td>One of the generating user's unlock methods as it was at the time: the passphrase,
+                  the recovery code, or a passkey.</td>
               </tr>
               <tr>
                 <td>A different installation</td>
-                <td>The same. No other user&apos;s passphrase opens the file. A passkey is offered only
-                  where the new installation is reached at the same name the passkey was added at (for
+                <td>The same. No other user's passphrase opens the file. A passkey is offered only where
+                  the new installation is reached at the same name the passkey was added at (for
                   example <code>luma.local</code>), over HTTPS. The vault on the new installation has to
                   exist and be unlocked, under whatever passphrase was set there.</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p>
-          A passphrase or recovery code that has been replaced is therefore worth keeping, with the date
-          it was replaced, for as long as a backup made under it might be restored somewhere else. The
-          restore names the date the file&apos;s recovery code was issued, to tell which kept code opens it.
-        </p>
-
-        <HelpHeading anchor="restoring-both">Restoring data and credentials</HelpHeading>
-        <p>
-          The two files restore separately, in either order, and neither undoes the other.
-        </p>
-        <ul>
-          <li>
-            A data restore replaces the ledger and never removes a credential. A connection that is
-            both in the backup and on the installation keeps its credential and goes back to the sync
-            position it had when the backup was made, so the next sync fetches what has arrived since.
-          </li>
-          <li>
-            A connection in the data backup that the installation does not have is created without a
-            credential, waiting to be reconnected. Its accounts and mapping are kept, and a
-            credentials restore afterwards fills the credential in.
-          </li>
-          <li>
-            A connection on the installation that the data backup does not mention keeps its
-            credential and loses its account list. <strong>Refresh accounts</strong> in the
-            connection&apos;s menu fetches the list again, and the next sync then reads its history
-            again. The same applies to a credentials backup restored with no data backup.
-          </li>
-          <li>
-            A credentials restore replaces the credentials stored on the installation and leaves
-            accounts and transactions alone.
-          </li>
-        </ul>
-        <p>
-          To move to a new machine: restore the data backup, set a vault passphrase on the Connections
-          tab, then restore the credentials backup.
-        </p>
-        <p>
-          A credentials backup made before <strong>Respond to an exposure</strong> was used
-          in <HelpLink to="/help/vault-settings#exposure">Vault settings</HelpLink> holds credentials
-          the providers no longer accept.
-        </p>
 
         <HelpHeading anchor="exposed-files">If the database files are exposed</HelpHeading>
         <p>
@@ -4576,8 +4591,8 @@ export const HELP_TOPICS = [
             Choose <strong>Replace vault key&hellip;</strong>.
           </li>
           <li>
-            Make a new credentials <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>. One
-            made earlier holds the replaced credentials, which the providers no longer accept.
+            Make a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>. One made earlier
+            holds the replaced credentials, which the providers no longer accept.
           </li>
         </ol>
         <p>

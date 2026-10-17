@@ -77,7 +77,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Secrets in backup and export](security-model.md#secrets-in-backup-and-export)
 - [Recovery and compromise response](security-model.md#recovery-and-compromise-response)
 - [Obstacles](security-model.md#obstacles)
-- [Open](security-model.md#open)
 
 ### [Mechanism index](mechanism-index.md)
 

@@ -207,7 +207,7 @@ export const api = {
   requestVaultReenrolment: (new_passphrase) =>
     request('/auth/vault/reenrol', { method: 'POST', body: JSON.stringify({ new_passphrase }) }),
   lockVault: () => request('/auth/vault/lock', { method: 'POST' }),
-  // Credentials backups taken against the wrapping currently in force — the ones a passphrase change is
+  // Backups carrying the vault, taken against the wrapping currently in force — the ones a passphrase change is
   // about to strand. Only those: a backup from before an earlier change is already stranded, and saying
   // so again would bury the one that still matters.
   vaultCredentialsBackups: () => request('/auth/vault/credentials-backups'),
@@ -1231,7 +1231,6 @@ export const api = {
     return `/api/import-export/transactions.csv?${q}`
   },
   getBackupRecipients: () => request('/import-export/backup/recipients'),
-  getCredentialsBackupStatus: () => request('/import-export/backup/credentials/status'),
   getRestoreTargetStatus: () => request('/import-export/restore/target-status'),
   createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),
   // Generates a keypair and stores NOTHING: the private key comes back once, in this response, and the
@@ -1239,6 +1238,9 @@ export const api = {
   generateBackupKeypair: (data) => request('/import-export/backup/keypair', { method: 'POST', body: JSON.stringify(data) }),
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
+  // Whether a backup taken now would leave the data provider credentials out, and why.
+  getBackupStatus: () => request('/import-export/backup/status'),
+  // A backup is always the financial data and the accounts; what to put back is chosen at restore.
   // `recipientIds` narrows an encrypted backup to a chosen subset; omitted means every enabled recipient,
   // which is what a single-recipient install always wants.
   exportBackup: (encrypted = false, recipientIds = null) => {
@@ -1246,8 +1248,6 @@ export const api = {
     const scope = recipientIds?.length ? `&recipients=${encodeURIComponent(recipientIds.join(','))}` : ''
     return `/api/import-export/backup?encrypted=true${scope}`
   },
-  // No `encrypted` variant: a credentials backup is ciphertext already (see export_credentials).
-  exportCredentials: ()                   => '/api/import-export/backup/credentials',
   inspectBackupFile: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -1260,12 +1260,19 @@ export const api = {
     }
     return res.json()
   },
-  restoreBackupFile: async (file, privateKeyFile = null, privateKeyPassphrase = '', force = false) => {
+  // `parts` chooses what to put back: `includeData` (the financial data) and `includeAccounts` (the
+  // accounts part, which only a full backup holds). `adminUsername`/`adminPassword` are an administrator of
+  // the backup, asked for when restoring its accounts turns sign-in on.
+  restoreBackupFile: async (file, privateKeyFile = null, privateKeyPassphrase = '', force = false, parts = {}) => {
     const fd = new FormData()
     fd.append('file', file)
     if (privateKeyFile) fd.append('private_key_file', privateKeyFile)
     if (privateKeyPassphrase) fd.append('private_key_passphrase', privateKeyPassphrase)
     if (force) fd.append('force', 'true')
+    fd.append('include_data', parts.includeData === false ? 'false' : 'true')
+    if (parts.includeAccounts) fd.append('include_accounts', 'true')
+    if (parts.adminUsername) fd.append('admin_username', parts.adminUsername)
+    if (parts.adminPassword) fd.append('admin_password', parts.adminPassword)
     const res = await trackedFetch('/api/import-export/restore-file', { method: 'POST', body: fd })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))

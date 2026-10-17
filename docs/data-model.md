@@ -1877,14 +1877,22 @@ A refund is not a [reimbursable expense](#reimbursable-expenses): nothing is owe
 
 ## Backups
 
-Two artifacts, kept separate so the ordinary backup holds no secret: the **data** backup and the
-**credentials** backup. Each declares its `kind` (`data` or `credentials`): in `meta.json`, in a
-credentials payload, and in an encrypted archive's `manifest.json`, outside the ciphertext, so an
-encrypted backup can be identified before a private key is produced. A file without the field is
-identified by the sections it carries. Each restore endpoint refuses the other kind by name.
+A backup is always everything, in two parts, and the restore chooses which to put back. The **data** part
+is the financial data and holds no secret. The **accounts** part is the identities, the perimeter, the
+backup keys, and the data-source credentials as ciphertext with the vault slots that open them
+(`services/accounts_backup.py`). The data part is the same layout the financial-data backup always had,
+with the accounts members beside its sections.
+
+A file's `kind` says what it holds: `full` for a backup written now, `data` for one from before the
+accounts part, and `credentials` for the standalone credentials backup that preceded it. It is declared in
+`meta.json` and, for an encrypted archive, in `manifest.json` outside the ciphertext, with
+`credentials_included`, so the restore can offer its choices before a private key is produced. A file
+without the field is identified by the sections it carries. A standalone credentials file restores
+through its own endpoint, which refuses every other kind by name, as the archive restore refuses it.
 
 Secrets stay in the data database as ciphertext and keys stay in the control database. That separation
-is why a leaked database does not leak tokens.
+is why a leaked database does not leak tokens, and why the credentials and the vault have to travel as
+one part: either half alone restores and never syncs.
 
 ### The data backup
 
@@ -1904,7 +1912,7 @@ row back.
 - **The export builds in a staging file beside the database**, not the system temp directory, which is
   RAM-backed on many Linux installs. The file is unnamed, so an interrupted export leaves nothing.
 - **Integrity.** Restore recomputes every member digest before anything destructive. Older single-JSON
-  payloads and the credentials backup carry `content_sha256` over the canonical payload. Both are
+  payloads and the standalone credentials backup carry `content_sha256` over the canonical payload. Both are
   optional and detect accidental corruption only; authenticity is the encrypted backup's AES-GCM tag.
 - **An encrypted restore decrypts `payload.bin` to a staging file and checks the tag before opening
   it.** The envelope's `manifest.json` carries `format: "luma-encrypted-backup"`.
@@ -1949,16 +1957,19 @@ fired, with `force` the only way past:
 - `newer_schema` — the backup's `schema_version` is past this build's, which is the one direction that
   loses data, since restore drops columns this schema does not know
 
-So "the target is empty" is not on its own a pass: a first install restoring an `auth`-mode backup into
-a `local`-mode instance is refused, and so is any downgrade.
+So "the target is empty" is not on its own a pass: a first install restoring an `auth`-mode backup's
+financial data into a `local`-mode instance is refused, and so is any downgrade. A restore that applies
+the accounts part skips `mode_mismatch`, since the file's sign-in setting comes with it. A restore of the
+accounts part alone is checked by none of the three: each is a question about the ledger, and the
+confirmation before it names what it replaces.
 
 **A restore adopts the backup's `instance_id`**, since afterwards the data is the backup's lineage.
 Restoring one backup twice into a fresh database therefore does not trip the guard. The id also
 namespaces browser-local UI caches.
 
-### A connection is split across the two backups
+### A connection is split across the two parts
 
-The credential (`credential` / `credential_enc`) rides the credentials backup. The data backup's
+The credential (`credential` / `credential_enc`) rides the accounts part. The data part's
 `connections` section carries the rest: that the connection exists, its sync-health fields, and
 `transactions_cursor` with `initial_sync_complete`. The resume point belongs with the data because it
 is a claim about data held, written with the rows it describes.
@@ -1968,7 +1979,7 @@ is a claim about data held, written with the rows it describes.
 - **A connection in both** (same id, or the same provider handle under another id) takes the backup's
   state and keeps its credential.
 - **One only in the backup** is created without a credential, so its accounts, mappings and cards have
-  a parent. A later credentials restore fills it in.
+  a parent. A later restore of the accounts part fills it in.
 - **One only on the install** keeps its credential and loses its resume point and its account list,
   since its synced rows and `connection_account` rows went with the old ledger. *Refresh accounts*
   rebuilds the list; Tasks reports the state (`connections_without_accounts`).
@@ -1978,11 +1989,11 @@ The backup's resume point is reset, not restored, when the backup is older than
 `provider_request_budget`, `sync_started_at` and `sync_progress` stay with the target: spending cannot
 be un-made, and the other two describe a running process.
 
-**A credentials restore fills credentials in and does not replace rows.** It matches by id, then by
-provider handle, writes the credential and handle, and inserts only a connection the install never had.
-A connection the file does not hold keeps its row and is flagged `reauth_required`. `connection_account`
-cascades from `connection`, so replacing rows would erase the mappings. The two restores can run in
-either order.
+**Restoring credentials writes them onto the rows; it does not replace rows**
+(`accounts_backup.write_credentials`). It matches by id, then by provider handle, writes the credential
+and handle, and inserts only a connection the install never had. A connection the file does not hold keeps
+its row, loses its credential and is flagged `reauth_required`. `connection_account` cascades from
+`connection`, so replacing rows would erase the mappings. The two parts can be restored in either order.
 
 **A connection may hold no credential.** A vault reset clears credentials and keeps the rows, because
 the mappings, coverage and cards hang off `connection_id`. `crypto_service.connection_has_credential`
@@ -1990,38 +2001,71 @@ asks without decrypting, and `decrypt_connection_credential` raises `MissingCred
 then removes the row locally and reports `revoked: false`; re-authorize and refresh-accounts refuse; a
 sync skips and flags `reauth_required`.
 
-### The credentials backup
+### The accounts part
 
-It exports ciphertext: `connection.credential_enc` and `provider_config.secret_enc` as stored, with the
-exporting member's slots (`crypto_service.export_vault_slots`) in a `vault_slots` list, each read by its
-`method` and `format`. The payload format is `CREDENTIALS_PAYLOAD_VERSION`; older ones carried a single
-passphrase slot as `vault` and still restore (`RESTORABLE_CREDENTIALS_VERSIONS`). The reasoning is in
-`security-model.md` → *Secrets in backup and export*.
+Members `accounts/<rows>.ndjson` for `users`, `recovery_codes`, `passkeys`, `settings` and `backup_keys`,
+and `accounts/credentials.json` (absent when the credentials were left out), all digested in `meta.json`,
+which also records `accounts_version`.
 
-- **Export needs no unlocked vault**, since it copies wrapped material. It is refused while the
-  exporter's passphrase has not been judged under the current rule, or fails it
-  (`credentials_export_refusal`).
-- **It carries the exporter's passphrase, recovery-code and passkey slots, and no other member's.** A
-  recovery slot carries `issued_at`, so a restore can say which kept code opens the file. A passkey slot
-  carries its `credential_id`, `prf_salt` and `label`, and `site`: a salted digest of the RP id it was
-  registered under, absent when that is unknown. The label is readable by anyone holding the file, like a
-  backup key's name. `sealed_dek_prev` rides along on a slot exported mid-rotation.
-- **Restore asks for a secret only when the file's ciphertext is not already valid under the live
-  workspace key.** It is valid when one of the file's slots seals the key this install holds now
+- **Identities are the control database's people and how they sign in**: `user_account`,
+  `user_recovery_code` and `app_passkey`, every column but `tenant_id`, plus the perimeter's two settings,
+  `auth_enabled` and `password_policy` (`control_database.IDENTITY_TABLES`, `PERIMETER_SETTING_KEYS`).
+  Everything else in that database describes the machine and stays; `test_accounts_backup.py` lists each
+  table left out with its reason.
+- **The backup keys** are the data database's `backup_recipient` rows.
+- **The credentials are copied as stored**: `connection.credential_enc` and `provider_config.secret_enc`,
+  with the exporter's slots (`crypto_service.export_vault_slots`) in a `vault_slots` list. The slots
+  carry their passphrase, recovery-code and passkey material and no other member's. A recovery slot
+  carries `issued_at`; a passkey slot its `credential_id`, `prf_salt`, `label`, and `site`, a salted
+  digest of the RP id it was registered under. Each carries its strength verdict and the basis it was
+  taken under, so it comes back judged.
+- **Export needs no unlocked vault**, since it copies wrapped material. The credentials are **left out**,
+  and the rest of the backup written, while the exporter's passphrase has not been judged under the
+  current rule or fails it (`credentials_export_refusal`), and when there is ciphertext and the exporter
+  holds no slot, since nothing could open the restored credentials (`vault_access_required`).
+  `GET /backup/status` says which before the file is made, and `meta.json` records
+  `credentials_included`. The reasoning is in `security-model.md` → *Secrets in backup and export*.
+- **Restore replaces.** The credentials are written back verbatim, then `replace_identities` makes the
+  control database's people, slots and perimeter exactly the file's in one transaction and ends every
+  sign-in session. A part without the credentials leaves the vault and the credentials here as they are,
+  less the slots of the people it removes; if that leaves nobody able to open the vault, the credentials
+  are cleared as a vault reset clears them (`crypto_service.clear_stored_secrets`). A person in both keeps their row, so the id this machine's records hang off survives;
+  a person the file does not name is deleted. The slots are adopted under their own `user_id` and `id`,
+  which their AAD binds them to, so the vault opens again for the exporter with the secrets in force at
+  export; the passkey's RP id is recorded at its next unlock. The per-person preferences in the data part
+  are keyed by the same ids, so a full restore reattaches them.
+- **A file that turns sign-in on needs an administrator of it** (`check_restoring_admin`): the username
+  and password of an active admin with a password, checked against the file's own hash before anything is
+  touched. Refused as `admin_password_required` or `incorrect_admin_password`, with the file's admin
+  names.
+- **The data database is written first, then the control database.** No transaction spans them. An
+  interruption between leaves credentials under the backup's key beside the old vault, and restoring the
+  same file again completes it, since every step is a replacement.
+- **`credentials_export`** (control database) holds one row per backup that carried the credentials: a timestamp
+  and `wrapped_dek_fingerprint`, a digest of the passphrase slot's wrapping. On a keypair slot it covers
+  `wrapped_private_key`, the field a passphrase change alters; a KDF upgrade at unlock alters it too and
+  moves the rows with it, since the same passphrase still opens those files. The passphrase-change
+  dialog uses it to name the backups that would put the old passphrase back. It is in the control
+  database so it survives a data restore, and a restore of the accounts part keeps the rows of everyone it
+  keeps.
+
+### The standalone credentials backup
+
+The file the accounts part replaced: `kind: credentials`, the same `connections`, `provider_configs` and
+`vault_slots` as one JSON payload (`RESTORABLE_CREDENTIALS_VERSIONS`; v3 and v4 carried a single slot as
+`vault`, v1 and v2 plaintext). It is no longer written. It carries no identities, so its slots may belong
+to no one here and are never adopted; it restores into whatever vault the install has.
+
+- **It asks for a secret only when the file's ciphertext is not already valid under the live workspace
+  key.** It is valid when one of the file's slots seals the key this install holds now
   (`exported_slots_hold_live_dek`, comparing the seal, which rotation changes and a passphrase change
   does not), or, with the vault unlocked, when one of its secrets opens with the live key. Rows then go
   back verbatim.
 - **Otherwise it needs one of the exporter's secrets** — a passphrase, a recovery code, or a passkey's
   PRF output with its credential id (`deks_from_exported_slot`, whose AAD is the slot's own `user_id` and
-  `id`) — and the local vault unlocked. Each secret is re-sealed under this workspace's key; a foreign
-  slot is never adopted. The refusal that asks (`backup_secret_required`) lists the `unlock_options` the
-  file carries, offering a passkey only when the request's RP id matches its `site`.
-- **`credentials_export`** (control database) holds one row per export: a timestamp and
-  `wrapped_dek_fingerprint`, a digest of the passphrase slot's wrapping. On a keypair slot it covers
-  `wrapped_private_key`, the field a passphrase change alters; a KDF upgrade at unlock alters it too and
-  moves the rows with it, since the same passphrase still opens those files. The passphrase-change
-  dialog uses it to name the backups that will need the old passphrase elsewhere. It is in the control
-  database so it survives a data restore.
+  `id`) — and the local vault unlocked. Each secret is re-sealed under this workspace's key. The refusal
+  that asks (`backup_secret_required`) lists the `unlock_options` the file carries, offering a passkey
+  only when the request's RP id matches its `site`.
 
 ### Backup recipients
 
@@ -2035,6 +2079,8 @@ passphrase slot as `vault` and still restore (`RESTORABLE_CREDENTIALS_VERSIONS`)
   keys than asked for fails only at restore.
 - The UI says "backup key"; the code, API and file format say "recipient", because `manifest.json`
   writes `recipient_id` into every encrypted backup.
+- The list rides the accounts part, not the data part: it decides who can read a backup, which is the
+  perimeter's concern rather than the ledger's.
 
 ### Preferences
 
@@ -2437,8 +2483,7 @@ and owed decisions*.
   → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
 - **Account type as a filtering and search axis.** It exists as a rule scope only.
   → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
-- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, and an
-  incremental chain.
+- **Restoring an incremental chain**: the document delta, and restore with no merge mode.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:
   an attributed node lists purchases dated outside the displayed period.

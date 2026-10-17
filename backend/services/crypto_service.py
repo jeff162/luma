@@ -963,10 +963,13 @@ def export_vault_slots(user_id: str) -> list[dict]:
             # one sealed under the key this install settles on (`exported_slots_hold_live_dek`).
             "sealed_dek_prev":      slot["sealed_dek_prev"],
             **{column: slot[column] for column in cdb.VAULT_SLOT_KDF_COLUMNS},
+            # The verdict on the wrap and what it was taken under, so a backup that is restored whole
+            # (`vault_slot_rows`) brings the slot back as judged rather than as never judged.
+            "meets_production_min": bool(slot["meets_production_min"]),
+            "strength_basis":       slot["strength_basis"],
+            "created_at":           slot["created_at"],
         }
-        if slot["method"] == "passphrase":
-            entry["meets_production_min"] = bool(slot["meets_production_min"])
-        elif slot["method"] == "recovery":
+        if slot["method"] == "recovery":
             # So someone restoring can tell which of the codes they kept opens this file.
             entry["issued_at"] = slot["updated_at"]
         elif slot["method"] == "passkey":
@@ -981,6 +984,42 @@ def export_vault_slots(user_id: str) -> list[dict]:
             })
         exported.append(entry)
     return exported
+
+
+def vault_slot_rows(exported: list[dict]) -> list[dict]:
+    """`vault_slot` rows for the slots a backup carries, to be adopted as they stand.
+
+    Only for a restore that also brings back the identities the slots belong to: each slot's material is
+    bound to its own user and slot id (`_private_key_aad`, `_sealed_dek_aad`), so it opens again only under
+    those ids, and adopting it for anyone else would install a key nobody here can open. The host a passkey
+    was registered under is not in the file, only a digest of it, so it is left to be recorded at the next
+    unlock, as for a slot that predates the column."""
+    rows = []
+    for slot in exported or []:
+        row = {
+            "id":                   slot["id"],
+            "user_id":              slot["user_id"],
+            "method":               slot.get("method") or "passphrase",
+            "format":               slot.get("format") or 1,
+            "label":                slot.get("label"),
+            "credential_id":        slot.get("credential_id"),
+            "prf_salt":             slot.get("prf_salt"),
+            "public_key":           slot.get("public_key"),
+            "wrapped_private_key":  slot.get("wrapped_private_key"),
+            "sealed_dek":           slot.get("sealed_dek"),
+            "sealed_dek_prev":      slot.get("sealed_dek_prev"),
+            "wrapped_dek":          slot.get("wrapped_dek"),
+            "meets_production_min": 1 if slot.get("meets_production_min") else 0,
+            "strength_basis":       slot.get("strength_basis"),
+            **{column: slot.get(column) for column in cdb.VAULT_SLOT_KDF_COLUMNS},
+        }
+        # Both NOT NULL with a default, so an absent value is left to the default rather than written.
+        if slot.get("created_at"):
+            row["created_at"] = slot["created_at"]
+        if slot.get("issued_at"):
+            row["updated_at"] = slot["issued_at"]
+        rows.append(row)
+    return rows
 
 
 def exported_slots_fingerprint(exported: list[dict]) -> str | None:
@@ -1035,7 +1074,7 @@ def deks_from_exported_slot(exported: dict, secret: str) -> list[bytes]:
 
 
 def credentials_export_refusal(user_id: str) -> dict | None:
-    """Why this member cannot take a credentials backup right now, or None when they can.
+    """Why a backup this member takes cannot carry the credentials right now, or None when it can.
 
     The file carries their passphrase slot, open to offline guessing by whoever holds it, so the
     passphrase has to clear the rule in force. A verdict from an earlier basis is not enough: the rule or
@@ -1046,14 +1085,14 @@ def credentials_export_refusal(user_id: str) -> dict | None:
     if slot["strength_basis"] != STRENGTH_BASIS:
         return {
             "code": "passphrase_unchecked",
-            "message": "Unlock the vault by typing your passphrase first, so it can be checked against the "
-                       "current strength rule before a backup carries it.",
+            "message": "The vault passphrase has not been checked against the current strength rule. Unlock "
+                       "the vault by typing it, so it can be checked before a backup carries it.",
         }
     if not slot["meets_production_min"]:
         return {
             "code": "weak_passphrase",
-            "message": "Your vault passphrase no longer meets the strength rule, and a credentials backup "
-                       "would carry it. Change it in Vault settings, then take the backup.",
+            "message": "The vault passphrase no longer meets the strength rule, and a backup would carry it. "
+                       "Change it in Vault settings.",
         }
     return None
 
@@ -1699,6 +1738,32 @@ def recover_with_code(user_id: str, code: str, new_passphrase: str) -> str:
 # apply — carries out the reset and tells them what it also costs the other members.
 
 
+def clear_stored_secrets(conn) -> int:
+    """Clear every stored credential and flag every connection for reconnection, for when no slot can
+    produce the key they were sealed under any more. Returns how many connections there are. `conn` is
+    the data database.
+
+    Once nothing can open them, leaving the values behind only yields `VaultDecryptError` at every future
+    sync — the clean-break behaviour the model has always described as meaning *re-link*. The columns
+    come from `ENCRYPTED_COLUMNS`, so a secret added to the vault later is cleared without anyone
+    remembering to come back."""
+    # Counted and flagged *before* anything is cleared, because the flag's meaning depends on what was
+    # there: `reauth_required` says "this connection's credential is gone", and after the UPDATE below
+    # there is no longer any way to tell which ones that was true of.
+    connections = conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0]
+    conn.execute("UPDATE connection SET reauth_required = 1")
+    for spec in ENCRYPTED_COLUMNS:
+        conn.execute(f"UPDATE {spec.table} SET {spec.column} = NULL WHERE {spec.column} IS NOT NULL")
+    # The pre-vault plaintext columns go too. New writes never populate them (`encrypt_*` returns an
+    # empty plaintext beside the ciphertext), so on any current install this clears nothing — but a
+    # legacy row that survived would otherwise keep syncing after the user was told every connection
+    # needs re-linking, and on the compromise path it would leave the single most exposed copy of a
+    # credential sitting in the database the reset was run *because of*.
+    conn.execute("UPDATE connection SET credential = '' WHERE credential != ''")
+    conn.execute("UPDATE provider_config SET secret = '' WHERE secret != ''")
+    return connections
+
+
 def reset_vault(user_id: str, *, reason: str) -> dict:
     """Destroy the workspace vault: every slot, every stored secret, and the DEK behind them.
 
@@ -1706,36 +1771,19 @@ def reset_vault(user_id: str, *, reason: str) -> dict:
     makes the reset → set → restore-a-credentials-backup sequence work, and equally what makes the old
     ciphertext permanently unopenable if there is no backup.
 
-    Clearing the ciphertext is not tidiness. Once no slot can produce the old DEK the stored values are
-    unopenable forever, so leaving them behind only yields `VaultDecryptError` at every future sync — the
-    clean-break behaviour the model has always described as meaning *re-link*.
+    Clearing the ciphertext is not tidiness: once no slot can produce the old DEK the stored values are
+    unopenable forever (`clear_stored_secrets`).
 
     It destroys **every** member's access, not just the caller's — there is one DEK per workspace. That is
     a consequence to state before the fact, not a reason to refuse; the note above this section records why
     the other-member check is a redirect rather than a block.
 
-    The columns come from `ENCRYPTED_COLUMNS` rather than being named here, so a secret added to the
-    vault later is cleared by this without anyone remembering to come back — the same registry rotation
-    reads, with the same test standing behind it.
     """
     if reason not in ("lost", "compromised"):
         raise ValueError("a vault reset must state whether the passphrase was lost or compromised")
 
     with get_db() as conn:
-        # Counted and flagged *before* anything is cleared, because the flag's meaning depends on what was
-        # there: `reauth_required` says "this connection's credential is gone", and after the UPDATE below
-        # there is no longer any way to tell which ones that was true of.
-        connections = conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0]
-        conn.execute("UPDATE connection SET reauth_required = 1")
-        for spec in ENCRYPTED_COLUMNS:
-            conn.execute(f"UPDATE {spec.table} SET {spec.column} = NULL WHERE {spec.column} IS NOT NULL")
-        # The pre-vault plaintext columns go too. New writes never populate them (`encrypt_*` returns an
-        # empty plaintext beside the ciphertext), so on any current install this clears nothing — but a
-        # legacy row that survived would otherwise keep syncing after a reset that told the user every
-        # connection needs re-linking, and for the compromise path it would leave the single most exposed
-        # copy of a credential sitting in the database the reset was run *because of*.
-        conn.execute("UPDATE connection SET credential = '' WHERE credential != ''")
-        conn.execute("UPDATE provider_config SET secret = '' WHERE secret != ''")
+        connections = clear_stored_secrets(conn)
 
     # Last, and only once the ciphertext is gone. Reversed, an interruption between the two would leave
     # unopenable rows behind a vault that still looked configured — a state with no way out but a second

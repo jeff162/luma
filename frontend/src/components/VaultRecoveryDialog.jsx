@@ -17,9 +17,9 @@
 //      anyone can act on, and "frances can" is — the name is the whole content of the rung.
 //   2. A recovery code                    → opens the vault and re-keys the passphrase against the SAME
 //      workspace key, so again nothing is re-encrypted and no connection is reconnected.
-//   3. A credentials backup               → complete recovery, but only after a reset, since re-keying
-//      needs a local vault open and there is no opening the old one. Named here so the reset does not
-//      read as pure loss when a rescue file exists.
+//   3. A backup carrying the vault        → complete recovery with an older passphrase or code: restoring
+//      it puts the vault back as it was when it was taken. Named here so the reset does not read as pure
+//      loss when a rescue file exists.
 //   4. Rebuild                            → destructive, irreversible, and the only rung that re-links.
 //
 // **Every rung above the last is a reason, never a bar.** An earlier design refused the rebuild outright
@@ -260,9 +260,9 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           ) : null}
           {backups.length > 0 ? (
             <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-              A credentials backup is on file. Set a new passphrase and restore it with the passphrase or
-              recovery code in force when it was taken, and the connections will work again without
-              reconnecting anything.
+              A backup holding the vault is on file. Restoring its accounts &amp; secrets puts the vault back
+              as it was when it was taken, opened by the passphrase or recovery code in force then, and the connections it
+              holds work again without reconnecting anything.
             </p>
           ) : null}
           {todo.length > 0 || appSecrets.length > 0 ? (
@@ -421,15 +421,17 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
             </Rung>
           ) : null}
 
-          {/* 3 — free, but only reachable after a reset, so it is context for rung 4 rather than an
-              action of its own. */}
+          {/* 3 — free, but taken on Backup / Restore, so it is context here rather than an action of its
+              own. */}
           {backups.length > 0 ? (
-            <Rung title="A credentials backup is on file">
+            <Rung title="A backup holding the vault is on file">
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                The most recent was taken {formatDate(String(backups[0].exported_at).slice(0, 10))}. A
-                backup is restored with the passphrase or recovery code in force when it was taken, not
-                your current ones — so if you still have an older passphrase or code, rebuilding below and
-                then restoring that file recovers everything without reconnecting anything.
+                The most recent was taken {formatDate(String(backups[0].exported_at).slice(0, 10))}.
+                Restoring its accounts &amp; secrets on Administration → Backup / Restore puts the vault back
+                as it was then, opened
+                by the passphrase or recovery code in force when it was taken, not your current ones — so if
+                you still have an older passphrase or code, it recovers everything without reconnecting
+                anything. It also puts back the sign-in accounts as they were and signs everyone out.
               </p>
             </Rung>
           ) : null}

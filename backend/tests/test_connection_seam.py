@@ -22,13 +22,12 @@ from unittest import mock
 from backend.db import control_database as cdb
 from backend.db import database
 from backend.db.database import get_db
-from backend.routers.import_export.backup import read_payload_bytes
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services import crypto_service as cs
 from backend.services.providers import PlaidAdapter, UnknownProviderError, get_adapter
 from backend.services.providers.base import ProviderAdapter
 from backend.services.providers.simplefin import SimpleFinError
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, exported_credentials, in_browser_session
 
 
 @contextmanager
@@ -698,11 +697,11 @@ class CredentialBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
-            status = client.get("/api/import-export/backup/credentials/status").json()
-            self.assertTrue(status["has_credentials"])
-            # 1 connection + 1 provider_config (the app credential _connect_one saves): both are vaulted
-            # secrets the credentials backup carries.
-            self.assertEqual(status["credential_count"], 2)
+            # The connection and the app credential _connect_one saves are both vaulted secrets the
+            # accounts backup carries.
+            credentials = exported_credentials(client)
+            self.assertEqual(len(credentials["connections"]), 1)
+            self.assertEqual(len(credentials["provider_configs"]), 1)
 
     def test_repeated_exchange_is_idempotent(self):
         # A user can complete Plaid Link more than once for the same bank (onSuccess double-fire, re-link),
@@ -747,21 +746,25 @@ class CredentialBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
+            user_id = client.get("/api/auth/me").json()["user"]["id"]
 
-            exported = client.get("/api/import-export/backup/credentials")
+            exported = client.get("/api/import-export/backup")
             self.assertEqual(exported.status_code, 200)
-            payload = read_payload_bytes(exported.content)
+            credentials = exported_credentials(client)
             # The export carries CIPHERTEXT plus the vault material that reopens it — the token itself
-            # must not be in the file (see routers/import_export/backup.py::export_credentials).
-            self.assertEqual(payload["version"], 5)
-            self.assertEqual(payload["connections"][0]["provider"], "plaid")
-            self.assertNotIn("access-sandbox-xyz", json.dumps(payload))
-            self.assertTrue(payload["connections"][0]["credential_enc"])
-            self.assertTrue(payload["vault_slots"][0]["sealed_dek"])
+            # must not be in the file.
+            self.assertEqual(credentials["connections"][0]["provider"], "plaid")
+            self.assertNotIn("access-sandbox-xyz", json.dumps(credentials))
+            self.assertTrue(credentials["connections"][0]["credential_enc"])
+            self.assertTrue(credentials["vault_slots"][0]["sealed_dek"])
 
-            restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
+            restored = client.post("/api/import-export/restore-file", files={
+                "file": ("luma_backup.zip", exported.content, "application/zip"),
+            }, data={"include_data": "false", "include_accounts": "true"})
             self.assertEqual(restored.status_code, 200, restored.text)
-            self.assertEqual(restored.json()["restored"], 2)  # 1 connection + 1 provider_config
+            self.assertEqual(restored.json()["accounts"]["credentials"], 2)  # 1 connection + 1 provider_config
+            client.post("/api/auth/select-identity", json={"user_id": user_id})
+            client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
             self.assertEqual(self._stored_token(client), "access-sandbox-xyz",
                              "the restored credential still decrypts to the original secret")
 
@@ -775,7 +778,7 @@ class CredentialBackupTests(unittest.TestCase):
             restored = client.post("/api/import-export/restore/credentials", json={"data": legacy})
             self.assertEqual(restored.status_code, 200, restored.text)
             self.assertEqual(restored.json()["restored"], 1)
-            again = read_payload_bytes(client.get("/api/import-export/backup/credentials").content)
+            again = exported_credentials(client)
             self.assertEqual(again["connections"][0]["provider"], "plaid")
             self.assertEqual(self._stored_token(client, "item-legacy"), "tok-legacy",
                              "a legacy plaintext payload is vaulted on the way in")

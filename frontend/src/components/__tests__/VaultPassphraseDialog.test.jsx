@@ -5,9 +5,9 @@
 //   * The floor is a GATE, not advice. A passphrase under it cannot be submitted at all. Before this the
 //     strength meter was the only signal, so a short passphrase was accepted by the UI and then refused
 //     by the server — which reads as the vault being broken rather than as a rule being applied.
-//   * Changing the passphrase says which credentials backups it strands. Rewrapping the DEK leaves every
-//     file exported beforehand restorable only with the old passphrase, permanently, and nothing else on
-//     screen would ever reveal that.
+//   * Changing the passphrase says which backups it strands. Rewrapping the DEK leaves every file
+//     exported beforehand putting the old wrap back when restored, so the vault then opens only with the
+//     old passphrase, and nothing else on screen would ever reveal that.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
@@ -255,16 +255,16 @@ describe('the passphrase floor is enforced, not suggested', () => {
 })
 
 describe('changing the passphrase', () => {
-  it('names the credentials backups the change would strand', async () => {
+  it('names the backups the change would strand', async () => {
     vaultCredentialsBackups.mockResolvedValueOnce({ backups: [{ exported_at: '2026-08-11T10:00:00Z' }] })
     renderDialog({ mode: 'change', onSubmit: vi.fn() })
     expect(await screen.findByText(/Aug 11, 2026/)).toBeTruthy()
-    expect(screen.getByText(/can only be restored on another system with it/)).toBeTruthy()
+    expect(screen.getByText(/after restoring one the vault opens only with it/)).toBeTruthy()
   })
 
   it('still cautions when no backup is on record, since one may predate the record', async () => {
     renderDialog({ mode: 'change', onSubmit: vi.fn() })
-    expect(await screen.findByText(/Any credentials backup taken before now/)).toBeTruthy()
+    expect(await screen.findByText(/Any backup taken before now/)).toBeTruthy()
   })
 
   it('sends the old and new passphrases together', async () => {

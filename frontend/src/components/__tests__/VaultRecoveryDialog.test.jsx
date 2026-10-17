@@ -132,13 +132,13 @@ describe('the ladder', () => {
     expect(screen.getByText(/Laptop/)).toBeTruthy()
   })
 
-  it('names a credentials backup as the rung that costs nothing', async () => {
+  it('names a backup holding the vault as the rung that costs nothing', async () => {
     vaultResetPreview.mockResolvedValue({
       connections: 2, other_members_can_unlock: [], own_passkeys: [], has_recovery_code: false,
       credentials_backups: [{ exported_at: '2026-06-01T00:00:00' }], confirm_phrase: 'RESET VAULT',
     })
     renderDialog()
-    expect(await screen.findByText('A credentials backup is on file')).toBeTruthy()
+    expect(await screen.findByText('A backup holding the vault is on file')).toBeTruthy()
     // The non-obvious half: a backup opens with the passphrase it was MADE under, so an older one the
     // user still remembers is a complete recovery rather than another dead end.
     expect(screen.getByText(/in force when it was taken, not\s+your current ones/)).toBeTruthy()

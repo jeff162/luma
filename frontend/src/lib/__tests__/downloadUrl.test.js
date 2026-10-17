@@ -27,7 +27,7 @@ describe('downloadUrl', () => {
 
   afterEach(() => { vi.restoreAllMocks() })
 
-  function respond({ ok = true, status = 200, body = {}, filename = 'luma_credentials_2026-08-10.zip' } = {}) {
+  function respond({ ok = true, status = 200, body = {}, filename = 'luma_accounts-2026-08-10.zip' } = {}) {
     globalThis.fetch = vi.fn(async () => ({
       ok,
       status,
@@ -40,8 +40,8 @@ describe('downloadUrl', () => {
 
   it('saves the file under the name the server chose', async () => {
     respond()
-    await downloadUrl('/api/import-export/backup/credentials')
-    expect(clicked).toEqual([{ href: 'blob:fake', download: 'luma_credentials_2026-08-10.zip' }])
+    await downloadUrl('/api/import-export/backup?scope=accounts')
+    expect(clicked).toEqual([{ href: 'blob:fake', download: 'luma_accounts-2026-08-10.zip' }])
   })
 
   it('falls back to a generic name when the server sends no disposition', async () => {
@@ -54,7 +54,7 @@ describe('downloadUrl', () => {
     // The reported bug's shape exactly: 423 + a machine-readable code.
     respond({ ok: false, status: 423, body: { detail: { code: 'vault_locked', message: 'Unlock the vault.' } } })
 
-    await expect(downloadUrl('/api/import-export/backup/credentials')).rejects.toMatchObject({
+    await expect(downloadUrl('/api/import-export/backup?scope=accounts')).rejects.toMatchObject({
       status: 423,
       message: 'Unlock the vault.',
       detail: { code: 'vault_locked' },

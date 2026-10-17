@@ -439,7 +439,8 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
     )
   }
   // Still unlocked, because a passphrase that fails a tightened rule keeps opening the vault — but it
-  // blocks connecting a data source and taking a credentials backup, and only its owner can change it.
+  // blocks connecting a data source and taking a backup that carries the credentials, and only its owner
+  // can change it.
   // Said here because this is where both of those are attempted; Change passphrase is in Vault settings.
   if (vault.passphraseNeedsChange) {
     return (
@@ -447,7 +448,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
         {help}
         <span>
           Your vault passphrase is too easy to guess under the current strength rule. Change it to connect
-          data providers or take a credentials backup.
+          data providers or include the credentials in a backup.
         </span>
         <Button small onClick={onSettings} style={{ marginLeft: 'auto' }}>
           {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
@@ -757,8 +758,8 @@ export default function ConnectionsTab({ onShowHistory }) {
     setChangingPassphrase(false)
     setNotice({
       title: 'Vault passphrase changed',
-      description: 'Your connections are unaffected. Any credentials backup taken before now still '
-        + 'needs the previous passphrase to restore.',
+      description: 'Your connections are unaffected. A backup taken before now puts the previous '
+        + 'passphrase back when its accounts & secrets are restored.',
     })
   }
 

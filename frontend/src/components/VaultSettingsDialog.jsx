@@ -466,8 +466,8 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
               {reissueResult.has_credentials_backups
                 && reissueResult.outcomes.some(o => o.outcome === 'reissued') ? (
                   <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
-                    Credentials backups made before now restore the replaced credentials, which no longer
-                    work. Make a new one.
+                    Backups made before now carry the replaced credentials, which no longer work. Make a
+                    new backup.
                   </p>
                 ) : null}
               <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>

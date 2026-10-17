@@ -2,7 +2,7 @@
 The backup, restore and watched-folder operations that need an admin once sign-in protection is on.
 
 A restore is not a data edit: it replaces every row, the connections and the provider configuration at once.
-Before this, any signed-in member could run one — including the legacy credentials restore, which replaces
+Before this, any signed-in member could run one — including the standalone credentials restore, which replaces
 global provider configuration that is otherwise an admin's alone to change. The backup keys are held to the
 same bar because they decide who can read a backup at all, and creating a backup is held to it so the
 server agrees with the Administration page that offers it. Pointing a data source at a **watched folder**
@@ -23,7 +23,7 @@ from backend.tests._api_client import api_client
 
 GUARDED = [
     ("get", "/api/import-export/backup", {}),
-    ("get", "/api/import-export/backup/credentials", {}),
+    ("get", "/api/import-export/backup/status", {}),
     ("post", "/api/import-export/restore", {"json": {"data": {}}}),
     ("post", "/api/import-export/restore-file", {"files": {"file": ("backup.zip", b"not a backup", "application/zip")}}),
     ("post", "/api/import-export/restore/resume-documents", {}),

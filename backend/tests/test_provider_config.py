@@ -20,11 +20,10 @@ from unittest import mock
 
 from backend.db import control_database as cdb
 from backend.db import database
-from backend.routers.import_export.backup import read_payload_bytes
 from backend.services import crypto_service as cs
 from backend.services.providers import config as provider_config
 from backend.services.providers import resolve_app_config
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, exported_credentials
 
 
 @contextmanager
@@ -226,27 +225,34 @@ class ProviderConfigEndpointTests(unittest.TestCase):
         with api_client() as (client, _):
             self.assertEqual(client.get("/api/providers/nope/secret").status_code, 404)
 
-    def test_app_credential_rides_the_credentials_backup(self):
+    def test_app_credential_rides_the_accounts_backup(self):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "app-secret"})
-            payload = read_payload_bytes(
-                client.get("/api/import-export/backup/credentials").content
-            )
-            pc = next(p for p in payload["provider_configs"] if p["provider"] == "plaid")
+            user_id = client.get("/api/auth/me").json()["user"]["id"]
+            exported = client.get("/api/import-export/backup")
+            self.assertEqual(exported.status_code, 200, exported.text)
+            credentials = exported_credentials(client)
+            pc = next(p for p in credentials["provider_configs"] if p["provider"] == "plaid")
             self.assertEqual(pc["client_id"], "cid")
             # The app secret rides as CIPHERTEXT. `client_id` is semi-public and stays readable; the
-            # secret itself must never appear in the file in a usable form (v3 — see export_credentials).
+            # secret itself must never appear in the file in a usable form.
             self.assertEqual(pc["secret"], "")
             self.assertTrue(pc["secret_enc"])
-            self.assertNotIn("app-secret", json.dumps(payload))
+            self.assertNotIn("app-secret", json.dumps(credentials))
 
-            restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
+            with database.get_db() as conn:
+                conn.execute("DELETE FROM provider_config")
+            restored = client.post("/api/import-export/restore-file", files={
+                "file": ("luma_backup.zip", exported.content, "application/zip"),
+            }, data={"include_data": "false", "include_accounts": "true"})
             self.assertEqual(restored.status_code, 200, restored.text)
+            # A restore of the accounts signs everyone out; with sign-in off, picking the identity again is
+            # signing back in.
+            client.post("/api/auth/select-identity", json={"user_id": user_id})
             again = client.get("/api/providers/plaid/config").json()
             self.assertEqual(again["client_id"], "cid")
             self.assertTrue(again["has_secret"])
-
 
 if __name__ == "__main__":
     unittest.main()

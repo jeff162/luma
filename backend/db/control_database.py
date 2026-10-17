@@ -1858,3 +1858,121 @@ def consume_recovery_code(user_id: str, code: str) -> bool:
             (row["id"],),
         )
     return True
+
+
+# --- Identities as a backup carries them ----------------------------------------------------------
+#
+# The accounts part of a backup (`services/accounts_backup.py`) is the identities, the ways they sign in,
+# and the two settings that make up the perimeter. Everything else in this database describes the machine
+# rather than the people on it, and stays: the session signing secret and cookie name, the sessions
+# themselves, the workspace record with its path to this machine's financial database, the error counters
+# and the like. The coverage test lists each table left out with its reason.
+#
+# Restoring them is a replacement, never a merge. The file is the set of people to have, so whoever it
+# does not name is gone and everyone is signed out — the replaced rows are what a live session was
+# authenticated against.
+
+PERIMETER_SETTING_KEYS = ("auth_enabled", "password_policy")
+
+# (part name, table). The part name is what the backup calls the rows; it outlives the table's.
+IDENTITY_TABLES = (
+    ("users", "user_account"),
+    ("recovery_codes", "user_recovery_code"),
+    ("passkeys", "app_passkey"),
+)
+
+# Rewritten on the way in: there is one workspace, and its record belongs to this machine.
+_MACHINE_COLUMNS = {"user_account": {"tenant_id"}}
+
+
+def export_identities() -> dict:
+    with get_control_db() as conn:
+        part = {
+            name: [
+                {k: v for k, v in dict(row).items() if k not in _MACHINE_COLUMNS.get(table, ())}
+                for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")
+            ]
+            for name, table in IDENTITY_TABLES
+        }
+        part["settings"] = [
+            dict(row) for row in conn.execute(
+                f"SELECT key, value FROM app_setting WHERE key IN ({', '.join('?' * len(PERIMETER_SETTING_KEYS))})"
+                " ORDER BY key",
+                PERIMETER_SETTING_KEYS,
+            )
+        ]
+    return part
+
+
+def _workspace_tenant_id(conn, users: list[dict]) -> str:
+    """The workspace record restored identities belong to, created when no identity has ever existed here."""
+    row = conn.execute("SELECT id FROM tenant ORDER BY created_at, id LIMIT 1").fetchone()
+    if row:
+        return row["id"]
+    tenant_id = str(uuid.uuid4())
+    first = next((u for u in users if u.get("role") == "admin"), users[0] if users else {})
+    name = (first.get("display_name") or first.get("username") or "Workspace").strip() or "Workspace"
+    conn.execute(
+        "INSERT INTO tenant (id, slug, name, db_path) VALUES (?, ?, ?, ?)",
+        (tenant_id, _unique_tenant_slug(conn, _tenant_slug(first.get("username") or name)), name,
+         _workspace_db_path()),
+    )
+    return tenant_id
+
+
+def _insert_rows(conn, table: str, rows: list[dict], *, upsert: bool = False) -> None:
+    """Insert backup rows, keeping only the columns this schema has: a column added since the backup takes
+    its default, and one since dropped is skipped."""
+    live = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for row in rows:
+        columns = [c for c in row if c in live]
+        sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})"
+        if upsert:
+            updates = ", ".join(f"{c} = excluded.{c}" for c in columns if c != "id")
+            sql += f" ON CONFLICT(id) DO UPDATE SET {updates}"
+        conn.execute(sql, [row[c] for c in columns])
+
+
+def replace_identities(part: dict, vault_slots: list[dict] | None) -> None:
+    """Make this database's people, their ways in and the perimeter exactly what `part` holds, with
+    `vault_slots` (`crypto_service.vault_slot_rows`) as the whole vault. One transaction. With
+    `vault_slots` None the vault is left as it is, less the slots of anyone the part does not name.
+
+    A person in both keeps their row and its id, which is what this machine's own records of them hang
+    off (`credentials_export`). Usernames are moved out of the way first, because two people can trade
+    names between the backup and now and a row-by-row update would collide on the unique column midway.
+    """
+    users = list(part.get("users") or [])
+    keep = [u["id"] for u in users]
+    with get_control_db() as conn:
+        tenant_id = _workspace_tenant_id(conn, users)
+        conn.execute("DELETE FROM sign_in_session")
+        if vault_slots is not None:
+            conn.execute("DELETE FROM vault_slot")
+        conn.execute("DELETE FROM user_recovery_code")
+        conn.execute("DELETE FROM app_passkey")
+        conn.execute(
+            f"DELETE FROM user_account WHERE id NOT IN ({', '.join('?' * len(keep))})", keep,
+        )
+        conn.execute("UPDATE user_account SET username = 'restoring:' || id")
+        _insert_rows(conn, "user_account", [{**u, "tenant_id": tenant_id} for u in users], upsert=True)
+        _insert_rows(conn, "user_recovery_code", list(part.get("recovery_codes") or []))
+        _insert_rows(conn, "app_passkey", list(part.get("passkeys") or []))
+        if vault_slots is not None:
+            _insert_rows(conn, "vault_slot", [s for s in vault_slots if s["user_id"] in set(keep)])
+
+        settings = {
+            s["key"]: s["value"] for s in part.get("settings") or [] if s.get("key") in PERIMETER_SETTING_KEYS
+        }
+        for key in PERIMETER_SETTING_KEYS:
+            if key in settings:
+                conn.execute(
+                    """
+                    INSERT INTO app_setting (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+                    """,
+                    (key, str(settings[key])),
+                )
+            else:
+                # Absent from the file means the default was in force there, so it is here too.
+                conn.execute("DELETE FROM app_setting WHERE key = ?", (key,))

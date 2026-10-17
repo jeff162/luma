@@ -381,8 +381,8 @@ Detection keys, scoring, curation gates and the signal kinds: `data-model.md` â†
 - **Backend:** `backend/routers/import_export/`, a package whose `__init__.py` assembles one router and
   re-exports the `backend.routers.import_export` surface
 
-- **Handles:** CSV preview and import, saved data sources (import profiles), undo, CSV export, data
-  backup/restore, and credentials backup/restore
+- **Handles:** CSV preview and import, saved data sources (import profiles), undo, CSV export, and
+  backup/restore of the financial data and the accounts (`services/accounts_backup.py`)
 
 #### Module layout
 
@@ -863,7 +863,8 @@ custody*; this section is the mechanism.
      sign-in recovery codes, because a slot's wrap can be attacked offline. `POST /auth/vault/recover`
      takes `{code, new_passphrase}` as one operation: the replacement slot is written before the
      recovery slot is deleted, so a failure leaves the code usable, and a fresh code is issued.
-  3. A credentials backup, restorable with the passphrase or recovery code in force when it was taken.
+  3. A backup holding the vault: restoring its accounts part puts the vault back as it was, opened by the
+     passphrase or recovery code in force when it was taken.
   4. `POST /auth/vault/reset` (admin-gated): every slot deleted, every `ENCRYPTED_COLUMNS` value cleared,
      `reauth_required` set on every connection. Connections, accounts, transactions, mappings and
      coverage survive. It asks *lost or compromised*: a compromised passphrase still opens the vault, so
@@ -995,7 +996,7 @@ import card. The full rule is in `data-model.md`.
   environment. A provider with `requires_app_config = False` receives `{}`, reports itself configured
   once it has a connection, and is gated on a Production-strength vault at connect time. CRUD is
   admin-gated at `GET/POST /api/providers/{provider}/config`; saving the secret needs the vault
-  unlocked. App credentials ride the credentials backup (`provider_configs`).
+  unlocked. App credentials ride the accounts part of a backup (`provider_configs`).
 
 - **The vault gate is hosted at App level** (`contexts/VaultGateContext.jsx`, `lib/useVaultGate.js`),
   because the navigation pane's sync control (`components/SyncNavItem.jsx`) starts gated work from any

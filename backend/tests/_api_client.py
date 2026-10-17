@@ -119,6 +119,20 @@ def in_browser_session(client):
         crypto_service.reset_vault_scope(token)
 
 
+def exported_credentials(client) -> dict:
+    """The data-source credentials a backup taken through `client` carries — the connections and provider
+    configurations as ciphertext, with the exporter's vault slots."""
+    import io
+    import zipfile
+
+    from backend.routers.import_export.backup import ACCOUNTS_CREDENTIALS_MEMBER
+
+    exported = client.get("/api/import-export/backup")
+    assert exported.status_code == 200, exported.text
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as zf:
+        return json.loads(zf.read(ACCOUNTS_CREDENTIALS_MEMBER))
+
+
 class LimiterClock:
     """Stands in for the attempt limiter's clock (`limiter_clock`)."""
 

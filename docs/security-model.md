@@ -32,7 +32,6 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 - [Secrets in backup and export](#secrets-in-backup-and-export)
 - [Recovery and compromise response](#recovery-and-compromise-response)
 - [Obstacles](#obstacles)
-- [Open](#open)
 
 ---
 
@@ -212,7 +211,9 @@ Left out, each for a reason:
 - **Passkeys**, which verify a signature or a 32-byte PRF output and cannot be guessed. Sign-in by passkey
   stays open while the password is paused, which gives the owner a way in.
 - **The code that confirms two-factor setup**, checked against a secret the same session was just given.
-- **The secret that opens a credentials backup file**, which whoever holds the file attacks offline.
+- **The secrets a backup file is checked against** — the vault secret that opens an older credentials
+  backup, and the administrator password a restore of the accounts asks for — which whoever holds the file
+  can test offline anyway.
 - **Guessing across many names.** A global limit would let one caller pause everyone's sign-in.
 
 **Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** A
@@ -313,9 +314,9 @@ under — the rule's version and the estimator's release (`STRENGTH_BASIS`), sin
 score as surely as a new threshold — and a slot on an outdated KDF is rewrapped under the current one,
 keeping its keypair. A passphrase that fails a tightened rule **keeps opening the vault**: refusing the unlock would
 stop that member syncing over a passphrase nobody has shown to be exposed. What it loses is what a weak
-wrap would put at risk — connecting a data source, and taking a credentials backup that would carry it —
-until its owner, the only person who can, changes it. A verdict from an earlier basis stands until the
-passphrase is next typed, except that a credentials export waits for a current one. Meanwhile its owner is
+wrap would put at risk — connecting a data source, and taking a backup that would carry it — until its
+owner, the only person who can, changes it. A verdict from an earlier basis stands until the passphrase is
+next typed, except that a backup carrying it waits for a current one. Meanwhile its owner is
 asked, dismissably, to unlock once by typing it: nothing is known to be wrong, and it is the only way the
 question reaches someone who unlocks with a passkey, which cannot judge a passphrase.
 
@@ -391,7 +392,8 @@ the server's refusal is the rule.
 - **The vault passphrase.** Refusing the unlock would stop an install that chose plain HTTP from syncing
   at all, and a captured passphrase still cannot reach a provider secret through the app from the network.
 - **Sign-in.** Recommended, never required.
-- **The credentials backup, in both directions.** Its payload is ciphertext under the vault key.
+- **Backups, in both directions.** The credentials in one are ciphertext under the vault key, and what it
+  holds in the clear is protected by encrypting the file, as at rest.
 - **Finishing a Link repair, syncing, refreshing accounts, disconnecting.** No secret travels between the
   browser and the server.
 
@@ -421,43 +423,69 @@ issued certificate for an owned domain avoids the trade.
 ## Secrets in backup and export
 
 **The vault's design splits a backup in two.** The credential ciphertext lives in the data DB and the key
-material that opens it in the control DB. That split *is* the leaked-DB-≠-leaked-credential property, so a
-data-only backup carries credentials that are **dead on arrival** anywhere else. A snapshot that can sync
+material that opens it in the control DB. That split *is* the leaked-DB-≠-leaked-credential property, so
+ciphertext copied without the slots is **dead on arrival** anywhere else. A snapshot that can sync
 after restore needs the ciphertext, the vault slots, **and** someone who knows the passphrase then in
 force.
 
-**The data backup carries each connection's non-secret half, and nothing in it opens anything** — the
+So the credentials and the vault slots that open them ride one part of a backup, the accounts part, and
+are restored together.
+
+**The data part carries each connection's non-secret half, and nothing in it opens anything** — the
 provider handle, the last sync's result and the resume point (`data-model.md` → *Backups*). Every request
-to a provider needs the credential, which only the credentials backup carries, as ciphertext. So an
-unencrypted data backup reveals which institutions are linked, which its transactions already reveal.
+to a provider needs the credential, which only the accounts part carries, as ciphertext. So an unencrypted
+data backup reveals which institutions are linked, which its transactions already reveal.
 
-**A leaked secrets backup is a pair of offline brute-force exposures that reach different things.** Login
-password hashes gate the *perimeter*; the credentials fall only if the **vault passphrase** is cracked.
-That is why the strength requirement lives on the passphrase, and why the strength flag rides along in a
-credentials export.
+**What an accounts backup holds falls into two groups, protected for different reasons.**
 
-**A credentials export carries the exporter's slots and no one else's** — their passphrase, recovery code
-and passkeys. Within the install that made it the live DEK opens it whoever exported it; on another
-install, any one of that person's secrets as they were when it was taken does. The file is as hard to
-break as its weakest slot. A recovery code is generated to full key strength and a passkey's secret never
-leaves its authenticator, so neither weakens it; another member's passphrase would make it only as strong
-as theirs, which the exporter can neither see nor vouch for. The exporter's own passphrase is held to the
-rule in force before a file is written. The cost is that a file opens elsewhere only for the member who
-took it: someone who leaves takes with them the only secrets that open their files on another install.
+- **The perimeter's material** — password hashes, two-factor secrets, the sign-in setting. It lets someone
+  sign in to the running app, which matters only to someone who can also reach it over the network, and
+  whoever holds a full backup already holds the ledger the perimeter guards. The database on disk holds it
+  in the same form. So it is protected the way the ledger is: by encrypting the backup, which is the
+  owner's choice.
+- **The credentials.** Their protection has to stand on its own in every copy. A backup is one more copy,
+  kept somewhere the app cannot see and open to offline guessing without limit, and backup encryption is
+  optional, with a key of its own that can be lost or leaked — so it cannot be what the credentials rest
+  on. This is the reason a vault passphrase is held to a strength rule at all, and why a file carries a
+  passphrase slot only while that passphrase clears the rule in force.
+
+**When the credentials cannot travel, they are left out and the backup is written.** The ledger cannot be
+got back once lost, and a credential can be re-linked, so a backup of the ledger never waits on the vault.
+The file says it holds no credentials, and so does the backup surface before it is made.
+
+**A backup carries the exporter's slots and no one else's** — their passphrase, recovery code and
+passkeys. The file is as hard to break as its weakest slot. A recovery code is generated to full key
+strength and a passkey's secret never leaves its authenticator, so neither weakens it; another member's
+passphrase would make it only as strong as theirs, which the exporter can neither see nor vouch for. The
+cost is that after a restore the vault opens only for the member who took the backup. The others ask for
+access again, and someone who leaves takes with them the only secrets that open their files.
 
 **A passkey answers only at the host name it was registered under**, so each passkey slot in a file
-carries a salted digest of that name and a restore offers the passkey only where the page's own name
-matches. The slots are readable without any key, so a digest rather than the name; a common name is still
-guessable from it, which is why it is a courtesy and not a secret. A passkey's label rides along in the
-clear, so the restore can name it, and discloses whatever the user named it, as a backup key's name does.
+carries a salted digest of that name. The slots are readable without any key, so a digest rather than the
+name; a common name is still guessable from it, which is why it is a courtesy and not a secret. A
+passkey's label rides along in the clear, so a restore can name it, and discloses whatever the user named
+it, as a backup key's name does.
 
-**Whether a file's credentials are already valid here is read from the key's seal**, never from the
-wrapping a passphrase change or a KDF upgrade replaces. Rotation replaces the key and leaves every wrapping
-alone, so a file matched on its wrapping would be copied back verbatim under a key nothing opens.
+**A restore of the accounts replaces them; it never merges.** A merge would have to decide, person by
+person, whose password and second factor win, and a merged vault would hold two keys for one set of
+credentials. Replacing has one answer on every target: an empty install, the one the file came from, or
+another, which once replaced is no different from an empty one. The slots are adopted as they were, so
+nothing is re-encrypted and no secret is asked for, and the file's people come back with their ids, so
+what hangs off those ids reattaches.
 
-**Restore must never cost the operator their way in.** When a restore includes identity data, the current
-admin is preserved and the backup's accounts are merged in. Overwriting the perimeter is an explicit
-choice, never a side effect.
+**Restore must never cost the operator their way in.** So a file that turns sign-in on is restored only
+with the password of an administrator in it, checked against the file before anything changes. Everyone
+is signed out, because the identities their sessions were checked against have been replaced.
+
+**The backup keys travel with the accounts.** They decide who can read a backup, which is the perimeter's
+concern rather than the ledger's, and a list left behind costs a keypair that has to be generated and
+distributed again.
+
+**An older standalone credentials file restores into the vault that is there**, since it carries no
+identities its slots could belong to. Whether its credentials are already valid here is read from the
+key's seal, never from the wrapping a passphrase change or a KDF upgrade replaces: rotation replaces the
+key and leaves every wrapping alone, so a file matched on its wrapping would be copied back verbatim under
+a key nothing opens.
 
 **An encrypted backup names its keys in the clear**, so someone restoring it can work out *which* private
 key to find before they hold one. Keys are therefore named for what they are, not for who or where.
@@ -467,8 +495,9 @@ key to find before they hold one. Keys are therefore named for what they are, no
 
 **The ladder is ordered by cost**, and the UI offers it in sequence rather than presenting destruction as
 the only answer. Another member re-enrolling the stuck user moves nothing. A recovery code re-keys the
-passphrase **against the same DEK**, so nothing is re-linked. A credentials backup opened with the
-passphrase or recovery code in force when *it* was taken is a complete recovery. Only then, reset.
+passphrase **against the same DEK**, so nothing is re-linked. Restoring a backup's accounts part puts the
+vault back as it was, opened by the passphrase or recovery code in force when *it* was taken: a complete
+recovery. Only then, reset.
 
 **Losing the passphrase costs the ability to keep syncing, not ledger data**, and the reset dialog leads
 with that: only two columns are ever encrypted.
@@ -508,8 +537,9 @@ What a second attempt hits, whether or not it is planned.
   revoked. The forgotten-passphrase case can never satisfy it.
 - **No transaction spans the control and data databases.** Rotation, reset, and any future operation that
   changes key material and ciphertext together has to be ordered so every intermediate state is readable.
-- **A restore can leave state inconsistent across the same split**, which is why restore reconciles rather
-  than overwrites.
+- **A restore of the accounts writes both databases**, so it is ordered: the credentials first, then the
+  people and the vault in one transaction. An interruption between leaves credentials under a key the
+  vault does not hold yet, and restoring the same file again completes it, since every step replaces.
 - **WebAuthn's two preconditions are the browser's, not the app's.** A bare-IP host can never register a
   passkey however it is served. Any LAN passkey story needs a name *and* HTTPS.
 - **Re-linking may land on a new connection row**, depending on how a provider derives its handle — see
@@ -518,15 +548,5 @@ What a second attempt hits, whether or not it is planned.
 - **An interrupted rotation must be resumed, not restarted.** Restarting pushes the key the ciphertext is
   under off the end of the two a slot can hold.
 - **Tightening the strength rule or the KDF reaches a slot only when its passphrase is next typed.** A
-  member who never unlocks keeps the old verdict and the old wrap, and a credentials backup already
-  written keeps the wrap it was written with for good — only a new backup carries the stronger one.
-
-## Open
-
-Decisions owed. Each names the live backlog item that will feed this topic when it is picked up.
-
-- **Whether `backup_recipient` belongs in an accounts-and-secrets backup** or stays machine-local.
-  → `backlog/backup-restore-scope-and-secrets.md`
-- **The wider accounts-and-secrets artifact.** The credentials half is settled — its payload is
-  ciphertext, so there is no plaintext variant to permit. The wider artifact also carries password
-  hashes, which have no such wrapping. → `backlog/backup-restore-scope-and-secrets.md`
+  member who never unlocks keeps the old verdict and the old wrap, and a backup already written keeps the
+  wrap it was written with for good — only a new backup carries the stronger one.

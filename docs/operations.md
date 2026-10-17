@@ -347,12 +347,14 @@ database carries the operation across that gap, and an import or a sync refuses 
 **Restoring requires admin**, as does creating a backup (`security-model.md` → *Identity and the network
 perimeter*). With sign-in protection off there is no role to check, and any session may.
 
-**A restore covers the data database only, so its outcome depends on state it never touched.**
-Identities, the sign-in perimeter and the vault slots live in the control database, which a data backup
-neither carries nor overwrites — deliberately, since a backup shared between people or machines must not
-carry a machine's security posture. So the same file restored **over an existing install** keeps sign-in
-protection exactly as it was, and restored **onto fresh databases** comes up at first run with sign-in
-off. Nothing on the restore surface says so.
+**What a restore replaces is what is chosen from the file.** A backup holds the financial data and the
+accounts part, and the restore puts back either or both. The financial data alone touches only the data
+database, so restored over an existing install it keeps sign-in protection exactly as it was, and onto
+fresh databases it comes up at first run with sign-in off. The accounts part also replaces the identities,
+the sign-in setting, the backup keys and the vault, so the same file gives the same system whether it
+lands on an empty install, the one it came from, or another. Restoring the accounts signs everyone out,
+and a file that turns sign-in on is restored only with the password of an administrator in it, so the
+operator keeps a way in: the administrator they then sign in as.
 
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.

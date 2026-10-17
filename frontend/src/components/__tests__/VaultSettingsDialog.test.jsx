@@ -418,7 +418,7 @@ describe('responding to an exposure', () => {
     expect(screen.getByText(/copied credential no longer works/)).toBeTruthy()
     expect(screen.getByText(/cannot replace it from here/)).toBeTruthy()
     expect(screen.getByText('Plaid app secret')).toBeTruthy()
-    expect(screen.getByText(/Credentials backups made before now/)).toBeTruthy()
+    expect(screen.getByText(/Backups made before now carry the replaced credentials/)).toBeTruthy()
     expect(screen.getByText('Change passphrase').closest('button')).toBeTruthy()
   })
 })

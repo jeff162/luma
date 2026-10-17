@@ -13,20 +13,26 @@ exporting vault's own key material beside it (v4 the same, for keypair slots), s
   * the passphrase is asked for at *restore*, where re-keying genuinely cannot proceed without it.
 
 The invariant these tests defend is narrow and absolute: **no usable secret ever appears in the file.**
+
+The standalone file is no longer written: every backup carries the same credentials and slots in its
+accounts part (`services/accounts_backup.py`), and these tests read them out of it. Files written before that still
+restore through `/restore/credentials`, which is what the restore tests here exercise.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import base64
 import unittest
+import zipfile
 
 from backend.db.database import get_db
 from backend.routers.import_export.backup import (
-    CONTENT_HASH_FIELD, read_payload_bytes, _stamp_content_hash,
+    ACCOUNTS_CREDENTIALS_MEMBER, CONTENT_HASH_FIELD, _stamp_content_hash, _zip_json_bytes,
 )
 from backend.services import crypto_service as cs
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, exported_credentials, in_browser_session
 
 PASSPHRASE = STRONG_PASSPHRASE
 OTHER_PASSPHRASE = "a-different-strong-passphrase"
@@ -64,9 +70,12 @@ class CredentialsBackupTests(unittest.TestCase):
         return user_id
 
     def _export(self, client) -> dict:
-        r = client.get("/api/import-export/backup/credentials")
-        self.assertEqual(r.status_code, 200, r.text)
-        return read_payload_bytes(r.content)
+        """A standalone credentials file as the last version of it was written: the credentials and slots
+        a backup carries, under the header the standalone file had."""
+        return _stamp_content_hash({
+            "kind": "credentials", "version": 5, "exported_at": "2026-01-01T00:00:00Z",
+            **exported_credentials(client),
+        })
 
     def _stored_secrets(self, client, user_id) -> tuple[str, str]:
         """What the live DB's credentials decrypt to under THIS install's DEK, read as that browser."""
@@ -247,20 +256,19 @@ class CredentialsBackupTests(unittest.TestCase):
         # the round trip the user actually performs: download the file, hand that file back.
         with api_client() as (client, _):
             user_id = self._seed(client)
-            exported = client.get("/api/import-export/backup/credentials")
-            self.assertEqual(exported.status_code, 200, exported.text)
+            exported = _zip_json_bytes("luma_credentials.json", self._export(client))
             with get_db() as conn:
                 conn.execute("DELETE FROM connection")
                 conn.execute("DELETE FROM provider_config")
 
             r = client.post(
                 "/api/import-export/restore/credentials-file",
-                files={"file": ("luma_credentials-2026-08-23.zip", exported.content, "application/zip")},
+                files={"file": ("luma_credentials-2026-08-23.zip", exported, "application/zip")},
             )
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
 
-    def test_a_data_backup_uploaded_here_is_named_for_what_it_is(self):
+    def test_a_backup_uploaded_here_is_named_for_what_it_is(self):
         # The complaint that started this: picking the wrong one of the two backups answered with a
         # remark about the names of members inside a ZIP. Both directions must say what the file is.
         with api_client() as (client, _):
@@ -273,12 +281,7 @@ class CredentialsBackupTests(unittest.TestCase):
                 files={"file": ("luma_backup-2026-08-23.zip", data_backup.content, "application/zip")},
             )
             self.assertEqual(r.status_code, 400)
-            self.assertEqual(r.json()["detail"], "This is a data backup, not a credentials backup.")
-
-    def test_the_exported_file_declares_that_it_is_a_credentials_backup(self):
-        with api_client() as (client, _):
-            self._seed(client)
-            self.assertEqual(self._export(client)["kind"], "credentials")
+            self.assertEqual(r.json()["detail"], "This is a full backup, not a credentials backup.")
 
     def test_restoring_onto_the_same_install_works_while_locked(self):
         # Verbatim restore touches no plaintext, so it needs no unlock either.
@@ -498,9 +501,13 @@ class CredentialsBackupTests(unittest.TestCase):
 
     # ---- the passphrase a file carries -----------------------------------
 
-    def test_no_backup_is_written_while_the_passphrase_fails_the_current_rule(self):
+    def _left_out(self, client):
+        return client.get("/api/import-export/backup/status").json()["credentials_left_out"]
+
+    def test_no_backup_carries_a_passphrase_that_fails_the_current_rule(self):
         # The file carries the passphrase slot to wherever it is kept, open to offline guessing, so it is
-        # held to the rule in force — judged at the last unlock, the only moment it can be.
+        # held to the rule in force — judged at the last unlock, the only moment it can be. The backup is
+        # still written, without the credentials.
         from unittest import mock
 
         with api_client() as (client, _):
@@ -509,15 +516,17 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/lock")
             client.post("/api/auth/vault/unlock", json={"passphrase": "passwordpassword1234"})
 
-            r = client.get("/api/import-export/backup/credentials")
-            self.assertEqual(r.status_code, 409, r.text)
-            self.assertEqual(r.json()["detail"]["code"], "weak_passphrase")
+            self.assertEqual(self._left_out(client)["code"], "weak_passphrase")
+            r = client.get("/api/import-export/backup")
+            self.assertEqual(r.status_code, 200, r.text)
+            with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+                self.assertNotIn(ACCOUNTS_CREDENTIALS_MEMBER, zf.namelist())
             tasks = client.get("/api/tasks").json()
             self.assertIn("vault_passphrase_change", [t["id"] for t in tasks["tasks"]])
 
     def test_a_passphrase_not_yet_checked_under_the_current_rule_is_asked_for_by_a_dismissable_task(self):
-        # Nothing is known to be wrong, so the reminder can be put away; the backup still waits for the
-        # passphrase to be typed whether or not it is.
+        # Nothing is known to be wrong, so the reminder can be put away; a backup still leaves the
+        # credentials out until the passphrase is typed, whether or not it is.
         from backend.db import control_database as cdb
 
         with api_client() as (client, _):
@@ -528,12 +537,12 @@ class CredentialsBackupTests(unittest.TestCase):
             task = next(t for t in client.get("/api/tasks").json()["tasks"] if t["id"] == "vault_passphrase_check")
             self.assertEqual(client.post(f"/api/tasks/dismiss/{task['dismiss_key']}").status_code, 200)
             self.assertNotIn("vault_passphrase_check", [t["id"] for t in client.get("/api/tasks").json()["tasks"]])
-            self.assertEqual(client.get("/api/import-export/backup/credentials").status_code, 409)
+            self.assertEqual(self._left_out(client)["code"], "passphrase_unchecked")
 
             client.post("/api/auth/vault/lock")
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
             self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_passphrase_needs_check"])
-            self.assertEqual(client.get("/api/import-export/backup/credentials").status_code, 200)
+            self.assertIsNone(self._left_out(client))
 
     # ---- refusals -------------------------------------------------------
 

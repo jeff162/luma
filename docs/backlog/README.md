@@ -208,17 +208,12 @@ scale — rather than by feature.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **reduced 2026-09-03 to
-  the scope/UX half, unstarted.** The secrets half is done and documented elsewhere: the v12 envelope,
-  streaming both directions, the incremental cipher, referential repair, `restore_state` and the
-  resumable documents phase are in [`../data-model.md`](../data-model.md) → *Backups*, restore semantics
-  in [`../operations.md`](../operations.md), the memory profile in
-  [`../scale-and-limits.md`](../scale-and-limits.md), custody in
-  [`../security-model.md`](../security-model.md). What stays: an **accounts & secrets** backup and a
-  sectioned *back up all* (one artifact, because the token ciphertext and the key that opens it live in
-  different databases — split them and the file restores but cannot sync), the **restore-time identity
-  reconciliation** flow, `backup_recipient` inclusion, and restoring an incremental chain (the document delta is the tractable half; a date-windowed
-  backup is a slice, not disaster recovery).
+- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **reduced to restoring an
+  incremental chain.** The backup of everything, the restore that chooses which part to put back, and
+  replacement of the accounts are built and documented in [`../data-model.md`](../data-model.md)
+  → *Backups* and [`../security-model.md`](../security-model.md) → *Secrets in backup and export*. What
+  stays: the document delta is the tractable half; restoring a chain has no merge mode to stand on, and a
+  date-windowed backup is a slice, not disaster recovery.
 - [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
   unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
   and every other rejected alternative — is in [`../operations.md`](../operations.md), with building in

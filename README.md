@@ -96,7 +96,7 @@ Anyone whose main requirement is either of these will be better served by some o
 
 - **Multiple owners** — track personal and shared finances across several people in one ledger, with owner as a reporting axis rather than a separate set of books.
 
-- **Backup and restore** — Backup the data, with optional encryption under a key of the user's choosing. Export the data as a csv file for moving to another app or using with another too.
+- **Backup and restore** — Backup the data, the sign-in accounts and data source credentials, with optional encryption under a key of the user's choosing, and choose what to put back when restoring. Export the data as a csv file for moving to another app or using with another too.
 
 - **Tasks** — a running list of what needs attention, such as uncategorized transactions, issues with recurring payments, late reimbursements.
 
@@ -140,7 +140,7 @@ Local-first also means the security model is easy to reason about — but it's w
 
 - **A household shares one vault, and each person has their own access.** When there is no vault passphrase set any user can create one. After the vault passphrase is created, a subsequent user requests access to the vault by creating their own vault passphrase which posts a request to the user(s) who can unlock the vault to approve the request. Passphrases are not revealed in the process.
 
-  - **Vault passphrases** are best kept in a password manager as they are complex: long, and checked for how easy they are to guess. Losing vault access does not affect access to the transaction ledger, just to the data connections to refresh the account data. Losing access means rebuilding these connections. A passphrase is checked against the current strength rule each time it is typed, and its owner is asked to change it if a tightened rule finds it too easy to guess, since a credentials backup is only as hard to break as the passphrase of the user who made it.
+  - **Vault passphrases** are best kept in a password manager as they are complex: long, and checked for how easy they are to guess. Losing vault access does not affect access to the transaction ledger, just to the data connections to refresh the account data. Losing access means rebuilding these connections. A passphrase is checked against the current strength rule each time it is typed, and its owner is asked to change it if a tightened rule finds it too easy to guess, since a backup is only as hard to break as the passphrase of the user who made it.
   - **Passkeys** can be added as an alternative access method, so a fingerprint or face check replaces retyping a long passphrase. Browsers require a secure connection to use a Passkey. The desktop app's `localhost` address works. This is part of why setting up HTTPS for a server configuration is desirable.
   - **A recovery code** can be added if there is a secure location separate from where the vault passphrase is stored. The recovery code is for when the passphrase is lost and if they are stored together, they are likely to get lost together. Printed or kept in separate secure storage is what makes it useful to have. A new recovery code is generated when it is used.
 
@@ -240,7 +240,7 @@ Instructions for the last two, and what each connecting computer does on its fir
 
 The two restrictions have different causes. The passkey requirement is from the browser and cannot be worked around. The restriction around setting up a data provider comes from Luma, because secrets need to move between the user and the server and these should not pass over a network unencrypted. Syncing is still allowed from any browser, since that does not involve secrets moving over the local network.
 
-**Without HTTPS the vault passphrase travels over the local network unencrypted.** Anyone who captures it and has a copy of either the database or a credentials backup can extract the data provider secrets from that copy. This should be considered before using Luma in a server configuration without HTTPS.
+**Without HTTPS the vault passphrase travels over the local network unencrypted.** Anyone who captures it and has a copy of either the database or a backup can extract the data provider secrets from that copy. This should be considered before using Luma in a server configuration without HTTPS.
 
 Caddy and HTTPS are quite easy to configure. The biggest issue is that the server's certifcate must be added to each client's certifiacate store as a trusted certificate.
 

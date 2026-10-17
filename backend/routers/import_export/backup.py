@@ -4,12 +4,14 @@
 """
 Backup / restore, credentials, and CSV export.
 
-This module covers the three "data leaves the app" / "data comes back in" concerns that are
-otherwise independent of the import-run workflow:
+This module covers the "data leaves the app" / "data comes back in" concerns that are otherwise
+independent of the import-run workflow:
 
 - **CSV export** (`/transactions.csv`) — a filtered, flattened dump of the ledger for spreadsheets.
-- **Regular backup/restore** (`/backup`, `/restore`, `/restore-file`) — a full app-data archive
-  (everything in the data DB except credentials) that can round-trip the database: owners,
+- **Backup/restore** (`/backup?scope=`, `/restore`, `/restore-file`) — three backups named by what they
+  protect: the financial data, the accounts (`services/accounts_backup.py`: identities, the perimeter,
+  backup keys, and the data-source credentials as ciphertext with the vault that opens them), and both in
+  one file. The financial data is everything in the data DB except credentials, and round-trips it: owners,
   accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
   the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
   the account-pair distinct assertions, recurring series (`recurring_series` + the `txn` membership
@@ -21,11 +23,10 @@ otherwise independent of the import-run workflow:
   with their pre-rename columns translated on restore — v7's account columns
   `plaid_account_id`/`plaid_item_id` to the 6b-3 shape, and pre-v9's `plaid_transaction_id` to
   `external_transaction_id`. Older versions are no longer accepted.)
-- **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
-  access tokens, kept deliberately separate from the regular backup so an ordinary backup never
-  carries secrets (see `docs/data-model.md` → Backups).
+- **Standalone credentials restore** (`/restore/credentials`, `/restore/credentials-file`) — for files of
+  the credentials backup that preceded the accounts part. It is no longer written.
 
-Both archive classes optionally encrypt to one or more saved RSA recipients (`backup_recipient`):
+Every backup optionally encrypts to one or more saved RSA recipients (`backup_recipient`):
 a random AES-256-GCM content key encrypts the payload and is RSA-OAEP-wrapped per recipient, so a
 backup can be decrypted by any holder of a matching private key. The crypto/zip helpers here own
 that envelope format; restore inspects an upload, decrypts if needed, and replays it.
@@ -79,12 +80,11 @@ from backend.db.database import (
     run_post_restore_data_init,
 )
 from backend.db.demo_data import is_demo_data_loaded
-from backend.db import control_database
 from backend.db.control_database import auth_required
 from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
-from backend.services import crypto_service
+from backend.services import accounts_backup, crypto_service
 from backend.services.documents import (
     copy_document_file_from,
     document_file_path,
@@ -294,22 +294,6 @@ def list_backup_recipients():
     return [dict(row) for row in rows]
 
 
-@router.get("/backup/credentials/status")
-def get_credentials_backup_status():
-    with get_db() as conn:
-        connection_count = int(conn.execute("SELECT COUNT(*) AS n FROM connection").fetchone()["n"] or 0)
-        # App-level provider credentials (the vaulted app secret) are backed up alongside per-connection
-        # credentials, so a configured-but-not-yet-connected provider still has something worth exporting.
-        provider_config_count = int(
-            conn.execute("SELECT COUNT(*) AS n FROM provider_config WHERE secret_enc IS NOT NULL OR client_id != ''").fetchone()["n"] or 0
-        )
-    credential_count = connection_count + provider_config_count
-    return {
-        "has_credentials": credential_count > 0,
-        "credential_count": credential_count,
-    }
-
-
 @router.post("/backup/keypair")
 def generate_backup_keypair(body: BackupKeypairRequest):
     """Generate an RSA keypair for encrypting backups, and **store nothing**.
@@ -440,7 +424,7 @@ def delete_backup_recipient(recipient_id: str):
     return {"ok": True}
 
 
-# --- CSV export + full app-data and credentials backup/restore ---------------------------------
+# --- CSV export + backup/restore ---------------------------------------------------------------
 
 @router.get("/transactions.csv")
 def export_transactions_csv(
@@ -700,16 +684,20 @@ RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
 # for it, and a resume point the provider refuses is worth less than the full backfill a reset buys.
 RESTORED_CURSOR_MAX_AGE_DAYS = 365
 
-# Which of the two backups a file is. Stamped into every container the app writes and read back by the
-# identification pass below, so the restore surface can route a file rather than asking the person
-# holding it which kind they have.
+# What a backup file holds. Stamped into every container the app writes and read back by the
+# identification pass below, so the restore surface can route a file rather than asking the person holding
+# it which kind they have. A backup is written `full`: the financial data and the accounts (identities, the
+# perimeter, backup keys, and the data-source credentials with the vault that opens them —
+# `services/accounts_backup.py`), and the restore chooses which to apply. `data` is a file of the financial
+# data alone, as every backup was before the accounts part existed, and `credentials` the standalone
+# credentials backup that preceded the accounts part. Neither is written any more, and both still restore.
 BACKUP_KIND_DATA = "data"
+BACKUP_KIND_FULL = "full"
 BACKUP_KIND_CREDENTIALS = "credentials"
 
-# The credentials payload's own format, separate from the data backup's. 3 carried ciphertext and the
-# exporter's directly-wrapped passphrase slot (`vault`), 4 the same for a keypair slot, and 5 every slot
-# the exporter opens the vault with (`vault_slots`). 1 and 2 held plaintext and still restore.
-CREDENTIALS_PAYLOAD_VERSION = 5
+# The standalone credentials backup's format. 3 carried ciphertext and the exporter's directly-wrapped
+# passphrase slot (`vault`), 4 the same for a keypair slot, and 5 every slot the exporter opens the vault
+# with (`vault_slots`). 1 and 2 held plaintext. All still restore.
 RESTORABLE_CREDENTIALS_VERSIONS = (1, 2, 3, 4, 5)
 
 # Size of the buffer used everywhere bytes are moved between a file, a zip member and a cipher. Big
@@ -724,9 +712,17 @@ META_MEMBER = "meta.json"
 # reconstructing a name.
 DOCUMENT_MEMBER_PREFIX = "documents/"
 
+# The accounts part, where a file carries it: one NDJSON member per row list and the credentials as one
+# JSON object. A prefix of its own so its names can never meet a data section's.
+ACCOUNTS_CREDENTIALS_MEMBER = "accounts/credentials.json"
+
 
 def _section_member(section: str) -> str:
     return f"sections/{section}.ndjson"
+
+
+def _accounts_member(rows: str) -> str:
+    return f"accounts/{rows}.ndjson"
 
 
 def _document_member(document_id: str) -> str:
@@ -837,36 +833,56 @@ def _write_document_members(conn, zf) -> None:
             shutil.copyfileobj(source, member, STREAM_CHUNK_BYTES)
 
 
-def write_backup_archive(conn, sink) -> None:
-    """Write the whole data backup into `sink` (any writable binary file object).
+def _write_ndjson_member(zf, name: str, rows) -> dict:
+    digest = hashlib.sha256()
+    count = 0
+    with zf.open(_zip_member_info(name, zipfile.ZIP_DEFLATED), "w") as member:
+        for row in rows:
+            line = (_canonical_json(dict(row)) + "\n").encode("utf-8")
+            digest.update(line)
+            member.write(line)
+            count += 1
+    return {"sha256": digest.hexdigest(), "rows": count}
 
-    Rows go straight from their cursor into the zip member, one JSON object per line, so no section is
-    ever materialized as a list and the peak memory is one row plus the compressor's own buffers —
-    whatever the ledger's size. `meta.json` is written last because it carries the digest of each member,
-    which is only known once that member has been written.
+
+def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part: Optional[dict] = None) -> None:
+    """Write a backup of `kind` into `sink` (any writable binary file object).
+
+    `accounts_part` (`accounts_backup.collect`) is written when given. A `data` kind without it is for tests
+    that build the older files. Data rows go straight from their cursor into the zip
+    member, one JSON object per line, so no section is ever materialized as a list and the peak memory is
+    one row plus the compressor's own buffers — whatever the ledger's size. The accounts part is a few rows
+    per person and is handed over whole. `meta.json` is written last because it carries the digest of each
+    member, which is only known once that member has been written.
     """
     members = {}
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for section, _table, query in BACKUP_SECTIONS:
             name = _section_member(section)
-            digest = hashlib.sha256()
-            rows = 0
-            with zf.open(_zip_member_info(name, zipfile.ZIP_DEFLATED), "w") as member:
-                for row in conn.execute(query):
-                    line = (_canonical_json(dict(row)) + "\n").encode("utf-8")
-                    digest.update(line)
-                    member.write(line)
-                    rows += 1
-            members[name] = {"sha256": digest.hexdigest(), "rows": rows}
-
+            members[name] = _write_ndjson_member(zf, name, conn.execute(query))
         _write_document_members(conn, zf)
+
+        if accounts_part is not None:
+            for rows in accounts_backup.ROW_LISTS:
+                name = _accounts_member(rows)
+                members[name] = _write_ndjson_member(zf, name, accounts_part.get(rows) or [])
+            if accounts_part.get("credentials") is not None:
+                body = _canonical_json(accounts_part["credentials"]).encode("utf-8")
+                zf.writestr(_zip_member_info(ACCOUNTS_CREDENTIALS_MEMBER, zipfile.ZIP_DEFLATED), body)
+                members[ACCOUNTS_CREDENTIALS_MEMBER] = {"sha256": hashlib.sha256(body).hexdigest()}
 
         zf.writestr(
             _zip_member_info(META_MEMBER, zipfile.ZIP_DEFLATED),
             _canonical_json({
                 # What this file is, so a restore surface can route it without the person holding it
-                # having to know how the two backups differ. See "Identifying a backup file".
-                "kind":           BACKUP_KIND_DATA,
+                # having to know how the backups differ. See "Identifying a backup file".
+                "kind":           kind,
+                # The accounts part's own format, and whether it carries the credentials, present exactly
+                # when the part is.
+                **({
+                    "accounts_version": accounts_backup.ACCOUNTS_PART_VERSION,
+                    "credentials_included": accounts_part.get("credentials") is not None,
+                } if accounts_part is not None else {}),
                 "version":        BACKUP_PAYLOAD_VERSION,
                 # The DB migration level the rows conform to, recorded so restore can tell an older
                 # backup (columns the schema has since added simply take their defaults) from one made
@@ -911,13 +927,16 @@ def build_backup_data(conn) -> dict:
     return _stamp_content_hash(payload)
 
 
-def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list[dict], kind: str) -> dict:
+def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list[dict], kind: str,
+                              credentials_included: Optional[bool] = None) -> dict:
     manifest = {
         "format": "luma-encrypted-backup",
         "version": 1,
-        # Outside the ciphertext deliberately: identifying the file needs no key, and saying which of the
-        # two backups it is discloses nothing the filename did not.
+        # Outside the ciphertext deliberately: what the file holds decides which restore choices to offer,
+        # and that has to be known before anyone has produced a private key. It discloses what the file
+        # holds, not anything in it.
         "kind": kind,
+        **({"credentials_included": credentials_included} if credentials_included is not None else {}),
         "cipher": "AES-256-GCM",
         "wrapped_keys": [],
         "nonce": urlsafe_b64encode(nonce).decode("ascii"),
@@ -942,7 +961,8 @@ def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list
     return manifest
 
 
-def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BACKUP_KIND_DATA) -> None:
+def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BACKUP_KIND_DATA,
+                            credentials_included: Optional[bool] = None) -> None:
     """Seal an already-written archive into the encrypted envelope, streaming.
 
     The envelope format is untouched by the streaming: `AESGCM.encrypt()` is one-shot and needs both
@@ -953,7 +973,7 @@ def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BA
     """
     content_key = AESGCM.generate_key(bit_length=256)
     nonce = os.urandom(12)
-    manifest = _build_encrypted_manifest(content_key, nonce, recipients, kind)
+    manifest = _build_encrypted_manifest(content_key, nonce, recipients, kind, credentials_included)
     encryptor = Cipher(algorithms.AES(content_key), modes.GCM(nonce)).encryptor()
 
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
@@ -1002,31 +1022,52 @@ def _recipients_for_export(conn, requested_ids: Optional[str]) -> list[dict]:
     return [by_id[rid] for rid in wanted]
 
 
+@router.get("/backup/status", dependencies=[Depends(require_admin_or_local)])
+def backup_status(request: Request):
+    """Whether a backup taken now would leave the data-source credentials out, and why — said on the
+    backup surface before the file is made rather than discovered at restore."""
+    with get_db() as conn:
+        return {"credentials_left_out": accounts_backup.credentials_left_out(conn, getattr(request.state, "user", None))}
+
+
 @router.get("/backup", dependencies=[Depends(require_admin_or_local)])
 def export_backup(
+    request: Request,
     encrypted: bool = Query(False),
     recipients: Optional[str] = Query(
         None, description="Comma-separated recipient ids; omitted means every enabled recipient."
     ),
 ):
+    """Write a backup: the financial data and the accounts (`services/accounts_backup.py`), always both.
+    What to put back is chosen at restore.
+
+    Encrypting to backup keys is optional and protects what the file holds in the clear — the ledger,
+    password hashes and two-factor secrets. It is not what protects the data-source credentials: they are
+    sealed under the vault, whose every way in that the file carries has to hold up on its own. When the
+    exporter's passphrase has not cleared the current rule, or the exporter cannot open the vault, the
+    credentials are left out and the file says so; the rest of the backup is never held back for them.
+    """
+    user = getattr(request.state, "user", None)
     selected = []
-    if encrypted:
-        with get_db() as conn:
+    with get_db() as conn:
+        if encrypted:
             selected = _recipients_for_export(conn, recipients)
-        if not selected:
-            raise HTTPException(status_code=400, detail="No enabled backup keys are configured")
+            if not selected:
+                raise HTTPException(status_code=400, detail="No enabled backup keys are configured")
+        accounts_part = accounts_backup.collect(conn, user)
 
     artifact = backup_temp_file()
     try:
         with get_db() as conn:
-            write_backup_archive(conn, artifact)
+            write_backup_archive(conn, artifact, BACKUP_KIND_FULL, accounts_part)
         if encrypted:
             # The plain archive becomes the plaintext of the encrypted one; the database is no longer
             # needed, so the connection is already closed by the time the cipher runs.
             plain, artifact = artifact, backup_temp_file()
             try:
                 plain.seek(0)
-                write_encrypted_archive(plain, selected, artifact)
+                write_encrypted_archive(plain, selected, artifact, BACKUP_KIND_FULL,
+                                        accounts_part["credentials"] is not None)
             finally:
                 plain.close()
         size = artifact.tell()
@@ -1034,6 +1075,13 @@ def export_backup(
     except BaseException:
         artifact.close()
         raise
+
+    # Deliberately not allowed to fail the export: the file is the valuable thing, the note about it a
+    # courtesy, and a control-DB hiccup must not cost someone their backup.
+    try:
+        accounts_backup.record_export(user, accounts_part)
+    except Exception as exc:                                        # pragma: no cover - defensive
+        log_error(f"[backup] could not record the backup: {exc}", exc_info=exc)
 
     filename = _dated_backup_filename("luma_backup", ".encrypted.zip" if encrypted else ".zip")
     return StreamingResponse(
@@ -1044,78 +1092,6 @@ def export_backup(
             # Known because the artifact is complete before the first byte is sent, which is what lets a
             # download show progress instead of an indeterminate spinner.
             "Content-Length": str(size),
-        },
-    )
-
-
-@router.get("/backup/credentials", dependencies=[Depends(require_admin_or_local)])
-def export_credentials(request: Request):
-    """Export data-source credentials **as ciphertext**, with the vault material needed to reopen them.
-
-    This deliberately never decrypts. Versions 1 and 2 wrote *plaintext* access tokens and app secrets
-    into a plain zip — an artifact strictly weaker than the databases it came from, which hold only
-    ciphertext — and producing it was the sole reason the export demanded an unlocked vault. Copying the
-    ciphertext instead needs no DEK, so a locked vault is no longer an error here at all; a secret is
-    asked for at *restore*, and only where re-keying genuinely cannot proceed without one.
-
-    The exporting member's slots travel with it (`vault_slots`; `crypto_service.export_vault_slots` says
-    which and why). Without them the ciphertext is undecryptable anywhere but the install that produced
-    it — the key lives in the control DB and the ciphertext in the data DB, so a credentials backup that
-    carried only one half would restore nowhere. They are safe to include only because each is wrapped by
-    a secret that resists offline guessing, which for the passphrase is why the export is refused until it
-    clears the current rule (`credentials_export_refusal`). No second encryption layer is offered because
-    the payload is already encrypted.
-
-    A legacy row that was never vaulted (plaintext `credential`, no `credential_enc`) is exported as it
-    sits. That keeps the invariant that matters — **the backup is never weaker than the DB at rest** —
-    without needing a DEK to upgrade it here.
-    """
-    user = getattr(request.state, "user", None)
-    refusal = crypto_service.credentials_export_refusal(user["id"]) if user else None
-    if refusal:
-        raise HTTPException(status_code=409, detail=refusal)
-    with get_db() as conn:
-        connections = [dict(r) for r in conn.execute(
-            "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
-        ).fetchall()]
-        provider_configs = [dict(r) for r in conn.execute(
-            "SELECT provider, client_id, secret, secret_enc, env FROM provider_config"
-        ).fetchall()]
-    payload = _stamp_content_hash({
-        "kind":             BACKUP_KIND_CREDENTIALS,
-        # v5 carries every slot the exporter opens the vault with (`vault_slots`) where v4 carried only the
-        # passphrase slot (`vault`). The bump is what makes an older install reject this file outright
-        # rather than report it as carrying no vault key.
-        "version":          CREDENTIALS_PAYLOAD_VERSION,
-        "exported_at":      utcnow_iso(),
-        "warning":          "This file holds encrypted data provider credentials. Anyone with it and the "
-                            "exporting member's vault passphrase, recovery code or passkey can use them. "
-                            "Store securely.",
-        "connections":      connections,
-        "provider_configs": provider_configs,
-        # Empty when the exporter holds no slot (nothing here is reopenable elsewhere, then).
-        "vault_slots":      crypto_service.export_vault_slots(user["id"]) if user else [],
-    })
-    # Note which wrapping went into the file. This artifact outlives the app's memory of it: change the
-    # passphrase and the DEK is rewrapped, leaving every file written before that restorable elsewhere only
-    # with the old passphrase (or the recovery code it carries) — a consequence the user has no way to
-    # notice at the moment it happens. Recorded here rather than in the UI because only this path knows
-    # what was actually written, and it is deliberately not allowed to fail the export: the file is the
-    # valuable thing, the note about it is a courtesy, and a control-DB hiccup must not cost someone their
-    # backup.
-    if user:
-        try:
-            fingerprint = crypto_service.exported_slots_fingerprint(payload["vault_slots"])
-            if fingerprint:
-                control_database.record_credentials_export(user["id"], fingerprint)
-        except Exception as exc:                                    # pragma: no cover - defensive
-            log_error(f"[backup] could not record the credentials export: {exc}", exc_info=exc)
-    return StreamingResponse(
-        iter([_zip_json_bytes("luma_credentials.json", payload)]),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition":
-                f'attachment; filename="{_dated_backup_filename("luma_credentials", ".zip")}"'
         },
     )
 
@@ -1633,8 +1609,15 @@ def _redate_held_duplicate(row):
     return row
 
 
-def _restore_preflight(header: dict, force: bool) -> None:
-    """Everything that can refuse a restore, run before a single row is touched."""
+def _restore_preflight(header: dict, force: bool, *, restores_data: bool = True,
+                       perimeter_follows: bool = False) -> None:
+    """Everything that can refuse a restore, run before a single row is touched.
+
+    `restores_data` is false for a restore of the accounts part alone. The compatibility guard is
+    about the ledger — whether data here would be erased, whether columns would be lost — so it does not
+    apply, and the confirmation the restore surface asks names what the file replaces. `perimeter_follows`
+    is true when the restore brings the file's identities and sign-in setting with it, so the access mode
+    the backup was made in is the one the install will be in."""
     # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
     # mixing real data into a demo tenant breaks the "clear is always safe" contract. Refuse outright.
     with get_db() as conn:
@@ -1649,7 +1632,7 @@ def _restore_preflight(header: dict, force: bool) -> None:
     # *different* system's existing data, or load across access modes, unless the user has explicitly
     # confirmed (force). Allowed without confirmation: an empty target (fresh install) or restoring this
     # system's own backup (matching instance_id) in the same mode.
-    if force:
+    if force or not restores_data:
         return
     backup_mode = header.get("access_mode")
     backup_instance = header.get("instance_id")
@@ -1659,7 +1642,7 @@ def _restore_preflight(header: dict, force: bool) -> None:
         target_instance = get_db_instance_id(conn)
         has_data = _target_has_data(conn)
     reasons = []
-    if backup_mode and backup_mode != target_mode:
+    if backup_mode and backup_mode != target_mode and not perimeter_follows:
         reasons.append("mode_mismatch")
     if has_data and backup_instance != target_instance:
         reasons.append("different_system")
@@ -1940,31 +1923,90 @@ def restore_backup(body: RestoreRequest):
     return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
 
 
-def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None) -> dict:
-    """Destructive restore straight from an opened version-10 archive, one member at a time.
+def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None, *,
+                         include_data: bool = True, include_accounts: bool = False,
+                         admin_username: Optional[str] = None, admin_password: Optional[str] = None) -> dict:
+    """Destructive restore straight from an opened version-10-or-later archive, one member at a time.
 
     `artifact_path` is where the staged copy of this archive lives, when it has one. Recording it is
     what makes the documents phase resumable: the ledger commits before a single file is written, so an
     interruption after that point needs the source still to exist.
+
+    `include_data` and `include_accounts` choose which of the parts the file holds to apply; a part the file
+    does not hold is not applied whatever is asked. Everything that can refuse — the digests, the
+    compatibility guard and the restoring administrator's password — runs before anything is touched.
+    The financial data then commits and the accounts part follows (`accounts_backup.apply`).
     """
     meta = _read_archive_meta(zf)
+    kind = meta.get("kind") or BACKUP_KIND_DATA
+    restores_data = include_data
+    restores_accounts = include_accounts and kind == BACKUP_KIND_FULL
+    if not (restores_data or restores_accounts):
+        raise HTTPException(status_code=400, detail="Nothing was chosen that this backup holds.")
     backup_version = meta.get("version")
-    if backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
+    if restores_data and backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
         raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
     verify_archive_members(zf, meta)
-    _restore_preflight(meta, force)
+    _restore_preflight(meta, force, restores_data=restores_data, perimeter_follows=restores_accounts)
+    accounts_part = read_accounts_part(zf, meta) if restores_accounts else None
+    if accounts_part is not None:
+        _check_restoring_admin(accounts_part, admin_username, admin_password)
 
-    _begin_restore(meta, artifact_path)
+    result = {"ok": True}
+    if restores_data:
+        _begin_restore(meta, artifact_path)
+        try:
+            with get_db() as conn:
+                counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
+        finally:
+            # Clears the slot only if the ledger never committed. A successful restore has already moved
+            # the marker to `documents_pending` inside its own transaction, and that one has to survive.
+            _abandon_restore_if_staging()
+        result["documents"] = _restore_documents(zf)
+        result["restored_counts"] = counts
+        compact_if_worthwhile(reason="restored a backup")
+    if accounts_part is not None:
+        result["accounts"] = accounts_backup.apply(accounts_part)
+        # The identities every session was authenticated against have just been replaced.
+        result["signed_out"] = True
+    result["restored_at"] = utcnow_iso()
+    return result
+
+
+def read_accounts_part(zf, meta: dict) -> dict:
+    """The accounts part of an archive whose members have already been verified."""
+    if meta.get("accounts_version") not in accounts_backup.RESTORABLE_ACCOUNTS_PART_VERSIONS:
+        raise HTTPException(status_code=400, detail="This backup's accounts are in a format this version cannot read")
+    part = {}
+    for rows in accounts_backup.ROW_LISTS:
+        try:
+            member = zf.open(_accounts_member(rows))
+        except KeyError:
+            part[rows] = []
+            continue
+        with io.TextIOWrapper(member, encoding="utf-8") as lines:
+            part[rows] = [json.loads(line) for line in lines if line.strip()]
+    # Absent when the backup left the credentials out; the part then restores without them.
+    part["credentials"] = (
+        json.loads(zf.read(ACCOUNTS_CREDENTIALS_MEMBER).decode("utf-8")) if meta.get("credentials_included") else None
+    )
+    return part
+
+
+def _check_restoring_admin(part: dict, username: Optional[str], password: Optional[str]) -> None:
     try:
-        with get_db() as conn:
-            counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
-    finally:
-        # Clears the slot only if the ledger never committed. A successful restore has already moved the
-        # marker to `documents_pending` inside its own transaction, and that one has to survive.
-        _abandon_restore_if_staging()
-    documents = _restore_documents(zf)
-    compact_if_worthwhile(reason="restored a backup")
-    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
+        accounts_backup.check_restoring_admin(part, username, password)
+    except accounts_backup.AdminPasswordRequired as required:
+        raise HTTPException(status_code=400, detail={
+            "code": "incorrect_admin_password" if required.attempted else "admin_password_required",
+            "message": (
+                "That is not the password of an administrator in this backup."
+                if required.attempted else
+                "This backup turns sign-in on. Enter the username and password of an administrator in it, "
+                "so the restore cannot leave this system with no one able to sign in."
+            ),
+            "admins": required.admins,
+        })
 
 
 def _restore_documents(zf) -> dict:
@@ -2152,11 +2194,12 @@ def decrypt_archive_to_temp(zf, private_key_bytes: Optional[bytes], passphrase: 
     return plaintext
 
 
-def _restore_from_zip(zf, force: bool, artifact_path: Optional[str] = None) -> dict:
+def _restore_from_zip(zf, force: bool, artifact_path: Optional[str] = None, **accounts_options) -> dict:
     """Restore an opened backup zip, whichever generation it is: version 10 streams from its members,
-    older versions are a single JSON object that has to be read whole."""
+    older versions are a single JSON object that has to be read whole. `accounts_options` are
+    `restore_from_archive`'s, and mean nothing to the older versions, which never carried accounts."""
     if META_MEMBER in set(zf.namelist()):
-        return restore_from_archive(zf, force, artifact_path=artifact_path)
+        return restore_from_archive(zf, force, artifact_path=artifact_path, **accounts_options)
     return restore_backup(RestoreRequest(data=_read_single_json_member(zf), force=force))
 
 
@@ -2182,13 +2225,13 @@ def _read_single_json_member(zf) -> dict:
 
 
 # --- Identifying a backup file --------------------------------------------------------------------
-# The two backups are different artifacts with different consequences — one replaces the ledger, the
-# other re-keys data-source secrets — but to the person holding the file they are both "my backup", and
-# being asked which kind it is means being asked to know how the app is split internally. So the file
+# The backups are different artifacts with different consequences — the financial data, the accounts, both,
+# or an older standalone credentials file — but to the person holding the file they are all "my backup",
+# and being asked which kind it is means being asked to know how the app is split internally. So the file
 # says what it is and the app reads it, rather than the choice of upload control deciding.
 #
 # The declaration lives in three places, one per container, and in every case *outside* any ciphertext:
-# `meta.json` for a version-10 data archive, the payload itself for a credentials backup, and
+# `meta.json` for a version-10-or-later archive, the payload itself for a credentials backup, and
 # `manifest.json` for an encrypted archive — the last of which is the point, since an encrypted backup
 # has to be identifiable before anyone has produced a private key for it. Naming the kind reveals
 # nothing the filename did not already say.
@@ -2233,6 +2276,12 @@ def _unrecognized_backup(detail: str = "") -> HTTPException:
     )
 
 
+def _credentials_flag(header: dict) -> dict:
+    """Whether a file's accounts part carries the credentials, for a file that has one."""
+    flag = header.get("credentials_included")
+    return {} if flag is None else {"credentials_included": bool(flag)}
+
+
 def identify_backup_zip(zf) -> dict:
     """What this archive is, without decrypting anything or reading a whole payload."""
     names = {name for name in zf.namelist() if not name.endswith("/")}
@@ -2258,6 +2307,7 @@ def identify_backup_zip(zf) -> dict:
             # Older manifests predate the field, and only data backups have ever had an encrypted
             # variant — a credentials payload is already ciphertext and gains nothing from a second layer.
             "kind": manifest.get("kind") or BACKUP_KIND_DATA,
+            **_credentials_flag(manifest),
             "encrypted": True,
             "container": "zip",
             "version": manifest.get("version"),
@@ -2270,6 +2320,7 @@ def identify_backup_zip(zf) -> dict:
         meta = _read_archive_meta(zf)
         return {
             "kind": meta.get("kind") or BACKUP_KIND_DATA,
+            **_credentials_flag(meta),
             "encrypted": False,
             "container": "zip",
             "version": meta.get("version"),
@@ -2302,20 +2353,28 @@ def identify_backup_file(fileobj) -> dict:
     return {"kind": kind, "encrypted": False, "container": "json", "version": payload.get("version")}
 
 
-def _require_kind(identification: dict, expected: str) -> None:
-    """Refuse the *other* backup in an endpoint that only handles one of them.
+_KIND_NAMES = {
+    BACKUP_KIND_DATA: "data backup",
+    BACKUP_KIND_FULL: "full backup",
+    BACKUP_KIND_CREDENTIALS: "credentials backup",
+}
+
+
+def _require_kind(identification: dict, *expected: str) -> None:
+    """Refuse a backup an endpoint does not handle.
 
     The unified picker routes by `kind`, so reaching this means an API caller sent the wrong file — but
-    it is also the case a person hits first when the two are confusable, and "unexpected file inside ZIP"
+    it is also the case a person hits first when the kinds are confusable, and "unexpected file inside ZIP"
     told them nothing about what they had actually chosen.
     """
     found = identification.get("kind")
-    if found == expected:
+    if found in expected:
         return
-    names = {BACKUP_KIND_DATA: "data backup", BACKUP_KIND_CREDENTIALS: "credentials backup"}
+    names = [_KIND_NAMES[kind].removesuffix(" backup") for kind in expected]
+    wanted = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
     raise HTTPException(
         status_code=400,
-        detail=f"This is a {names.get(found, 'different kind of backup')}, not a {names[expected]}.",
+        detail=f"This is a {_KIND_NAMES.get(found, 'different kind of backup')}, not a {wanted} backup.",
     )
 
 
@@ -2429,6 +2488,11 @@ def _backup_deks(body: CredentialsRestoreRequest, slots: list[dict]) -> list[byt
 
 @router.post("/restore/credentials", dependencies=[Depends(require_admin_or_local)])
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
+    """Restore a standalone credentials backup, the kind written before the accounts part replaced it.
+
+    Such a file carries no identities, so its slots may belong to no one here and are never adopted: the
+    credentials are copied when they are already valid under this install's key, and otherwise reopened
+    with one of the exporter's secrets and re-sealed under it, into whatever vault is here."""
     # Blocked while demo data is loaded, like every other path that brings data in. This one is not merely
     # for consistency: it inserts `connection` rows, and a linked connection is exactly what
     # `is_demo_loadable` treats as disqualifying, so restoring here would produce the one state the demo
@@ -2540,66 +2604,8 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
         # Only a non-empty app secret is vaulted; a config with just client_id/env stores no ciphertext.
         return crypto_service.encrypt_app_credential(user, pc["provider"], plain) if plain else ("", None)
 
-    # Credentials are filled in on the connection rows rather than the rows being replaced. A row is shared
-    # with the data backup — its account links, mappings, import cards and sync state all hang off it, and
-    # `connection_account` cascades from it — so deleting and re-inserting, as this once did, erased every
-    # account mapping whenever credentials were restored onto a ledger that already held them, which is
-    # precisely the state a data restore leaves behind.
     with get_db() as conn:
-        restored_ids: list[str] = []
-        for c in connections:
-            credential, credential_enc = _connection_secret(c)
-            local = None
-            if c.get("id"):
-                local = conn.execute("SELECT id FROM connection WHERE id = ?", (c["id"],)).fetchone()
-            if local is None:
-                local = conn.execute(
-                    "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
-                    (c["provider"], c["external_id"]),
-                ).fetchone()
-            if local is None:
-                connection_id = c.get("id") or str(uuid.uuid4())
-                conn.execute(
-                    """
-                    INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (connection_id, c["provider"], c["external_id"], credential, credential_enc,
-                     c.get("institution")),
-                )
-            else:
-                connection_id = local["id"]
-                # The handle travels with the credential: the ciphertext is bound to (provider, external_id),
-                # so a credential written back under a different handle would never open.
-                conn.execute(
-                    """
-                    UPDATE connection
-                    SET    provider = ?, external_id = ?, credential = ?, credential_enc = ?,
-                           institution = COALESCE(?, institution)
-                    WHERE  id = ?
-                    """,
-                    (c["provider"], c["external_id"], credential, credential_enc, c.get("institution"),
-                     connection_id),
-                )
-            restored_ids.append(connection_id)
-        # A connection the file does not hold keeps its row and loses its credential, exactly as a vault
-        # reset leaves one: the file is the set of credentials to have, and the row is what a re-link lands on.
-        placeholders = ", ".join("?" * len(restored_ids))
-        conn.execute(
-            "UPDATE connection SET credential = '', credential_enc = NULL, reauth_required = 1"
-            + (f" WHERE id NOT IN ({placeholders})" if restored_ids else ""),
-            restored_ids,
-        )
-        conn.execute("DELETE FROM provider_config")
-        for pc in provider_configs:
-            secret, secret_enc = _provider_secret(pc)
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO provider_config (provider, client_id, secret, secret_enc, env)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (pc["provider"], pc.get("client_id") or "", secret, secret_enc, pc.get("env") or "sandbox"),
-            )
+        accounts_backup.write_credentials(conn, connections, provider_configs, _connection_secret, _provider_secret)
     return {"ok": True, "restored": len(connections) + len(provider_configs)}
 
 
@@ -2609,8 +2615,19 @@ async def restore_backup_file(
     private_key_file: UploadFile | None = File(None),
     private_key_passphrase: str | None = Form(None),
     force: bool = Form(False),
+    # Which of the parts the file holds to restore. The defaults restore the financial data, which is all an
+    # older file holds; a part the file does not hold is ignored.
+    include_data: bool = Form(True),
+    include_accounts: bool = Form(False),
+    # An administrator of the backup, when it turns sign-in on (`accounts_backup.check_restoring_admin`).
+    admin_username: str | None = Form(None),
+    admin_password: str | None = Form(None),
 ):
     private_key_bytes = await private_key_file.read() if private_key_file else None
+    accounts_options = {
+        "include_data": include_data, "include_accounts": include_accounts,
+        "admin_username": admin_username, "admin_password": admin_password,
+    }
     # Named, unlike every other staging file here, because the documents phase may need to read it again
     # after the ledger has committed. Removed below unless that phase claimed it.
     staged, staged_path = restore_staging_file()
@@ -2618,7 +2635,7 @@ async def restore_backup_file(
         await _spool_upload(file, staged)
         # Identify before anything else: a credentials backup reaching this endpoint should be told what
         # it is, not met with a complaint about the names of the members inside it.
-        _require_kind(identify_backup_file(staged), BACKUP_KIND_DATA)
+        _require_kind(identify_backup_file(staged), BACKUP_KIND_DATA, BACKUP_KIND_FULL)
         staged.seek(0)
         if not zipfile.is_zipfile(staged):
             staged.seek(0)
@@ -2626,7 +2643,7 @@ async def restore_backup_file(
         staged.seek(0)
         with zipfile.ZipFile(staged) as zf:
             if not _is_encrypted_archive(zf):
-                return _restore_from_zip(zf, force, artifact_path=staged_path)
+                return _restore_from_zip(zf, force, artifact_path=staged_path, **accounts_options)
             plaintext = decrypt_archive_to_temp(zf, private_key_bytes, private_key_passphrase)
             try:
                 with zipfile.ZipFile(plaintext) as inner:
@@ -2636,7 +2653,7 @@ async def restore_backup_file(
                     # cannot be reopened without the private key. An interrupted documents phase here is
                     # finished by restoring the same backup again, which the marker's recorded identity
                     # lets the app confirm.
-                    return _restore_from_zip(inner, force)
+                    return _restore_from_zip(inner, force, **accounts_options)
             finally:
                 plaintext.close()
     finally:

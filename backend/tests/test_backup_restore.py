@@ -68,6 +68,10 @@ from backend.services.categorizer import seed_default_rules
 # (export/restore_credentials). `connection` itself is split between the two — see `EXCLUDED_COLUMNS`.
 # `connection_sync_log` is the provider-sync diagnostic log: capped, prunable and user-clearable, so
 # nothing about the system's state may depend on it, which is also why a backup has nothing to preserve.
+# `export_backup` called directly, as most tests here do, with no identity behind the request. The file
+# still carries the accounts part, without credentials, which none of these tests read.
+NO_USER_REQUEST = SimpleNamespace(state=SimpleNamespace(user=None))
+
 EXCLUDED_TABLES = {"plaid_item", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
 # The document text index and the shadow tables FTS5 keeps beside it. Derived state, not data: every
 # term in it comes from `document.text`, which the backup *does* carry, and the triggers rebuild the
@@ -849,7 +853,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
     def test_export_endpoint_streams_a_complete_archive(self):
         self._seed_complete()
         with self._use_db_path():
-            response = export_backup(encrypted=False, recipients=None)
+            response = export_backup(NO_USER_REQUEST, encrypted=False, recipients=None)
         body = self._drain(response)
 
         # Declared length must match what is actually sent, or a download shows a progress bar that
@@ -863,7 +867,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                               f"{section} has no member in the archive")
             meta = json.loads(zf.read("meta.json"))
         self.assertEqual(meta["version"], BACKUP_PAYLOAD_VERSION)
-        self.assertEqual(set(meta["members"]),
+        self.assertEqual({m for m in meta["members"] if m.startswith("sections/")},
                          {f"sections/{s}.ndjson" for s in BACKUP_SECTION_NAMES})
 
     def test_archive_round_trip_preserves_every_table(self):
@@ -1245,7 +1249,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._seed_complete()
         private_key, _pem = self._add_recipient()
         with self._use_db_path():
-            response = export_backup(encrypted=True, recipients=None)
+            response = export_backup(NO_USER_REQUEST, encrypted=True, recipients=None)
         body = self._drain(response)
 
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
@@ -1267,7 +1271,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         tables = self._user_data_tables()
         before = self._counts(tables)
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
@@ -1290,7 +1294,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 target = conn.execute(
                     "SELECT id FROM backup_recipient WHERE label = 'Offsite drive'"
                 ).fetchone()["id"]
-            body = self._drain(export_backup(encrypted=True, recipients=target))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=target))
 
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             manifest = json.loads(zf.read("manifest.json"))
@@ -1303,7 +1307,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._add_recipient("Home NAS")
         self._add_recipient("Offsite drive")
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             manifest = json.loads(zf.read("manifest.json"))
         self.assertEqual(len(manifest["wrapped_keys"]), 2)
@@ -1315,7 +1319,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._add_recipient("Home NAS")
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
-                export_backup(encrypted=True, recipients="not-a-real-id")
+                export_backup(NO_USER_REQUEST, encrypted=True, recipients="not-a-real-id")
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_a_disabled_recipient_cannot_be_selected(self):
@@ -1327,7 +1331,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 rid = conn.execute("SELECT id FROM backup_recipient").fetchone()["id"]
                 conn.execute("UPDATE backup_recipient SET enabled = 0")
             with self.assertRaises(HTTPException) as ctx:
-                export_backup(encrypted=True, recipients=rid)
+                export_backup(NO_USER_REQUEST, encrypted=True, recipients=rid)
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_encrypted_restore_refuses_a_tampered_payload(self):
@@ -1336,7 +1340,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         tables = self._user_data_tables()
         before = self._counts(tables)
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
         sealed = bytearray(zipfile.ZipFile(io.BytesIO(body)).read("payload.bin"))
         sealed[len(sealed) // 2] ^= 0xFF
         tampered = self._rewrite_member(body, "payload.bin", bytes(sealed))
@@ -1396,14 +1400,16 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         self._add_recipient()
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
             encrypted = asyncio.new_event_loop().run_until_complete(
                 inspect_backup_file(file=self._upload(body, "luma_backup.encrypted.zip")))
         self.assertTrue(encrypted["encrypted"])
         self.assertEqual(encrypted["recipient_count"], 1)
         # Identified without a private key: the kind rides the plaintext manifest precisely so the
         # restore surface can name the file before anyone has produced a key for it.
-        self.assertEqual(encrypted["kind"], "data")
+        self.assertEqual(encrypted["kind"], "full")
+        # With no identity behind the export there is no vault access to carry, and the manifest says so.
+        self.assertFalse(encrypted["credentials_included"])
 
 
 # --- Telling the two backups apart -----------------------------------------------------------------
@@ -1464,7 +1470,7 @@ class BackupIdentificationTests(BackupFixtureTestCase):
                     file=self._upload(self._credentials_file(), "luma_credentials.zip"),
                     private_key_file=None, private_key_passphrase=None, force=False))
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "This is a credentials backup, not a data backup.")
+        self.assertEqual(ctx.exception.detail, "This is a credentials backup, not a data or full backup.")
 
     def test_the_wrong_backup_in_the_credentials_restore_names_what_it_is(self):
         self._seed_complete()
@@ -1682,7 +1688,7 @@ class BackupKeypairTests(BackupFixtureTestCase):
         generated = self._generate(key_size=2048, passphrase="a passphrase")
         with self._use_db_path():
             create_backup_recipient(BackupRecipientCreate(label="Generated", public_key=generated["public_key"]))
-            body = self._drain(export_backup(encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
