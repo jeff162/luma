@@ -37,7 +37,7 @@ from backend.app_logging import log_error, log_warning
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
-from backend.services import connection_log, crypto_service
+from backend.services import connection_log, crypto_service, rule_conflicts
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
@@ -935,6 +935,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         def _owe_touched() -> None:
             nonlocal owed_through
             owe_recurring_rescan(conn, touched_ids[owed_through:])
+            rule_conflicts.record_for_txns(conn, touched_ids[owed_through:])
             owed_through = len(touched_ids)
 
         if connection_id:

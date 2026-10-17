@@ -496,6 +496,8 @@ export default function Rules() {
   // hidden, while a rule it opened is edited).
   const [checkupRefreshKey, setCheckupRefreshKey] = useState(0)
   const [rangeDriftCount, setRangeDriftCount] = useState(0)
+  const [conflictCount, setConflictCount] = useState(0)
+  const checkupCount = rangeDriftCount + conflictCount
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
@@ -514,22 +516,24 @@ export default function Rules() {
     api.getRules().then(r => { setRules(r); setLoading(false) })
   }, [])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
-  // Only the range-drift half of the rule checkup is counted on load. It is the half that arrives on its
-  // own — a charge appears in the ledger and a rule silently stops claiming it — so it is news worth a
-  // badge, and it is the cheaper pass. The overlap check reports on rules the user edited themselves and
-  // never changes on its own, so badging it would leave a number sitting there for months over something
-  // the user has already decided is fine, which is how a badge stops meaning anything.
-  const loadRangeDriftCount = useCallback(() => {
+  // The badge counts what arrives on its own, with no edit by the user: a charge a rule silently stopped
+  // claiming (range drift), and a pair of rules an import, sync or categorization caught deciding a
+  // transaction arbitrarily (the recorded conflicts). The rest of the overlap check reports on rules as
+  // the user wrote them, and much of it is information they can acknowledge; badging that would leave a
+  // number sitting there for months over something already decided, which is how a badge stops meaning
+  // anything. The whole-ledger scan is also too slow to run on every visit.
+  const loadCheckupCounts = useCallback(() => {
     api.getRuleRangeDrift().then(r => setRangeDriftCount(r?.count || 0)).catch(() => setRangeDriftCount(0))
+    api.getRuleConflictCount().then(r => setConflictCount(r?.count || 0)).catch(() => setConflictCount(0))
   }, [])
 
   useEffect(() => { loadRules() },      [loadRules])
-  useEffect(() => { loadRangeDriftCount() }, [loadRangeDriftCount])
+  useEffect(() => { loadCheckupCounts() }, [loadCheckupCounts])
 
-  // Landing from the Tasks card (?findings=range-drift) opens the checkup panel, then strips the param
-  // so closing it does not reopen on the next render and a refresh does not reopen it at all.
+  // Landing from a Tasks card (?findings=range-drift or ?findings=conflicts) opens the checkup panel, then
+  // strips the param so closing it does not reopen on the next render and a refresh does not reopen it.
   useEffect(() => {
-    if (searchParams.get('findings') !== 'range-drift') return
+    if (!['range-drift', 'conflicts'].includes(searchParams.get('findings'))) return
     setFindingsOpen(true)
     const next = new URLSearchParams(searchParams); next.delete('findings')
     setSearchParams(next, { replace: true })
@@ -840,25 +844,28 @@ export default function Rules() {
               present findings, let the user act — rather than in the toolbar below, which is search,
               filter and sort. Enabled as soon as either check can say anything: a single rule with an
               amount range can have a charge drift out of it, while the overlap half needs a pair to
-              compare. The badge counts only the drifted charges (see `loadRangeDriftCount`). */}
-          <Tooltip content={rules.length < 2 && !rangeDriftCount
+              compare. The badge counts drifted charges and recorded conflicts (see `loadCheckupCounts`). */}
+          <Tooltip content={rules.length < 2 && !checkupCount
             ? 'Nothing to check until there are two rules, or a charge drifts out of one'
-            : rangeDriftCount
-              ? `${rangeDriftCount} recent charge${rangeDriftCount === 1 ? '' : 's'} a rule's amount range no longer claims`
+            : checkupCount
+              ? [
+                  rangeDriftCount && `${rangeDriftCount} recent charge${rangeDriftCount === 1 ? '' : 's'} a rule's amount range no longer claims`,
+                  conflictCount && `${conflictCount} pair${conflictCount === 1 ? '' : 's'} of rules competing for the same transactions`,
+                ].filter(Boolean).join('; ')
               : 'Check for drifted amount ranges and rules that compete for the same transaction'}>
             <Button
               small
               variant="ghost"
-              disabled={rules.length < 2 && !rangeDriftCount}
+              disabled={rules.length < 2 && !checkupCount}
               onClick={() => setFindingsOpen(true)}
-              style={rangeDriftCount ? {
+              style={checkupCount ? {
                 background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
                 border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))',
               } : undefined}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <span>Rule checkup</span>
-                <ActionCountBadge count={rangeDriftCount} tone="warning" />
+                <ActionCountBadge count={checkupCount} tone="warning" />
               </span>
             </Button>
           </Tooltip>
@@ -1168,7 +1175,7 @@ export default function Rules() {
         <RuleFindingsDialog
           // Closing re-reads the badge: widening a range or dismissing a charge inside the panel is
           // exactly what changes it, and a badge still showing the old number reads as a failed action.
-          onClose={() => { setFindingsOpen(false); loadRangeDriftCount() }}
+          onClose={() => { setFindingsOpen(false); loadCheckupCounts() }}
           // The editor opens as a second floating panel above this one, which stays open with its
           // results so the two can be arranged side by side.
           onEditRule={openEditForm}

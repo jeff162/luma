@@ -43,7 +43,7 @@ from backend.db.control_database import (
     get_https_warning_suppressed,
 )
 from backend import app_log_file, runtime_config, transport
-from backend.services import crypto_service, proxy_certificate, update_check
+from backend.services import crypto_service, proxy_certificate, rule_conflicts, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_detection import overdue_owed_rescan_count
@@ -542,6 +542,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
             tasks.append(owed_rescan_task)
         tasks.extend(_recurring_signal_tasks(conn))
         tasks.extend(_rule_range_drift_tasks(conn))
+        tasks.extend(_rule_conflict_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
         tasks.extend(_connection_tasks(conn))
 
@@ -702,6 +703,27 @@ def _rule_range_drift_tasks(conn) -> list[dict]:
                        "drifts past it quietly stops being categorized by that rule.",
         "count":       n,
         "link":        "/rules?findings=range-drift",
+        "link_label":  "Review rules",
+        "severity":    SEVERITY_WARNING,
+    }]
+
+
+def _rule_conflict_tasks(conn) -> list[dict]:
+    """Rule pairs a categorization pass caught deciding a transaction arbitrarily. Dismissing the task puts
+    the reminder away until a new pair is recorded; the pairs themselves stay listed in the rule checkup
+    until the rules stop conflicting."""
+    n = rule_conflicts.open_count(conn)
+    if not n:
+        return []
+    return [{
+        "id":          "rule_conflict",
+        "title":       "Rules competing for the same transactions",
+        "description": f"{n} pair{' of rules' if n == 1 else 's of rules'} matched the same transaction, "
+                       "and which one applied changes its category, name or recurring series. Nothing "
+                       "meaningful chooses between them: neither keyword contains the other, or their "
+                       "amount ranges only partly overlap.",
+        "count":       n,
+        "link":        "/rules?findings=conflicts",
         "link_label":  "Review rules",
         "severity":    SEVERITY_WARNING,
     }]

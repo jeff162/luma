@@ -29,7 +29,7 @@ from backend.services.categorizer import (
 )
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.rule_range_drift import find_range_drift
-from backend.services import signal_dismissals
+from backend.services import rule_conflicts, signal_dismissals
 from backend.services.recurring_detection import (
     CADENCES,
     link_series_members,
@@ -292,10 +292,12 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     ]
 
     affected_ids: list[str] = []
+    matched_ids: list[str] = []  # every row the rule matches, for the conflicts its arrival can create
     effect_max_date = None  # newest date this rule applies an effect to (for last_effect_date)
     for txn in txns:
         if not _rule_matches_txn(rule, txn):
             continue
+        matched_ids.append(txn["id"])
         # A trashed row is not a live effect (see `recategorize_all`), so it does not advance the date
         # the rule is judged recently-used by, even though the apply still reaches it — a row restored
         # later should come back carrying the category its rule would have given it.
@@ -357,6 +359,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # The rule just applied its effect across these matches — advance its last_effect_date to the newest.
     if effect_max_date:
         bump_rule_effect_dates(conn, {rule_id: effect_max_date})
+    rule_conflicts.record_for_txns(conn, matched_ids)
     return affected_ids
 
 
@@ -538,6 +541,15 @@ def restore_rule_overlap(body: RuleFindingDismissBody):
     with get_db() as conn:
         restore_finding(conn, body.key)
     return {"ok": True}
+
+
+@router.get("/conflicts")
+def rule_conflict_count():
+    """How many rule pairs a categorization pass has caught deciding a transaction arbitrarily that still
+    do: the Rules page's checkup badge. The checkup lists each one among its warnings. See
+    `services/rule_conflicts.py`."""
+    with get_db() as conn:
+        return {"count": rule_conflicts.open_count(conn)}
 
 
 @router.get("/range-drift")

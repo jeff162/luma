@@ -1891,12 +1891,16 @@ export const HELP_TOPICS = [
         <p>*needs review*</p>
         <p>
           <strong>Competing rules that file the same way</strong> is the last section, and it holds
-          pairs from either of the two sections above whose two rules apply the same category, rename,
-          tags and recurring setting. Those pairs contend over an outcome that is identical whichever
-          rule wins -- two spellings of one merchant filing to one place is the usual shape -- so
-          nothing needs refining and they can be dismissed. Where every transaction one of the two rules
-          matches is matched by the other as well, the finding offers to delete it. A dismissal there
-          lapses if the two rules ever stop agreeing, which puts the pair back among the warnings.
+          pairs from either of the two sections above where it makes no difference which rule wins.
+          Every rule that matches a transaction contributes to it, and each action is decided on its
+          own: the category comes from the highest-ranked matching rule that sets one, the rename the
+          same way, and the tags of every matching rule are added. So the winner matters only when both
+          rules set a category and the categories differ, both rename to different names, or both track
+          a recurring series, since a transaction joins only one series. Anything else -- two spellings
+          of one merchant filing to one place is the usual shape -- needs no refining and can be
+          dismissed. Where the two rules take exactly the same actions and every transaction one of
+          them matches is matched by the other as well, the finding offers to delete it. A dismissal
+          there lapses if the winner starts to matter, which puts the pair back among the warnings.
         </p>
         <p>
           <strong>Overlapping ranges and rules matching the same transaction cannot be dismissed.</strong>{' '}
@@ -1905,6 +1909,15 @@ export const HELP_TOPICS = [
           to be arithmetically smaller, or which keyword happens to be longer. An acknowledgement would
           leave the ledger categorized by that accident with the report calling it settled, so these stay
           listed until the conditions are refined.
+        </p>
+        <p>*needs review*</p>
+        <p>
+          These two do not wait for the checkup to be run. Whenever rules are applied -- an import, a
+          sync, <strong>Categorize</strong>, or a rule saved and applied -- a transaction that two rules
+          match this way is noted, and the pair raises a task on the Tasks page and adds to the count on
+          the <strong>Rule checkup</strong> button. Dismissing the task hides it until another pair is
+          found. The pair itself stays in the report until the rules are refined, and leaves the count
+          as soon as they are.
         </p>
         <p>
           Ranges where one sits entirely inside the other are deliberately not reported. That case has a

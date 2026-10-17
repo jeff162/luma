@@ -739,6 +739,8 @@ export const api = {
     request('/rules/range-drift/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
   restoreRuleRangeDrift: (key) =>
     request('/rules/range-drift/restore', { method: 'POST', body: JSON.stringify({ key }) }),
+  // How many rule pairs a categorization pass caught deciding a transaction arbitrarily that still do.
+  getRuleConflictCount: () => request('/rules/conflicts'),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
   // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save

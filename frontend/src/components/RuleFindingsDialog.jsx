@@ -24,8 +24,10 @@
  * pair whose two rules do the same thing has a surplus half worth clearing out. **Rules where a limit
  * decides** is the case a reader gets wrong: one keyword sits inside the other, but an owner or account
  * limit only the shorter one carries puts it first. **Competing rules that file the same way** is a
- * pair from either warning section whose two rules do the same thing, so it is competing over nothing
- * and belongs out of the warnings entirely.
+ * pair from either warning section whose winner changes nothing, so it is competing over nothing and
+ * belongs out of the warnings entirely. Every matching rule contributes, and precedence picks each action
+ * separately, so a category or rename only one rule sets, and either rule's tags, apply whichever wins
+ * (`docs/data-model.md` → *How matching rules combine*).
  *
  * Only the drift section arrives on its own. Three of the other four are an *audit* that changes when a
  * rule is edited — which is why none is badged — and the co-match section also moves when transactions
@@ -162,17 +164,29 @@ function RulePair({ finding, rules, onEditRule, onDelete, busy }) {
 }
 
 // How two rules' actions differ, as phrases naming each rule by its label ("#1", "#2"); empty when they
-// do the same thing. Compares what `rule_overlaps._actions_agree` compares.
-function actionDifferences(first, second, [firstLabel, secondLabel]) {
+// do the same thing. Compares what `rule_overlaps._actions_agree` compares, which is what deleting one of
+// them would change. `outcomeOnly` keeps just the differences that depend on which rule wins, as
+// `rule_overlaps._outcomes_agree` reads them: both set a category or both rename, to different values, or
+// both own a recurring series.
+function actionDifferences(first, second, [firstLabel, secondLabel], { outcomeOnly = false } = {}) {
   const parts = []
-  if ((first.category_id || null) !== (second.category_id || null)) {
+  const bothOrDiffer = (a, b) => (outcomeOnly ? Boolean(a && b) : true)
+  if ((first.category_id || null) !== (second.category_id || null)
+    && bothOrDiffer(first.category_id, second.category_id)) {
     const files = rule => (rule.category_name ? `files to ${rule.category_name}` : 'sets no category')
     parts.push(`${firstLabel} ${files(first)} where ${secondLabel} ${files(second)}`)
   }
   const renameOf = rule => (rule.clean_name || '').trim()
-  if (renameOf(first).toLowerCase() !== renameOf(second).toLowerCase()) {
+  if (renameOf(first).toLowerCase() !== renameOf(second).toLowerCase()
+    && bothOrDiffer(renameOf(first), renameOf(second))) {
     const renames = rule => (renameOf(rule) ? `renames to “${renameOf(rule)}”` : 'keeps the name')
     parts.push(`${firstLabel} ${renames(first)} where ${secondLabel} ${renames(second)}`)
+  }
+  if (outcomeOnly) {
+    if (first.is_recurring && second.is_recurring) {
+      parts.push('both track a recurring series, and the transaction can join only one')
+    }
+    return parts
   }
   const tagKey = rule => (rule.tag_ids || []).slice().sort().join(',')
   if (tagKey(first) !== tagKey(second)) parts.push(`${firstLabel} and ${secondLabel} add different tags`)
@@ -233,7 +247,7 @@ function decidingLimit(finding, winner) {
 
 function scopeSplitNote(finding, winner, other) {
   const limit = decidingLimit(finding, winner)
-  const differences = actionDifferences(winner, other, ['#1', '#2'])
+  const differences = actionDifferences(winner, other, ['#1', '#2'], { outcomeOnly: true })
   return `${evidenceNote(finding)} #1 is limited to ${limit}, and owner and account limits count before keyword length, so #1 wins where both match. ${sentence(differences)}`
 }
 
@@ -652,7 +666,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
                   accident rather than because anything needs doing. */}
               {pairSection(
                 'Competing rules that file the same way',
-                'These rules have transactions in common and take the same actions. If neither has transactions outside the common set, one could be removed.',
+                'These rules have transactions in common, and the result is the same whichever one wins: a category or rename only one of them sets applies either way, and both rules’ tags are added. Where both take the same actions and neither has transactions outside the common set, one could be removed.',
                 ['amount_overlap_benign', 'matcher_co_match_benign'],
               )}
             </>

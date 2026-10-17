@@ -33,23 +33,30 @@ the range containing it. This module reports the two cases worth a human's atten
   owner or account limit the inner one lacks, so neither rule contains the other: an owner-scoped
   `amazon` against a global `amazon prime`. Precedence settles it on the limit, which is a reason the
   user would recognize, but the winner is not the one a reader expects. Reported only when a real
-  transaction matches both and the two rules do different things to it, since otherwise the pair
-  changes nothing anyone would see.
+  transaction matches both and which rule wins changes what happens to it (`_outcomes_agree`), since
+  otherwise the pair changes nothing anyone would see.
 
-**Either warning drops to information when the two rules do the same thing** (`_actions_agree`:
-category, rename, tags and the recurring flag all equal), as `amount_overlap_benign` and
-`matcher_co_match_benign`. A pair can compete forever over an outcome that is identical whichever side
-wins — two spellings of one merchant filing to one category is the common shape — and calling that a
-problem the user must refine trains them to ignore the panel. The split is by *kind* rather than only
-severity because dismissibility is decided by kind, and it rides in the finding's key, so an
-acknowledgement lapses the moment the two stop agreeing.
+**Either warning drops to information when the winner does not change the outcome**
+(`_outcomes_agree`), as `amount_overlap_benign` and `matcher_co_match_benign`. Precedence does not pick
+one rule to apply: every matching rule contributes, and precedence decides each action separately
+(`categorizer.categorize_transaction`). The category is the first matching rule's that sets one, the
+rename likewise, and the tags are every matching rule's. So the winner decides a row only where both
+rules set a category and the categories differ, or both rename and the names differ. The recurring flag
+is the one action outside that engine: each recurring rule owns a series, a row belongs to one series,
+and between two rule-backed series the recurring scan does not read rule precedence at all
+(`recurring_detection._reconcile_priority`), so two recurring rules always contend. A pair can compete
+forever over an outcome that is identical whichever side wins — two spellings of one merchant filing to
+one category is the common shape — and calling that a problem the user must refine trains them to
+ignore the panel. The split is by *kind* rather than only severity because dismissibility is decided by
+kind, and it rides in the finding's key, so an acknowledgement lapses the moment the two stop agreeing.
 
 The action each kind carries follows from that split. The *ambiguous* pair offers no removal: the answer
 there is to refine the conditions until the rules are unambiguous, and deleting one is picking a side
-rather than fixing the model. A pair whose two rules do the same thing can offer one, through
-`removable_rule_id`, but only where deleting that rule changes nothing: a nesting pair's inner rule, from
-the rules alone, and a benign pair's rule whose every transaction the other rule also matches, read off
-the ledger scan.
+rather than fixing the model. A pair whose winner changes nothing can offer one, through
+`removable_rule_id`, but only where deleting that rule changes nothing, which is the stricter test
+(`_actions_agree`): the deleted rule's tags, rename and series go with it, so both rules must carry the
+same ones. That is a nesting pair's inner rule, from the rules alone, and a benign pair's rule whose
+every transaction the other rule also matches, read off the ledger scan.
 
 The kinds cannot collide. `amount_overlap` requires identical matcher text and the two nesting kinds
 require one matcher inside the other; `matcher_co_match` takes what is left, matchers that are neither
@@ -130,7 +137,7 @@ DISMISSIBLE_KINDS = (KIND_MATCHER_NESTING, KIND_SCOPE_SPLIT, KIND_AMOUNT_OVERLAP
 MAX_RULES_PER_ROW = 25
 
 
-def _load_rules(conn: sqlite3.Connection) -> list[dict]:
+def eligible_rules(conn: sqlite3.Connection) -> list[dict]:
     """The rules eligible to appear in a finding, carrying the matcher fields the comparisons read and the
     action fields `_actions_agree` reads. `account_id` resolves to the linked-group root, matching how a rule's account scope is
     evaluated everywhere else (`categorizer.rule_scope_account_sql`) — comparing raw ids would call two
@@ -301,17 +308,28 @@ def _rule_tag_ids(conn: sqlite3.Connection) -> dict[str, frozenset]:
     return {rule_id: frozenset(tags) for rule_id, tags in mapping.items()}
 
 
+def _outcomes_agree(a: dict, b: dict) -> bool:
+    """Would a row both rules match end up the same whichever of them won?
+
+    This is the question that decides whether a competing pair is a problem at all. Each action is
+    decided on its own (see the module docstring): a category or rename only one rule sets applies either
+    way, and both rules' tags are added either way. So the winner matters only where both set a category
+    and they differ, both rename and the names differ, or both own a recurring series, which the
+    recurring scan does not order by rule precedence.
+    """
+    if a["category_id"] is not None and b["category_id"] is not None and a["category_id"] != b["category_id"]:
+        return False
+    rename_a, rename_b = normalize_clean_name(a["clean_name"]), normalize_clean_name(b["clean_name"])
+    if rename_a and rename_b and rename_a != rename_b:
+        return False
+    return not (a["is_recurring"] and b["is_recurring"])
+
+
 def _actions_agree(a: dict, b: dict, tags: dict[str, frozenset]) -> bool:
-    """Would the ledger read the same whichever of these two rules won?
+    """Do the two rules carry the same actions: category, rename, tags and the recurring flag?
 
-    This is the question that decides whether a competing pair is a problem at all. Two rules can fight
-    over a row forever without it mattering, as long as they do the same thing to it — the commonest case
-    being two spellings of one merchant filing to one category. Where that holds, the arbitrary winner is
-    arbitrary about nothing, and the finding drops to information the user may acknowledge.
-
-    Every effect a rule carries has to agree, not just the category: a rename, a tag or the recurring flag
-    that only one side sets is a real difference in outcome. The comparison is deliberately strict — a
-    pair that is *almost* identical is exactly the pair whose winner is worth knowing about.
+    The test for deleting one of them, which is stricter than `_outcomes_agree`. A rename or tag only one
+    rule carries changes nothing about which of the two wins, but it goes when that rule is deleted.
     """
     if a["category_id"] != b["category_id"]:
         return False
@@ -320,6 +338,35 @@ def _actions_agree(a: dict, b: dict, tags: dict[str, frozenset]) -> bool:
     if bool(a["is_recurring"]) != bool(b["is_recurring"]):
         return False
     return tags.get(a["id"], frozenset()) == tags.get(b["id"], frozenset())
+
+
+def _contention_kind(a: dict, b: dict, texts_a: MerchantMatcher, texts_b: MerchantMatcher) -> str | None:
+    """For two rules that can claim one row: the warning kind when precedence picks between them on
+    nothing about the two rules, else None. Identical matchers are settled by the amount span, which is a
+    refinement only when one range contains the other; other matchers by text length, which is one only
+    when they nest. A scope difference is read before either and is always a refinement.
+
+    The single statement of "arbitrary", shared by the checkup and by the conflicts a categorization
+    pass records (`rule_conflicts`), so the two cannot disagree about which pairs those are."""
+    if not _scopes_identical(a, b):
+        return None
+    if texts_a == texts_b:
+        range_a, range_b = _amount_range(a), _amount_range(b)
+        if _range_contains(range_a, range_b) or _range_contains(range_b, range_a):
+            return None
+        return KIND_AMOUNT_OVERLAP
+    if _texts_nest(texts_a, texts_b) or _texts_nest(texts_b, texts_a):
+        return None
+    return KIND_CO_MATCH
+
+
+def conflict_kind(a: dict, b: dict) -> str | None:
+    """For two eligible rules (`eligible_rules`) that both match one transaction: the checkup warning the
+    pair is — picked between arbitrarily, with the pick changing the outcome — or None."""
+    kind = _contention_kind(a, b, _matcher_texts(a), _matcher_texts(b))
+    if kind is None or _outcomes_agree(a, b):
+        return None
+    return kind
 
 
 def _load_scan_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -409,15 +456,11 @@ def _co_match_findings(rules: list[dict], texts: dict, rank, tags, pairs, rule_c
     findings = []
     for (first_id, second_id), evidence in pairs.items():
         first, second = by_id[first_id], by_id[second_id]
-        texts_a, texts_b = texts[first_id], texts[second_id]
-        if texts_a == texts_b:
+        if _contention_kind(first, second, texts[first_id], texts[second_id]) != KIND_CO_MATCH:
             continue
-        if _texts_nest(texts_a, texts_b) or _texts_nest(texts_b, texts_a):
-            continue
-        if not _scopes_identical(first, second):
-            continue
-        benign = _actions_agree(first, second, tags)
-        removable = _removable_by_coverage(first, second, evidence, rule_counts, rank) if benign else None
+        benign = _outcomes_agree(first, second)
+        removable = (_removable_by_coverage(first, second, evidence, rule_counts, rank)
+                     if benign and _actions_agree(first, second, tags) else None)
         findings.append(_co_match_finding(first, second, evidence, benign, removable, rank))
     return findings
 
@@ -489,7 +532,7 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
     Dismissed findings are filtered out unless `include_dismissed`, in which case they come back carrying
     `dismissed: True` so the panel can show them as the acknowledged set and offer to restore one.
     """
-    rules = _load_rules(conn)
+    rules = eligible_rules(conn)
     if len(rules) < 2:
         return {"count": 0, "counts": {}, "dismissed_count": 0, "findings": []}
 
@@ -516,16 +559,15 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
 
             texts_a, texts_b = texts[first["id"]], texts[second["id"]]
             if texts_a == texts_b:
-                if not _scopes_identical(first, second):
+                if _contention_kind(first, second, texts_a, texts_b) != KIND_AMOUNT_OVERLAP:
                     continue
-                if _range_contains(range_a, range_b) or _range_contains(range_b, range_a):
-                    continue
-                benign = _actions_agree(first, second, tags)
+                benign = _outcomes_agree(first, second)
                 evidence = pairs.get(tuple(sorted((first["id"], second["id"]))))
                 findings.append(
                     _amount_overlap_finding(
                         first, second, range_a, range_b, rank, benign=benign,
-                        removable=_removable_by_coverage(first, second, evidence, rule_counts, rank) if benign else None,
+                        removable=(_removable_by_coverage(first, second, evidence, rule_counts, rank)
+                                   if benign and _actions_agree(first, second, tags) else None),
                     )
                 )
             else:
@@ -539,7 +581,7 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
                     findings.append(_nesting_finding(outer, inner, texts[outer["id"]], ranges, tags, rank))
                     continue
                 evidence = pairs.get(tuple(sorted((first["id"], second["id"]))))
-                if evidence and not _actions_agree(first, second, tags):
+                if evidence and not _outcomes_agree(first, second):
                     findings.append(_scope_split_finding(first, second, evidence, rank))
 
     findings.extend(_co_match_findings(rules, texts, rank, tags, pairs, rule_counts))

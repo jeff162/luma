@@ -93,6 +93,9 @@ EXCLUDED_TABLES |= {"import_watch_file"}
 # Owed recurring rescans: a note that derived state is behind, not data. A debt the backup was taken with
 # is covered by the daily full scan (`recurring_detection.maybe_auto_scan`).
 EXCLUDED_TABLES |= {"recurring_rescan_owed"}
+# Recorded rule conflicts: a note that a pass met a pair, re-tested on every read. The next pass that
+# meets the pair records it again (`services/rule_conflicts.py`).
+EXCLUDED_TABLES |= {"rule_conflict"}
 
 # Columns of a backed-up table that deliberately do not travel, per table, each with its reason. Empty on
 # purpose: a restore is meant to return the system to the state it was in when the backup was taken, so a

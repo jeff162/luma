@@ -678,6 +678,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
         rule_scalar_effects,
         source_match_text_from_json,
     )
+    from backend.services import rule_conflicts
     from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
     rules = load_categorization_rules(conn)
@@ -690,6 +691,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
            FROM   txn WHERE import_batch_id = ? AND category_id IS NULL""",
         (batch_id,),
     ).fetchall()
+    results = []
     for row in rows:
         source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
@@ -697,6 +699,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
             owner_id=row["owner_id"], account_id=row["account_id"],
             rules=rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
         )
+        results.append((row["id"], result))
         if not result:
             continue
         cat_id = result.get("category_id")
@@ -711,6 +714,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
         if set_parts:
             conn.execute(f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?", (*params, row["id"]))
         sync_rule_tags_for_transaction(conn, row["id"], result.get("tag_ids", []))
+    rule_conflicts.record(conn, results)
 
 
 _COUNT_KEYS = ("orders_imported", "non_cash", "charges_matched",

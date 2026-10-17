@@ -176,6 +176,19 @@ describe('RuleFindingsDialog', () => {
     expect(note).toMatch(/#1 files to Shopping where #2 files to Subscriptions/)
   })
 
+  it('names only what the limit decides, not a rename that applies whichever rule wins', async () => {
+    // Once, so it is served ahead of the default `renderDialog` sets.
+    api.getRuleOverlaps.mockResolvedValueOnce({
+      ...payload([SCOPE_SPLIT]),
+      rules: { ...RULES, long: { ...RULES.long, clean_name: 'Northgate Prime' } },
+    })
+    renderDialog([SCOPE_SPLIT])
+    await screen.findByText(/Rules where a limit decides/)
+    const note = screen.getByText(/#1 is limited to Alex/).textContent
+    expect(note).toMatch(/#1 files to Shopping where #2 files to Subscriptions/)
+    expect(note).not.toMatch(/renames/)
+  })
+
   it('separates the kinds and counts them apart', async () => {
     renderDialog([OVERLAP, NESTING], { drift: [DRIFT] })
     expect(await screen.findByText('1 charge outside a range · 1 to settle · 1 for information')).toBeTruthy()

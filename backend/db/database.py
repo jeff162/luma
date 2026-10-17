@@ -344,13 +344,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `recurring_series.rule_fingerprint`, so a scoped scan can leave a rule-backed series alone until an edit
 # or its rule changes what it holds. v80 records on each Amazon card the Amazon account it imported
 # into, which the import history groups a vendor's cards by; older cards are backfilled from their rows,
-# and a card with none (an items-only card holding parked detail) is left unattributed.
+# and a card with none (an items-only card holding parked detail) is left unattributed. v81 adds
+# `rule_conflict`, the rule pairs a categorization pass caught deciding a transaction arbitrarily.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 80
+CURRENT_VERSION = 81
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2549,6 +2550,28 @@ def _record_amazon_batch_account(conn):
     _backfill_amazon_batch_account(conn)
 
 
+@migration(81)
+def _add_rule_conflict(conn):
+    # See the baseline CREATE. Empty on an existing database: a pair is recorded by the next pass that
+    # applies the rules to a transaction showing it.
+    #
+    # Skipped when either table it references is absent, which happens only on the partial schemas the
+    # older migration tests build (see v46): there, a foreign key to a missing table makes every delete
+    # from `txn` fail. On any real database both are always present.
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('txn', 'category_rule')")}
+    if len(tables) < 2:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_conflict (
+            rule_id_low  TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+            rule_id_high TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+            txn_id       TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            PRIMARY KEY (rule_id_low, rule_id_high)
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3715,6 +3738,16 @@ def init_db(db_path: str | None = None):
                 finding_key  TEXT PRIMARY KEY,
                 kind         TEXT NOT NULL,
                 dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- Rule pairs a categorization pass caught deciding a transaction arbitrarily
+            -- (services/rule_conflicts.py): one row per pair, ids sorted, with the newest transaction that
+            -- showed it. A note rather than a verdict -- every read re-tests the pair and drops it when it
+            -- no longer holds -- so it is not backed up: the next pass that meets the pair records it again.
+            CREATE TABLE IF NOT EXISTS rule_conflict (
+                rule_id_low  TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+                rule_id_high TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+                txn_id       TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                PRIMARY KEY (rule_id_low, rule_id_high)
             );
 
             -- Typed links between transactions: a general association primitive (services/txn_links.py).

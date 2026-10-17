@@ -1141,6 +1141,8 @@ def _wipe_user_data_tables(conn):
     # cascades them — the wipe has to name the table or pre-restore dismissals would survive it.
     conn.execute("DELETE FROM recurring_signal_dismissal")
     conn.execute("DELETE FROM rule_overlap_dismissal")
+    # Recorded rule conflicts are not backed up, and the rows they name are about to go.
+    conn.execute("DELETE FROM rule_conflict")
     # Link members reference txn (and link) via ON DELETE CASCADE; the link rows themselves have no FK
     # to txn, so they must be deleted explicitly or they'd survive the wipe as orphans.
     conn.execute("DELETE FROM txn_link_member")

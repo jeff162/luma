@@ -151,3 +151,24 @@ about the statement importer requires a person, which is what makes this a gap r
 `CANDIDATE_SUFFIXES`, and the client is told *which files* rather than which extensions — so widening
 the set widens the picker with no frontend change. The backend test asserting the picker offers nothing
 the scan would pass over is what keeps the two from drifting.
+
+## A rule action that stops later rules from applying
+
+**Context.** Matching does not stop at the first rule: every matching rule contributes, with the category
+and the rename each taken from the highest-ranked rule that sets one and the tags of every matching rule
+added together (`docs/data-model.md` → *How matching rules combine*). There is no way to say that one rule
+alone governs the transactions it matches.
+
+**The idea.** A per-rule *stop matching* option, as mail filters have: once this rule matches, rules ranked
+below it contribute nothing to that transaction, not their tags, rename or category.
+
+**Open questions.**
+
+- Precedence is computed, not ordered by hand, so "below" means below in `rule_specificity_order_sql`. The
+  option cannot settle the rule checkup's arbitrary pairs, since in those the ranking between the two rules
+  is itself the accident; it would only make a rule's ranking matter more.
+- Every path that mirrors the engine would have to honour it: preview and single-rule apply in
+  `routers/rules`, and rule-backed series membership, which tests each rule on its own
+  (`recurring_detection._candidate_members`).
+- The checkup's outcome test (`rule_overlaps._outcomes_agree`) would change: with a stopping rule in a pair,
+  tags and a rename only one side carries would depend on which rule wins.

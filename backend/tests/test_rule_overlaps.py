@@ -116,11 +116,12 @@ class RuleOverlapsTests(unittest.TestCase):
         return rule_id
 
     def _differing(self, **kwargs):
-        """A rule that *does something different* from the plain `_rule` above — here, a rename the other
-        does not carry. Competing rules only earn a warning when the winner changes the ledger, so a test
-        about which pairs contend has to make them disagree about something or it is testing the benign
-        split by accident. Which effect differs is immaterial; the rename is the cheapest to set up."""
-        return self._rule(clean_name="Harborline Water", **kwargs)
+        """A rule whose winning *changes the outcome* against the plain `_rule` above — here, a different
+        category. Competing rules only earn a warning when the winner changes the ledger, so a test about
+        which pairs contend has to make them disagree about something or it is testing the benign split by
+        accident. It has to be an action both rules set: one only this rule carried would apply whichever
+        rule won (`_outcomes_agree`)."""
+        return self._rule(category_id=self._other_category("Water"), **kwargs)
 
     def _txn(self, name, amount=100.0, date="2026-03-01", account_id=None):
         txn_id = str(uuid.uuid4())
@@ -427,8 +428,9 @@ class RuleOverlapsTests(unittest.TestCase):
     #
     # A competing pair is only a problem if the rule that wins decides something. Two spellings of one
     # merchant filing to one category fight forever over an outcome that is identical either way, and the
-    # user may wave that through. Every effect has to agree, though: the tempting version of this check
-    # compares categories and quietly loses a rename or a tag that only one side carried.
+    # user may wave that through. The winner is decided per action, though, and only where both rules set
+    # it: a rename or tag only one side carries applies whichever wins, while two different renames, two
+    # different categories, or two recurring series are each a real difference.
 
     def _tag(self, rule_id, name="Reimbursable"):
         tag_id = str(uuid.uuid4())
@@ -455,16 +457,44 @@ class RuleOverlapsTests(unittest.TestCase):
         self._dismiss(finding)
         self.assertEqual(self._findings()["count"], 0)
 
-    def test_a_rename_on_one_side_is_a_real_difference(self):
+    def test_a_rename_on_one_side_applies_whichever_wins(self):
         self._rule(amount_min=300, amount_max=4000)
-        self._differing(amount_min=3000)
-        self.assertEqual(len(self._findings("amount_overlap")), 1)
-        self.assertEqual(self._findings("amount_overlap_benign"), [])
+        self._rule(amount_min=3000, clean_name="Harborline Water")
+        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(len(self._findings("amount_overlap_benign")), 1)
 
-    def test_a_tag_on_one_side_is_a_real_difference(self):
+    def test_two_different_renames_are_a_real_difference(self):
+        self._rule(amount_min=300, amount_max=4000, clean_name="Harborline Utilities")
+        self._rule(amount_min=3000, clean_name="Harborline Water")
+        self.assertEqual(len(self._findings("amount_overlap")), 1)
+
+    def test_a_category_on_one_side_applies_whichever_wins(self):
+        self._rule(amount_min=300, amount_max=4000)
+        self._rule(amount_min=3000, category_id=None, clean_name="Harborline Water")
+        self.assertEqual(len(self._findings("amount_overlap_benign")), 1)
+
+    def test_tags_on_one_side_are_added_whichever_wins(self):
         self._rule(amount_min=300, amount_max=4000)
         self._tag(self._rule(amount_min=3000))
+        self.assertEqual(self._findings("amount_overlap"), [])
+        self.assertEqual(len(self._findings("amount_overlap_benign")), 1)
+
+    def test_two_recurring_rules_are_a_real_difference(self):
+        # Each owns a series and a transaction joins only one, which rule precedence does not decide.
+        first = self._rule(amount_min=300, amount_max=4000)
+        second = self._rule(amount_min=3000)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id IN (?, ?)", (first, second))
         self.assertEqual(len(self._findings("amount_overlap")), 1)
+
+    def test_a_benign_pair_whose_actions_differ_offers_no_removal(self):
+        # Deleting the tagged rule would take its tag off every row, even though it never decided anything.
+        self._txn("TOWN OF HARBORLINE", amount=3500)
+        self._rule(amount_min=300, amount_max=4000)
+        self._tag(self._rule(amount_min=3000))
+        finding = self._findings("amount_overlap_benign")[0]
+        self.assertIsNone(finding["removable_rule_id"])
 
     def test_a_different_category_is_a_real_difference(self):
         self._rule(amount_min=300, amount_max=4000)
@@ -489,7 +519,8 @@ class RuleOverlapsTests(unittest.TestCase):
         self._dismiss(self._findings("amount_overlap_benign")[0])
         with self._use_db_path():
             with get_db() as conn:
-                conn.execute("UPDATE category_rule SET clean_name = 'Water' WHERE id = ?", (first,))
+                conn.execute("UPDATE category_rule SET category_id = ? WHERE id = ?",
+                             (self._other_category("Water"), first))
         result = self._findings()
         self.assertEqual(result["counts"], {"amount_overlap": 1})
         self.assertEqual(result["dismissed_count"], 0)

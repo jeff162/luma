@@ -676,6 +676,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     updated = 0
     effect_dates: dict = {}  # rule_id -> newest txn date it supplies a live effect for (last_effect_date)
     label_fallback_ids: list[str] = []  # reconcile-cleared rows that still carry a file label
+    results: list = []  # (txn id, result) for the rule conflicts this pass met (`rule_conflicts`)
     for txn in txns:
         source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
@@ -688,6 +689,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
             rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
         )
+        results.append((txn["id"], result))
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
         name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
@@ -755,6 +757,10 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
         adopt_file_categories(conn, label_fallback_ids)
     bump_rule_effect_dates(conn, effect_dates)
+    # Deferred: `rule_conflicts` reads the rules through this module.
+    from backend.services import rule_conflicts
+
+    rule_conflicts.record(conn, results)
     return updated
 
 

@@ -69,6 +69,7 @@ from backend.services.categorizer import (
     effect_rule_ids,
     bump_rule_effect_dates,
 )
+from backend.services import rule_conflicts
 from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 from backend.services.txn_trash import restore_txns
 from backend.services.account_groups import set_account_parent
@@ -2678,6 +2679,7 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
         (batch_id,),
     ).fetchall()
     effect_dates: dict = {}
+    results: list = []
     for row in rows:
         if not row["date"]:
             continue
@@ -2688,10 +2690,12 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
             effective_account_type=row["effective_account_type"], rules=rules, rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
         )
+        results.append((row["id"], result))
         for rid in effect_rule_ids(result, rules_by_id, rule_tags_by_id):
             if rid not in effect_dates or row["date"] > effect_dates[rid]:
                 effect_dates[rid] = row["date"]
     bump_rule_effect_dates(conn, effect_dates)
+    rule_conflicts.record(conn, results)
 
 
 def _adopt_batch_file_labels(conn, batch_id: str, txn_ids: Optional[list[str]] = None) -> None:
@@ -4010,9 +4014,11 @@ def run_import_parsed(
         # New rows owe their payees a recurring rescan, recorded with the rows themselves; the caller settles
         # it once the import has committed (see `owe_recurring_rescan`).
         if batch_id:
-            owe_recurring_rescan(conn, [
+            batch_txn_ids = [
                 r["id"] for r in conn.execute("SELECT id FROM txn WHERE import_batch_id = ?", (batch_id,)).fetchall()
-            ])
+            ]
+            owe_recurring_rescan(conn, batch_txn_ids)
+            rule_conflicts.record_for_txns(conn, batch_txn_ids)
 
         account_skipped = sum(skip_counts.values())
 

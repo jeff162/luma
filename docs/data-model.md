@@ -691,9 +691,32 @@ by the engine, by the preview and apply in `routers/rules`, and by the rules lis
    another has the smaller span, so `>= 3000` beats `>= 300`. Counting bounds cannot distinguish them.
 4. **Rule id**, so a tie is stable across a `VACUUM` or an index change.
 
-Category and rename come from the first matching rule that provides each; direct tags are the union of
-all matching rules. Two ranges that overlap without one containing the other have no principled
-winner; that case is reported, below.
+Two ranges that overlap without one containing the other have no principled winner; that case is
+reported, below.
+
+### How matching rules combine
+
+Matching does not stop at the first rule. Every rule is tested against every row, and every rule that
+matches contributes (`categorizer.categorize_transaction`). Precedence picks a winner for each action
+separately:
+
+| Action | Comes from |
+|---|---|
+| Category | the first matching rule, in precedence order, that sets one |
+| Rename | the first matching rule that sets one, which need not be the rule that set the category |
+| Tags | every matching rule: they are added together |
+| Recurring series | not decided here; see *Rule-backed series* |
+
+So which of two matching rules wins changes a row only where both set a category and the categories
+differ, or both rename and the names differ. A category or rename only one of them sets applies either
+way, and both rules' tags apply either way. Two recurring rules are the exception: each owns a series, a
+row belongs to one series, and the recurring scan does not order rule-backed series by rule precedence,
+so the series a row lands in is not the winning rule's. The rule checkup's test for this is
+`rule_overlaps._outcomes_agree`.
+
+Deleting a rule is a different question from which rule wins: its tags, rename and series go with it
+even where it never decided anything, which is why the checkup offers a delete only when both rules
+carry the same actions (`_actions_agree`).
 
 ### Rule checkup
 
@@ -713,31 +736,42 @@ winner; that case is reported, below.
   its owner and account limits sit inside the other's. A **scope split** is a matcher inside another
   where the outer rule carries an owner or account limit the inner one lacks, so neither contains the
   other and the limit decides; it is reported only when a real transaction matches both and the two
-  rules do different things to it. Which rule wins is read from `rule_specificity_order_sql`.
+  rules' outcomes differ. Which rule wins is read from `rule_specificity_order_sql`.
 - **The co-match check reads the ledger; nothing else here does.** Whether two unrelated keywords ever
   land in one merchant name is a fact about the transactions, not about `category_rule`. It matters
   because precedence settles such a pair on text length, and that term stands for containment —
   between matchers that do not nest there is no subset relation for it to stand for, so it decides on
   nothing. See *Scale and limits* for the scan.
-- **A pair whose rules file identically is information, not a warning.** `_actions_agree` compares
-  category, rename, tags and the recurring flag; where all four match, the winner changes no row and the
-  finding is reported as `amount_overlap_benign` or `matcher_co_match_benign`. The split is by kind
+- **A pair whose winner changes nothing is information, not a warning.** `_outcomes_agree` applies
+  *How matching rules combine*: where the two rules do not both set differing categories, do not both
+  set differing renames, and are not both recurring, the finding is reported as `amount_overlap_benign`
+  or `matcher_co_match_benign`. The split is by kind
   rather than severity because dismissibility is keyed on kind, and it rides in the finding key, so an
   acknowledgement lapses as soon as the two rules stop agreeing.
 - **`removable_rule_id`** names a rule whose deletion changes no row, and is the only rule a finding
-  offers to delete. For a nesting pair it is the inner rule, when both rules do the same thing
-  (`_actions_agree`) and the outer one's amount range and direction take every charge the inner one does.
-  For a benign pair it is a rule whose every transaction the other rule also matches, read off the
-  co-match scan's per-rule counts; that is a fact about the ledger so far, not about the rules.
+  offers to delete. It requires both rules to carry the same category, rename, tags and recurring flag
+  (`_actions_agree`), which is stricter than the benign test. For a nesting pair it is the inner rule,
+  when the outer one's amount range and direction also take every charge the inner one does. For a
+  benign pair it is a rule whose every transaction the other rule also matches, read off the co-match
+  scan's per-rule counts; that is a fact about the ledger so far, not about the rules.
 - Containment is not a finding, since precedence resolves it. Bounds are inclusive, so two rules split
   at one value overlap on that value. Managed rules, trashed rules and rules targeting an inactive
   category are left out; so are pending and trashed transactions, as evidence.
-- **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored state.
+- **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored answer.
   `rule_overlaps.DISMISSIBLE_KINDS` admits the kinds whose winner changes nothing — nestings and the two
   benign variants. A live amount overlap or co-match is settled only by the ordering's last terms:
   reproducibly, but on no basis that is about the two rules. The key carries the pair and the
   redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
   dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.
+- **`rule_conflict`** (`services/rule_conflicts.py`) brings the two warnings forward to when the rules
+  are applied, so they surface without the checkup being run. Every pass that applies rules (import,
+  sync, Amazon order categorization, Run categorization, a rule's own apply) records the pairs it meets on
+  a live, posted row not categorized by hand, judged by `rule_overlaps.conflict_kind`, the checkup's own
+  test. One row per pair, ids sorted, carrying the newest transaction that showed it. It is a note, not a
+  verdict: each read re-tests the pair against the current rules and that transaction and deletes what no
+  longer holds, so an edit resolves it without another pass. The open count drives the `rule_conflict`
+  task and the checkup button's badge; the task is dismissed by count, as every task is, while the pair
+  itself cannot be acknowledged. Not backed up, since the next pass that meets a pair records it again.
 
 ### Rule hygiene columns
 
@@ -966,6 +1000,11 @@ membership is the rule's matches, through the same predicate rule apply uses
 - **Suppress** and **delete** clear the rule's `is_recurring` and drop the series, deleting the rule if
   that leaves it with no action. **End** keeps the flag, so a resubscription can resume it.
 - Deleting the rule, merging it away, or unchecking the flag drops the series.
+- **Two rule-backed series can match one row, and rule precedence does not decide which holds it.** A row
+  belongs to one series, and the reconcile orders rule-backed series by `_reconcile_priority`: active
+  before ended, account-scoped before not, then series id. So where two recurring rules match one row,
+  the series it lands in can belong to the rule that lost the category, and the rule checkup treats any
+  two recurring rules matching one row as contending.
 
 ### When a scan runs
 
