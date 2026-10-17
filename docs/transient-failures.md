@@ -154,6 +154,64 @@ backwards (entry 1 above), and every question here is a question about ordering.
 
 ---
 
+## 3. A click on a same-span trend bar does not navigate
+
+**Status: instrumented, waiting on a recurrence.**
+
+**Last seen: 2026-10-17.**
+
+### Symptom
+
+`frontend/tests/ui/dashboard.spec.js` → *single-period trend keeps its grain chooser through bar clicks
+and compares exact spans* fails at the first bar click: the trend's chooser has just been switched to
+*Same span each month* under *Month to date*, the test clicks in the column of the oldest plot bar, and
+`← Back to Month to date` never appears in 20 seconds. The failing run took 23.2s against ~3.5s for a
+passing one, in a full browser run on 7 workers. Once in three full runs that day; it has passed in every
+run since.
+
+### Evidence
+
+The screenshot, video and trace were lost: the suite was re-run before they were read, and Playwright
+empties `test-results/` at the start of every run. What was noted from the screenshot first:
+
+- the chooser read *Same span each month*, so the switch had happened;
+- the pointer sat over the oldest plot bar (Sep 2025), with recharts' hover band drawn;
+- the tooltip read "Sep 1 – Sep 17, 2025 · Spending: $58.90", which is same-span data, so by the time of
+  the screenshot the new buckets had rendered;
+- there was no back-step button, so the click never re-pinned the period.
+
+### What is suspected, and why it is not proven
+
+The test waits for the same-span *request* to be sent, not for its response, and then measures the bar
+and clicks. In a passing run the response lands about 220ms before the click, because finding the bar
+takes that long; a response slower than that lands between the measurement and the click, or after it.
+Two ways that loses the click, and the screenshot fits both:
+
+- **The chart is redrawn under the press.** The response replaces the bucket set, and the pan
+  re-anchors on a new set (`Dashboard.jsx`, the `useLayoutEffect` keyed on `trendBucketsKey`), so the
+  mousedown and the mouseup can land on different nodes, or the click on a column the press was not on.
+- **recharts reports nothing active at the click.** The trend's click reads the hover state, not the
+  click position (`lib/chartInteraction.js`), and a click with no active index is ignored. A click in the
+  same frame as a redraw can find that state reset.
+
+Waiting for the response before clicking would make the test pass either way, which is why it has not
+been added: it would hide which of the two this is, and the second would be a defect a person can hit.
+
+### What the next occurrence will say
+
+`instrumentTrendClick` in the spec records, on the page's clock, every summary request and when it settled,
+and for each mousedown, mouseup and click: the element under the pointer, whether it was inside the chart,
+the bar count, **whether the bar the test measured is still in the document**, the plot's scroll offset,
+and **the tooltip recharts was showing**. The failure prints all of it from the switch to same span
+onward, timed against the bar's mousedown, with the chooser and the date chip as they stand.
+
+- A range-trend response between *bar measured* and the mousedown, the measured bar detached, or a scroll
+  offset that moved: the chart was redrawn under the click. The fix is in the test (wait for the redraw).
+- The measured bar still attached, the scroll unchanged, and no tooltip showing at the click: recharts
+  dropped a click on a settled chart. That is a product defect.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

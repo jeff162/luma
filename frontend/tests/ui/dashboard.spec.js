@@ -321,6 +321,85 @@ test('removing a tag from a drilled transaction moves the report behind it', asy
   await picker.selectOption({ label: 'group' })
 })
 
+// Instrumentation for `docs/transient-failures.md` entry 3: a click on a same-span bar that did not
+// navigate. It records, on the page's own clock, every dashboard summary request and when it settled, and
+// for each mousedown, mouseup and click what was under the pointer, whether the trend's bars were still
+// the ones the test measured, the plot's scroll offset, and which tooltip recharts was showing. A click
+// recharts reports nothing active for is ignored by the chart, so the tooltip at the click is the piece
+// that separates "the click arrived before the hover" from "the chart was redrawn under it". Test-side
+// only, through `addInitScript`; times are `performance.now()` because this host's wall clock steps
+// backwards (entry 1).
+async function instrumentTrendClick(page) {
+  await page.addInitScript(() => {
+    window.__trendLog = []
+    const log = (event, detail) => window.__trendLog.push({ at: performance.now(), event, ...detail })
+    window.__trendMark = (event, detail) => log(event, detail)
+    const realFetch = window.fetch
+    window.fetch = function instrumentedFetch(...args) {
+      const url = String(args[0]?.url || args[0] || '')
+      if (!url.includes('/summary/')) return realFetch.apply(this, args)
+      const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
+      log('request', { path })
+      return realFetch.apply(this, args).then(response => {
+        log('response', { path, status: response.status })
+        return response
+      }, err => {
+        log('request failed', { path, error: String(err) })
+        throw err
+      })
+    }
+    const chartState = () => {
+      const bars = document.querySelectorAll('.recharts-bar-rectangle')
+      const scroller = [...document.querySelectorAll('div')].filter(el => (
+        getComputedStyle(el).overflowX === 'auto' && el.querySelector('.recharts-bar-rectangle')
+      )).pop()
+      const tooltips = [...document.querySelectorAll('.recharts-tooltip-wrapper')]
+        .filter(el => getComputedStyle(el).visibility !== 'hidden')
+        .map(el => el.textContent.trim().replace(/\s+/g, ' '))
+      return {
+        bars: bars.length,
+        // The node itself is kept off to the side: whether the bar measured before the click is still in
+        // the document at the click says whether the chart was redrawn in between.
+        measuredBarAttached: window.__trendMeasuredBar ? window.__trendMeasuredBar.isConnected : null,
+        scrollLeft: scroller ? scroller.scrollLeft : null,
+        tooltip: tooltips.join(' | ') || '(none showing)',
+      }
+    }
+    window.__trendChartState = chartState
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      document.addEventListener(type, event => {
+        const target = event.target
+        log(type, {
+          x: Math.round(event.clientX),
+          y: Math.round(event.clientY),
+          target: `${target?.tagName || '?'}${target?.getAttribute?.('class') ? `.${target.getAttribute('class')}` : ''}`,
+          inChart: Boolean(target?.closest?.('.recharts-wrapper')),
+          ...chartState(),
+        })
+      }, true)
+    }
+  })
+}
+
+// The log from the switch to same span onward, as lines timed against the bar's mousedown, so "before"
+// and "after" are read rather than inferred.
+async function trendClickReport(page) {
+  const { all, now } = await page.evaluate(() => ({
+    all: (window.__trendLog || []).map(entry => ({ ...entry })),
+    now: window.__trendChartState ? window.__trendChartState() : null,
+  }))
+  const entries = all.slice(Math.max(0, all.findIndex(entry => entry.event === 'same span chosen')))
+  const measured = entries.findIndex(entry => entry.event === 'bar measured')
+  const down = entries.slice(measured).find(entry => entry.event === 'mousedown')?.at
+  const at = ms => (down == null ? `${Math.round(ms)}ms` : `${ms < down ? '-' : '+'}${Math.round(Math.abs(ms - down))}ms`)
+  const lines = entries.map(({ at: time, event, ...detail }) => `  ${at(time)} ${event} ${JSON.stringify(detail)}`)
+  return [
+    `Chart now: ${JSON.stringify(now)}`,
+    'Summary requests and pointer events since same span was chosen (times relative to the bar\'s mousedown):',
+    ...(lines.length ? lines : ['  (nothing recorded)']),
+  ].join('\n')
+}
+
 // The single-period trend's grain chooser stays on screen while the chart navigates the period. A bar
 // click once replaced it with the back-step alone, leaving no way into a selected year's months; and a
 // to-date selection could only be compared against earlier periods rounded to whole months. This walks
@@ -328,6 +407,7 @@ test('removing a tag from a drilled transaction moves the report behind it', asy
 // keeping that choice, and a FilterBar pick dropping it. Month to date rather than year to date, because
 // the demo ledger's spending sits in one year but several months.
 test('single-period trend keeps its grain chooser through bar clicks and compares exact spans', async ({ page }) => {
+  await instrumentTrendClick(page)
   await page.goto('/')
   await page.getByRole('link', { name: 'Dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
@@ -359,6 +439,7 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const today = `${thisMonth}-${String(now.getDate()).padStart(2, '0')}`
   const spanRequest = page.waitForRequest(request => request.url().includes('/summary/range-trend'))
+  await page.evaluate(() => window.__trendMark('same span chosen', window.__trendChartState()))
   await grain.selectOption('span')
   const ranges = new URL((await spanRequest).url()).searchParams.get('ranges').split(',')
   expect(ranges.at(-1)).toBe(`${thisMonth}-01:${today}`)
@@ -371,9 +452,29 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   await bar.scrollIntoViewIfNeeded()
   const barBox = await bar.boundingBox()
   const plotBox = await bar.locator('xpath=ancestor::*[local-name()="svg"][1]').boundingBox()
+  await bar.evaluate(node => {
+    window.__trendMeasuredBar = node
+    window.__trendMark('bar measured', window.__trendChartState())
+  })
   await page.mouse.click(barBox.x + barBox.width / 2, plotBox.y + 12)
   const back = page.getByRole('button', { name: /^← Back to Month to date/ })
-  await expect(back).toBeVisible()
+  try {
+    await expect(back).toBeVisible()
+  } catch (err) {
+    const report = [
+      err.message,
+      '',
+      'Failed: the bar click did not navigate (transient-failures.md, entry 3)',
+      `Clicked at (${Math.round(barBox.x + barBox.width / 2)}, ${Math.round(plotBox.y + 12)}); chooser now ${
+        await grain.inputValue()}; date chip now "${(await datePicker.textContent())?.trim()}"`,
+      await trendClickReport(page),
+    ].join('\n')
+    const failure = new Error(report)
+    // As in needs-review-marker.spec.js: a report line Playwright reads as a stack frame would be printed
+    // twice, so the stack is pinned to the message.
+    failure.stack = report
+    throw failure
+  }
   await expect(grain).toHaveValue('span')
   await back.click()
   await expect(datePicker).toHaveText(/Month to date/)
