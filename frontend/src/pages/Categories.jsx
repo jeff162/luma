@@ -642,10 +642,6 @@ export default function Categories() {
   const [categoryUsage, setCategoryUsage] = useState({})
   const [uncategorizedExpenseTxnCount, setUncategorizedExpenseTxnCount] = useState(0)
   const [uncategorizedIncomeTxnCount, setUncategorizedIncomeTxnCount] = useState(0)
-  const [matchingTxnsTotal, setMatchingTxnsTotal] = useState(0)
-  // Bumped to force the matching-transactions list to reload (e.g. after a rule the toast created
-  // is applied to existing rows, which can change which transactions match the selected category).
-  const [matchingReloadNonce, setMatchingReloadNonce] = useState(0)
   const [reimbursementsOpen, setReimbursementsOpen] = useState(false)
   // Notice surface shared by the category-delete-skip path and the (controller-owned) bulk-edit flow's
   // sibling actions. The matching-list bulk edit itself is the shared controller, wired up below.
@@ -722,7 +718,11 @@ export default function Categories() {
     }
   }, [dbInstanceId, preferences, userId])
 
+  // Re-run after every category change, so two loads overlap routinely; only the newest call may land, or an
+  // older answer arriving last would put back the tree and counts from before the change.
+  const loadCategoriesSeqRef = useRef(0)
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
+    const seq = ++loadCategoriesSeqRef.current
     const [nextTree, nextFlat, nextUsage, nextInactive, nextEmptyCleanup, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
       api.getCategoryTree(),
       api.getCategories(),
@@ -740,6 +740,7 @@ export default function Categories() {
         offset: 0,
       }),
     ])
+    if (loadCategoriesSeqRef.current !== seq) return
     const nextUncategorizedExpenseTxnCount = Number(uncategorizedExpenseResult?.total || 0)
     const nextUncategorizedIncomeTxnCount = Number(uncategorizedIncomeResult?.total || 0)
     setTree(nextTree)
@@ -1676,8 +1677,6 @@ export default function Categories() {
       ? selectedCategoryIdsFilter
       : null
   const matchingTxnsKey = matchingTxnsBaseKey
-    ? `${matchingTxnsBaseKey}|${matchingReloadNonce}`
-    : null
 
   const loadMatchingTxnPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
@@ -1694,6 +1693,10 @@ export default function Categories() {
     rows: pagedMatchingTxns,
     setRows: setPagedMatchingTxns,
     loading: matchingTxnsLoading,
+    reload: reloadMatchingTxns,
+    reloading: matchingTxnsReloading,
+    total: matchingTxnsTotal,
+    setTotal: setMatchingTxnsTotal,
     paging: matchingTxnsPaging,
     sortState: matchingTxnsSortState,
     onSort: onMatchingTxnsSort,
@@ -1741,27 +1744,6 @@ export default function Categories() {
   function closeDetailPanel(type, id) {
     setDetailPanels(prev => prev.filter(panel => !(panel.type === type && panel.item?.id === id)))
   }
-
-  useEffect(() => {
-    if (!matchingTxnsKey) {
-      setMatchingTxnsTotal(0)
-      return
-    }
-    let cancelled = false
-    api.getTransactions({
-      category_id: selectedCategoryFilter,
-      category_ids: selectedCategoryIdsFilter || undefined,
-      limit: 1,
-      offset: 0,
-    }).then(result => {
-      if (cancelled) return
-      setMatchingTxnsTotal(result.total || 0)
-    }).catch(() => {
-      if (cancelled) return
-      setMatchingTxnsTotal(0)
-    })
-    return () => { cancelled = true }
-  }, [matchingTxnsKey, selectedCategoryFilter, selectedCategoryIdsFilter])
 
   // Search drives the tree's expand state: while a query is active, a group opens iff its name or one of
   // its visible children matches, and the rest collapse — matches are highlighted in place. The persisted
@@ -2418,8 +2400,8 @@ export default function Categories() {
                       {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
                         server on demand to drop rows that no longer match the selected category. */}
                       <RefreshButton
-                        onRefresh={() => setMatchingReloadNonce(n => n + 1)}
-                        loading={matchingTxnsLoading}
+                        onRefresh={reloadMatchingTxns}
+                        loading={matchingTxnsReloading}
                         disabled={!matchingTxnsKey}
                         title="Refresh — re-query the list and drop transactions that no longer match"
                       />
@@ -2477,7 +2459,7 @@ export default function Categories() {
                       // This list is category-scoped, so its rows are the server's *expanded*
                       // allocations. A rewritten split changes which categories those parts are in and
                       // for how much — which no row patch can restate — so the scope is fetched again.
-                      onSplitSaved={() => setMatchingReloadNonce(n => n + 1)}
+                      onSplitSaved={reloadMatchingTxns}
                       paging={matchingTxnsPaging}
                       sortState={matchingTxnsSortState}
                       onSort={onMatchingTxnsSort}
@@ -2500,7 +2482,7 @@ export default function Categories() {
           onClose={() => setReimbursementsOpen(false)}
           // Completing or pairing from in here moves allocations between categories, so the list behind
           // is refetched rather than patched — the change is not confined to the rows on screen.
-          onChanged={() => setMatchingReloadNonce(n => n + 1)}
+          onChanged={reloadMatchingTxns}
         />
       )}
 

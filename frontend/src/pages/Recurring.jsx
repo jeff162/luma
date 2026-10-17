@@ -771,8 +771,9 @@ export default function Recurring() {
   const [categories, setCategories] = useState([])
   // The bottom drill-down. The member list pages through the shared usePagedTransactions (server-side
   // sort, no fetch cap) so a high-frequency series with hundreds of occurrences isn't truncated at 500;
-  // the removed-from-series rows are a small user-curated set fetched alongside. `reportNonce` bumps to
-  // force a member re-fetch of the same open series (e.g. after a scan shifts membership).
+  // the removed-from-series rows are a small user-curated set fetched alongside. `refreshReport` re-fetches
+  // both for the same open series (e.g. after a scan shifts membership); `reportNonce` is what the removals
+  // fetch keys on, and the members reload through `usePagedTransactions().reload`, which keeps the reader's place.
   const [openSeries, setOpenSeries] = useState(null)
   const [reportNonce, setReportNonce] = useState(0)
   const [excluded, setExcluded] = useState([])
@@ -834,9 +835,14 @@ export default function Recurring() {
     return api.getTransactions({ recurring_series_id: openSeries?.id, ...base })
   }, [openSeries])
   const membersPaged = usePagedTransactions({
-    activeKey: openSeries ? `recurring:${openSeries.id}:${reportNonce}` : null,
+    activeKey: openSeries ? `recurring:${openSeries.id}` : null,
     loadPage: membersLoadPage,
   })
+  const reloadMembers = membersPaged.reload
+  const refreshReport = useCallback(() => {
+    setReportNonce(n => n + 1)
+    reloadMembers()
+  }, [reloadMembers])
   // Reconcile after an inline edit / row-menu action operates on the paged member rows in place.
   const setReportRows = membersPaged.setRows
 
@@ -1073,7 +1079,7 @@ export default function Recurring() {
       await load()  // a scan is a deliberate re-sort
       loadSignals()  // membership and next_due move, so every signal is restated
       setScanSummary(summary)
-      if (openSeries) setReportNonce(n => n + 1)  // membership may have shifted → re-fetch members
+      if (openSeries) refreshReport()  // membership may have shifted → re-fetch members
     } finally {
       setScanning(false)
     }
@@ -1167,7 +1173,7 @@ export default function Recurring() {
       amount: signal.amount, date: signal.txn_date,
     })
     loadSignals()
-    setReportNonce(n => n + 1)
+    refreshReport()
   }
 
   async function undoExcludeCharge() {
@@ -1177,7 +1183,7 @@ export default function Recurring() {
     const updated = await api.setRecurringMembership(snap.seriesId, snap.txnId, 'clear')
     if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
     loadSignals()
-    setReportNonce(n => n + 1)
+    refreshReport()
   }
 
   async function restoreSignal(key) {
@@ -1212,10 +1218,10 @@ export default function Recurring() {
   // drill-down exactly as they were. That reads as "the edit I just made did not take": the findings are
   // derived on read, so they were already correct on the server and only this page had not asked again.
   const refreshAll = useCallback(() => {
-    setReportNonce(n => n + 1)  // an open drill-down re-fetches its rows too
+    refreshReport()  // an open drill-down re-fetches its rows too
     // Returned so the refresh control turns for as long as the page's own reads take.
     return Promise.all([load(), loadSignals(), loadTransferReview()])
-  }, [load, loadSignals, loadTransferReview])
+  }, [load, loadSignals, loadTransferReview, refreshReport])
   // A sync rescans the payees it touched before it returns, so the series, findings and pairings it brought
   // in are already on the server by the time this fires.
   useAfterLedgerSync(() => { refreshAll().catch(() => {}) })
@@ -1516,7 +1522,7 @@ export default function Recurring() {
           onClose={() => setRuleModal(null)}
           // Editing the rule can change the series' membership/cadence/name, so reload the list, the
           // findings judged against it, and any open report of its transactions.
-          onSaved={() => { setRuleModal(null); load(); loadSignals(); setReportNonce(n => n + 1) }}
+          onSaved={() => { setRuleModal(null); load(); loadSignals(); refreshReport() }}
         />
       )}
 
@@ -1531,7 +1537,7 @@ export default function Recurring() {
             const updated = await api.updateRecurring(amountMatchSeries.id, payload)
             setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
             loadSignals()  // a membership change can resolve or raise a finding about this series
-            if (openSeries?.id === updated.id) setReportNonce(n => n + 1)  // and changes the open report's rows
+            if (openSeries?.id === updated.id) refreshReport()  // and changes the open report's rows
           }}
         />
       )}

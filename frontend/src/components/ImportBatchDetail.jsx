@@ -135,8 +135,9 @@ export default function ImportBatchDetail({
   const activeAttributeLabel = activeAttribute
     ? filterAttributes.find(attribute => attribute.key === activeAttribute)?.label || null
     : null
-  // A reviewed or recategorized row stays where it is until this is bumped, as on the Transactions page, so a
-  // row does not vanish from a filtered list the moment it stops matching.
+  // A reviewed or recategorized row stays where it is until a refresh, as on the Transactions page, so a
+  // row does not vanish from a filtered list the moment it stops matching. This re-runs the counts beside
+  // the list; the list itself reloads through `usePagedTransactions().reload`, which keeps the reader's place.
   const [refreshNonce, setRefreshNonce] = useState(0)
 
   const [filterInput, setFilterInput] = useState('')
@@ -184,13 +185,19 @@ export default function ImportBatchDetail({
     rows,
     setRows,
     loading,
+    reload,
+    reloading,
     paging,
     sortState,
     onSort,
   } = usePagedTransactions({
-    activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}|${activeAttribute || ''}|${refreshNonce}`,
+    activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}|${activeAttribute || ''}`,
     loadPage,
   })
+  const refresh = useCallback(() => {
+    setRefreshNonce(n => n + 1)
+    reload()
+  }, [reload])
 
   // Bulk edit over this file's imported rows. Scope mirrors the list fetch (batch + date/search), so
   // "select all matching" resolves the whole file even though the list is paged; rows reconcile in place.
@@ -247,8 +254,8 @@ export default function ImportBatchDetail({
   useEffect(() => {
     if (duplicatesVersion === handledDuplicatesVersionRef.current) return
     handledDuplicatesVersionRef.current = duplicatesVersion
-    setRefreshNonce(n => n + 1)
-  }, [duplicatesVersion])
+    refresh()
+  }, [duplicatesVersion, refresh])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
@@ -269,8 +276,8 @@ export default function ImportBatchDetail({
         {batch.filename}
         {/* Kept out of the panel drag, which the header starts. */}
         <RefreshButton
-          onRefresh={() => setRefreshNonce(n => n + 1)}
-          loading={loading}
+          onRefresh={refresh}
+          loading={reloading}
           onMouseDown={event => event.stopPropagation()}
           title="Refresh — re-query the list and drop transactions that no longer match"
         />
