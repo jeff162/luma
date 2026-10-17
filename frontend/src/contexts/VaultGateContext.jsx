@@ -65,7 +65,7 @@ function vaultFlags(user) {
 export function VaultGateProvider({ children }) {
   const { currentUser, setCurrentUser } = useAppSession()
   const vault = useMemo(() => vaultFlags(currentUser), [currentUser])
-  const { mode, ensureVault, openVault, closeVault } = useVaultGate(vault)
+  const { mode, offerPasskey, ensureVault, openVault, closeVault } = useVaultGate(vault)
   const [notice, setNotice] = useState(null)
   // Held apart from the gate's own mode on purpose: the gate exists to make a blocked action resume once
   // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
@@ -153,12 +153,12 @@ export function VaultGateProvider({ children }) {
   }, [refreshVault])
 
   const value = useMemo(() => ({
-    vault, mode, ensureVault, openVault, closeVault,
+    vault, mode, offerPasskey, ensureVault, openVault, closeVault,
     submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
     changingPassphrase, changePassphrase: () => setChangingPassphrase(true),
     submitPassphraseChange, completePassphraseChange, closePassphraseChange: () => setChangingPassphrase(false),
     notice, dismissNotice: () => setNotice(null),
-  }), [vault, mode, ensureVault, openVault, closeVault,
+  }), [vault, mode, offerPasskey, ensureVault, openVault, closeVault,
     submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
     changingPassphrase, submitPassphraseChange, completePassphraseChange, notice])
 
@@ -171,7 +171,7 @@ export function VaultGateProvider({ children }) {
 // only after the user has committed, and backing out of the prompt returns to that decision).
 export function VaultGateRenderer() {
   const {
-    mode, submitVault, adoptPasskeyUnlock, closeVault, notice, dismissNotice,
+    mode, offerPasskey, submitVault, adoptPasskeyUnlock, closeVault, notice, dismissNotice,
     changingPassphrase, submitPassphraseChange, completePassphraseChange, closePassphraseChange,
   } = useVaultGateContext()
   return (
@@ -187,7 +187,7 @@ export function VaultGateRenderer() {
         <VaultPassphraseDialog
           mode={mode}
           onSubmit={submitVault}
-          onUnlockedByPasskey={adoptPasskeyUnlock}
+          onUnlockedByPasskey={offerPasskey ? adoptPasskeyUnlock : undefined}
           onClose={() => closeVault(false)}
         />
       ) : null}

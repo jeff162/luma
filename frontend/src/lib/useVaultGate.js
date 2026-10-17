@@ -26,6 +26,9 @@ export function useVaultGate({ configured, unlocked }) {
   // null (closed) | 'set' | 'unlock' from `ensureVault`; a host may `openVault` any dialog mode that ends
   // in the passphrase being submitted ('request', 'check').
   const [mode, setMode] = useState(null)
+  // False when the opener already turned the passkey down — the strip's "Unlock with a passphrase" sits
+  // beside the passkey button, so offering the passkey again in the dialog would undo that choice.
+  const [offerPasskey, setOfferPasskey] = useState(true)
   const flagsRef = useRef({ configured, unlocked })
   const waiterRef = useRef(null)
 
@@ -37,9 +40,10 @@ export function useVaultGate({ configured, unlocked }) {
     waiter?.(value)
   }, [])
 
-  const openVault = useCallback((nextMode) => {
+  const openVault = useCallback((nextMode, { offerPasskey: offer = true } = {}) => {
     settle(false)
     setMode(nextMode)
+    setOfferPasskey(offer)
     return new Promise(resolve => { waiterRef.current = resolve })
   }, [settle])
 
@@ -65,5 +69,5 @@ export function useVaultGate({ configured, unlocked }) {
   // promise pending forever.
   useEffect(() => () => settle(false), [settle])
 
-  return { mode, ensureVault, openVault, closeVault }
+  return { mode, offerPasskey, ensureVault, openVault, closeVault }
 }

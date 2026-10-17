@@ -1128,7 +1128,7 @@ export default function ConnectionsTab({ onShowHistory }) {
         waiting={waitingRequests}
         onSet={() => openVault('set')}
         onRequest={() => openVault('request')}
-        onUnlock={() => openVault('unlock')}
+        onUnlock={() => openVault('unlock', { offerPasskey: false })}
         onUnlockPasskey={unlockWithPasskey}
         passkeyBusy={passkeyBusy}
         passkeyLabel={passkeyLabel}
