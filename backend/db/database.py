@@ -138,6 +138,38 @@ def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
         conn.close()
 
 
+@contextmanager
+def single_runner(name: str, *, lease_seconds: int = 1800, db_path: str | None = None):
+    """Yield True to the one caller allowed to run `name` now, False to any other while it runs.
+
+    For a request-driven catch-up that decides whether it is due and then does long work: two callers
+    arriving together (app load and a page mount) would otherwise both read "due" before either stamps
+    it, and both do the work. The claim is a `db_meta` row written in its own short immediate
+    transaction, so the check and the claim cannot interleave, and it is visible to other requests
+    while the long block runs (see `get_db`). It is cleared on the way out; `lease_seconds` lets a claim
+    left by a process that died mid-run lapse rather than block the work for good.
+    """
+    key = f"running:{name}"
+    with get_db(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        held = conn.execute(
+            "SELECT 1 FROM db_meta WHERE key = ? AND (julianday('now') - julianday(value)) * 86400.0 < ?",
+            (key, lease_seconds),
+        ).fetchone()
+        if not held:
+            conn.execute(
+                "INSERT OR REPLACE INTO db_meta (key, value) VALUES (?, datetime('now'))", (key,),
+            )
+    if held:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM db_meta WHERE key = ?", (key,))
+
+
 # Compaction rewrites the whole file, so it is worth running unprompted only when what it gives back is large
 # both outright and against the file: 10 MB free in a 30 MB ledger, not 10 MB in a 2 GB one. Smaller slack is
 # left on the free list, where SQLite reuses it for the next writes anyway.

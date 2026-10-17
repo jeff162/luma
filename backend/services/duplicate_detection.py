@@ -4177,6 +4177,21 @@ def rescan_until_settled(conn: sqlite3.Connection, account_ids: Iterable[str]) -
     return {"flagged": total, "passes": _MAX_RESCAN_PASSES, "settled": False}
 
 
+def _detection_version_seen(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT value FROM db_meta WHERE key = ?",
+                       (_DETECTION_VERSION_META_KEY,)).fetchone()
+    try:
+        return int(row["value"]) if row and row["value"] is not None else 0
+    except (TypeError, ValueError):
+        return 0  # a malformed stamp reads as "never scanned" rather than crashing app load
+
+
+def detection_rescan_due(conn: sqlite3.Connection) -> bool:
+    """Whether `maybe_rescan_for_detection_change` would do any work. Read-only, so the app-load caller can
+    answer the common case (nothing due) without claiming the rescan, which takes the write lock."""
+    return _detection_version_seen(conn) < DUPLICATE_DETECTION_VERSION
+
+
 def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
     """The app-load catch-up for a matcher that has since improved: re-scan once when the database was
     last examined under older rules, then stamp the current version.
@@ -4186,12 +4201,7 @@ def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
     passage of time. Pairs the user has already judged are skipped by the scan itself
     (`suspect_pair_distinct`), so a bump re-examines what was never looked at without re-asking anything
     that was."""
-    row = conn.execute("SELECT value FROM db_meta WHERE key = ?",
-                       (_DETECTION_VERSION_META_KEY,)).fetchone()
-    try:
-        seen = int(row["value"]) if row and row["value"] is not None else 0
-    except (TypeError, ValueError):
-        seen = 0  # a malformed stamp reads as "never scanned" rather than crashing app load
+    seen = _detection_version_seen(conn)
     if seen >= DUPLICATE_DETECTION_VERSION:
         return {"skipped": True, "version": seen}
     account_ids = [r["id"] for r in conn.execute("SELECT id FROM account WHERE trashed_at IS NULL")]

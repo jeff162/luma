@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.db.database import get_db
+from backend.db.database import get_db, single_runner
 from backend.routers.rules import _trash_rule
 from backend.services.recurring_detection import (
     AMOUNT_MODE_FIXED,
@@ -32,6 +32,7 @@ from backend.services.recurring_detection import (
     COUNTERPART_SCOPE_ACCOUNT_SQL,
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
+    auto_scan_due,
     maybe_auto_scan,
     owe_full_recurring_scan,
     scan_and_store,
@@ -182,8 +183,16 @@ def auto_scan(window_months: int = 25):
     import/sync already scanned, so it's safe to call unconditionally on every app load."""
     if window_months < 1 or window_months > 120:
         raise HTTPException(status_code=400, detail="window_months must be between 1 and 120")
+    # App load in two tabs, or a reload while the first load's scan runs, would otherwise both find the
+    # scan due and both run it.
     with get_db() as conn:
-        return maybe_auto_scan(conn, window_months=window_months)
+        if not auto_scan_due(conn):
+            return {"skipped": True}
+    with single_runner("recurring_auto_scan") as claimed:
+        if not claimed:
+            return {"skipped": True, "reason": "scan_in_progress"}
+        with get_db() as conn:
+            return maybe_auto_scan(conn, window_months=window_months)
 
 
 @router.get("/transfer-review")

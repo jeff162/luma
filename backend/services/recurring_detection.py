@@ -1538,13 +1538,28 @@ def overdue_owed_rescan_count(conn: sqlite3.Connection) -> int:
     return len(_owed_rescans(conn, overdue_only=True))
 
 
+def auto_scan_due(conn: sqlite3.Connection, *,
+                  min_interval_hours: float = _AUTO_SCAN_MIN_INTERVAL_HOURS) -> bool:
+    """Whether `maybe_auto_scan` would do any work. Read-only, so the app-load caller can answer the common
+    case (nothing due) without claiming the scan, which takes the write lock."""
+    row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (_LAST_SCAN_META_KEY,)).fetchone()
+    if not row:
+        return True
+    due = conn.execute(
+        "SELECT ((julianday('now') - julianday(?)) * 24.0 >= ?) IS NOT 0 AS due",
+        (row["value"], min_interval_hours),
+    ).fetchone()["due"]
+    return bool(due) or bool(_owed_rescans(conn, overdue_only=True))
+
+
 def maybe_auto_scan(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT,
                     min_interval_hours: float = _AUTO_SCAN_MIN_INTERVAL_HOURS) -> dict:
     """Scan only if one is *due*: never scanned (a fresh, or pre-recurring/older-schema, database), the
     last scan is older than `min_interval_hours`, or an owed rescan is overdue. This is the app-load
     catch-up, so detection stays current even when data arrives outside the import/sync paths (a restore,
     another tab, a schema migration) and a rescan whose settling scan failed is retried on the next load.
-    Returns the scan summary, or ``{"skipped": True}`` when a recent scan makes it a no-op."""
+    Returns the scan summary, or ``{"skipped": True}`` when a recent scan makes it a no-op. `auto_scan_due`
+    asks the same question without doing the work."""
     row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (_LAST_SCAN_META_KEY,)).fetchone()
     last = row["value"] if row else None
     if last:

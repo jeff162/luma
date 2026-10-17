@@ -27,7 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, compact_if_worthwhile, get_db
+from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, compact_if_worthwhile, get_db, single_runner
 from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
@@ -35,6 +35,7 @@ from backend.services.duplicate_detection import (
     forget_account_pair_distinct,
     forget_suspect_pair_distinct,
     list_suspect_pair_distinct,
+    detection_rescan_due,
     maybe_rescan_for_detection_change,
     reopen_suspect_pair,
     list_distinct_account_pairs,
@@ -474,8 +475,16 @@ def rescan_duplicates_for_detection_change():
     A no-op on every load but the first after a rule change, so it is safe to call unconditionally. Pairs
     the user has already judged are skipped, so a bump surfaces what was never examined without re-asking
     anything that was."""
+    # One rescan at a time: two tabs loading together would otherwise both read the old version and both
+    # rescan the whole ledger.
     with get_db() as conn:
-        return maybe_rescan_for_detection_change(conn)
+        if not detection_rescan_due(conn):
+            return {"skipped": True}
+    with single_runner("duplicate_rescan") as claimed:
+        if not claimed:
+            return {"skipped": True, "reason": "scan_in_progress"}
+        with get_db() as conn:
+            return maybe_rescan_for_detection_change(conn)
 
 
 class ReopenPairsRequest(BaseModel):

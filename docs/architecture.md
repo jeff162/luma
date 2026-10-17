@@ -1079,6 +1079,14 @@ the browser sends with the upload and by tenant, which the browser polls at `GET
 /import-export/run-progress/{id}`. The endpoint does its work via `run_in_threadpool`, because work in
 an `async def` body would hold the event loop and the poll could not be answered.
 
+**A request-driven catch-up claims itself before its long work** (`single_runner`,
+`backend/db/database.py`). App load, a second tab and a page mount can each ask for the same catch-up —
+the recurring auto-scan, the duplicate-detection rescan, a watched-folder scan — and each would read
+"due" before the other stamps it, so both would do the work, and two folder scans would import one file
+twice. A read-only due check answers the common case without the write lock. Only work that is due takes
+a claim, written in its own short immediate transaction, and a second caller is turned away while it
+stands. A claim left by a process that died lapses after its lease.
+
 **Every request shares one interpreter lock.** Python lets only one thread run Python code at a time;
 the lock that enforces this is the GIL. The `sqlite3` module lets go of it while SQLite works and has to
 take it back afterwards, once for each call and once for each row it fetches. While other requests are

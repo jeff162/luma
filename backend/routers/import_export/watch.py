@@ -52,7 +52,7 @@ from pydantic import BaseModel
 from backend.app_logging import log_error
 from backend.authorization import require_admin_or_local
 from backend.runtime_config import app_name, data_dir
-from backend.db.database import get_db
+from backend.db.database import get_db, single_runner
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
 from backend.services.recurring_detection import settle_owed_rescans
@@ -639,7 +639,17 @@ def _purge_pass(conn, profile: dict) -> list[dict]:
 
 
 def scan_watched_sources(*, profile_id: Optional[str] = None) -> dict:
-    """Walk every watched source once. The whole unattended path, and the body of both triggers."""
+    """Walk every watched source once. The whole unattended path, and the body of both triggers.
+
+    One scan at a time: app load and the Import page's mount both trigger one, and two scans walking the
+    same folder together would each find a new file ready and import it twice."""
+    with single_runner("watch_scan") as claimed:
+        if not claimed:
+            return {"skipped": "scan_in_progress", "sources": []}
+        return _scan_watched_sources(profile_id=profile_id)
+
+
+def _scan_watched_sources(*, profile_id: Optional[str]) -> dict:
     with get_db() as conn:
         if is_demo_data_loaded(conn):
             return {"skipped": "demo_data_loaded", "sources": []}
