@@ -8,6 +8,7 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Spinner } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
+import CornerTab from '../components/CornerTab.jsx'
 
 /*
  * The nag inbox. Tasks are computed server-side (routers/tasks.py) and re-fetched whenever work
@@ -123,29 +124,15 @@ function TaskCard({ task, onDismiss }) {
         </div>
       </div>
       {task.dismiss_key ? (
-        // A tab set into the card's bottom-right corner: it sits over the card's own border, its outer
-        // corner takes the card's radius and its inner corner is rounded, so it reads as cut out of the
-        // card rather than a button placed on it. Muted on purpose — the task's link is the main action.
-        <button
+        // Muted on purpose, as a corner tab: the task's link is the main action.
+        <CornerTab
+          corner="bottom-right"
+          borderColor={style.border}
           onClick={() => onDismiss(task)}
           title="Hide this until there is more of it"
-          style={{
-            position: 'absolute',
-            right: -1,
-            bottom: -1,
-            minHeight: 26,
-            padding: '4px 14px',
-            background: 'var(--surface2)',
-            border: `1px solid ${style.border}`,
-            borderRadius: '10px 0 10px 0',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontWeight: 500,
-          }}
         >
           Dismiss
-        </button>
+        </CornerTab>
       ) : null}
     </div>
   )

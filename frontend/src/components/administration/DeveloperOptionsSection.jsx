@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { localStore, sessionStore } from '../../lib/browserStorage.js'
 import { Card, Button, AppConfirmDialog } from '../ui.jsx'
+import { cornerTabStyle } from '../CornerTab.jsx'
 
 function clearBrowserStoredState() {
   localStore.clear()
@@ -142,10 +143,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
         small
         variant="ghost"
         style={{
-          position: 'absolute',
-          top: -1,
-          right: -1,
-          borderRadius: '0 12px 0 12px',
+          ...cornerTabStyle({ corner: 'top-right', radius: 12 }),
           borderLeft: '1px solid var(--border)',
           borderBottom: '1px solid var(--border)',
           padding: '10px 18px',
