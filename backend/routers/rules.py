@@ -469,6 +469,124 @@ def preview_rule(body: RulePreview):
     return {"count": len(affected), "transactions": affected}
 
 
+# The rule checkup's endpoints. Registered ahead of every `/{rule_id}/…` route, because a router
+# matches in registration order: after them, `POST /{rule_id}/restore` would take
+# `/overlaps/restore` with "overlaps" as the rule id.
+
+@router.get("/overlaps")
+def rule_overlaps(include_dismissed: bool = Query(False)):
+    """Rule pairs that compete for the same transactions — the on-demand check behind the Rules page's
+    *Rule checkup* control. Four shapes: an `amount_overlap` the precedence order cannot meaningfully
+    settle, a `matcher_co_match` where two unrelated matchers both hit one real transaction, a
+    `matcher_nesting` where one rule matches a subset of the other's rows, and a `matcher_scope_split`
+    where an owner or account limit decides between nested matchers (the last two are information). The
+    first two come in a `_benign` variant, used when the two rules file identically so the winner
+    changes nothing.
+    See `services/rule_overlaps.py` for what qualifies and why.
+
+    The co-match half scans the ledger, which the rest of this check does not — it is the one question
+    the rules alone cannot answer. That makes this the slowest of the findings endpoints, which is why
+    it is a button rather than a badge.
+
+    Nothing is changed: an overlap is an ambiguity in the rules themselves, so it is named rather than
+    resolved. `rules` carries each referenced rule once, in the same shape the rules list returns, so
+    the dialog can render a finding's two rules the way the list renders them.
+
+    Dismissed findings are excluded and counted in `dismissed_count`; `include_dismissed` brings them
+    back flagged, which is what the panel's "show dismissed" toggle asks for."""
+    with get_db() as conn:
+        result = find_rule_overlaps(conn, include_dismissed=include_dismissed)
+        referenced = {rid for finding in result["findings"] for rid in finding["rule_ids"]}
+        rules = []
+        if referenced:
+            placeholders = ",".join("?" for _ in referenced)
+            rows = conn.execute(
+                _TRASH_DISPLAY_SQL + f" WHERE cr.id IN ({placeholders})", list(referenced)
+            ).fetchall()
+            rules = _decorate_rule_rows(conn, rows)
+    return {**result, "rules": {rule["id"]: rule for rule in rules}}
+
+
+class RuleFindingDismissBody(BaseModel):
+    key: str
+    kind: str = ""
+
+
+@router.post("/overlaps/dismiss")
+def dismiss_rule_overlap(body: RuleFindingDismissBody):
+    """Acknowledge a finding so the check stops listing it. Not a fix and not an assertion that the
+    rules are right — just "this pair is deliberate". The key carries what made the finding actionable,
+    so a later edit that changes the situation produces a different key and surfaces again.
+
+    Only findings whose winner changes nothing may be acknowledged — the informational kinds, and the
+    benign variants of the two warnings. A live amount overlap or co-match is arbitrary rather than
+    undefined: the ordering settles it the same way every time, but for no reason that is about these two
+    rules, so it stays listed until the conditions are refined; the
+    refusal is 400 rather than a silent no-op, since a caller that thinks it dismissed something and did
+    not is worse than one that is told."""
+    with get_db() as conn:
+        try:
+            dismiss_finding(conn, body.key, body.kind)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err))
+    return {"ok": True}
+
+
+@router.post("/overlaps/restore")
+def restore_rule_overlap(body: RuleFindingDismissBody):
+    """Undo a dismissal, putting the finding back in the open list."""
+    with get_db() as conn:
+        restore_finding(conn, body.key)
+    return {"ok": True}
+
+
+@router.get("/range-drift")
+def rule_range_drift(include_dismissed: bool = Query(False)):
+    """Recent charges an amount-gated rule nearly claimed — the badge on the Rules page's findings
+    control and the third section of the panel it opens. Two kinds: a `rule_range` that missed a bound
+    by a little (a warning: the row lost the rule's category, and any series that category earned it),
+    and a `rule_range_edge` sitting just inside one (information, the same warning one occurrence
+    earlier). See `services/rule_range_drift.py`.
+
+    `rules` carries each referenced rule once, in the same shape the rules list returns, so the panel
+    renders the rule behind a finding the way the list renders it — matching the overlaps endpoint,
+    since one panel presents both.
+
+    Dismissed findings are excluded and counted in `dismissed_count`; `include_dismissed` brings them
+    back flagged, which is what the panel's "show dismissed" toggle asks for."""
+    with get_db() as conn:
+        result = find_range_drift(conn, include_dismissed=include_dismissed)
+        referenced = {finding["rule_id"] for finding in result["findings"]}
+        rules = []
+        if referenced:
+            placeholders = ",".join("?" for _ in referenced)
+            rows = conn.execute(
+                _TRASH_DISPLAY_SQL + f" WHERE cr.id IN ({placeholders})", list(referenced)
+            ).fetchall()
+            rules = _decorate_rule_rows(conn, rows)
+    return {**result, "rules": {rule["id"]: rule for rule in rules}}
+
+
+@router.post("/range-drift/dismiss")
+def dismiss_rule_range_drift(body: RuleFindingDismissBody):
+    """"Seen it, that charge is not this rule's." Keyed by rule and transaction, so acknowledging one
+    charge says nothing about the next, and a dismissal never uses up the per-rule cap that limits how
+    many of a rule's near-misses are listed at once."""
+    if not (body.key or "").strip():
+        raise HTTPException(status_code=400, detail="key is required")
+    with get_db() as conn:
+        signal_dismissals.dismiss(conn, body.key.strip(), (body.kind or "").strip())
+    return {"ok": True}
+
+
+@router.post("/range-drift/restore")
+def restore_rule_range_drift(body: RuleFindingDismissBody):
+    """Undo a dismissal, putting the finding back in the open list."""
+    with get_db() as conn:
+        signal_dismissals.restore(conn, (body.key or "").strip())
+    return {"ok": True}
+
+
 @router.get("/{rule_id}/matches")
 def rule_matches(rule_id: str):
     """Existing transactions this rule's matcher currently matches — *every* match, not only the rows an
@@ -1354,115 +1472,3 @@ def cleanup_rules(body: RuleCleanupBody):
         owe_recurring_rescan(conn, reverted, prior_payee_keys=prior_keys)
     settle_owed_rescans()
     return {"trashed": trashed}
-
-
-@router.get("/overlaps")
-def rule_overlaps(include_dismissed: bool = Query(False)):
-    """Rule pairs that compete for the same transactions — the on-demand check behind the Rules page's
-    *Rule checkup* control. Three shapes: an `amount_overlap` the precedence order cannot meaningfully
-    settle, a `matcher_co_match` where two unrelated matchers both hit one real transaction, and a
-    `matcher_nesting` where one merchant matcher is a subset of the other (information). The first two
-    come in a `_benign` variant, used when the two rules file identically so the winner changes nothing.
-    See `services/rule_overlaps.py` for what qualifies and why.
-
-    The co-match half scans the ledger, which the rest of this check does not — it is the one question
-    the rules alone cannot answer. That makes this the slowest of the findings endpoints, which is why
-    it is a button rather than a badge.
-
-    Nothing is changed: an overlap is an ambiguity in the rules themselves, so it is named rather than
-    resolved. `rules` carries each referenced rule once, in the same shape the rules list returns, so
-    the dialog can render a finding's two rules the way the list renders them.
-
-    Dismissed findings are excluded and counted in `dismissed_count`; `include_dismissed` brings them
-    back flagged, which is what the panel's "show dismissed" toggle asks for."""
-    with get_db() as conn:
-        result = find_rule_overlaps(conn, include_dismissed=include_dismissed)
-        referenced = {rid for finding in result["findings"] for rid in finding["rule_ids"]}
-        rules = []
-        if referenced:
-            placeholders = ",".join("?" for _ in referenced)
-            rows = conn.execute(
-                _TRASH_DISPLAY_SQL + f" WHERE cr.id IN ({placeholders})", list(referenced)
-            ).fetchall()
-            rules = _decorate_rule_rows(conn, rows)
-    return {**result, "rules": {rule["id"]: rule for rule in rules}}
-
-
-class RuleFindingDismissBody(BaseModel):
-    key: str
-    kind: str = ""
-
-
-@router.post("/overlaps/dismiss")
-def dismiss_rule_overlap(body: RuleFindingDismissBody):
-    """Acknowledge a finding so the check stops listing it. Not a fix and not an assertion that the
-    rules are right — just "this pair is deliberate". The key carries what made the finding actionable,
-    so a later edit that changes the situation produces a different key and surfaces again.
-
-    Only findings whose winner changes nothing may be acknowledged — the informational kinds, and the
-    benign variants of the two warnings. A live amount overlap or co-match is arbitrary rather than
-    undefined: the ordering settles it the same way every time, but for no reason that is about these two
-    rules, so it stays listed until the conditions are refined; the
-    refusal is 400 rather than a silent no-op, since a caller that thinks it dismissed something and did
-    not is worse than one that is told."""
-    with get_db() as conn:
-        try:
-            dismiss_finding(conn, body.key, body.kind)
-        except ValueError as err:
-            raise HTTPException(status_code=400, detail=str(err))
-    return {"ok": True}
-
-
-@router.post("/overlaps/restore")
-def restore_rule_overlap(body: RuleFindingDismissBody):
-    """Undo a dismissal, putting the finding back in the open list."""
-    with get_db() as conn:
-        restore_finding(conn, body.key)
-    return {"ok": True}
-
-
-@router.get("/range-drift")
-def rule_range_drift(include_dismissed: bool = Query(False)):
-    """Recent charges an amount-gated rule nearly claimed — the badge on the Rules page's findings
-    control and the third section of the panel it opens. Two kinds: a `rule_range` that missed a bound
-    by a little (a warning: the row lost the rule's category, and any series that category earned it),
-    and a `rule_range_edge` sitting just inside one (information, the same warning one occurrence
-    earlier). See `services/rule_range_drift.py`.
-
-    `rules` carries each referenced rule once, in the same shape the rules list returns, so the panel
-    renders the rule behind a finding the way the list renders it — matching the overlaps endpoint,
-    since one panel presents both.
-
-    Dismissed findings are excluded and counted in `dismissed_count`; `include_dismissed` brings them
-    back flagged, which is what the panel's "show dismissed" toggle asks for."""
-    with get_db() as conn:
-        result = find_range_drift(conn, include_dismissed=include_dismissed)
-        referenced = {finding["rule_id"] for finding in result["findings"]}
-        rules = []
-        if referenced:
-            placeholders = ",".join("?" for _ in referenced)
-            rows = conn.execute(
-                _TRASH_DISPLAY_SQL + f" WHERE cr.id IN ({placeholders})", list(referenced)
-            ).fetchall()
-            rules = _decorate_rule_rows(conn, rows)
-    return {**result, "rules": {rule["id"]: rule for rule in rules}}
-
-
-@router.post("/range-drift/dismiss")
-def dismiss_rule_range_drift(body: RuleFindingDismissBody):
-    """"Seen it, that charge is not this rule's." Keyed by rule and transaction, so acknowledging one
-    charge says nothing about the next, and a dismissal never uses up the per-rule cap that limits how
-    many of a rule's near-misses are listed at once."""
-    if not (body.key or "").strip():
-        raise HTTPException(status_code=400, detail="key is required")
-    with get_db() as conn:
-        signal_dismissals.dismiss(conn, body.key.strip(), (body.kind or "").strip())
-    return {"ok": True}
-
-
-@router.post("/range-drift/restore")
-def restore_rule_range_drift(body: RuleFindingDismissBody):
-    """Undo a dismissal, putting the finding back in the open list."""
-    with get_db() as conn:
-        signal_dismissals.restore(conn, (body.key or "").strip())
-    return {"ok": True}
