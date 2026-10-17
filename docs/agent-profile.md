@@ -132,9 +132,11 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   check by the user is a valid test and costs less than a driven browser session.
 
 - Investigate a red run before re-running it, because a green re-run destroys the state that explained
-  it. The gate writes every run to `data/check-logs/` and prints the path; check the failure against
-  [`transient-failures.md`](transient-failures.md), since one intermittent surfaces in several
-  unrelated specs.
+  it. The gate writes every run to `data/check-logs/` and prints the path, and keeps a failed browser
+  run's screenshots, videos and traces in `data/check-logs/last-browser-failure/`; check the failure
+  against [`transient-failures.md`](transient-failures.md), since one intermittent surfaces in several
+  unrelated specs. A Playwright run started directly keeps no copy: its artifacts are in
+  `frontend/test-results/` only until the next run starts.
 
 - Redirect a test or build run to a file and read the file; never pipe it into `tail`, `head` or `grep`,
   because the pipe discards the only evidence an unexpected failure produces.

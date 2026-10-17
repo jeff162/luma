@@ -17,8 +17,10 @@ is. Where the date is a bound rather than an observation, it says so.
 **Read this before re-running a red suite.** The rule it exists to serve is in
 [`agent-profile.md`](agent-profile.md) → *Verification And Tests*: a failure is investigated when it
 happens, before anything else, because a green re-run destroys the evidence. The gate writes every run
-whole to `data/check-logs/` and prints the path on its last line; a failed run's logs are kept until a
-later failure replaces them. Check whether a red run matches an entry below before concluding anything
+whole to `data/check-logs/` and prints the path on its last line. When its browser suite fails, it also
+copies Playwright's screenshots, videos and traces to `data/check-logs/last-browser-failure/`, which only
+the next browser failure replaces, since Playwright empties `frontend/test-results/` at the start of every
+run. Both are deleted after 30 days. Check whether a red run matches an entry below before concluding anything
 about the change in hand. One entry can also wear several different masks: the session-cookie bug below
 was filed three times under three spec names before it turned out to be one thing, so **grep the
 preserved log for the symptom rather than trusting the failing test's name**.

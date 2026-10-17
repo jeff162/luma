@@ -25,7 +25,6 @@ Producing the downloadable artifacts and cutting a release.
   - [Container image visibility](#container-image-visibility)
   - [Repository presentation and collaboration](#repository-presentation-and-collaboration)
 - [Obstacles](#obstacles)
-- [Open](#open)
 
 ## The two distribution forms
 

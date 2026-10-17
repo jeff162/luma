@@ -201,7 +201,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Release checklist](releasing.md#release-checklist)
 - [Configuring the public repository](releasing.md#configuring-the-public-repository)
 - [Obstacles](releasing.md#obstacles)
-- [Open](releasing.md#open)
 
 ## Work in progress
 
