@@ -42,30 +42,23 @@ branches, and no backports to earlier tags.
 oversights, and reports about them will be closed with a pointer here:
 
 - **Transaction data is stored unencrypted on disk.** The ledger is a local SQLite database in plain
-  form. The database files and any unencrypted backup are the sensitive artifacts, and protecting them
-  is the operator's responsibility — keep them off shared and cloud-synced locations, and use the
-  encrypted backup for anything that leaves the machine.
+  form. If the database files and any unencrypted backup are considered sensitive artifacts
+  is the operator's responsibility to protect them — keep them off shared and cloud-synced locations.
+  Encrypted backup is available to assist with this.
 - **The sign-in password is network-access control, not disk encryption.** It governs who can reach a
   running instance. It does not encrypt the database and does not protect files copied off the disk.
 - **A local user with filesystem access can read the ledger.** There is no defense against an attacker
   who already has the account the app runs under.
-- **Serving over plain HTTP on a trusted LAN** is a supported deployment shape. The transport-security
-  policy per topology is documented in the model doc below; the risk of choosing HTTP is the operator's
-  to accept.
+- **Serving over plain HTTP on a trusted LAN** is not recommended but it is a valid deployment shape. The transport-security
+  policy per topology is documented in the model doc below; the risk and limitations of choosing HTTP is the operator's
+  to accept. HTTPS was made easy to use. Use it.
 - **An encrypted backup names its backup keys in the clear.** The manifest carries each key's name and
   fingerprint outside the ciphertext (as `recipient_id`/`label`, the field names the format has always
-  used), so anyone holding the file can read them without any key at all. That is deliberate and
-  load-bearing: it is what lets someone restoring a backup work out *which* private key to go and find,
-  before they hold one — the alternative is a file that cannot say what would open it. The consequence to
-  know is that those names are a disclosure: a key named after a person or a place reveals that name to
-  anyone who obtains the file, while the ledger inside stays sealed. Name keys for what they are
+  used), so anyone holding the file can read them. That is deliberate as
+  it lets someone restoring a backup work out *which* private key is required so it is best to
+  use something meaningful but vague.  Name keys for what they are
   (`Offsite drive`) rather than for who or where.
-- **The vault passphrase is unrecoverable by design** and is never stored — no unlock secret can be
-  reconstructed from anything on disk, and that remains true of the recovery code, which is also stored
-  only as the KEK it derives. What a recovery code changes is that a *forgotten* passphrase need not be
-  a dead end: it opens the vault and re-keys the passphrase against the same DEK, so nothing is
-  re-encrypted. Losing every way in — passphrase, passkeys and recovery code — still means re-linking
-  data sources; the ledger is unaffected either way.
+- **The vault passphrase is unrecoverable by design** If all the ways into the vault become lost there is no way to open it and the data connections need to be rebuilt. There is no way to unlock the vault without one of the passphrases, passkeys or the recovery code.
 - Findings from automated scanners with no demonstrated path to impact, and vulnerabilities in
   dependencies that Luma does not actually exercise.
 
@@ -80,21 +73,13 @@ Stated plainly, because it determines what is worth reporting and what a user sh
   treated as reachable given enough time, and **revoked** on the provider side.
 - **A leaked provider credential** grants whatever access the provider issued it for, for as long as it
   remains valid. Luma only ever *uses* read access — transactions, balances, and the account metadata
-  that identifies them — and never requests a money-movement product. But what a credential *can* do is
+  that identifies them — and never initiates money-movement. However what a credential *can* do is
   the provider's to define, not Luma's: depending on the provider and what the connection was created
-  with, it may also reach account and routing numbers or identity details, and an app-level credential
-  (a client id and secret) reaches every connection made with it rather than one. Treat the ceiling as
-  whatever that provider's own dashboard says the credential can do, and check it there. Retiring it at
+  with, it may also reach account and routing numbers or identity details. Treat the ceiling as
+  whatever that provider's own dashboard says the credential can do. Retiring it at
   the provider is the response — revoking it, or replacing it where the provider can issue a new one — and
   it is the *only* action that reaches a credential already sitting in someone else's copy. How a provider
-  deactivates its credentials is its own to define, so each step follows that provider's documentation. Revocation differs by provider — a declared capability, `revokes_on_disconnect`: where the
-  provider supports third-party revocation, disconnecting from Luma genuinely ends that connection's
-  access; where it does not, disconnecting removes only Luma's copy and the credential must be revoked at
-  the provider. The disconnect confirmation states which of the two is about to happen. **Neither retires
-  an app-level secret**: revoking every connection leaves the secret they were authorized under valid, so
-  after a leak it is rotated at the provider *and the old one deleted* — a provider may keep a rotated-away
-  secret working until it is deleted (Plaid does). An ordinary disconnect, with nothing exposed, needs
-  none of this.
+  deactivates its credentials is its own to define, so each step follows that provider's documentation. 
 - **After a leaked file, assume the vault secrets are recoverable and change them.** Nothing done
   afterwards protects the copy already taken — only revocation limits that. But whatever an offline
   attack against the copy yields (the passphrase, and through it the slot's private key and the DEK)
