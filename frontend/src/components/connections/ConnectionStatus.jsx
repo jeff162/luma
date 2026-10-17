@@ -27,10 +27,19 @@ export function LastSyncedLine({ lastSyncedAt, style }) {
 
 // A small pill for the connection cards' at-a-glance state. `tone` picks the colour role rather than a
 // literal colour, so the same component covers "needs attention" and "something is wrong".
-export function StatusPill({ tone = 'accent2', children, title, onClick }) {
+//
+// `muted` is the fourth role and the quiet one: a state that is neither normal nor wrong, such as a
+// watched folder deliberately switched off. It has no colour of its own precisely so it cannot be read
+// as a problem — the pill's shape is what makes it a state rather than a word in a sentence.
+//
+// `small` is for a pill that sits in a list row rather than on a card: beside a 10px column label or a
+// line of 11px metadata, the full-size pill is the largest thing in the row and reads as the point of
+// it. It stays legible because it keeps its weight; only the type and the padding come down.
+export function StatusPill({ tone = 'accent2', small = false, children, title, onClick }) {
   const color = tone === 'danger' ? 'var(--danger, #dc2626)'
     : tone === 'warning' ? 'var(--warning)'
-      : 'var(--accent2)'
+      : tone === 'muted' ? 'var(--muted)'
+        : 'var(--accent2)'
   const Tag = onClick ? 'button' : 'span'
   return (
     <Tag
@@ -38,7 +47,8 @@ export function StatusPill({ tone = 'accent2', children, title, onClick }) {
       title={title}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+        padding: small ? '0 6px' : '1px 8px', borderRadius: 999,
+        fontSize: small ? 10 : 11, fontWeight: 600,
         background: `color-mix(in srgb, ${color} 12%, var(--surface2))`,
         color,
         border: `1px solid color-mix(in srgb, ${color} 50%, var(--border))`,

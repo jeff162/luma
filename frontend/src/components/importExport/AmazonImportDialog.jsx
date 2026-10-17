@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { AppDialog, AppNoticeDialog, Badge, Button, COMPACT_ACTION_BTN_STYLE, Input, InsetPanel, Select, Spinner, Toggle, Tooltip } from '../ui.jsx'
 import CategoryPicker from '../CategoryPicker.jsx'
+import AmazonAccountPicker from './AmazonAccountPicker.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
@@ -148,16 +149,12 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
 // is gated until the account is chosen and every discovered card has a decision. A finished import is
 // handed to the host as `onImported(summary)`, which shows it on its cards in the import history.
 export function AmazonImportDialog({ files: droppedFiles, onClose, onImported }) {
-  const NEW_ACCOUNT = '__new__'
   // The backend refuses the import while demo data is loaded, so the tab says so up front rather than after
   // the form is filled in.
   const { demoLoaded } = useAppSession()
   const [accounts, setAccounts] = useState([])
   // Persisted per user so the chosen Amazon account carries over from visit to visit.
   const [accountId, setAccountId] = useUserPreference(AMAZON_IMPORT_ACCOUNT_PREF_KEY, '')
-  const [creatingAccount, setCreatingAccount] = useState(false)
-  const [newAccountName, setNewAccountName] = useState('Amazon')
-  const [savingAccount, setSavingAccount] = useState(false)
   const [files, setFiles] = useState(droppedFiles)
   const [scan, setScan] = useState(null)            // { instruments, unrecognized_files, ... } | null
   const [skippedFilesAlert, setSkippedFilesAlert] = useState(null)   // skipped-file entries awaiting an OK
@@ -186,7 +183,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
     setProfileId(id)
     const profile = profiles.find(p => p.id === id)
     if (!profile) return
-    setCreatingAccount(false)
     if (profile.account_id) setAccountId(profile.account_id)
     setApplyCategorization(!!profile.apply_categorization)
   }, [profiles, setAccountId])
@@ -240,26 +236,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
       .finally(() => setScanning(false))
   }, [])
   useEffect(() => { rescan(files, accountId) }, [files, accountId, rescan])
-
-  const onAccountChange = (value) => {
-    if (value === NEW_ACCOUNT) { setCreatingAccount(true); setAccountId('') }
-    else { setCreatingAccount(false); setAccountId(value) }
-  }
-  const createAccount = async () => {
-    const name = newAccountName.trim()
-    if (!name) return
-    setSavingAccount(true); setError('')
-    try {
-      const created = await api.createAccount({ name, type: 'amazon' })
-      await loadAccounts()
-      setAccountId(created.id)
-      setCreatingAccount(false)
-    } catch (e) {
-      setError(e?.message || 'Could not create account')
-    } finally {
-      setSavingAccount(false)
-    }
-  }
 
   const addFiles = (list) => {
     // Snapshot the FileList to a real array *now*, synchronously — the <input>'s live FileList empties
@@ -319,11 +295,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   const profileOptions = [
     { value: '', label: 'None — set the options below' },
     ...profiles.map(p => ({ value: p.id, label: p.account_name ? `${p.name} → ${p.account_name}` : p.name })),
-  ]
-  const amazonAccountOptions = [
-    { value: '', label: amazonAccounts.length ? 'Select an account…' : 'No Amazon account yet — create one →' },
-    ...amazonAccounts.map(a => ({ value: a.id, label: a.display_name || a.name })),
-    { value: NEW_ACCOUNT, label: '＋ New Amazon account…' },
   ]
   const fundingAccountOptions = [
     { value: '', label: '— Select —' },
@@ -423,28 +394,16 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
         ) : null}
 
         <FieldLabel htmlFor={ACCOUNT_FIELD_ID}>Import into account</FieldLabel>
-        <div>
-          {/* The dialog body stretches its own children; inside a form cell the select has to be told. */}
-          <Select
-            id={ACCOUNT_FIELD_ID}
-            value={creatingAccount ? NEW_ACCOUNT : accountId}
-            onChange={onAccountChange}
-            options={amazonAccountOptions}
-            style={{ width: '100%', maxWidth: ACCOUNT_SELECT_WIDTH }}
-          />
-          {creatingAccount && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              <Input value={newAccountName} onChange={setNewAccountName} placeholder="Account name"
-                aria-label="New account name" style={{ flex: 1 }} />
-              <Button small onClick={createAccount} disabled={savingAccount || !newAccountName.trim()}>
-                {savingAccount ? 'Creating…' : 'Create'}
-              </Button>
-              <Button small variant="ghost" onClick={() => { setCreatingAccount(false); setNewAccountName('Amazon') }}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </div>
+        {/* The dialog body stretches its own children; inside a form cell the select has to be told. */}
+        <AmazonAccountPicker
+          id={ACCOUNT_FIELD_ID}
+          accounts={amazonAccounts}
+          value={accountId}
+          onChange={setAccountId}
+          onCreated={loadAccounts}
+          onError={setError}
+          style={{ width: '100%', maxWidth: ACCOUNT_SELECT_WIDTH }}
+        />
 
         <FieldLabel top={2}>Category for matched card charges</FieldLabel>
         <div>

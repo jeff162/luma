@@ -33,6 +33,7 @@ import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
+import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 const AMOUNT_CONVENTIONS = [
@@ -1307,7 +1308,9 @@ export default function ImportProfilesManager({
                             style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, ...TRUNCATED_CELL_STYLE }}
                             title={profile.watch_notice ? `${profile.watch_dir} · ${profile.watch_notice}` : profile.watch_dir}
                           >
-                            {profile.watch_enabled ? '👁 Watching ' : '👁 Watching paused — '}
+                            {/* The pill leads the line for the same reason the path is truncated rather
+                                than wrapped: anything after the path is the first thing clipped. */}
+                            {profile.watch_enabled ? '👁 Watching ' : <><WatchPausedPill />{' 👁 '}</>}
                             <span style={{ color: 'var(--text)' }}>{profile.watch_dir}</span>
                             {profile.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {profile.watch_notice}</span> : null}
                           </div>

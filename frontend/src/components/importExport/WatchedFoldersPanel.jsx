@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { formatTimestamp } from '../../lib/utils.js'
 import { Button, Card } from '../ui.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
+import WatchPausedPill from './WatchPausedPill.jsx'
 
 // What the watched folders are doing, and what they could not take on their own.
 //
@@ -17,6 +18,13 @@ import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 // Entering the page runs the watermark-gated scan rather than an unconditional one, so arriving here
 // twice in a minute costs one directory listing rather than two. **Check now** is the unconditional
 // form, for the case the cadence does not cover: the file was downloaded thirty seconds ago.
+//
+// **Why the list is behind a disclosure, below the two ways data arrives.** This card reports work
+// already waiting rather than another thing to start, which first put it above the file importer — but
+// its height is the number of refused files, so several of them pushed the importer and the connections
+// card off the top of the page. The card now follows them at full page width, and only the roll-call
+// collapses: the count and anything a folder is complaining about stay on the visible line, the shape
+// `DataConnectionsPanel` uses for the same problem.
 
 const STATE_LABELS = {
   parked: 'Needs a look',
@@ -27,10 +35,23 @@ const STATE_LABELS = {
   dismissed: 'Put away',
 }
 
+// About eight one-line rows. The list scrolls past that rather than growing, because what it would push
+// down is the import history — the record of everything that *did* arrive. A row whose reason wraps is
+// taller, so this is a height and not a row count; the cap is deliberately generous since the card is
+// opened to work through the files.
+const WAITING_LIST_MAX_HEIGHT = 420
+// Fixed, not `auto`: each row is its own grid, so an `auto` end track puts a row offering only
+// **Dismiss** out of line with every row that also offers **Import…**.
+const WAITING_ROW_ACTIONS_WIDTH = 164
+
 export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
   const [status, setStatus] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [opening, setOpening] = useState('')
+  // `null` means "follow the count": the card opens itself when something is waiting and stays shut when
+  // nothing is, without a first visit having to be told. A click is an answer about this visit and holds
+  // against a later refresh that changes the count.
+  const [listOpen, setListOpen] = useState(null)
 
   const refresh = useCallback(() => api.getWatchStatus().then(setStatus).catch(() => { }), [])
 
@@ -81,82 +102,116 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
   const waiting = (status?.files || []).filter(
     file => file.state === 'parked' || file.state === 'error' || file.state === 'purge_failed',
   )
+  const open = listOpen ?? waiting.length > 0
 
   return (
-    <Card style={{ padding: 16, display: 'grid', gap: 12, marginBottom: 20 }}>
+    <Card style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 20 }}>
       {/* The action sits against the title rather than against the card's far edge: pushed right by a
-          `space-between`, it read as belonging to the page instead of to this panel. Beside the heading
-          rather than under the source list, because that list grows and shrinks with the number of
-          watched folders and a control anchored below it would move every time one is added. */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            Watched folders
-            <FeatureExplainer topic="watched-folders" placement="bottom-left" />
-          </span>
-          <button
-            type="button"
-            onClick={checkNow}
-            disabled={scanning}
-            style={{
-              background: 'none', border: '1px solid var(--border)', borderRadius: 999,
-              color: 'var(--muted)', cursor: scanning ? 'default' : 'pointer',
-              fontSize: 12, padding: '2px 10px', opacity: scanning ? 0.6 : 1,
-            }}
-          >
-            {scanning ? 'Checking…' : 'Check now'}
-          </button>
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+          `space-between`, it read as belonging to the page instead of to this panel. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          Watched folders
+          <FeatureExplainer topic="watched-folders" placement="bottom-left" />
+        </span>
+        <button
+          type="button"
+          onClick={checkNow}
+          disabled={scanning}
+          style={{
+            background: 'none', border: '1px solid var(--border)', borderRadius: 999,
+            color: 'var(--muted)', cursor: scanning ? 'default' : 'pointer',
+            fontSize: 12, padding: '2px 10px', opacity: scanning ? 0.6 : 1,
+          }}
+        >
+          {scanning ? 'Checking…' : 'Check now'}
+        </button>
+        <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>
           {status?.last_scan_at ? `Last checked ${formatTimestamp(status.last_scan_at)}` : 'Not checked yet'}
+        </span>
+      </div>
+
+      {/* The disclosure names what is inside it, so the count is readable with the card shut. The file
+          rows each state their own state and reason, which is why this only has to be a true count —
+          "waiting", not "available", since it also carries a file that errored and one whose
+          post-import delete failed, neither of which can be imported. */}
+      <button
+        type="button"
+        onClick={() => setListOpen(!open)}
+        aria-expanded={open}
+        title={open ? 'Hide the watched folders and the files waiting' : 'Show the watched folders and the files waiting'}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, justifySelf: 'start',
+          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+          font: 'inherit', fontSize: 12, fontWeight: 600, color: 'var(--text)',
+        }}
+      >
+        <span aria-hidden style={{ fontSize: 10, color: 'var(--muted)' }}>{open ? '▾' : '▸'}</span>
+        <span>
+          {waiting.length
+            ? `${waiting.length} ${waiting.length === 1 ? 'file' : 'files'} waiting`
+            : 'No files waiting'}
+        </span>
+      </button>
+
+      {/* A folder that cannot be read is asking for something, so it never collapses: the roll-call
+          below is the routine half, and this is the half that would otherwise be hidden behind a
+          disclosure nobody opened. */}
+      {sources.filter(source => source.watch_notice).map(source => (
+        <div key={source.id} style={{ fontSize: 12, color: 'var(--muted)' }}>
+          <span style={{ color: 'var(--text)' }}>{source.name}</span>
+          {' — '}
+          <span style={{ color: 'var(--danger)' }}>{source.watch_notice}</span>
         </div>
-      </div>
+      ))}
 
-      <div style={{ display: 'grid', gap: 4 }}>
-        {sources.map(source => (
-          <div key={source.id} style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all' }}>
-            <span style={{ color: 'var(--text)' }}>{source.name}</span>
-            {' — '}
-            {source.watch_enabled ? source.watch_dir : `${source.watch_dir} (paused)`}
-            {source.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {source.watch_notice}</span> : null}
-          </div>
-        ))}
-      </div>
-
-      {waiting.length ? (
+      {open ? (
         <div style={{ display: 'grid', gap: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>
-            {/* "Waiting", not "available": the count also carries a file that errored and one whose
-                post-import delete failed, neither of which can be imported. Each row states its own
-                state and reason, so the heading only has to be a true count. */}
-            {waiting.length} {waiting.length === 1 ? 'file' : 'files'} waiting
-          </div>
-          {waiting.map(file => (
-            <div
-              key={file.id}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 12, flexWrap: 'wrap',
-                border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px',
-                background: 'var(--surface2)',
-              }}
-            >
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13, wordBreak: 'break-all' }}>{file.filename}</div>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                  {STATE_LABELS[file.state] || file.state}{file.reason ? ` · ${file.reason}` : ''}
+          {waiting.length ? (
+            <div style={{
+              display: 'grid', gap: 8,
+              maxHeight: WAITING_LIST_MAX_HEIGHT, overflowY: 'auto',
+            }}>
+              {waiting.map(file => (
+                <div
+                  key={file.id}
+                  style={{
+                    display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${WAITING_ROW_ACTIONS_WIDTH}px`,
+                    alignItems: 'center', gap: 12,
+                    border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px',
+                    background: 'var(--surface2)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, wordBreak: 'break-all' }}>{file.filename}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                      {STATE_LABELS[file.state] || file.state}{file.reason ? ` · ${file.reason}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    {file.state === 'purge_failed' ? null : (
+                      <Button small onClick={() => openInImportFlow(file)} disabled={opening === file.id}>
+                        {opening === file.id ? 'Opening…' : 'Import…'}
+                      </Button>
+                    )}
+                    <Button variant="ghost" small onClick={() => dismiss(file)}>Dismiss</Button>
+                  </div>
                 </div>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {file.state === 'purge_failed' ? null : (
-                  <Button small onClick={() => openInImportFlow(file)} disabled={opening === file.id}>
-                    {opening === file.id ? 'Opening…' : 'Import…'}
-                  </Button>
-                )}
-                <Button variant="ghost" small onClick={() => dismiss(file)}>Dismiss</Button>
-              </div>
+              ))}
             </div>
-          ))}
+          ) : null}
+
+          {/* The folders themselves, read back rather than managed: setting one is the Folder button on
+              the File Sources tab. Below the files because they are what the reader came for. */}
+          <div style={{ display: 'grid', gap: 4, paddingTop: waiting.length ? 8 : 0, borderTop: waiting.length ? '1px solid var(--border)' : undefined }}>
+            {sources.map(source => (
+              <div key={source.id} style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all' }}>
+                <span style={{ color: 'var(--text)' }}>{source.name}</span>
+                {source.watch_enabled ? null : <> <WatchPausedPill /></>}
+                {' — '}
+                {source.watch_dir}
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </Card>

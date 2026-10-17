@@ -3200,15 +3200,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         </Card>
       ) : null}
 
-      {/* Above the file importer, because what it reports is work already waiting rather
-          than another thing to start. Renders nothing at all until some source names a folder. */}
-      {view === 'import' && (
-        <WatchedFoldersPanel
-          onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
-          onImported={() => api.listBatches().then(setBatches).catch(() => { })}
-        />
-      )}
-
       {/* The two ways data arrives, side by side: drop a file, or pull from a connection. They are the
           same intent and produce the same artifact — an import card in the history below. The connections
           card renders nothing until something is connected, and the row wraps once it cannot fit both. */}
@@ -3253,6 +3244,17 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             onChanged={refreshBatches}
           />
         </div>
+      )}
+
+      {/* Below the two ways data arrives and at full page width: what it reports is work already
+          waiting rather than another thing to start, but its height is the number of files waiting, so
+          above them it pushed both off the top of the page. Here, an open list pushes down only the
+          import history. Renders nothing at all until some source names a folder. */}
+      {view === 'import' && (
+        <WatchedFoldersPanel
+          onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
+          onImported={() => api.listBatches().then(setBatches).catch(() => { })}
+        />
       )}
 
       {/* Held while the unreadable-rows viewer, which floats above this, still needs the staged file. */}

@@ -4,10 +4,12 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { formatTimestamp } from '../../lib/utils.js'
-import { AppConfirmDialog, AppDialog, Button, Input, Select, Toggle } from '../ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Input, Toggle } from '../ui.jsx'
 import { SOURCE_ROW_GRID_COLUMNS, TRUNCATED_CELL_STYLE } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import WatchedFolderDialog from './WatchedFolderDialog.jsx'
+import AmazonAccountPicker from './AmazonAccountPicker.jsx'
+import WatchPausedPill from './WatchPausedPill.jsx'
 
 // Amazon in the data-source list.
 //
@@ -34,13 +36,13 @@ const ROW_ACTION_STYLE = {
   color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '3px 8px',
 }
 
-// What a source's folder setting amounts to, in the words the watched-folder status uses.
+// What a source's folder setting amounts to. Whether it is *switched on* is not in here: that rides
+// the label above as a pill, where the cell's truncation cannot clip it.
 function folderSummary(profile) {
-  if (!profile.watch_dir) return 'No folder watched'
-  return profile.watch_enabled ? profile.watch_dir : `${profile.watch_dir} (off)`
+  return profile.watch_dir || 'No folder watched'
 }
 
-function AmazonSourceEditor({ profile, accounts, onClose, onSaved }) {
+function AmazonSourceEditor({ profile, accounts, onClose, onSaved, onAccountCreated }) {
   const [name, setName] = useState(profile?.name || '')
   const [accountId, setAccountId] = useState(profile?.account_id || '')
   const [pattern, setPattern] = useState(profile?.filename_pattern || '')
@@ -62,10 +64,6 @@ function AmazonSourceEditor({ profile, accounts, onClose, onSaved }) {
     } finally { setSaving(false) }
   }
 
-  const accountOptions = [
-    { value: '', label: 'Select an Amazon account…' },
-    ...accounts.map(a => ({ value: a.id, label: a.display_name || a.name })),
-  ]
   return (
     <AppDialog
       title={profile ? 'Edit Amazon source' : 'Add Amazon source'}
@@ -74,7 +72,9 @@ function AmazonSourceEditor({ profile, accounts, onClose, onSaved }) {
       actions={(
         <>
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={save} disabled={saving || !name.trim()}>{saving ? 'Saving…' : 'Save'}</Button>
+          {/* The account is required, not optional: a source saved without one takes no file — its
+              watched folder parks every export it finds, with no sign here that it would. */}
+          <Button onClick={save} disabled={saving || !name.trim() || !accountId}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
       )}
     >
@@ -85,7 +85,16 @@ function AmazonSourceEditor({ profile, accounts, onClose, onSaved }) {
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <label htmlFor={`${fieldPrefix}-account`}>Import into account</label>
-          <Select id={`${fieldPrefix}-account`} value={accountId} onChange={setAccountId} options={accountOptions} />
+          {/* The same picker the import form shows, so a source can be set up before the account it
+              imports into exists — which is the order it happens in the first time. */}
+          <AmazonAccountPicker
+            id={`${fieldPrefix}-account`}
+            accounts={accounts}
+            value={accountId}
+            onChange={setAccountId}
+            onCreated={onAccountCreated}
+            onError={setError}
+          />
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <label htmlFor={`${fieldPrefix}-pattern`}>Filename contains</label>
@@ -157,7 +166,7 @@ export default function AmazonSourcesSection({ batches = [] }) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button type="button" style={ROW_ACTION_STYLE} onClick={() => setEditing({ profile: null })}>
-            + Add source
+            + New Amazon source
           </button>
         </div>
       </div>
@@ -172,7 +181,10 @@ export default function AmazonSourcesSection({ batches = [] }) {
             </div>
           </div>
           <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-            <span style={labelStyle}>Watched folder</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={labelStyle}>Watched folder</span>
+              {profile.watch_dir && !profile.watch_enabled ? <WatchPausedPill /> : null}
+            </span>
             <span style={{ ...cellValueStyle, ...TRUNCATED_CELL_STYLE }}
               title={profile.watch_notice || folderSummary(profile)}>
               {folderSummary(profile)}
@@ -200,7 +212,8 @@ export default function AmazonSourcesSection({ batches = [] }) {
       ))}
 
       {editing ? (
-        <AmazonSourceEditor profile={editing.profile} accounts={accounts} onClose={() => setEditing(null)} onSaved={load} />
+        <AmazonSourceEditor profile={editing.profile} accounts={accounts} onClose={() => setEditing(null)}
+          onSaved={load} onAccountCreated={load} />
       ) : null}
       {watchProfile ? (
         <WatchedFolderDialog profile={watchProfile} canEdit={canSetWatchFolder}

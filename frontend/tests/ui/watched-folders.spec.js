@@ -8,8 +8,8 @@ import { expect, test } from '@playwright/test'
 // and which files the scan refuses; what only a browser can show is the join between them — that a file
 // nobody uploaded lands in the import history as an ordinary card, and that the refused one hands itself
 // back to the *real* import flow when its button is pressed. That second half is the risk worth a
-// browser: the panel is mounted above the upload stage and calls the page's own `handleFile`, so it is a
-// claim about where the component sits rather than about what it renders.
+// browser: the panel is mounted on the page beside the upload stage and calls the page's own
+// `handleFile`, so it is a claim about where the component sits rather than about what it renders.
 //
 // The folder is a temp directory on this machine, which is also the backend's machine here. Scans are
 // driven through the endpoint rather than by waiting for the page's own trigger, because a file has to be

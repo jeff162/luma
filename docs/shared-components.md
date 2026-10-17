@@ -146,9 +146,11 @@ header comment of its own file. Paths are under `frontend/src/`.
 | Use | For | Where |
 | --- | --- | --- |
 | `AccountMatchSelect` | Choosing which existing account a source account maps to. | `components/importExport/AccountMatchSelect.jsx` |
+| `AmazonAccountPicker` | Choosing which Amazon account order files import into, with inline create. | `components/importExport/AmazonAccountPicker.jsx` |
+| `WatchPausedPill` | Marking a watched folder that is switched off, on any surface that lists one. | `components/importExport/WatchPausedPill.jsx` |
 | `ImportNewAccountFields` | The name and type fields for an account created while mapping. | `components/ImportNewAccountFields.jsx` |
 | `SourceAccountChip` / `OutcomeChip` | Reporting what each source account contributed to one import or sync. | `components/importExport/SourceAccountChip.jsx` |
-| `LastSyncSummary` / `StatusPill` | Reporting a connection's last sync. | `components/connections/ConnectionStatus.jsx` |
+| `LastSyncSummary` / `StatusPill` | Reporting a connection's last sync. `StatusPill` also carries any at-a-glance state elsewhere: `danger`, `warning`, `accent2`, or `muted` for a state that is neither normal nor wrong. | `components/connections/ConnectionStatus.jsx` |
 | `providerSummaryLine` | The one-line status in a provider card's header. | `lib/connectionSummary.js` |
 | `useConnectionOperations` | Anything done to a connection other than configuring it: sync, fetch more history, refresh accounts, remove synced transactions. It owns the vault gating. | `lib/useConnectionOperations.js` |
 | `AccountIdentityPrompt` | Asking whether two accounts are the same real-world account. | `components/importExport/AccountIdentityPrompt.jsx` |
