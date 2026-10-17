@@ -372,7 +372,7 @@ def suggest_split(conn: sqlite3.Connection, txn_id: str) -> Optional[dict]:
         category_id = None
         if amount is not None:
             match = categorize_transaction(
-                item["description"], item["description"], item["description"],
+                item["description"], item["description"],
                 amount, conn,
                 owner_id=txn["owner_id"], account_id=txn["account_id"], rules=rules,
             )

@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 import { Card, Button, Spinner, EmptyState, AppConfirmDialog } from '../ui.jsx'
+import { RuleMatcherText } from '../RuleSummary.jsx'
 
 // Whether a trashed transaction was removed by import reconciliation (an Amazon merge or per-copy
 // discard) rather than deleted directly by the user — the discriminator between the two
@@ -395,30 +396,22 @@ export function RulesTrashSection({ onChanged }) {
           <EmptyState message="No trashed rules." />
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            {items.map((rule, index) => {
-              const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
-              return (
-                <div key={rule.id} style={{
-                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16, alignItems: 'center',
-                  padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', background: 'var(--surface2)',
-                }}>
-                  <div style={{ minWidth: 0, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
-                    {clauses.map((c, i) => (
-                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
-                        <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{c}</span>
-                      </span>
-                    ))}
-                    {rule.category_name ? <span style={{ color: 'var(--muted)' }}>→ {rule.category_name}</span> : null}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                    <Button small variant="ghost" onClick={() => restore(rule.id)} disabled={workingId === rule.id}>Restore</Button>
-                    <Button small variant="ghost" onClick={() => purge(rule.id)} disabled={workingId === rule.id}
-                      style={{ color: 'var(--danger)' }}>Remove</Button>
-                  </div>
+            {items.map((rule, index) => (
+              <div key={rule.id} style={{
+                display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16, alignItems: 'center',
+                padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', background: 'var(--surface2)',
+              }}>
+                <div style={{ minWidth: 0, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
+                  <RuleMatcherText rule={rule} />
+                  {rule.category_name ? <span style={{ color: 'var(--muted)' }}>→ {rule.category_name}</span> : null}
                 </div>
-              )
-            })}
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <Button small variant="ghost" onClick={() => restore(rule.id)} disabled={workingId === rule.id}>Restore</Button>
+                  <Button small variant="ghost" onClick={() => purge(rule.id)} disabled={workingId === rule.id}
+                    style={{ color: 'var(--danger)' }}>Remove</Button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Card>

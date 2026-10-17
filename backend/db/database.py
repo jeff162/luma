@@ -455,7 +455,7 @@ def _backfill_display_name_source(conn):
             continue  # no name to attribute; leave source NULL
         source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"],
             effective_account_id=row["effective_account_id"], rules=rules, source_text=source_text,
         )
@@ -723,7 +723,7 @@ def _backfill_rule_last_effect_date(conn):
             continue
         source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"],
             effective_account_id=row["effective_account_id"], effective_account_type=row["effective_account_type"],
             rules=rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
@@ -3019,11 +3019,12 @@ def init_db(db_path: str | None = None):
                 -- (description + extra evidence fields like "Original Statement"), not just the
                 -- merchant/raw/display name. Opt-in per rule; part of the rule's matcher identity.
                 match_source_text INTEGER NOT NULL DEFAULT 0,
-                -- Optional multi-clause merchant matcher (JSON) that supersedes the single-substring
-                -- `keyword` when present: {"op":"and","clauses":[{"type":"contains","text":"…"}, …]}.
-                -- v1 is AND-only / contains-only — every clause's text must be a substring of the row's
-                -- name (or source text). `keyword` mirrors the sorted, joined clause texts so search and
-                -- LENGTH-based specificity ordering keep working; NULL match_expr = a plain keyword rule.
+                -- Optional merchant matcher (JSON) that supersedes the single-substring `keyword` when
+                -- present: filters alone as {"op":"and","clauses":[{"type":"contains","text":"…"}, …]},
+                -- or alternatives with filters as {"op":"any_and","any":[…],"all":[…]} — at least one
+                -- alternative and every filter must be a substring of the row's name (or source text).
+                -- `keyword` mirrors the joined texts so search keeps working; NULL = a plain keyword rule.
+                -- See categorizer.build_match_expr for the canonical form.
                 match_expr TEXT,
                 -- 1 = this rule declares a recurring series: its matches are members of the
                 -- recurring_series row that points back here via rule_id (see recurring_series).

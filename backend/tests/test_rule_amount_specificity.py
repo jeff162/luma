@@ -72,7 +72,7 @@ class RuleAmountSpecificityTests(unittest.TestCase):
     def _categorize(self, amount, name="TOWN OF HARBORLINE"):
         with self._use_db_path():
             with get_db() as conn:
-                result = categorize_transaction(name, name, name, amount, conn, owner_id=SHARED_OWNER_ID)
+                result = categorize_transaction(name, name, amount, conn, owner_id=SHARED_OWNER_ID)
         if not result:
             return None
         for label, cid in self.cats.items():

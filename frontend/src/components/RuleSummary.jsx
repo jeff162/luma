@@ -3,8 +3,8 @@
 
 /*
  * One rule rendered compactly, for the surfaces that list rules *about* something rather than for
- * editing them (the stale-rule cleanup, the overlap check). The matcher's clauses read as monospace
- * terms joined by "and"; the rule's actions — category, tags, rename, recurring — follow as badges.
+ * editing them (the stale-rule cleanup, the overlap check). The matcher reads as monospace terms
+ * (`RuleMatcherText`); the rule's actions — category, tags, rename, recurring — follow as badges.
  *
  * It works from a rule row alone. Both `/rules` and the rule-display SQL behind the cleanup and overlap
  * endpoints return the resolved `owner_name` / `account_name` / `account_mask` / `category_name`
@@ -20,6 +20,7 @@ import { Badge } from './ui.jsx'
 import { TagBadge } from './TagUi.jsx'
 import { amountConditionSummary } from './RuleForm.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
+import { ruleMatcherTerms } from '../lib/ruleMatcher.js'
 
 // The rule's scope clauses as plain sentence fragments, in the order the rule form presents them.
 function ruleConditionParts(rule) {
@@ -33,14 +34,21 @@ function ruleConditionParts(rule) {
   return parts
 }
 
-function RuleMatcherText({ rule }) {
-  const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
+const joinerStyle = { color: 'var(--muted)', fontWeight: 400 }
+
+// The matcher as monospace terms: alternatives joined by "or" (bracketed when filters follow), then
+// filters joined by "and". Shared by every surface that lists rules, so a matcher reads one way.
+export function RuleMatcherText({ rule }) {
   return (
     <>
-      {clauses.map((clause, i) => (
+      {ruleMatcherTerms(rule).map((term, i) => (
         <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
-          <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{clause}</span>
+          {term.joiner ? <span style={joinerStyle}>{term.joiner}</span> : null}
+          <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>
+            {term.open ? <span style={joinerStyle}>(</span> : null}
+            {term.text}
+            {term.close ? <span style={joinerStyle}>)</span> : null}
+          </span>
         </span>
       ))}
     </>

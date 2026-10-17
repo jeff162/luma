@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.services.categorizer import build_match_expr
 from backend.services.rule_overlaps import dismiss_finding, find_rule_overlaps, restore_finding
 
 
@@ -86,11 +87,13 @@ class RuleOverlapsTests(unittest.TestCase):
     def _rule(self, keyword="town of harborline", *, rule_id=None, amount_min=None, amount_max=None,
               owner_id=None, account_id=None, account_type=None, clauses=None, debit_credit="both",
               is_managed=0, match_source_text=0, deleted_at=None, category_id=_UNSET,
-              clean_name=None):
+              clean_name=None, alternatives=None):
         rule_id = rule_id or str(uuid.uuid4())
         category_id = self.category_id if category_id is self._UNSET else category_id
         match_expr = None
-        if clauses:
+        if alternatives:
+            match_expr, keyword = build_match_expr(clauses, alternatives)
+        elif clauses:
             texts = sorted(clauses)
             keyword = " ".join(texts)
             match_expr = (
@@ -255,6 +258,25 @@ class RuleOverlapsTests(unittest.TestCase):
         broad = self._rule(keyword="northgate")
         narrow = self._rule(clauses=["northgate", "prime"])
         self.assertEqual(self._findings("matcher_nesting")[0]["rule_ids"], [broad, narrow])
+
+    def test_a_keyword_containing_an_alternative_nests_inside_the_alternatives_rule(self):
+        broad = self._rule(alternatives=["northgate", "nrthgt"])
+        narrow = self._rule(keyword="northgate prime")
+        self.assertEqual(self._findings("matcher_nesting")[0]["rule_ids"], [broad, narrow])
+
+    def test_one_of_the_alternatives_alone_is_the_narrower_rule(self):
+        # The plain rule matches a subset of the alternatives rule's rows, so it is the narrower one and
+        # wins, although the alternatives rule's joined text is longer.
+        broad = self._rule(alternatives=["northgate", "nrthgt"])
+        narrow = self._rule(keyword="northgate")
+        finding = self._findings("matcher_nesting")[0]
+        self.assertEqual(finding["rule_ids"], [broad, narrow])
+        self.assertEqual(finding["winner_rule_id"], narrow)
+
+    def test_a_keyword_inside_only_some_alternatives_does_not_nest(self):
+        self._rule(alternatives=["northgate", "nrthgt"])
+        self._rule(keyword="north")
+        self.assertEqual(self._findings("matcher_nesting"), [])
 
     def test_the_winner_is_not_always_the_longer_keyword(self):
         # The whole reason this finding is worth reading: scope outranks keyword length, so the short

@@ -619,13 +619,31 @@ category, a rename (`clean_name`), tags, a recurring series, or any combination.
 
 ### The matcher
 
-- **Merchant text** is either a single `keyword` (case-insensitive substring) or a `match_expr`: up to
-  three `contains` clauses ANDed, stored as `{"op":"and","clauses":[{"type":"contains","text":"…"}]}`.
-  A multi-clause rule matches when every clause appears in the row's name text, in any order.
-- When `match_expr` is set, `keyword` is derived from the clause texts (sorted, lowercased,
-  space-joined), so it stays the search target and its length keeps driving specificity. `match_expr`
-  is NULL for a single-keyword rule. `build_match_expr` owns canonicalization, and every match site
-  uses `merchant_matcher_matches`.
+- **Merchant text** is a set of **alternatives**, at least one of which must appear, then **filters**,
+  every one of which must also appear: `(alt₁ or alt₂) and f₁ and f₂`, each a case-insensitive
+  `contains`, in any order. It is how one rule claims the several descriptors one payee arrives under.
+  A plain rule is a single `keyword`. Filters alone are stored as
+  `{"op":"and","clauses":[{"type":"contains","text":"…"}]}`; with alternatives, as
+  `{"op":"any_and","any":[…],"all":[…]}`. `MAX_MATCH_CLAUSES` caps each list.
+- **The text matched is the names as they arrived**: `merchant_name` and `raw_name`
+  (`categorizer.name_match_text`), plus the import evidence for a `match_source_text` rule. Never
+  `display_name`, which holds what a rule's `clean_name` or the user last wrote: matching it would let
+  one rule match another's output, so a second categorization pass would not see what the first saw,
+  and a rename meant for one rule could hand the row to an unrelated rule with a longer keyword. A
+  rule-suggestion keyword is taken from the same two names, so an accepted suggestion matches the rows
+  it came from.
+- **Every alternative gets the same filters.** "`alt₁` must also contain X but `alt₂` need not" is two
+  different conditions, and belongs in two rules.
+- **Canonical form**, owned by `build_match_expr`: each list is trimmed, lowercased, de-duplicated and
+  sorted, and a single alternative folds into the filters, so two spellings of one matcher store one
+  form and matcher identity cannot fork a duplicate. `match_expr` is NULL for a single-keyword rule.
+  `keyword` is derived from every text (alternatives, then filters, space-joined) so it stays the search
+  target. `merchant_matcher` parses a stored matcher, and every match site uses
+  `merchant_matcher_matches`.
+- **An alternatives matcher carries no `clauses` key, so a build that predates it fails closed.** Such a
+  build reads only `clauses`, finds none, and falls back to `keyword`, which as one joined substring
+  matches essentially nothing. Storing the filters under `clauses` would instead have it fire on the
+  filters alone, far more broadly than the rule was written.
 - **`match_source_text`** (default off) tests the text against the row's captured import free text as
   well: the `import_evidence_json` description slot and extra fields, not the account label. The
   per-row evidence parse runs only when the rule set holds at least one such rule. Import and sync both
@@ -664,7 +682,11 @@ by the engine, by the preview and apply in `routers/rules`, and by the rules lis
 1. **Scope**, in this order: an owner-scoped rule, then one pinned to a single account, then one
    covering an account type, then a global one.
 2. **Text length**: `LENGTH(keyword)`. For a multi-clause rule that is the summed clause length, so a
-   rule whose clauses are a superset of another's is always longer and wins where both match.
+   rule whose clauses are a superset of another's is always longer and wins where both match. An
+   alternative widens a rule rather than narrowing it, so a rule with alternatives is as broad as its
+   shortest one: its length is that alternative plus every filter, with the joined keyword's separators,
+   which ranks it exactly as the AND rule of its shortest alternative. It is computed from `match_expr`
+   in the ORDER BY rather than stored, so no write path can leave it stale.
 3. **Amount span**: `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)`. A range contained in
    another has the smaller span, so `>= 3000` beats `>= 300`. Counting bounds cannot distinguish them.
 4. **Rule id**, so a tie is stable across a `VACUUM` or an index change.
@@ -686,11 +708,12 @@ winner; that case is reported, below.
   all three require their scopes to tie, since a scope difference is a refinement precedence reads
   first. An **amount overlap** is two rules with the same matcher whose ranges intersect with neither
   containing the other. A **matcher co-match** is two matchers that neither repeat nor contain each
-  other, both matching a real transaction. A **matcher nesting** is one matcher inside another. Which
-  rule wins is read from `rule_specificity_order_sql`.
+  other, both matching a real transaction. A **matcher nesting** is one matcher inside another: every
+  row the inner one matches is guaranteed to carry each of the outer one's filters and one of its
+  alternatives. Which rule wins is read from `rule_specificity_order_sql`.
 - **The co-match check reads the ledger; nothing else here does.** Whether two unrelated keywords ever
   land in one merchant name is a fact about the transactions, not about `category_rule`. It matters
-  because precedence settles such a pair on `LENGTH(keyword)`, and that term stands for containment —
+  because precedence settles such a pair on text length, and that term stands for containment —
   between matchers that do not nest there is no subset relation for it to stand for, so it decides on
   nothing. See *Scale and limits* for the scan.
 - **A pair whose rules file identically is information, not a warning.** `_actions_agree` compares
@@ -2505,9 +2528,6 @@ and owed decisions*.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
 - **Dedupe follow-ups**, including the prefix-stripping item and auto-restore after an undo.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
-- **Alternatives in a merchant matcher** (*any of these*), and dropping `display_name` from the
-  matcher haystack once nothing needs the rename feedback loop.
-  → [`backlog/rule-matcher-alternatives.md`](backlog/rule-matcher-alternatives.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
 - **`clean_name` / merchant rename: keep or drop.**

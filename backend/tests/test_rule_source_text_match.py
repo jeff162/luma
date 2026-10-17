@@ -133,7 +133,7 @@ class RuleSourceTextMatchTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             flagged = create_rule(RuleCreate(keyword=KEYWORD, category_id=self.membership, match_source_text=True))
             result = categorize_transaction(
-                "Fablecard", "FABLECARD", None, -695.0, conn,
+                "Fablecard", "FABLECARD", -695.0, conn,
                 owner_id=SHARED_OWNER_ID, account_id=self.account,
                 source_text=ORIGINAL_STATEMENT,
             )
@@ -141,7 +141,7 @@ class RuleSourceTextMatchTests(unittest.TestCase):
             self.assertEqual(result["matched_rule_ids"], [flagged["id"]])
             # No source text in hand → no match, even for the flagged rule.
             self.assertIsNone(categorize_transaction(
-                "Fablecard", "FABLECARD", None, -695.0, conn,
+                "Fablecard", "FABLECARD", -695.0, conn,
                 owner_id=SHARED_OWNER_ID, account_id=self.account,
                 source_text=None,
             ))

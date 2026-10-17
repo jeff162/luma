@@ -1254,7 +1254,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 return False
 
             result = categorize_transaction(
-                t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
+                t["merchant_name"], t["raw_name"], t["amount"], conn,
                 owner_id=acc["owner_id"], account_id=acc["id"], rules=rules, rule_tags_by_id=rule_tags_by_id,
                 source_text=source_match_text_from_json(evidence_json) if needs_source_text else None,
             )

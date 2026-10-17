@@ -339,6 +339,10 @@ export function RuleEditorModal({
             onCategoriesChanged={onCategoriesChanged}
             onTagCreated={onTagCreated}
             mode={matchOnly ? 'match-only' : 'full'}
+            // A suggestion is one keyword plus scope all the way through the review (grouping, coverage,
+            // accept), and carries no account type, so the editor offers only what an accepted suggestion
+            // keeps. Further words or spellings, and an account type, are set on the rule once it exists.
+            suggestionFields
           />
 
           {matchingRowsPanel ? (

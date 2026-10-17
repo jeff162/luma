@@ -21,7 +21,8 @@ from backend.services.categorizer import (
     source_match_text_from_json,
     build_match_expr,
     merchant_matcher_matches,
-    match_expr_clause_texts,
+    merchant_matcher,
+    name_match_text,
     bump_rule_effect_dates,
     rule_scope_account_sql,
     rule_specificity_order_sql,
@@ -56,6 +57,13 @@ def _drop_recurring_series_for_rule(conn, rule_id: str) -> None:
         conn.execute("DELETE FROM recurring_series WHERE id = ?", (s["id"],))
 
 
+def _matcher_series_name(rule) -> str:
+    """A name for a series whose rule sets none: the matcher's text, taking only the first of any
+    alternatives, since they are spellings of one payee rather than parts of its name."""
+    matcher = merchant_matcher(rule["keyword"], rule["match_expr"])
+    return " ".join(matcher.alternatives[:1] + matcher.filters)
+
+
 def ensure_rule_series(conn, rule_id: str, cadence: str | None) -> str:
     """Create (or refresh) the recurring series a rule with is_recurring=1 owns. The series is source='rule'
     and user-owned (confirmed), so scans preserve it; its membership is the rule's matches, filled right
@@ -69,9 +77,10 @@ def ensure_rule_series(conn, rule_id: str, cadence: str | None) -> str:
     period_days = _CADENCE_DAYS[cadence]
     if existing is None:
         rule = conn.execute(
-            "SELECT keyword, clean_name, category_id, account_id FROM category_rule WHERE id = ?", (rule_id,)
+            "SELECT keyword, match_expr, clean_name, category_id, account_id FROM category_rule WHERE id = ?",
+            (rule_id,),
         ).fetchone()
-        display_name = ((rule["clean_name"] or rule["keyword"] or "Recurring") if rule else "Recurring").strip()
+        display_name = ((rule["clean_name"] or _matcher_series_name(rule) or "Recurring") if rule else "Recurring").strip()
         series_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO recurring_series
@@ -130,11 +139,7 @@ def _txn_source_match_text(txn) -> str:
 
 
 def _find_matching_rule(conn, txn):
-    text = " ".join(filter(None, [
-        txn["display_name"],
-        txn["merchant_name"],
-        txn["raw_name"],
-    ])).lower()
+    text = name_match_text(txn["merchant_name"], txn["raw_name"])
     source_text = _txn_source_match_text(txn)
     if not text and not source_text:
         return None
@@ -357,9 +362,11 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
 
 class RulePreview(BaseModel):
     keyword:      str
-    # Optional multi-clause (AND / contains) merchant matcher; when it resolves to >= 2 clauses it
-    # supersedes `keyword` (which the backend then derives from the clause texts). See build_match_expr.
+    # Optional merchant matcher: `clauses` are the filters every match must contain, `alternatives` the
+    # texts at least one of which it must contain. Either, when it resolves to more than one text in all,
+    # supersedes `keyword` (which the backend then derives from the matcher). See build_match_expr.
     clauses:      Optional[list[str]] = None
+    alternatives: Optional[list[str]] = None
     category_id:  Optional[str] = None
     amount_min:   Optional[float] = None
     amount_max:   Optional[float] = None
@@ -410,7 +417,7 @@ _RULE_MATCHES_ROW_LIMIT = 500
 @router.post("/preview")
 def preview_rule(body: RulePreview):
     """Return transactions that would actually change if this rule were applied."""
-    keyword, match_expr = _resolve_matcher(body.clauses, body.keyword)
+    keyword, match_expr = _resolve_matcher(body.clauses, body.alternatives, body.keyword)
     rule = {
         "keyword":     keyword,
         "match_expr":  match_expr,
@@ -495,9 +502,10 @@ def rule_matches(rule_id: str):
 
 class RuleCreate(BaseModel):
     keyword:     str
-    # Optional multi-clause (AND / contains) merchant matcher; a request that resolves to >= 2 clauses
-    # supersedes `keyword` and the stored keyword is derived from the clause texts (see build_match_expr).
+    # Optional merchant matcher, as on RulePreview: a request that resolves to more than one text in all
+    # supersedes `keyword` and the stored keyword is derived from the matcher (see build_match_expr).
     clauses:     Optional[list[str]] = None
+    alternatives: Optional[list[str]] = None
     category_id: Optional[str] = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
@@ -516,9 +524,11 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     keyword:     Optional[str]   = None
-    # When provided, replaces the merchant matcher: >= 2 clauses store a match_expr (keyword derived from
-    # them); 0/1 clause clears any existing match_expr back to a plain keyword. None leaves it unchanged.
+    # When either is provided, the pair replaces the merchant matcher (an omitted one counts as empty):
+    # more than one text in all stores a match_expr with the keyword derived from it; a single text clears
+    # any existing match_expr back to a plain keyword. Both None leaves the matcher unchanged.
     clauses:     Optional[list[str]] = None
+    alternatives: Optional[list[str]] = None
     category_id: Optional[str]   = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
@@ -588,11 +598,7 @@ def list_rules(search: Optional[str] = Query(None)):
         for rule in rules:
             rule["tags"] = tag_map.get(rule["id"], [])
             rule["tag_ids"] = [tag["id"] for tag in rule["tags"]]
-            # A uniform clause list for the client: the multi-clause texts when match_expr is set, else the
-            # single keyword as a one-element list (so the editor and list render one way for both shapes).
-            rule["clauses"] = match_expr_clause_texts(rule.get("match_expr")) or (
-                [rule["keyword"]] if rule["keyword"] else []
-            )
+            _add_matcher_lists(rule)
     return rules
 
 
@@ -625,12 +631,22 @@ def match_rule_for_transaction(txn_id: str):
     return {"rule_id": rule_id}
 
 
-def _resolve_matcher(clauses, keyword_field) -> tuple[str, Optional[str]]:
-    """Resolve a request's `(keyword_to_store, match_expr_json_or_None)` from its optional `clauses` list and
-    its plain `keyword` field. >= 2 clauses derive the keyword from the canonical clause texts and store a
-    match_expr; 0/1 clause (or no `clauses` at all) is a plain single-substring rule with no expr."""
-    if clauses is not None:
-        match_expr, derived = build_match_expr(clauses)
+def _add_matcher_lists(rule: dict) -> None:
+    """The matcher in the uniform shape the client renders and edits: `clauses` (the filters, or the single
+    keyword as a one-element list) and `alternatives`, so the editor and lists read one way for every
+    stored shape."""
+    matcher = merchant_matcher(rule["keyword"], rule.get("match_expr"))
+    rule["clauses"] = [text for text in matcher.filters if text]
+    rule["alternatives"] = list(matcher.alternatives)
+
+
+def _resolve_matcher(clauses, alternatives, keyword_field) -> tuple[str, Optional[str]]:
+    """Resolve a request's `(keyword_to_store, match_expr_json_or_None)` from its optional `clauses` and
+    `alternatives` lists and its plain `keyword` field. More than one text in all derives the keyword from
+    the canonical matcher and stores a match_expr; a single text (or neither list at all) is a plain
+    single-substring rule with no expr."""
+    if clauses is not None or alternatives is not None:
+        match_expr, derived = build_match_expr(clauses, alternatives)
         if match_expr is not None:
             return derived, match_expr
         return (derived or (keyword_field or "").lower().strip()), None
@@ -719,7 +735,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
     """
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
-    keyword, match_expr = _resolve_matcher(body.clauses, body.keyword)
+    keyword, match_expr = _resolve_matcher(body.clauses, body.alternatives, body.keyword)
     if not keyword:
         raise HTTPException(status_code=400, detail="Rules need a merchant keyword or at least one match clause")
     existing = _existing_rule_for_matcher(conn, keyword, match_expr, body)
@@ -779,11 +795,11 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
 
 
 def _resulting_matcher(current: dict, body: RuleUpdate) -> tuple[str, Optional[str]]:
-    """The `(keyword, match_expr)` the rule will have after the patch: a provided `clauses` list replaces
-    the merchant matcher; an explicit `keyword` with no `clauses` becomes a plain single-substring matcher
-    (clearing any existing expr); otherwise both are left as they are."""
-    if body.clauses is not None:
-        return _resolve_matcher(body.clauses, body.keyword)
+    """The `(keyword, match_expr)` the rule will have after the patch: a provided `clauses` or
+    `alternatives` list replaces the merchant matcher; an explicit `keyword` with neither becomes a plain
+    single-substring matcher (clearing any existing expr); otherwise both are left as they are."""
+    if body.clauses is not None or body.alternatives is not None:
+        return _resolve_matcher(body.clauses, body.alternatives, body.keyword)
     if body.keyword is not None:
         return body.keyword.lower().strip(), None
     return current["keyword"], current["match_expr"]
@@ -918,10 +934,11 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
 
     # No collision — apply the patch.
     fields, params = [], []
-    # `clauses` or `keyword` redefines the merchant matcher; write keyword + match_expr together so the
-    # derived keyword and the stored expr can never drift (a clauses→single or single→clauses edit flips
-    # match_expr on or off). `resulting` already resolved both under _resulting_matcher's precedence.
-    if body.clauses is not None or body.keyword is not None:
+    # `clauses`, `alternatives` or `keyword` redefines the merchant matcher; write keyword + match_expr
+    # together so the derived keyword and the stored expr can never drift (a clauses→single or
+    # single→clauses edit flips match_expr on or off). `resulting` already resolved both under
+    # _resulting_matcher's precedence.
+    if body.clauses is not None or body.alternatives is not None or body.keyword is not None:
         fields.append("keyword = ?");    params.append(resulting["keyword"])
         fields.append("match_expr = ?"); params.append(resulting["match_expr"])
     if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
@@ -1221,7 +1238,7 @@ def _decorate_rule_rows(conn, rows):
     for rule in rules:
         rule["tags"] = tag_map.get(rule["id"], [])
         rule["tag_ids"] = [tag["id"] for tag in rule["tags"]]
-        rule["clauses"] = match_expr_clause_texts(rule.get("match_expr")) or ([rule["keyword"]] if rule["keyword"] else [])
+        _add_matcher_lists(rule)
     return rules
 
 

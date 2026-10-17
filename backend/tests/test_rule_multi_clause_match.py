@@ -9,6 +9,7 @@ the summed clause length ranks a subsuming rule above the one it subsumes. All d
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -22,7 +23,7 @@ from backend.routers.rules import (
     RuleCreate, RuleUpdate, create_rule_core, update_rule, delete_rule, _rule_affected_txn_ids,
 )
 from backend.services.categorizer import (
-    recategorize_all, build_match_expr, normalize_match_clauses, match_expr_clause_texts,
+    recategorize_all, build_match_expr, normalize_match_clauses, merchant_matcher,
 )
 
 
@@ -39,7 +40,7 @@ class BuildMatchExprUnitTests(unittest.TestCase):
     def test_multi_clause_derives_sorted_keyword_and_expr(self):
         expr, keyword = build_match_expr(["Flash", "amazon", "Shoebox"])
         self.assertEqual(keyword, "amazon flash shoebox")  # sorted, lowercased, space-joined
-        self.assertEqual(match_expr_clause_texts(expr), ["amazon", "flash", "shoebox"])
+        self.assertEqual(merchant_matcher(keyword, expr).filters, ("amazon", "flash", "shoebox"))
 
     def test_normalize_dedupes_trims_and_caps_at_three(self):
         self.assertEqual(normalize_match_clauses([" A ", "a", "b", "c", "d"]), ["a", "b", "c"])
@@ -47,6 +48,27 @@ class BuildMatchExprUnitTests(unittest.TestCase):
     def test_clause_order_is_canonical(self):
         # Reordering the same clauses yields the same expr + keyword (identity-stable).
         self.assertEqual(build_match_expr(["a", "b"]), build_match_expr(["b", "a"]))
+
+
+class AlternativesMatchExprUnitTests(unittest.TestCase):
+    """The alternatives half of the canonical form — no database."""
+
+    def test_alternatives_are_canonical(self):
+        self.assertEqual(
+            build_match_expr(["Market"], ["NRTHGT", "northgate"]),
+            build_match_expr(["market"], ["northgate", "nrthgt"]),
+        )
+
+    def test_a_single_alternative_is_a_filter(self):
+        self.assertEqual(build_match_expr(["market"], ["northgate"]), build_match_expr(["market", "northgate"]))
+        self.assertEqual(build_match_expr([], ["northgate"]), (None, "northgate"))
+
+    def test_an_older_build_finds_nothing_to_match_on(self):
+        # A build that predates alternatives reads only `clauses`, then falls back to the plain keyword.
+        # Filters stored under `clauses` would make it fire on the filters alone, far broader than the rule.
+        expr, keyword = build_match_expr(["market"], ["northgate", "nrthgt"])
+        self.assertNotIn("clauses", json.loads(expr))
+        self.assertNotIn(keyword, "northgate market")
 
 
 class MultiClauseMatchTests(unittest.TestCase):
@@ -173,6 +195,44 @@ class MultiClauseMatchTests(unittest.TestCase):
         self.assertEqual(single["status"], "created")
         self.assertNotEqual(multi["id"], single["id"])
 
+    # --- Alternatives ---------------------------------------------------------
+
+    def test_any_alternative_and_every_filter(self):
+        plain = self._txn("NORTHGATE MARKET")
+        variant = self._txn("NRTHGT MARKET #0412")
+        no_filter = self._txn("NORTHGATE FUEL")
+        no_alternative = self._txn("RIVERSTONE MARKET")
+        self._rule(["market"], self.cat_a, alternatives=["northgate", "nrthgt"])
+        self._recategorize()
+        self.assertEqual(self._cat(plain), self.cat_a)
+        self.assertEqual(self._cat(variant), self.cat_a)
+        self.assertIsNone(self._cat(no_filter))
+        self.assertIsNone(self._cat(no_alternative))
+
+    def test_an_alternatives_rule_ranks_on_its_shortest_alternative(self):
+        # Joined, the alternatives rule's text ("northgate nrthgt", 16) is longer than "northgate m" (11),
+        # but it is as broad as "nrthgt" (6), so the narrower plain rule wins the row both match.
+        txn = self._txn("NORTHGATE MKT")
+        self._rule([], self.cat_a, alternatives=["northgate", "nrthgt"])
+        self._rule(["northgate m"], self.cat_b)
+        self._recategorize()
+        self.assertEqual(self._cat(txn), self.cat_b)
+
+    def test_alternative_order_does_not_fork_a_duplicate(self):
+        self._rule(["market"], self.cat_a, alternatives=["northgate", "nrthgt"])
+        again = self._rule(["market"], self.cat_a, alternatives=["nrthgt", "northgate"])
+        self.assertEqual(again["status"], "duplicate")
+
+    def test_a_rename_does_not_feed_another_rule(self):
+        # Rules match the names as they arrived. If they read the rename too, the second pass would see
+        # "grocer market", hand the row to the longer rule, and categorizing twice would differ from once.
+        txn = self._txn("STOP SHOP 0412")
+        self._rule(["stop shop"], self.cat_a, clean_name="Grocer Market")
+        self._rule(["grocer market"], self.cat_b)
+        self._recategorize()
+        self._recategorize()
+        self.assertEqual(self._cat(txn), self.cat_a)
+
     # --- match_source_text interaction ---------------------------------------
 
     def test_clause_can_match_source_text(self):
@@ -220,7 +280,7 @@ class MultiClauseMatchTests(unittest.TestCase):
         self.assertIsNone(self._stored_match_expr(created["id"]))
         with self._use_db():
             update_rule(created["id"], RuleUpdate(clauses=["amazon", "prime"]))
-        self.assertEqual(match_expr_clause_texts(self._stored_match_expr(created["id"])), ["amazon", "prime"])
+        self.assertEqual(merchant_matcher("", self._stored_match_expr(created["id"])).filters, ("amazon", "prime"))
         with self._use_db():
             update_rule(created["id"], RuleUpdate(clauses=["amazon"]))
         self.assertIsNone(self._stored_match_expr(created["id"]), "back to one clause clears the expr")

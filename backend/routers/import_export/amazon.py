@@ -693,7 +693,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
     for row in rows:
         source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"],
             rules=rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
         )

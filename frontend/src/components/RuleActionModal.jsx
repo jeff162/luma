@@ -13,7 +13,7 @@ import { useState, useEffect } from 'react'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import RuleForm from './RuleForm.jsx'
+import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 import { OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
@@ -122,19 +122,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
   }
 
   const initialValues = state.mode === 'edit'
-    ? (rule ? {
-      keyword: rule.keyword,
-      amount_min: rule.amount_min ?? null,
-      amount_max: rule.amount_max ?? null,
-      debit_credit: rule.debit_credit || 'both',
-      owner_id: rule.owner_id || '',
-      account_id: rule.account_id || '',
-      catId: rule.category_id,
-      cleanName: rule.clean_name || '',
-      tagIds: rule.tag_ids || [],
-      is_recurring: !!rule.is_recurring,
-      cadence: rule.recurring_cadence || 'monthly',
-    } : null)
+    ? (rule ? ruleFormInitialValues(rule) : null)
     : {
       keyword: (state.keywordSource || '').toLowerCase().trim(),
       cleanName: '',

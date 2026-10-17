@@ -10,7 +10,7 @@ import { Card, PageHeader, Button, SearchInput, Badge, Spinner, EmptyState, AppD
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
-import RuleForm, { amountConditionSummary, RulePreviewDetail } from '../components/RuleForm.jsx'
+import RuleForm, { amountConditionSummary, RulePreviewDetail, ruleFormInitialValues } from '../components/RuleForm.jsx'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
@@ -18,6 +18,8 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
 import RuleFindingsDialog from '../components/RuleFindingsDialog.jsx'
+import { RuleMatcherText } from '../components/RuleSummary.jsx'
+import { formatRuleMatcher } from '../lib/ruleMatcher.js'
 import { formatDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -127,7 +129,6 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
       : 'Show transactions this rule matches'
 
   const conditions = describeRule(rule, owners, accounts)
-  const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
   const hasAction = rule.category_name || rule.clean_name || (rule.tags && rule.tags.length) || rule.is_recurring
 
   return (
@@ -136,14 +137,9 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
       padding: '9px 16px', borderBottom: '1px solid var(--border)',
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        {/* Line 1 — the matcher: AND'd clauses (or single keyword) plus scope conditions. */}
+        {/* Line 1 — the matcher plus scope conditions. */}
         <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
-          {clauses.map((clause, i) => (
-            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
-              <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500 }}>{clause}</span>
-            </span>
-          ))}
+          <RuleMatcherText rule={rule} />
           {conditions.map((c, i) => (
             <span key={i} style={{ color: 'var(--muted)' }}>· {c}</span>
           ))}
@@ -423,20 +419,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
           ) : null}
           <RuleForm
             ref={formRef}
-            initialValues={{
-              keyword: rule.keyword,
-              clauses: rule.clauses,
-              amount_min: rule.amount_min ?? null,
-              amount_max: rule.amount_max ?? null,
-              debit_credit: rule.debit_credit || 'both',
-              owner_id: rule.owner_id || '',
-              account_id: rule.account_id || '',
-              account_type: rule.account_type || '',
-              catId: rule.category_id,
-              cleanName: rule.clean_name || '',
-              tagIds: rule.tag_ids || [],
-              match_source_text: !!rule.match_source_text,
-            }}
+            initialValues={ruleFormInitialValues(rule)}
             categories={categories}
             owners={owners}
             accounts={accounts}
@@ -1192,7 +1175,7 @@ export default function Rules() {
         <RulePreviewDetail
           transactions={matchReport.data.transactions}
           categories={categories}
-          title={`Transactions matching “${(matchReport.rule.clauses && matchReport.rule.clauses.length ? matchReport.rule.clauses.join(' + ') : matchReport.rule.keyword)}”`}
+          title={`Transactions matching “${formatRuleMatcher(matchReport.rule)}”`}
           subtitle={
             matchReport.data.count > matchReport.data.transactions.length
               ? `${matchReport.data.count} matching · showing the ${matchReport.data.transactions.length} most recent`

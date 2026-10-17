@@ -133,11 +133,11 @@ class CategorizerPerfContractTests(unittest.TestCase):
             self.assertEqual(len(txns), TXN_COUNT)
             for t in txns:
                 on_demand = categorize_transaction(
-                    t["merchant_name"], t["raw_name"], t["display_name"], t["amount"], conn,
+                    t["merchant_name"], t["raw_name"], t["amount"], conn,
                     owner_id=t["owner_id"], account_id=t["account_id"],
                 )
                 preloaded = categorize_transaction(
-                    t["merchant_name"], t["raw_name"], t["display_name"], t["amount"], conn,
+                    t["merchant_name"], t["raw_name"], t["amount"], conn,
                     owner_id=t["owner_id"], account_id=t["account_id"],
                     rules=rules, rule_tags_by_id=rule_tags_by_id,
                 )

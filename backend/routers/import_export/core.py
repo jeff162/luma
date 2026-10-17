@@ -1578,11 +1578,16 @@ def _prune_redundant_rule_suggestions(suggestions: list[dict]) -> list[dict]:
     ]
 
 
+def _row_rule_keyword(row: dict) -> str:
+    """The keyword a suggestion takes from a row, from the names a rule will match
+    (`categorizer.name_match_text`) — never `display_name`, or an accepted suggestion could fail to match
+    the rows it was built from."""
+    return normalize_rule_keyword(row.get("merchant_name") or row.get("raw_name") or "")
+
+
 def _row_matches_rule_suggestion_entry(row: dict, entry: dict) -> bool:
     entry_keyword = normalize_rule_keyword(entry.get("keyword") or "")
-    row_text = normalize_rule_keyword(
-        row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
-    )
+    row_text = _row_rule_keyword(row)
     matched = bool(entry_keyword) and bool(row_text) and entry_keyword in row_text
     if not matched and entry.get("match_source_text"):
         matched = entry_keyword in source_match_text_from_json(row.get("import_evidence_json"))
@@ -1604,9 +1609,7 @@ def _row_matches_rule_suggestion_entry(row: dict, entry: dict) -> bool:
 
 
 def _row_matches_rule_suggestion_report_keyword(row: dict, keyword: str, match_source_text: bool) -> bool:
-    row_keyword = normalize_rule_keyword(
-        row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
-    )
+    row_keyword = _row_rule_keyword(row)
     if row_keyword and row_keyword == keyword:
         return True
     if match_source_text and keyword in source_match_text_from_json(row.get("import_evidence_json")):
@@ -1665,9 +1668,7 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
         if selected_owner_ids and row["owner_id"] not in selected_owner_ids:
             continue
 
-        keyword = normalize_rule_keyword(
-            row["display_name"] or row["merchant_name"] or row["raw_name"] or ""
-        )
+        keyword = _row_rule_keyword(row)
         if not keyword:
             continue
 
@@ -2061,9 +2062,7 @@ def _rule_suggestion_rows_use_canonical_keyword(rows: list[dict], keyword: str) 
     if not normalized_keyword or not rows:
         return False
     for row in rows:
-        row_keyword = normalize_rule_keyword(
-            row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
-        )
+        row_keyword = _row_rule_keyword(row)
         if row_keyword != normalized_keyword:
             return False
     return True
@@ -2684,7 +2683,7 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
             continue
         source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"], effective_account_id=row["effective_account_id"],
             effective_account_type=row["effective_account_type"], rules=rules, rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
@@ -2843,7 +2842,6 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
-                    row["display_name"] or row["merchant_name"] or row["raw_name"] or "",
                     row["amount"],
                     conn,
                     owner_id=row["owner_id"],
@@ -3709,7 +3707,7 @@ def run_import_parsed(
                     category_overridden = 1
             if apply_cat and not cat_id:
                 rule_result = categorize_transaction(
-                    raw_desc, raw_desc, raw_desc, amount, conn,
+                    raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
                     rules=rules,
@@ -5083,7 +5081,6 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
-                    row["display_name"] or row["merchant_name"] or row["raw_name"] or "",
                     row["amount"],
                     conn,
                     owner_id=row["owner_id"],

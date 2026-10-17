@@ -6,7 +6,7 @@ import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.j
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Badge, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
-import RuleForm from './RuleForm.jsx'
+import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
 
@@ -171,15 +171,18 @@ function RuleModal({ prompt, onSave, onCancel }) {
             </div>
           ) : null}
           <RuleForm
-            initialValues={{
-              keyword: existingRule?.keyword ?? (prompt.keywordSource || prompt.merchantName || '').toLowerCase().trim(),
-              amount_min: existingRule?.amount_min ?? null,
-              amount_max: existingRule?.amount_max ?? null,
-              owner_id: existingRule?.owner_id || '',
-              account_id: existingRule?.account_id || '',
-              cleanName: existingRule?.clean_name || '',
-              catId: prompt.categoryId || existingRule?.category_id || '',
-              tagIds: existingRule?.tag_ids || [],
+            initialValues={existingRule ? {
+              ...ruleFormInitialValues(existingRule),
+              catId: prompt.categoryId || existingRule.category_id || '',
+            } : {
+              keyword: (prompt.keywordSource || prompt.merchantName || '').toLowerCase().trim(),
+              amount_min: null,
+              amount_max: null,
+              owner_id: '',
+              account_id: '',
+              cleanName: '',
+              catId: prompt.categoryId || '',
+              tagIds: [],
             }}
             categories={categories}
             owners={owners}

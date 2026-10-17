@@ -22,6 +22,7 @@ vi.mock('../../components/RuleForm.jsx', () => ({
   }),
   amountConditionSummary: () => null,
   RulePreviewDetail: () => null,
+  ruleFormInitialValues: () => ({}),
 }))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })

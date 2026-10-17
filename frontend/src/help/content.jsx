@@ -1659,6 +1659,13 @@ export const HELP_TOPICS = [
           against newly imported data, which is what keeps categorization current without repeating
           the work.
         </p>
+        <p>
+          The merchant keyword can be more than one word. <strong>And contains</strong> adds a word every
+          match must also have. <strong>Or contains</strong> adds another spelling, for a merchant whose
+          name arrives several ways: at least one of the spellings has to appear. Rules always match the
+          name as it arrived from the bank or the file, never a name a rule or an edit has since given the
+          transaction, so one rule listing the spellings is how a merchant like that is covered.
+        </p>
         <HelpHeading anchor="how-rules-come-into-being">How rules come into being</HelpHeading>
         <p>
           There are three main ways rules get created:
@@ -1820,7 +1827,8 @@ export const HELP_TOPICS = [
           beats one that is not, then a rule pinned to an account, then one scoped to an account type,
           then the <strong>longer keyword</strong>, and last the <strong>narrower amount range</strong>.
           The order matters as much as the terms -- scope is settled before keyword length, and keyword
-          length before amount.
+          length before amount. A rule with several spellings counts only its shortest one, since each
+          spelling it adds lets it match more transactions, not fewer.
         </p>
         <p>
           Narrower on the amount axis means the <em>smaller range</em>, not the rule with more limits

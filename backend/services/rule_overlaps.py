@@ -86,7 +86,8 @@ import sqlite3
 
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.categorizer import (
-    match_expr_clause_texts,
+    MerchantMatcher,
+    merchant_matcher,
     normalize_clean_name,
     row_match_texts,
     rule_matches_row_prepared,
@@ -159,14 +160,29 @@ def _effective_account_types(conn: sqlite3.Connection) -> dict[str, str | None]:
     return {row["eff_id"]: row["eff_type"] for row in rows}
 
 
-def _matcher_texts(rule: dict) -> tuple[str, ...]:
-    """A rule's merchant matcher as its canonical clause texts — one entry for a plain keyword, several
-    for an AND matcher. Sorted, because an AND matcher is order-independent."""
-    texts = match_expr_clause_texts(rule["match_expr"])
-    if texts is None:
-        keyword = str(rule["keyword"] or "").strip().lower()
-        texts = [keyword] if keyword else []
-    return tuple(sorted(t for t in texts if t))
+def _matcher_texts(rule: dict) -> MerchantMatcher:
+    """A rule's merchant matcher in canonical form, so two spellings of one matcher compare equal. A rule
+    with no matcher text at all comes back with both lists empty."""
+    matcher = merchant_matcher(rule["keyword"], rule["match_expr"])
+    return MerchantMatcher(
+        tuple(sorted(t.strip() for t in matcher.alternatives if t.strip())),
+        tuple(sorted(t.strip() for t in matcher.filters if t.strip())),
+    )
+
+
+def _matcher_width(matcher: MerchantMatcher) -> int:
+    """How much text every match must carry — the shortest alternative plus every filter, the measure
+    precedence ranks on (`categorizer.rule_specificity_order_sql`). Smaller is broader."""
+    shortest = min((len(text) for text in matcher.alternatives), default=0)
+    return shortest + sum(len(text) for text in matcher.filters)
+
+
+def _matcher_label(matcher: MerchantMatcher) -> str:
+    """The matcher as one string, for ordering findings and for the width a nesting finding sorts on."""
+    parts = list(matcher.filters)
+    if matcher.alternatives:
+        parts.insert(0, "(" + "|".join(matcher.alternatives) + ")")
+    return "+".join(parts)
 
 
 def _amount_range(rule: dict) -> tuple[float, float]:
@@ -223,12 +239,26 @@ def _scopes_identical(a: dict, b: dict) -> bool:
     )
 
 
-def _texts_nest(outer: tuple[str, ...], inner: tuple[str, ...]) -> bool:
-    """Does every clause of `outer` appear inside some clause of `inner`? That is the condition under
-    which `inner` matches a subset of the rows `outer` does, and it covers all three forms the
-    relationship takes: plain substring (`amazon` / `amazon prime`), clause superset (`{amazon}` /
-    `{amazon, prime}`), and the mix of the two."""
-    return all(any(clause in candidate for candidate in inner) for clause in outer)
+def _guarantees_one_of(matcher: MerchantMatcher, texts: tuple[str, ...]) -> bool:
+    """Does every row `matcher` matches contain at least one of `texts`? It does when one of its filters
+    contains one of them, since every match carries every filter — or when each of its alternatives
+    does, since every match carries one alternative."""
+    if any(text in candidate for candidate in matcher.filters for text in texts):
+        return True
+    return bool(matcher.alternatives) and all(
+        any(text in alternative for text in texts) for alternative in matcher.alternatives
+    )
+
+
+def _texts_nest(outer: MerchantMatcher, inner: MerchantMatcher) -> bool:
+    """Does `inner` match a subset of the rows `outer` does? It does when every row `inner` matches is
+    guaranteed to carry each of `outer`'s filters and one of `outer`'s alternatives. Without alternatives
+    that is every clause of `outer` appearing inside some clause of `inner`, which covers plain substring
+    (`amazon` / `amazon prime`), clause superset (`{amazon}` / `{amazon, prime}`) and the mix of the two.
+    With them it also covers an alternative set inside a wider one (`amazon or amzn` / `amazon`)."""
+    if not all(_guarantees_one_of(inner, (text,)) for text in outer.filters):
+        return False
+    return not outer.alternatives or _guarantees_one_of(inner, outer.alternatives)
 
 
 def _rule_tag_ids(conn: sqlite3.Connection) -> dict[str, frozenset]:
@@ -326,7 +356,7 @@ def _co_match_findings(conn, rules: list[dict], texts: dict, rank, tags) -> list
     The ambiguity the other two kinds cannot see. `amount_overlap` needs identical matcher text and
     `matcher_nesting` needs one matcher inside the other; two matchers that merely *co-occur* in one
     merchant name — different keywords picking up different parts of it — satisfy neither and were
-    invisible. Precedence still settles them, on `LENGTH(keyword)`, but that term means "a longer
+    invisible. Precedence still settles them, on matcher length, but that term means "a longer
     substring matches a strict subset of the rows a shorter one does", and between matchers that do not
     nest there is no subset relation for it to be about. It decides, on nothing.
 
@@ -383,7 +413,7 @@ def _co_match_finding(a: dict, b: dict, evidence: dict, benign: bool, rank) -> d
         # Most-collided first within the section: the pair touching two hundred rows is the one worth
         # opening, and it is not necessarily the one with the longest matcher.
         "sort_width": -evidence["count"],
-        "sort_label": "+".join(_matcher_texts(a)),
+        "sort_label": _matcher_label(_matcher_texts(a)),
     }
 
 
@@ -409,7 +439,7 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
     ranges = {rule["id"]: _amount_range(rule) for rule in rules}
     # A rule with no matcher text can never fire, and would otherwise nest into every other rule (the
     # empty clause list makes `_texts_nest` vacuously true).
-    rules = [rule for rule in rules if texts[rule["id"]]]
+    rules = [rule for rule in rules if texts[rule["id"]].alternatives or texts[rule["id"]].filters]
 
     findings: list[dict] = []
     for index, first in enumerate(rules):
@@ -516,7 +546,7 @@ def _amount_overlap_finding(a: dict, b: dict, range_a, range_b, rank, *, benign:
     low, high = (a, b) if range_a[0] <= range_b[0] else (b, a)
     band_low = max(range_a[0], range_b[0])
     band_high = min(range_a[1], range_b[1])
-    label = "+".join(_matcher_texts(a))
+    label = _matcher_label(_matcher_texts(a))
     kind = KIND_AMOUNT_OVERLAP_BENIGN if benign else KIND_AMOUNT_OVERLAP
     return {
         "kind": kind,
@@ -559,7 +589,7 @@ def _narrower_is_redundant(broader: dict, narrower: dict) -> bool:
     )
 
 
-def _nesting_finding(broader: dict, narrower: dict, broader_texts: tuple[str, ...], rank) -> dict:
+def _nesting_finding(broader: dict, narrower: dict, broader_texts: MerchantMatcher, rank) -> dict:
     """Listed broader matcher first: the finding reads as "this wide rule also catches what that
     narrow one is for"."""
     redundant = _narrower_is_redundant(broader, narrower)
@@ -575,6 +605,6 @@ def _nesting_finding(broader: dict, narrower: dict, broader_texts: tuple[str, ..
         # The removable one, when it is removable: the narrow rule is the redundant half of a nesting
         # pair, never the broad one, whose deletion would strand every row the narrow matcher misses.
         "narrower_is_redundant": redundant,
-        "sort_width": sum(len(text) for text in broader_texts),
-        "sort_label": "+".join(broader_texts),
+        "sort_width": _matcher_width(broader_texts),
+        "sort_label": _matcher_label(broader_texts),
     }

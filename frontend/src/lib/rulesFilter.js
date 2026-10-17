@@ -13,6 +13,8 @@
  * Both are AND-combined; within a multi-value facet, membership is OR.
  */
 
+import { ruleMatcherLists } from './ruleMatcher.js'
+
 // The rail shows every letter always (present ones are active, absent ones dim). '#' collects rules whose
 // keyword starts with a digit or symbol; it sorts last, matching where such keywords land in keyword-ASC.
 export const RAIL_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#']
@@ -55,11 +57,11 @@ export function hasActiveRulesFacets(facets) {
   return activeRulesFacetCount(facets) > 0
 }
 
-// The text a search query is matched against: the rule's clause texts (or its single keyword). Merchant
+// The text a search query is matched against: every text in the rule's merchant matcher. Merchant
 // only — never the category/rename/tags, which are facet concerns.
 export function ruleSearchHaystack(rule) {
-  const parts = (rule.clauses && rule.clauses.length) ? rule.clauses : [rule.keyword]
-  return parts.filter(Boolean).join(' ').toLowerCase()
+  const { alternatives, filters } = ruleMatcherLists(rule)
+  return [...alternatives, ...filters].join(' ').toLowerCase()
 }
 
 export function ruleMatchesSearch(rule, query) {

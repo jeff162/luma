@@ -99,13 +99,6 @@ scale — rather than by feature.
   (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
   `txn`; the revisit threshold is roughly 50,000 rows.
-- [rule-matcher-alternatives.md](rule-matcher-alternatives.md) — **not started.** Adds *any of these* to a
-  rule's merchant matcher, so one rule can claim the several descriptors one payee arrives under. Today
-  the only route is a rename that a second rule then matches, which is a feedback loop, is not reliable
-  (the standardized name still competes on keyword length) and fans out into N+1 rules that drift. The
-  file settles the canonical form, the stored specificity column precedence needs, and the sequencing:
-  this lands before `display_name` is dropped from the matcher haystack, or that fix removes the only
-  route to one-series-many-descriptors.
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the

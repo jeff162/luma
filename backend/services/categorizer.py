@@ -11,7 +11,7 @@ transaction text, owner, account, and amount window.
 import json
 import sqlite3
 from functools import lru_cache
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
@@ -110,15 +110,25 @@ def _amount_rule_matches(amount: float, amount_min, amount_max, debit_credit: st
     return _amount_matches(abs(amount), amount_min, amount_max)
 
 
-# Multi-clause merchant matching (see category_rule.match_expr). v1 is AND-only / contains-only: a rule
-# with a match_expr matches only when *every* clause's text is a substring of the row's name text (or, for
-# match_source_text rules, its source text). MAX_MATCH_CLAUSES caps how many the UI/authoring may set.
+# Merchant matching (see category_rule.match_expr). A matcher is a set of **alternatives**, at least one of
+# which must appear, then **filters**, every one of which must also appear — `(alt1 or alt2) and f1 and f2`
+# — all of them `contains` tests against the row's name text (or, for match_source_text rules, its source
+# text). Either list may be empty, never both. Every alternative shares the same filters on purpose: "alt1
+# must also contain X but alt2 need not" is two different conditions and belongs in two rules.
+# MAX_MATCH_CLAUSES caps each list.
 MAX_MATCH_CLAUSES = 3
 
 
+class MerchantMatcher(NamedTuple):
+    """A rule's merchant matcher in canonical form: both lists trimmed, lowercased, de-duplicated and
+    sorted. `alternatives` is empty or holds two or more texts, because one alternative is just a filter."""
+    alternatives: tuple[str, ...]
+    filters: tuple[str, ...]
+
+
 def normalize_match_clauses(clauses) -> list[str]:
-    """Canonicalize raw clause strings for an AND matcher: trim, lowercase, drop blanks, de-duplicate, and
-    sort. Order-independent (AND), so the sorted list is the canonical form used for both storage and
+    """Canonicalize one list of raw matcher texts: trim, lowercase, drop blanks, de-duplicate, and sort.
+    Both lists are order-independent, so the sorted list is the canonical form used for both storage and
     matcher identity. Capped at MAX_MATCH_CLAUSES."""
     seen: set[str] = set()
     out: list[str] = []
@@ -132,61 +142,88 @@ def normalize_match_clauses(clauses) -> list[str]:
     return out[:MAX_MATCH_CLAUSES]
 
 
-def build_match_expr(clauses) -> tuple[Optional[str], str]:
-    """From raw clause strings, produce ``(match_expr_json_or_None, derived_keyword)``:
+def build_match_expr(clauses, alternatives=None) -> tuple[Optional[str], str]:
+    """From raw filter texts (`clauses`) and raw alternatives, produce
+    ``(match_expr_json_or_None, derived_keyword)``:
 
-    - 0 clauses  -> ``(None, "")`` — caller falls back to its own keyword field
-    - 1 clause   -> ``(None, "<clause>")`` — an ordinary single-substring rule (no expr stored)
-    - 2..N       -> ``('{"op":"and",...}', "<clauses joined by space>")``
+    - no text at all        -> ``(None, "")`` — caller falls back to its own keyword field
+    - one filter            -> ``(None, "<text>")`` — an ordinary single-substring rule (no expr stored)
+    - 2..N filters          -> ``('{"op":"and","clauses":[…]}', "<filters joined by space>")``
+    - 2..N alternatives     -> ``('{"op":"any_and","any":[…],"all":[…]}', "<alternatives, then filters>")``
 
-    The derived keyword mirrors the canonical clause texts so it stays the LIKE-search target and its
-    LENGTH keeps driving specificity ordering (≈ summed clause length)."""
-    norm = normalize_match_clauses(clauses)
-    if len(norm) <= 1:
-        return None, (norm[0] if norm else "")
-    expr = {"op": "and", "clauses": [{"type": "contains", "text": text} for text in norm]}
-    return json.dumps(expr, separators=(",", ":")), " ".join(norm)
+    A single alternative folds into the filters, so the two spellings of one matcher store one form and
+    matcher identity cannot fork a duplicate.
+
+    The alternatives shape deliberately carries no `clauses` key. A build that predates alternatives reads
+    only `clauses`; finding none, it falls back to the plain `keyword`, which here is every text joined and
+    so matches essentially nothing. The rule goes quiet on an older build instead of firing on the filters
+    alone, which would be far broader than the rule was written to be.
+
+    The derived keyword holds every text so it stays the LIKE-search target. Precedence does not read its
+    length for an alternatives rule (`rule_specificity_order_sql`)."""
+    alts = normalize_match_clauses(alternatives)
+    filters = normalize_match_clauses(clauses)
+    if len(alts) == 1:
+        filters = sorted(set(filters) | set(alts))
+        alts = []
+    if alts:
+        expr = {
+            "op": "any_and",
+            "any": [{"type": "contains", "text": text} for text in alts],
+            "all": [{"type": "contains", "text": text} for text in filters],
+        }
+        return json.dumps(expr, separators=(",", ":")), " ".join(alts + filters)
+    if len(filters) <= 1:
+        return None, (filters[0] if filters else "")
+    expr = {"op": "and", "clauses": [{"type": "contains", "text": text} for text in filters]}
+    return json.dumps(expr, separators=(",", ":")), " ".join(filters)
 
 
-def match_expr_clause_texts(match_expr) -> Optional[list[str]]:
-    """The clause texts (lowercased) from a stored match_expr JSON string, or None for a legacy keyword
-    rule (absent/blank/unparseable/empty-clauses expr — all fall back to the single-keyword path)."""
-    if not match_expr:
-        return None
-    try:
-        data = json.loads(match_expr)
-    except (ValueError, TypeError):
-        return None
-    raw = data.get("clauses") if isinstance(data, dict) else None
+def _expr_texts(data: dict, key: str) -> list[str]:
+    raw = data.get(key)
     if not isinstance(raw, list):
-        return None
-    texts = [
+        return []
+    return [
         str(clause.get("text", "")).strip().lower()
         for clause in raw
         if isinstance(clause, dict) and str(clause.get("text", "")).strip()
     ]
-    return texts or None
 
 
-# A pass tests every rule against every row, so a rule's needles are derived once rather than re-parsed
-# from its JSON per row. Keyed on the stored values themselves, so an edited rule is simply a new key.
+# A pass tests every rule against every row, so a rule's matcher is parsed once rather than per row. Keyed
+# on the stored values themselves, so an edited rule is simply a new key.
 @lru_cache(maxsize=4096)
-def _matcher_needles(keyword, match_expr) -> tuple[str, ...]:
-    clause_texts = match_expr_clause_texts(match_expr)
-    return tuple(clause_texts) if clause_texts is not None else (str(keyword).lower(),)
+def merchant_matcher(keyword, match_expr) -> MerchantMatcher:
+    """A rule's stored `(keyword, match_expr)` as a `MerchantMatcher`. A plain keyword rule — no expr, or
+    one that is blank, unparseable or empty — is a single filter."""
+    data = None
+    if match_expr:
+        try:
+            data = json.loads(match_expr)
+        except (ValueError, TypeError):
+            data = None
+    if isinstance(data, dict):
+        alternatives = _expr_texts(data, "any")
+        filters = _expr_texts(data, "all") if alternatives else _expr_texts(data, "clauses")
+        if alternatives or filters:
+            return MerchantMatcher(tuple(alternatives), tuple(filters))
+    keyword_text = str(keyword or "").lower()
+    return MerchantMatcher((), (keyword_text,))
 
 
 def merchant_matcher_matches(rule, text: str, source_text_lc: str, match_source_text) -> bool:
     """Does the rule's merchant matcher fire on ``text`` (already lowercased, the joined name fields)?
-    A multi-clause rule (``match_expr`` set) requires *every* clause; a legacy rule uses its single
-    ``keyword``. A clause/keyword is satisfied when its text is a substring of ``text`` — or, when the rule
-    matches source text, of ``source_text_lc``. This is the one predicate every match site shares."""
-    for needle in _matcher_needles(rule["keyword"], _dict_get(rule, "match_expr")):
+    At least one alternative, when the rule has any, and every filter must be satisfied. A text is
+    satisfied when it is a substring of ``text`` — or, when the rule matches source text, of
+    ``source_text_lc``. This is the one predicate every match site shares."""
+    def found(needle: str) -> bool:
         in_name = bool(text) and needle in text
-        in_source = bool(match_source_text) and bool(source_text_lc) and needle in source_text_lc
-        if not (in_name or in_source):
-            return False
-    return True
+        return in_name or (bool(match_source_text) and bool(source_text_lc) and needle in source_text_lc)
+
+    matcher = merchant_matcher(rule["keyword"], _dict_get(rule, "match_expr"))
+    if matcher.alternatives and not any(found(needle) for needle in matcher.alternatives):
+        return False
+    return all(found(needle) for needle in matcher.filters)
 
 
 def normalize_clean_name(value: Optional[str]) -> str:
@@ -197,13 +234,25 @@ def normalize_clean_name(value: Optional[str]) -> str:
     return " ".join((value or "").strip().split()).lower()
 
 
+def name_match_text(merchant_name, raw_name) -> str:
+    """The lowercased name text a merchant matcher is tested against. Every match site builds it here, so
+    "which names a rule reads" has one definition.
+
+    It is the names as they arrived, never `display_name`. That field holds what a rule's rename or the
+    user last wrote, so matching it would let one rule match another rule's output: a row's matchable
+    text would change after a rule ran, a second categorization pass would not see what the first saw,
+    and a rename meant for one rule could hand the row to an unrelated rule with a longer keyword. A
+    payee arriving under several descriptors is one rule with alternatives (`build_match_expr`)."""
+    return " ".join(filter(None, [merchant_name, raw_name])).lower()
+
+
 def row_match_texts(row, *, want_source_text: bool) -> tuple[str, str]:
     """The two lowercased haystacks a merchant matcher is tested against: the joined name fields, and the
     import source text (empty unless asked for, since pulling it parses JSON).
 
     Split out so a pass testing *many* rules against one row derives these once instead of once per rule —
     the whole cost of the rule-overlap co-match scan, which is rules x rows."""
-    text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
+    text = name_match_text(row["merchant_name"], row["raw_name"])
     source_text_lc = ""
     if want_source_text:
         try:
@@ -238,7 +287,7 @@ def rule_matches_row(rule, row) -> bool:
     (recurring_detection.reconcile_series), so "which rows a rule owns" has a single definition.
 
     Both args are dict-like. `rule` provides keyword/owner_id/account_id/account_type/amount_min/amount_max/
-    debit_credit/match_source_text; `row` provides display_name/merchant_name/raw_name/amount/owner_id/
+    debit_credit/match_source_text; `row` provides merchant_name/raw_name/amount/owner_id/
     effective_account_id/effective_account_type and (for match_source_text rules) import_evidence_json. A
     row whose SELECT omits import_evidence_json simply can't match on source text, which is safe.
     """
@@ -280,6 +329,19 @@ def _resolve_effective_account(
 _AMOUNT_SPAN_OPEN_END = 1000000000000.0
 
 
+def _matcher_length_sql(p: str) -> str:
+    """The matcher-text term of `rule_specificity_order_sql`, read from the stored matcher rather than kept
+    in a column of its own, so no write path can leave it stale. The CASE arms run in order, which keeps a
+    malformed expr from reaching the JSON functions."""
+    return f"""(CASE
+                 WHEN json_valid(COALESCE({p}match_expr, '')) = 0 THEN LENGTH({p}keyword)
+                 WHEN json_type({p}match_expr, '$.any') IS NULL THEN LENGTH({p}keyword)
+                 ELSE (SELECT MIN(LENGTH(json_extract(value, '$.text'))) FROM json_each({p}match_expr, '$.any'))
+                    + (SELECT COALESCE(SUM(LENGTH(json_extract(value, '$.text')) + 1), 0)
+                       FROM json_each({p}match_expr, '$.all'))
+               END)"""
+
+
 def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool = True) -> str:
     """The rule precedence contract, as ORDER BY terms — defined once because three surfaces depend on
     it agreeing: the engine (which rule categorizes a row), the preview/apply mirror in `routers/rules`
@@ -287,7 +349,13 @@ def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool
     hand-kept copies of an ordering are three chances for the app to disagree with itself.
 
     Most specific first: owner scope, then account scope, then account *type* scope, then the longer
-    keyword — a longer substring matches a strict subset of the rows a shorter one does.
+    matcher text — a longer substring matches a strict subset of the rows a shorter one does. For an AND
+    matcher that text is the stored `keyword` (every filter, space-joined), since more and longer filters
+    narrow the rule. Alternatives invert that: adding one makes the rule match *more* rows while
+    lengthening the joined text. A rule is as broad as its broadest alternative, so its text length is
+    the shortest alternative plus every filter, counted with the same separators the joined keyword
+    carries. That makes an alternatives rule rank exactly as the AND rule of its shortest alternative
+    would, and leaves every rule without alternatives ranked on `LENGTH(keyword)` as before.
 
     **Then the narrower amount range**, which is the same idea on the amount axis: `>= 3000` matches a
     strict subset of `>= 300`, so it must win. The measure is the range's *span*, not how many bounds a
@@ -309,7 +377,7 @@ def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool
                CASE WHEN {p}owner_id     IS NOT NULL THEN 1 ELSE 0 END {d},
                CASE WHEN {p}account_id   IS NOT NULL THEN 1 ELSE 0 END {d},
                CASE WHEN {p}account_type IS NOT NULL THEN 1 ELSE 0 END {d},
-               LENGTH({p}keyword) {d},
+               {_matcher_length_sql(p)} {d},
                (COALESCE({p}amount_max, {_AMOUNT_SPAN_OPEN_END}) - COALESCE({p}amount_min, 0)) {a},
                CASE WHEN COALESCE({p}debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END {d},
                {p}id {a}"""
@@ -351,7 +419,6 @@ def load_rule_tags_by_id(conn: sqlite3.Connection) -> dict:
 def categorize_transaction(
     merchant_name: str | None,
     raw_name: str | None,
-    display_name: str | None,
     amount: float,
     conn: sqlite3.Connection,
     owner_id: str | None = None,
@@ -362,7 +429,7 @@ def categorize_transaction(
     rule_tags_by_id: dict | None = None,
     source_text: str | None = None,
 ) -> dict | None:
-    text = " ".join(filter(None, [display_name, merchant_name, raw_name])).lower()
+    text = name_match_text(merchant_name, raw_name)
     # `source_text` is the captured import free text (description + extra fields), consulted only for a
     # rule with `match_source_text` set — so a row whose visible merchant says nothing can still match
     # on its "Original Statement"-style detail. Callers pass it from the import row / stored evidence;
@@ -605,7 +672,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     for txn in txns:
         source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            txn["merchant_name"], txn["raw_name"], txn["display_name"], txn["amount"], conn,
+            txn["merchant_name"], txn["raw_name"], txn["amount"], conn,
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
@@ -710,7 +777,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     for txn in txns:
         source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
-            txn["merchant_name"], txn["raw_name"], txn["display_name"], txn["amount"], conn,
+            txn["merchant_name"], txn["raw_name"], txn["amount"], conn,
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
