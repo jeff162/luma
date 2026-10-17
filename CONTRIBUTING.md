@@ -29,7 +29,7 @@ For the shortest local startup path, use the launcher scripts documented in
 **Toolchain:** **Python 3.12 or newer**, and **Node.js 22.12 or newer**. The packaged downloads are
 built on 3.12, and CI runs the backend suite on 3.14 as well.
 
-The venv belongs at `backend/venv/` — that is where every script in `scripts/` looks for it.
+The venv belongs at `backend/venv/` — that is where the scripts in `scripts/` expect it.
 
 ```bash
 # backend
@@ -40,7 +40,7 @@ source venv/bin/activate      # Unix-like shells
 pip install -r requirements.txt
 ```
 
-Start both halves together:
+Start frontend and backend:
 
 ```bash
 bash ./scripts/start_luma.sh                                        # macOS / Linux / WSL
@@ -48,7 +48,7 @@ scripts\start_luma.bat                                              # Windows
 powershell -ExecutionPolicy Bypass -File .\scripts\start_luma.ps1   # Windows PowerShell
 ```
 
-Or start them individually:
+Or individually:
 
 ```bash
 # backend — from the REPO ROOT, not from backend/, since the app is imported as backend.main
@@ -60,32 +60,20 @@ npm install
 npm run dev
 ```
 
-When `npm install` reports advisories, the first question is which half of the tree they are in.
-Everything in `devDependencies` — vite, vitest, eslint and their trees — builds or tests the app and
-reaches no user: the product ships as a static bundle served by the backend, so a dev-server or
-test-runner advisory exists only on a developer machine. The six packages in `dependencies` are the
-ones that reach the browser, and an advisory there has to be acted on rather than explained.
+When `npm install` reports advisories, determine whether they are build/test related or affect code the user sees. `devDependencies` contains vite, vitest, eslint and their trees. These are the build and testing tools. The six packages in `dependencies` are the ones that reach the user's browser, and an advisory there should be resolved. 
 
-No `.env` file is required — a checkout runs on defaults (browser at frontend 8010, backend 8011, databases in the working directory). A
-repo-root `.env` is the override mechanism, and is useful for running against different databases (test v. prod) or different instances running on the same box:
-`BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
-and `DATA_DIR` specifies the database location. A hand-run `uvicorn`
-does not read `.env` for its port, so pass the same value `.env` sets or the frontend will call a
-backend that is not there. **Administration → Startup configuration** lists every effective value and its current source. Most settings can be set via
-a `.env` file, see `env_example.txt`.
+Configuration is via the `.env` file. This is only needed to change one of the defaults, many of which are useful in a development environment. env_example.txt describes the various settings.
 
-For building test scrpits, the `LUMA_ENV_FILE` environment variable (not a `.env` file setting as it points at the `.env` file to use). It redirects **the backend
-only** — `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly
-for their ports — so it is the right tool for pointing a backend at a throwaway database for testing. `scripts/run-e2e-backend.sh` uses this. It is not of much interest to users starting the application.
+The `LUMA_ENV_FILE` environment variable is useful for building test script. This is not a `.env` file setting as it points at the `.env` file to use. This redirects the database for the **the backend
+only**. `scripts/run-e2e-backend.sh` uses this  `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly
+so they do not see this. 
 
 Shell examples and local tooling should stay WSL-friendly where practical.
 
 ### Working with an AI assistant
 
-The repo carries its own agent instructions, and they are worth pointing an assistant at explicitly
-before it starts editing — most of the avoidable rework on this project has come from an agent
-reconstructing the design from source instead of reading the file that already explains it or an agent discovered it didn't follow the
-instructions and it introduced a bug or other technical debt that needs to get resolve later.
+The repo carries its own agent instructions, and they may worth pointing an assistant at explicitly
+before it starts editing. The agents do not always follow the guidelines but for the most part they help.
 
 A reasonable opening instruction:
 
@@ -93,8 +81,7 @@ A reasonable opening instruction:
 
 **Give that instruction even though the files are meant to be automatic.** Claude Code loads
 `CLAUDE.md` into context on its own and still benefits from being told to act on it — an instruction
-that arrives as ambient background gets treated as background. Naming the files in the prompt is what
-turns them from context into a step.
+that arrives as ambient background gets treated as background. Naming the files in the prompt may provide a bit of emphasis.
 
 - **[CLAUDE.md](CLAUDE.md)** is the one Claude Code picks up automatically. It carries the hard rule
   and a routing index into `docs/`.
@@ -105,10 +92,11 @@ turns them from context into a step.
   the things a repo cannot record — what was tried and rejected, and how a particular contributor
   prefers to work — and once there is anything in it, an assistant that was never told to consult it
   will not.
-- **`docs/`** holds the *why*. [docs/collaboration-notes.md](docs/collaboration-notes.md) covers
-  decision principles, and [docs/agent-profile.md](docs/agent-profile.md) collects
+- **`docs/`** attempts to capture the *why*. [docs/collaboration-notes.md](docs/collaboration-notes.md) covers
+  decision principles, and [docs/agent-profile.md](docs/agent-profile.md) is 
   the operational footguns that recur across sessions. These live in the repo rather than in any one
-  developer's assistant memory, so every contributor and every agent starts from the same guidance.
+  developer's assistant memory, so every contributor and every agent starts from the same guidance (these are
+  more of an attempt to get quality work from the agents).
 
 The rule most likely to be getting violated when work goes wrong: **read the relevant doc before
 changing — or answering questions about — shared systems, persistence, invariants, or shared UI.**
@@ -116,14 +104,13 @@ changing — or answering questions about — shared systems, persistence, invar
 
 ### Developer flag
 
-Environment-only by design — it gates destructive reset tooling, so it is not an in-app toggle. Set it
-in `.env` (or the shell) to expose Developer options on the main Settings page:
+Set it in `.env` (or the shell) to expose Developer options on the main Settings page and add a toggle to add the database path to the navigation panel.
 
 ```bash
 LUMA_DEVELOPER_OPTIONS=true
 ```
 
-### Running it as a single process
+### Running as a single process
 
 The two-window setup above is the development arrangement. The application can also run as one process
 that serves both halves and opens a browser at itself — the same shape the packaged downloads use:
@@ -133,18 +120,15 @@ cd frontend && npm run build && cd ..
 backend/venv/bin/python -m backend.desktop    # Windows: backend\venv\Scripts\python -m backend.desktop
 ```
 
-It listens on loopback only and stops with Ctrl+C. Launching it again while it is already running opens
+The backend listens on loopback only by default (override with .env BACKEND_ADDR setting) and stops with Ctrl+C. Launching it again while it is already running opens
 a new tab against the existing instance rather than starting a second one. The frontend only needs
-rebuilding when it changes.
+rebuilding when it changes. 
 
-The URL is printed on startup and is the reliable part; opening a browser is a convenience on top, and
-`--no-browser` skips it for a machine reached over SSH or without a browser installed.
+By default a browser is launched at startup. The `--no-browser` flag skips this which is useful if starting with no browser available.
 
-**This serves `frontend/dist`, which is a copy.** After a frontend change it goes on serving the old
-interface until `npm run build` is run again; only the development server follows the source as it is
-edited.
+**This serves `frontend/dist`, which is a copy of the source tree** Use `npm run build` to rebuild the dist directory from the source tree.
 
-### Running it in Docker
+### Running in Docker
 
 `docker-compose.yml` runs the server arrangement in containers: the application in server mode, with a
 Caddy proxy in front of it for HTTPS. From the top of a checkout, on a Linux host:
@@ -164,18 +148,16 @@ rest.
 
 ## Useful checks
 
-The whole local gate is one command, and it is the one to reach for before committing:
+The whole local test suite is one command:
 
 ```bash
 scripts/check_backend_and_frontend.sh        # backend suite + frontend lint + vitest + browser suite
 scripts/check_backend_and_frontend.sh lint   # frontend lint only — seconds, no browser
 ```
 
-The browser suite is *in* the default target on purpose. It is the only lane that exercises the app the
-way a user meets it, and a check that has to be remembered separately is one that stops being run and
-then stops being maintained. `lint` stays as the fast escape hatch for a tight edit loop.
+`lint` only is available for a tight edit loop.
 
-`npm run check` inside `frontend/` is the frontend half of the same gate (lint → vitest → browser
+`npm run check` inside `frontend/` is the frontend half of the suites (lint → vitest → browser
 suite), in cheapest-failure-first order.
 
 Everything below is the individual pieces, for running the check that matches the changed files:
