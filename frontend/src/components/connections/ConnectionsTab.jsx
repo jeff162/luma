@@ -11,7 +11,6 @@ import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
 import { useBatchDetailPanels } from '../importExport/useBatchDetailPanels.jsx'
 import { useAccountDetailPanels } from '../accounts/useAccountDetailPanels.jsx'
-import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
 import { EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS } from '../../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../VaultSettingsDialog.jsx'
 import { VaultRecoveryDialog } from '../VaultRecoveryDialog.jsx'
@@ -350,7 +349,7 @@ export function WaitingForAccess({ waiting }) {
 }
 
 function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockPasskey,
-  passkeyBusy = false, passkeyLabel = VAULT_PASSKEY_LABEL, onLock, onSettings, onRecover }) {
+  passkeyBusy = false, passkeyLabel = VAULT_PASSKEY_LABEL, onLock, onSettings, onRecover, onCheck }) {
   const box = (bg, border) => ({
     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
@@ -428,8 +427,8 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
             which to use, here where the choice is made. */}
         {vault.passphraseNeedsCheck ? (
           <div style={{ flexBasis: '100%', fontSize: 12 }}>
-            The strength rule for vault passphrases has changed. Unlock with your passphrase this time,
-            not a passkey, so yours can be checked.
+            The vault needs to be unlocked with your passphrase, not a passkey, so it can be validated
+            against the current strength rule.
           </div>
         ) : null}
         {/* Below the buttons on its own row, not competing with them: the request is somebody else's
@@ -447,8 +446,8 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
       <div style={box('rgba(234, 179, 8, 0.12)', 'rgba(234, 179, 8, 0.4)')}>
         {help}
         <span>
-          Your vault passphrase is too easy to guess under the current strength rule. Change it to connect
-          data providers or include the credentials in a backup.
+          Your vault passphrase is considered too easy to guess. Change it to connect data providers or
+          include the credentials in a backup.
         </span>
         <Button small onClick={onSettings} style={{ marginLeft: 'auto' }}>
           {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
@@ -461,13 +460,25 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
     <div style={box('var(--surface2)', 'var(--border)')}>
       {help}
       <span style={{ color: 'var(--muted)' }}>Vault unlocked for this session.</span>
+      {/* Opened with a passkey while the passphrase is still unjudged, which is the one way to reach this
+          state: the check is a typed unlock, and without this the only route to it was locking first. */}
+      {vault.passphraseNeedsCheck ? (
+        <Button small onClick={onCheck} style={{ marginLeft: 'auto' }}>Validate passphrase</Button>
+      ) : null}
       {/* Reachable only while unlocked, and that is the gate rather than the styling: approving someone
           and replacing the key both need the key in hand. The waiting count rides the button because
           this strip is the only place on the page a pending request would otherwise be visible. */}
-      <Button variant="ghost" small onClick={onSettings} style={{ marginLeft: 'auto' }}>
+      <Button variant="ghost" small onClick={onSettings}
+        style={vault.passphraseNeedsCheck ? undefined : { marginLeft: 'auto' }}>
         {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
       </Button>
       <Button variant="ghost" small onClick={onLock}>Lock</Button>
+      {vault.passphraseNeedsCheck ? (
+        <div style={{ flexBasis: '100%', fontSize: 12 }}>
+          Your passphrase needs to be validated against the current strength rule. Until then backups will
+          not contain the data provider credentials.
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -492,7 +503,7 @@ function loadPlaidScript() {
 // `onShowHistory({ connectionIds })` opens the Data Import tab's history on those connections' cards, which
 // are what a sync writes to.
 export default function ConnectionsTab({ onShowHistory }) {
-  const { currentUser, setCurrentUser, authEnabled } = useAppSession()
+  const { currentUser, authEnabled } = useAppSession()
   const [accounts, setAccounts] = useState([])
   // For the import-card ledger a connection card opens in place: its rows are categorizable, which is
   // the whole reason to open it here rather than send the user to find the card.
@@ -531,11 +542,9 @@ export default function ConnectionsTab({ onShowHistory }) {
   // (`contexts/VaultGateContext.jsx`), because the navigation pane can start a sync too and a prompt
   // mounted under this route could not suspend an action taken anywhere else. This page keeps only the
   // *strip* — a configuration surface — and reads the same flags the gate does.
-  const { vault, ensureVault, openVault, adoptPasskeyUnlock, adoptVaultState, lockVault } = useVaultGateContext()
-  // Held apart from the gate's own mode on purpose: the gate exists to make a blocked action resume once
-  // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
-  // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
-  const [changingPassphrase, setChangingPassphrase] = useState(false)
+  const {
+    vault, ensureVault, openVault, adoptPasskeyUnlock, adoptVaultState, lockVault, changePassphrase,
+  } = useVaultGateContext()
   const [vaultSettingsOpen, setVaultSettingsOpen] = useState(false)
   const [vaultRecoveryOpen, setVaultRecoveryOpen] = useState(false)
   // Who is waiting, not just how many: the locked strip names them, because "somebody is waiting" is not
@@ -740,27 +749,6 @@ export default function ConnectionsTab({ onShowHistory }) {
     await api.saveProviderConfig(provider, payload)
     await refresh()
     setConfigTarget(null)
-  }
-
-  // Deliberately not routed through `closeVault`: no action is waiting, and the vault was already open
-  // before this ran — a change rewraps the DEK the session is holding rather than obtaining one.
-  async function submitPassphraseChange({ current, next }) {
-    const resp = await api.changeVaultPassphrase(current, next)
-    await completePassphraseChange(resp?.user)
-  }
-
-  // The tail both routes share. A passkey proves the current secret exactly as typing it does, and the
-  // outcome is identical — same DEK, same stranded-backup consequence — so the same notice is owed
-  // rather than a second one written for the other button.
-  async function completePassphraseChange(user) {
-    if (user) setCurrentUser?.(user)
-    await refresh()
-    setChangingPassphrase(false)
-    setNotice({
-      title: 'Vault passphrase changed',
-      description: 'Your connections are unaffected. A backup taken before now puts the previous '
-        + 'passphrase back when its accounts & secrets are restored.',
-    })
   }
 
   // The strip's button, on the same hook the unlock dialog uses. A refused or dismissed ceremony leaves
@@ -1146,6 +1134,7 @@ export default function ConnectionsTab({ onShowHistory }) {
         passkeyLabel={passkeyLabel}
         onSettings={() => setVaultSettingsOpen(true)}
         onRecover={() => setVaultRecoveryOpen(true)}
+        onCheck={() => openVault('check')}
         onLock={lockVault}
       />
 
@@ -1634,19 +1623,11 @@ export default function ConnectionsTab({ onShowHistory }) {
         />
       ) : null}
 
-      {changingPassphrase ? (
-        // The passkey route is offered here too, which is what makes the panel usable by someone who has
-        // forgotten the passphrase but still holds a way in. It proves the *current* secret; the new one
-        // is typed in the dialog either way.
-        <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}
-          onUnlockedByPasskey={completePassphraseChange}
-          onClose={() => setChangingPassphrase(false)} />
-      ) : null}
       {vaultSettingsOpen ? (
         <VaultSettingsDialog
           currentUserId={currentUser?.id}
           isAdmin={isAdmin}
-          onChangePassphrase={() => { setVaultSettingsOpen(false); setChangingPassphrase(true) }}
+          onChangePassphrase={() => { setVaultSettingsOpen(false); changePassphrase() }}
           onChanged={refresh}
           onClose={() => setVaultSettingsOpen(false)}
         />

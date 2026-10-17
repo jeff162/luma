@@ -23,7 +23,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useVaultGate({ configured, unlocked }) {
-  const [mode, setMode] = useState(null)   // null (closed) | 'set' | 'unlock'
+  // null (closed) | 'set' | 'unlock' from `ensureVault`; a host may `openVault` any dialog mode that ends
+  // in the passphrase being submitted ('request', 'check').
+  const [mode, setMode] = useState(null)
   const flagsRef = useRef({ configured, unlocked })
   const waiterRef = useRef(null)
 

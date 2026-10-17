@@ -9,6 +9,7 @@ import { Card, PageHeader, Spinner } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import CornerTab from '../components/CornerTab.jsx'
+import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
 
 /*
  * The nag inbox. Tasks are computed server-side (routers/tasks.py) and re-fetched whenever work
@@ -19,6 +20,9 @@ import CornerTab from '../components/CornerTab.jsx'
  * again", and new work always resurfaces. The dismissed ones stay reachable at the foot of the page
  * rather than vanishing, because a card that disappears without a trace is indistinguishable from one
  * that was lost.
+ *
+ * A task carries a `link` to the page that resolves it, or an `action` when what resolves it is a dialog
+ * that opens over any page — then sending the user elsewhere would only add a step.
  */
 
 // The page's content column, named once so the header, the cards and the dismissed list agree.
@@ -64,10 +68,26 @@ function TaskSeverityIcon({ severity }) {
 function TaskCard({ task, onDismiss }) {
   const style = SEVERITY_COLORS[task.severity] || SEVERITY_COLORS.info
   const { clearAll } = useFilters()
+  const { openVault, changePassphrase } = useVaultGateContext()
+  const actions = {
+    vault_passphrase_check: () => openVault('check'),
+    vault_passphrase_change: changePassphrase,
+  }
   // Task counts are global (e.g. all-time uncategorized), but the shared FilterBar defaults to a
   // "Past 12 months" date window. Clear filters when jumping to a transaction view so the user lands
   // on the same set the badge counted instead of a narrower, confusingly-different number.
-  const handleClick = task.link.startsWith('/transactions') ? () => clearAll() : undefined
+  const handleClick = task.link?.startsWith('/transactions') ? () => clearAll() : undefined
+  const actionStyle = {
+    display: 'inline-block',
+    fontSize: 13,
+    fontWeight: 500,
+    color: 'var(--accent2)',
+    textDecoration: 'none',
+    padding: '5px 14px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+  }
   return (
     <div
       style={{
@@ -104,23 +124,15 @@ function TaskCard({ task, onDismiss }) {
         </div>
         {/* Room on the right for the corner tab, so a wrapped action row can never run under it. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingRight: task.dismiss_key ? 72 : 0 }}>
-          <Link
-            to={task.link}
-            onClick={handleClick}
-            style={{
-              display: 'inline-block',
-              fontSize: 13,
-              fontWeight: 500,
-              color: 'var(--accent2)',
-              textDecoration: 'none',
-              padding: '5px 14px',
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-            }}
-          >
-            {task.link_label} {'->'}
-          </Link>
+          {task.action ? (
+            <button type="button" onClick={actions[task.action]} style={{ ...actionStyle, cursor: 'pointer' }}>
+              {task.action_label}
+            </button>
+          ) : (
+            <Link to={task.link} onClick={handleClick} style={actionStyle}>
+              {task.link_label} {'->'}
+            </Link>
+          )}
         </div>
       </div>
       {task.dismiss_key ? (

@@ -21,9 +21,13 @@
 // and it adds no fetch of its own: a page that read auth status for its own reasons can hand the answer
 // over, so a surface that *displays* the vault state self-corrects without a timer.
 //
-// What deliberately stays with the Connections tab: the vault *strip* (a configuration surface), the
-// change-passphrase dialog (nothing waits on it — see the comment at its call site), and the strip's own
-// passkey button, whose refusal is reported as a page notice rather than inline in a dialog.
+// The change-passphrase dialog lives here too, though it is not a gate — nothing awaits it, and it rewraps
+// the key the session already holds rather than obtaining one. It is here because two pages open it:
+// Vault settings on the Connections tab, and the Backup section, whose credentials wait on a passphrase
+// that fails the strength rule.
+//
+// What deliberately stays with the Connections tab: the vault *strip* (a configuration surface) and the
+// strip's own passkey button, whose refusal is reported as a page notice rather than inline in a dialog.
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
@@ -63,6 +67,10 @@ export function VaultGateProvider({ children }) {
   const vault = useMemo(() => vaultFlags(currentUser), [currentUser])
   const { mode, ensureVault, openVault, closeVault } = useVaultGate(vault)
   const [notice, setNotice] = useState(null)
+  // Held apart from the gate's own mode on purpose: the gate exists to make a blocked action resume once
+  // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
+  // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
+  const [changingPassphrase, setChangingPassphrase] = useState(false)
 
   // Take a fresh `/auth/status` user a *page* happened to fetch, but only when it actually says something
   // new about the vault.
@@ -121,6 +129,24 @@ export function VaultGateProvider({ children }) {
     closeVault(true)
   }, [closeVault, setCurrentUser])
 
+  // The tail both routes of a passphrase change share. A passkey proves the current secret exactly as typing
+  // it does, and the outcome is identical — same DEK, same stranded-backup consequence — so the same notice
+  // is owed rather than a second one written for the other button.
+  const completePassphraseChange = useCallback(async (user) => {
+    if (user) setCurrentUser?.(user)
+    setChangingPassphrase(false)
+    setNotice({
+      title: 'Vault passphrase changed',
+      description: 'Your connections are unaffected. A backup taken before now puts the previous '
+        + 'passphrase back when its accounts & secrets are restored.',
+    })
+  }, [setCurrentUser])
+
+  const submitPassphraseChange = useCallback(async ({ current, next }) => {
+    const resp = await api.changeVaultPassphrase(current, next)
+    await completePassphraseChange(resp?.user)
+  }, [completePassphraseChange])
+
   const lockVault = useCallback(async () => {
     await api.lockVault().catch(() => {})
     await refreshVault()
@@ -129,9 +155,12 @@ export function VaultGateProvider({ children }) {
   const value = useMemo(() => ({
     vault, mode, ensureVault, openVault, closeVault,
     submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
+    changingPassphrase, changePassphrase: () => setChangingPassphrase(true),
+    submitPassphraseChange, completePassphraseChange, closePassphraseChange: () => setChangingPassphrase(false),
     notice, dismissNotice: () => setNotice(null),
   }), [vault, mode, ensureVault, openVault, closeVault,
-    submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault, notice])
+    submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
+    changingPassphrase, submitPassphraseChange, completePassphraseChange, notice])
 
   return <VaultGateContext.Provider value={value}>{children}</VaultGateContext.Provider>
 }
@@ -141,9 +170,19 @@ export function VaultGateProvider({ children }) {
 // it sit above a confirmation dialog that is still open beneath it (Disconnect asks for the passphrase
 // only after the user has committed, and backing out of the prompt returns to that decision).
 export function VaultGateRenderer() {
-  const { mode, submitVault, adoptPasskeyUnlock, closeVault, notice, dismissNotice } = useVaultGateContext()
+  const {
+    mode, submitVault, adoptPasskeyUnlock, closeVault, notice, dismissNotice,
+    changingPassphrase, submitPassphraseChange, completePassphraseChange, closePassphraseChange,
+  } = useVaultGateContext()
   return (
     <>
+      {changingPassphrase ? (
+        // The passkey route is offered here too, which is what makes the change usable by someone who has
+        // forgotten the passphrase but still holds a way in. It proves the *current* secret; the new one
+        // is typed in the dialog either way.
+        <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}
+          onUnlockedByPasskey={completePassphraseChange} onClose={closePassphraseChange} />
+      ) : null}
       {mode ? (
         <VaultPassphraseDialog
           mode={mode}

@@ -207,6 +207,7 @@ export const api = {
   requestVaultReenrolment: (new_passphrase) =>
     request('/auth/vault/reenrol', { method: 'POST', body: JSON.stringify({ new_passphrase }) }),
   lockVault: () => request('/auth/vault/lock', { method: 'POST' }),
+  markVaultPassphrasesUnchecked: () => request('/auth/vault/developer/mark-passphrases-unchecked', { method: 'POST' }),
   // Backups carrying the vault, taken against the wrapping currently in force — the ones a passphrase change is
   // about to strand. Only those: a backup from before an earlier change is already stranded, and saying
   // so again would bury the one that still matters.

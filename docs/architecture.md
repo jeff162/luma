@@ -826,7 +826,12 @@ custody*; this section is the mechanism.
   `vault_passphrase_needs_change`, which raises the `vault_passphrase_change` task; `ready_for_production`
   then refuses a connect, and `credentials_export_refusal` an export, until the owner changes it. A
   verdict under an older basis sets `vault_passphrase_needs_check` instead, which raises the dismissable
-  `vault_passphrase_check` task and a note on the locked strip; only the export waits on it.
+  `vault_passphrase_check` task and a note on the locked strip; only the export waits on it. The backup
+  surface offers whichever of the two would clear its warning: a passphrase-only check (gate mode
+  `check`, an unlock that offers no passkey, since a passkey cannot judge a passphrase) or the change.
+  Developer options can put every passphrase in the unchecked state and lock every session
+  (`mark_passphrases_unchecked`, a NULL basis), as an upgrade carrying a rule change leaves it, so the
+  check can be exercised without one.
 - **Minting a durable unlock method needs a recently presented secret.** Writing a passphrase slot,
   registering a passkey and issuing a recovery code each require proof within `PROOF_TTL_SECONDS`,
   stamped where a secret is verified (`unlock`, `unlock_with_passkey`, `change_passphrase`,
@@ -1002,7 +1007,8 @@ import card. The full rule is in `data-model.md`.
   because the navigation pane's sync control (`components/SyncNavItem.jsx`) starts gated work from any
   route. Everything needing an open vault goes through it: it raises the unlock dialog and resumes the
   action when the unlock lands, and treats a `423` as the same gate arriving late. Its flags derive from
-  `currentUser`.
+  `currentUser`. It also hosts the change-passphrase dialog, which is not a gate (nothing waits on it)
+  but is opened from both Vault settings and the backup surface.
 
 - **Connect on a networked bind requires HTTPS** (`transport.is_https` from `/auth/status`).
 

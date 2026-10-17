@@ -544,6 +544,31 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_passphrase_needs_check"])
             self.assertIsNone(self._left_out(client))
 
+    def test_the_developer_tool_puts_a_passphrase_in_the_state_a_rule_change_leaves_it_in(self):
+        # Its only use is exercising the check, so it is tested by the check working against it: if what it
+        # writes stopped reading as unchecked, the tool would succeed and change nothing. Absent unless
+        # developer options are on, since it touches every member's slot.
+        from unittest import mock
+        from backend import app_config
+
+        with api_client() as (client, _):
+            self._seed(client)
+            path = "/api/auth/vault/developer/mark-passphrases-unchecked"
+            with mock.patch.object(app_config, "developer_options_enabled", return_value=False):
+                self.assertEqual(client.post(path).status_code, 404)
+            self.assertIsNone(self._left_out(client))
+
+            with mock.patch.object(app_config, "developer_options_enabled", return_value=True):
+                r = client.post(path)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertTrue(r.json()["user"]["vault_passphrase_needs_check"])
+            # As the restart that brings a rule change does.
+            self.assertFalse(r.json()["user"]["vault_unlocked"])
+            self.assertEqual(self._left_out(client)["code"], "passphrase_unchecked")
+
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            self.assertIsNone(self._left_out(client))
+
     # ---- refusals -------------------------------------------------------
 
     def test_a_foreign_backup_without_a_passphrase_asks_for_one(self):

@@ -1085,16 +1085,28 @@ def credentials_export_refusal(user_id: str) -> dict | None:
     if slot["strength_basis"] != STRENGTH_BASIS:
         return {
             "code": "passphrase_unchecked",
-            "message": "The vault passphrase has not been checked against the current strength rule. Unlock "
-                       "the vault by typing it, so it can be checked before a backup carries it.",
+            "message": "The vault needs to be unlocked with this user's passphrase so it can be validated "
+                       "against the current strength rule. Until then the backup will not contain the data "
+                       "provider credentials.",
         }
     if not slot["meets_production_min"]:
         return {
             "code": "weak_passphrase",
-            "message": "The vault passphrase no longer meets the strength rule, and a backup would carry it. "
-                       "Change it in Vault settings.",
+            "message": "This user's vault passphrase does not meet the current strength rule and needs to be "
+                       "changed. Until then the backup will not contain the data provider credentials.",
         }
     return None
+
+
+def mark_passphrases_unchecked() -> int:
+    """Developer tooling: put the vault in the state a strength-rule change leaves it in, so the check can
+    be exercised without changing the rule. A rule change ships with an upgrade, and the restart drops every
+    unlock, so every member's passphrase reads as unchecked and every session is locked. A NULL basis is a
+    real state (a verdict from before the basis was recorded) and reads as unchecked like any outdated one.
+    Each member's next typed unlock re-judges theirs."""
+    marked = cdb.clear_passphrase_strength_bases()
+    lock_all()
+    return marked
 
 
 def _own_passphrase_slot(user_id: str) -> dict | None:

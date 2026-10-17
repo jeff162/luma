@@ -1285,6 +1285,15 @@ def set_vault_slot_strength(slot_id: str, *, meets_production_min: bool, strengt
         )
 
 
+def clear_passphrase_strength_bases() -> int:
+    """Forget what every passphrase verdict was judged under, so each reads as unchecked until typed.
+    Leaves the verdict itself. Returns how many slots it touched."""
+    with get_control_db() as conn:
+        return conn.execute(
+            "UPDATE vault_slot SET strength_basis = NULL WHERE method = 'passphrase'"
+        ).rowcount
+
+
 def set_vault_slot_rp_id(slot_id: str, rp_id: str):
     """Record the host name a passkey slot answered under. Leaves `updated_at` alone, like the above."""
     with get_control_db() as conn:

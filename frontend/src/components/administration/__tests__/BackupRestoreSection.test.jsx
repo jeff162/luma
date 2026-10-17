@@ -8,8 +8,11 @@
 //     the app with a raw JSON error page; nothing in the section could say anything about it.
 //   * Restoring follows from what the file is: a backup holding both parts offers each, and restoring
 //     accounts that turn sign-in on asks for an administrator of the file once the server says so.
+//   * A reason the credentials are left out that this user can clear is cleared on this page, through the
+//     App-level vault gate, and the warning follows the server's new answer.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { useState } from 'react'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -17,6 +20,8 @@ const downloadUrl = vi.fn()
 const restoreCredentialsFile = vi.fn()
 const restoreBackupFile = vi.fn()
 const runBackupPasskeyCeremony = vi.fn()
+const unlockVault = vi.fn()
+const changeVaultPassphrase = vi.fn()
 // Mutable so a test can decide how many recipients exist before rendering: the picker's whole contract is
 // that it appears only when there is more than one, so both sides of that need a different fixture.
 let recipients = []
@@ -39,6 +44,10 @@ vi.mock('../../../lib/api.js', () => ({
     getRestoreTargetStatus:     async () => ({ has_data: true }),
     restoreCredentialsFile:     (...args) => restoreCredentialsFile(...args),
     restoreBackupFile:          (...args) => restoreBackupFile(...args),
+    unlockVault:                (...args) => unlockVault(...args),
+    changeVaultPassphrase:      (...args) => changeVaultPassphrase(...args),
+    vaultCredentialsBackups:    async () => ({ backups: [] }),
+    vaultPassphraseStrength:    async () => ({ score: 4, shortfall: null }),
   },
 }))
 
@@ -50,12 +59,28 @@ vi.mock('../../../lib/vaultPasskey.js', async (importOriginal) => ({
 
 const { default: BackupRestoreSection } = await import('../BackupRestoreSection.jsx')
 const { AppSessionProvider } = await import('../../../lib/AppSessionContext.jsx')
+const { VaultGateProvider, VaultGateRenderer } = await import('../../../contexts/VaultGateContext.jsx')
 
-const renderSection = () => render(<AppSessionProvider value={{ demoLoaded: false }}><BackupRestoreSection /></AppSessionProvider>)
+const VAULT_USER = { id: 'u1', vault_configured: true, vault_unlocked: true, vault_has_passphrase: true }
+
+// The App's arrangement: the session holds the user, and the vault gate and its dialogs sit above the page.
+function Harness({ user }) {
+  const [currentUser, setCurrentUser] = useState(user)
+  return (
+    <AppSessionProvider value={{ demoLoaded: false, currentUser, setCurrentUser }}>
+      <VaultGateProvider>
+        <BackupRestoreSection />
+        <VaultGateRenderer />
+      </VaultGateProvider>
+    </AppSessionProvider>
+  )
+}
+
+const renderSection = (user = VAULT_USER) => render(<Harness user={user} />)
 
 afterEach(() => {
   cleanup(); downloadUrl.mockReset(); restoreCredentialsFile.mockReset(); runBackupPasskeyCeremony.mockReset()
-  restoreBackupFile.mockReset()
+  restoreBackupFile.mockReset(); unlockVault.mockReset(); changeVaultPassphrase.mockReset()
   recipients = []
   inspection = { kind: 'credentials', container: 'zip', encrypted: false }
   backupStatus = { credentials_left_out: null }
@@ -82,9 +107,48 @@ describe('the backup', () => {
   })
 
   it('says beforehand when the credentials will be left out, and why', async () => {
-    backupStatus = { credentials_left_out: { code: 'passphrase_unchecked', message: 'Unlock the vault by typing it.' } }
+    backupStatus = { credentials_left_out: { code: 'passphrase_unchecked', message: 'Until then the backup will not contain the credentials.' } }
     renderSection()
-    expect(await screen.findByText(/will not include the data provider credentials. Unlock the vault by typing it./)).toBeTruthy()
+    expect(await screen.findByText('Until then the backup will not contain the credentials.')).toBeTruthy()
+  })
+
+  // The whole journey a user with a passkey makes, because each step depends on the last crossing a
+  // component boundary: the page's button opens the App-level dialog, the dialog's answer replaces the
+  // session user, and that is what makes the page ask the server again.
+  it('lets an unchecked passphrase be checked and then changed without leaving the page', async () => {
+    const user = { ...VAULT_USER, vault_passphrase_needs_check: true, vault_passkeys: [{ id: 'pk1' }] }
+    backupStatus = { credentials_left_out: { code: 'passphrase_unchecked', message: 'Type it once.' } }
+    // Typing it shows the passphrase fails the rule.
+    unlockVault.mockImplementation(async () => {
+      backupStatus = { credentials_left_out: { code: 'weak_passphrase', message: 'Change it.' } }
+      return { user: { ...user, vault_passphrase_needs_check: false, vault_passphrase_needs_change: true } }
+    })
+    changeVaultPassphrase.mockImplementation(async () => {
+      backupStatus = { credentials_left_out: null }
+      return { user: { ...user, vault_passphrase_needs_check: false, vault_passphrase_needs_change: false } }
+    })
+    renderSection(user)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Validate passphrase' }))
+    await screen.findByText('Validate the vault passphrase')
+    // A passkey would open the vault and leave the passphrase unjudged, so it is not offered.
+    expect(screen.queryByRole('button', { name: /passkey/i })).toBeNull()
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'the old passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Validate' }))
+    expect(unlockVault).toHaveBeenCalledWith('the old passphrase')
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Change passphrase' }))
+    await screen.findByText('Change the vault passphrase')
+    const next = 'a much longer passphrase than before'
+    await userEvent.type(screen.getByPlaceholderText(/^Current passphrase/), 'the old passphrase')
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), next)
+    await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), next)
+    await screen.findByText('Strong')
+    // The warning's button and the dialog's share a name; the dialog renders after the page.
+    await userEvent.click(screen.getAllByRole('button', { name: 'Change passphrase' }).at(-1))
+    expect(changeVaultPassphrase).toHaveBeenCalledWith('the old passphrase', next)
+
+    await waitFor(() => expect(screen.queryByText('Change it.')).toBeNull())
   })
 
   it('reports a failed download in the page instead of navigating away', async () => {
@@ -300,7 +364,7 @@ describe('restoring a backup that holds both parts', () => {
     const user = userEvent.setup()
     renderSection()
     await choose(user, { credentials_included: false })
-    expect(screen.getByText(/This backup holds no data provider credentials/)).toBeTruthy()
+    expect(screen.getByText(/This backup does not contain data provider credentials/)).toBeTruthy()
   })
 
   it('asks for an administrator of the backup when the server says so, and sends what is typed', async () => {

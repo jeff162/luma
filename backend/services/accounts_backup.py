@@ -75,8 +75,8 @@ def _credentials(conn, user: dict | None) -> tuple[dict | None, dict | None]:
             return None, None
         return None, {
             "code": "vault_access_required",
-            "message": "Only a member who can open the vault can back up the data provider credentials. "
-                       "Ask a vault member to grant access.",
+            "message": "This user cannot open the vault, so the backup will not contain the data provider "
+                       "credentials. Someone who can open it can grant access.",
         }
     refusal = crypto_service.credentials_export_refusal(user_id)
     if refusal:

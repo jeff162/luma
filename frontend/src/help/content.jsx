@@ -2768,14 +2768,16 @@ export const HELP_TOPICS = [
                   the dialog can suggest some.</td>
               </tr>
               <tr>
-                <td><strong>Your vault passphrase is too easy to guess</strong></td>
+                <td><strong>Your vault passphrase is considered too easy to guess</strong></td>
                 <td>Shown when a passphrase set under an earlier, weaker rule no longer passes the current
                   one. It is checked each time it is typed to unlock. When the rule, or the estimate behind
-                  it, changes, the locked strip and a <strong>Confirm your vault passphrase</strong> task
-                  ask for one unlock with the passphrase rather than a passkey, since a passkey cannot be
-                  used to check it; backups leave the data provider credentials out until then. It still opens
-                  the vault, but no data provider can be connected, and backups leave the credentials out,
-                  until it is changed in Vault settings. Only the person whose passphrase it is can change it.</td>
+                  it, changes, the strip and a <strong>Confirm your vault passphrase</strong> task ask for
+                  it to be typed once rather than a passkey used, since a passkey cannot be used to check
+                  it: the locked strip by unlocking, and the unlocked strip and the task with{' '}
+                  <strong>Validate passphrase</strong>; backups leave the data provider credentials out until
+                  then. It still opens the vault, but until it is changed, in Vault settings, from its task or
+                  from the backup page, data providers cannot be connected and backups leave the credentials
+                  out. Only the person whose passphrase it is can change it.</td>
               </tr>
               <tr>
                 <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
@@ -4478,6 +4480,9 @@ export const HELP_TOPICS = [
           are left out while that user's passphrase fails the current strength rule, or has not been
           checked against it since the rule changed, and when that user cannot open the vault. The rest
           of the backup is still made, and the page says beforehand that the credentials will be missing.
+          Where the passphrase is the reason, that warning carries <strong>Validate passphrase</strong> or{' '}
+          <strong>Change passphrase</strong>. Validating takes the typed passphrase only, since a passkey
+          opens the vault without validating it.
         </p>
         <p>
           A backup can be encrypted to a backup key, and {APP_NAME} can generate the key pairs. That

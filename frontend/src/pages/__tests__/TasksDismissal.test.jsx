@@ -16,6 +16,9 @@ vi.mock('../../lib/api.js', () => ({
   api: { getTasks: vi.fn(), dismissTask: vi.fn(), restoreTask: vi.fn() },
 }))
 vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => ({ clearAll: vi.fn() }) }))
+vi.mock('../../contexts/VaultGateContext.jsx', () => ({
+  useVaultGateContext: () => ({ openVault: vi.fn(), changePassphrase: vi.fn() }),
+}))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 

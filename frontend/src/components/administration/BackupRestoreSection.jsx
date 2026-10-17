@@ -11,7 +11,8 @@
 // with the vault that opens them). What to put back is chosen at restore, from
 // what the file holds. The one thing a backup can lack is the credentials, left
 // out when the vault passphrase has not cleared the current rule or the person
-// taking it cannot open the vault; the page says so before the file is made.
+// taking it cannot open the vault; the page says so before the file is made, and
+// offers the check or the change where those would clear it.
 //
 // Restore is ONE picker for every kind of backup. The file says what it holds
 // (the server reads that without decrypting, so an encrypted archive is
@@ -31,8 +32,7 @@ import { AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername 
 import { Subsection } from '../SectionListPage.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
-import { useVaultGate } from '../../lib/useVaultGate.js'
-import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
+import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
 import { formatDate } from '../../lib/utils.js'
 import {
@@ -105,10 +105,10 @@ export default function BackupRestoreSection() {
   const [backupPassphrase, setBackupPassphrase] = useState('')
   const [backupRecoveryCode, setBackupRecoveryCode] = useState('')
   const [unlockOptions, setUnlockOptions] = useState(null)
-  const [vault, setVault] = useState({ configured: false, unlocked: false })
   // Restoring credentials re-keys them under this workspace's DEK, so it needs the vault open. The gate
-  // prompts and the action resumes itself — see lib/useVaultGate.js.
-  const { mode: vaultDialog, ensureVault, closeVault } = useVaultGate(vault)
+  // prompts and the action resumes itself — see lib/useVaultGate.js. It is the App-level one, so an unlock
+  // here is the session's unlock and every other surface sees the vault open.
+  const { vault, ensureVault, openVault, changePassphrase } = useVaultGateContext()
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
   // What the chosen file turned out to be. Everything below the picker — which inputs appear, what the
   // button says and how alarming it looks, which endpoint runs — follows from this rather than from
@@ -131,35 +131,18 @@ export default function BackupRestoreSection() {
     // A passkey has its own button, which restores directly.
     || (restoreIsCredentials && !!unlockOptions && !backupPassphrase && !backupRecoveryCode.trim())
 
-  async function refreshVault() {
-    const status = await api.getAuthStatus().catch(() => null)
-    const u = status?.user || {}
-    setVault({ configured: !!u.vault_configured, unlocked: !!u.vault_unlocked })
-    // An unlock is what settles an unchecked passphrase, so the answer can change with the vault's state.
-    const backup = await api.getBackupStatus().catch(() => null)
-    setCredentialsLeftOut(backup?.credentials_left_out || null)
-  }
-
+  // Re-asked whenever the session's vault state changes, because that is what moves the answer: checking
+  // the passphrase settles 'passphrase_unchecked' (or turns it into 'weak_passphrase'), and changing it
+  // settles 'weak_passphrase'. Both are done from this page, and either can also happen on another.
+  // Recipients are not fetched here: the section below owns that list and reports it up, so fetching
+  // it again would be a second request for an answer already on the page.
   useEffect(() => {
-    // Recipients are not fetched here: the section below owns that list and reports it up, so fetching
-    // it again would be a second request for an answer already on the page.
-    refreshVault()
-  }, [])
-
-  async function submitVault(passphrase) {
-    if (vaultDialog === 'set') await api.setVaultPassphrase(passphrase)
-    else await api.unlockVault(passphrase)
-    await refreshVault()
-    closeVault(true)
-  }
-
-  // The same settle the passphrase path performs, for an unlock the dialog ran with a passkey instead.
-  // Restoring a credentials backup is a gated action like any other, so it must accept the same proof:
-  // before this, a user with a passkey was still asked to type their passphrase here specifically.
-  async function adoptPasskeyUnlock() {
-    await refreshVault()
-    closeVault(true)
-  }
+    let alive = true
+    api.getBackupStatus()
+      .then(backup => { if (alive) setCredentialsLeftOut(backup?.credentials_left_out || null) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [vault])
 
   // Fetch-and-save rather than navigate: a navigation hands the response to the browser, so any error
   // status renders as a raw JSON page with the app gone from under it.
@@ -402,11 +385,25 @@ export default function BackupRestoreSection() {
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {credentialsLeftOut ? (
             <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
               fontSize: 13, lineHeight: 1.5, borderRadius: 8, padding: '8px 12px',
               background: 'color-mix(in srgb, var(--warning, #d97706) 12%, var(--surface2))',
               border: '1px solid color-mix(in srgb, var(--warning, #d97706) 35%, var(--border))',
             }}>
-              This backup will not include the data provider credentials. {credentialsLeftOut.message}
+              {/* The server's sentence says both why and what the backup will lack. */}
+              <span>{credentialsLeftOut.message}</span>
+              {/* The two reasons this user can clear, cleared here rather than on the Connections tab. The
+                  check takes a typed passphrase only: a passkey opens the vault but cannot judge one. The
+                  third reason, no vault access, is another member's to grant. */}
+              {credentialsLeftOut.code === 'passphrase_unchecked' ? (
+                <Button small onClick={() => openVault('check')} style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                  Validate passphrase
+                </Button>
+              ) : credentialsLeftOut.code === 'weak_passphrase' ? (
+                <Button small onClick={changePassphrase} style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                  Change passphrase
+                </Button>
+              ) : null}
             </div>
           ) :
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Generate a backup</div>
@@ -546,6 +543,14 @@ export default function BackupRestoreSection() {
                     ].filter(Boolean).join(' ')}
                   </div>
                 )}
+                {/* Above both choices rather than inside one: it describes the file, and it answers the
+                    question a restore raises either way — what happens to the credentials already here. */}
+                {restoreHoldsBoth && restoreInspection.credentials_included === false && (
+                  <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.5 }}>
+                    This backup does not contain data provider credentials, so any existing credentials will
+                    remain after the restore.
+                  </div>
+                )}
                 {restoreHoldsBoth && (
                   <div role="group" aria-label="What to restore" style={{ display: 'grid', gap: 8 }}>
                     {[
@@ -553,7 +558,7 @@ export default function BackupRestoreSection() {
                         'Replaces the accounts, categories, rules, transactions, documents and preferences here.'],
                       ['restore-accounts', 'Accounts & secrets', restoreAccounts, value => { setRestoreAccounts(value); if (!value) setAdminPrompt(null) },
                         restoreInspection.credentials_included === false
-                          ? 'Replaces the sign-in accounts and settings and the backup keys, and signs everyone out. This backup holds no data provider credentials, so those here are kept for whoever among the restored accounts can open the vault.'
+                          ? 'Replaces the sign-in accounts and settings and the backup keys, and signs everyone out.'
                           : 'Replaces the sign-in accounts and settings, backup keys and data provider credentials, and signs everyone out. Afterwards the vault opens for the user who made the backup, with the passphrase, recovery code or passkey in force then; other members ask for vault access again.'],
                     ].map(([name, label, checked, setChecked, detail]) => (
                       <label key={name} style={{ display: 'flex', gap: 10, alignItems: 'baseline', cursor: 'pointer' }}>
@@ -804,14 +809,6 @@ export default function BackupRestoreSection() {
           </div>
         </div>
       )}
-
-      {/* The gate's prompt for THIS system's vault, raised when a restore needs to re-key credentials
-          under the workspace DEK. Distinct from the backup-passphrase field above, which opens the
-          file. `closeVault(true)` releases the waiting action; `false` declines it. */}
-      {vaultDialog ? (
-        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault}
-          onUnlockedByPasskey={adoptPasskeyUnlock} onClose={() => closeVault(false)} />
-      ) : null}
     </div>
   )
 }

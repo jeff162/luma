@@ -1175,6 +1175,19 @@ def vault_lock(request: Request):
     return {"user": _session_payload(user)}
 
 
+@router.post("/vault/developer/mark-passphrases-unchecked")
+def vault_mark_passphrases_unchecked(request: Request):
+    """Developer options: mark every member's passphrase as not yet checked under the current strength
+    rule and lock every session (`crypto_service.mark_passphrases_unchecked`). Every member's, so
+    administrator-only."""
+    if not app_config.developer_options_enabled():
+        raise HTTPException(status_code=404, detail="Developer options are not enabled")
+    require_admin_or_local(request)
+    user = _require_current_user(request)
+    marked = crypto_service.mark_passphrases_unchecked()
+    return {"marked": marked, "user": _session_payload(user)}
+
+
 # --- Recovery: the rung between "ask another member" and "destroy it" -----------------------------
 #
 # On a multi-user workspace a forgotten passphrase was already survivable — another member re-enrols the

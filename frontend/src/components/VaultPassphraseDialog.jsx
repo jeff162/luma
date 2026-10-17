@@ -82,6 +82,9 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   //     | 'change' (rewrap the DEK under a new passphrase)
   //     | 'request' (join a vault that already exists — same passphrase against the same floor, but it
   //       opens nothing until a member approves, and saying so up front is the whole difference)
+  //     | 'check' (type the passphrase so it can be judged against a strength rule that changed since it
+  //       was last typed — mechanically an unlock, which is what judges it, whether or not the vault is
+  //       already open)
   const [passphrase, setPassphrase] = useState('')
   const [confirm, setConfirm] = useState('')
   const [current, setCurrent] = useState('')
@@ -98,6 +101,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // themselves can be authorized. Mechanically an unlock — that is what stamps the proof server-side —
   // but it must not *say* "unlock", which would describe an action the vault does not need.
   const confirming = mode === 'confirm'
+  const checking = mode === 'check'
   // Every one of these three chooses a NEW passphrase and is held to the floor.
   const setting = mode === 'set' || changing || requesting
   const session = useAppSession()
@@ -126,7 +130,8 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   const mismatch = setting && !!confirm && passphrase !== confirm
 
   // Offered wherever a passkey can actually answer the question being asked, and only where a usable one
-  // exists. That is three of the modes, for two different reasons:
+  // exists. Never in 'check': a passkey opens the vault but cannot judge a passphrase, so it would close
+  // the prompt with the question still unanswered. That leaves three of the modes, for two different reasons:
   //
   //   'unlock'  — the passkey opens the vault, which is the whole request.
   //   'confirm' — the ceremony *is* the proof; unlocking again is how the server records it.
@@ -185,11 +190,14 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       title={changing ? 'Change the vault passphrase'
         : requesting ? 'Request vault access'
           : confirming ? 'Confirm it’s you'
-            : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
+            : checking ? 'Validate the vault passphrase'
+              : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
       description={changing
         ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no connection needs re-linking. The current passphrase proves this is you — a passkey does the same, for anyone who has one.'
         : confirming
           ? 'Changing how this vault is opened needs the passphrase or a passkey, even though the vault is already open. Otherwise anyone who reached an unlocked screen could add their own way in.'
+          : checking
+          ? 'Enter your passphrase so it can be validated against the current strength rule. Until then backups will not contain the data provider credentials.'
           : requesting
           ? 'This workspace already has a credential vault. Choose the passphrase that will open it for you — it starts working once a member who can already open the vault approves the request.'
           : setting
@@ -220,7 +228,8 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
                 : changing ? 'Change passphrase'
                   : requesting ? 'Request access'
                     : confirming ? 'Confirm'
-                      : setting ? 'Set passphrase' : 'Unlock'}
+                      : checking ? 'Validate'
+                        : setting ? 'Set passphrase' : 'Unlock'}
             </Button>
           </Tooltip>
         </>

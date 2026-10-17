@@ -161,8 +161,8 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `useVaultGate` | Any action that needs the vault unlocked: `await ensureVault()` first, and the action resumes once the vault opens. | `lib/useVaultGate.js` |
-| `VaultPassphraseDialog` | The prompt a host renders for `useVaultGate`. Pass `onUnlockedByPasskey`, or a user with a passkey is offered only the passphrase. | `components/VaultPassphraseDialog.jsx` |
+| `useVaultGate` | Any action that needs the vault unlocked: `await ensureVault()` first, and the action resumes once the vault opens. A page reaches the App-level instance through `useVaultGateContext`, which also opens the change-passphrase dialog (`changePassphrase()`). | `lib/useVaultGate.js`, `contexts/VaultGateContext.jsx` |
+| `VaultPassphraseDialog` | The prompt a host renders for `useVaultGate`. Pass `onUnlockedByPasskey`, or a user with a passkey is offered only the passphrase. Mode `check` never offers one, since a passkey cannot judge a passphrase. | `components/VaultPassphraseDialog.jsx` |
 | `useVaultPasskeyUnlock` | An "Unlock with a passkey" control. | `lib/useVaultPasskeyUnlock.js` |
 | `vaultPasskey.js` | The passkey ceremony (`registerPasskey`, `runVaultPasskeyUnlock`, `hasUsableVaultPasskey`). It answers `{ ok, reason }`, and a caller shows every reason, cancellation included. | `lib/vaultPasskey.js` |
 | `RecoveryCodeReveal` | Showing a recovery code that will not be shown again. | `components/VaultRecoveryDialog.jsx` |

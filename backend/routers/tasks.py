@@ -129,6 +129,9 @@ def _vault_access_task(request: Request | None) -> dict | None:
 def _vault_passphrase_task(request: Request | None) -> dict | None:
     """This member's vault passphrase failed the strength rule when they last typed it.
 
+    Carries an `action` rather than a `link`, as the check task below does: the dialog that clears it opens
+    over whatever page is showing (`VaultGateContext`), so there is nowhere to send the user.
+
     Required rather than dismissible: while it stands no data source can be connected
     (`crypto_service.ready_for_production`) and this member cannot take a credentials backup, and the only
     person who can clear it is the one it is shown to — a passphrase can be changed by its owner alone.
@@ -139,12 +142,12 @@ def _vault_passphrase_task(request: Request | None) -> dict | None:
     return {
         "id":          "vault_passphrase_change",
         "title":       "Change your vault passphrase",
-        "description": "Your vault passphrase is too easy to guess under the current strength rule. It still "
-                       "opens the vault, but no data provider can be connected and no credentials backup "
-                       "can be taken until it is changed. Change it in Vault settings.",
+        "description": "Your vault passphrase is considered too easy to guess. It still opens the vault, but "
+                       "until it is changed data providers cannot be connected and backups will not contain "
+                       "the data provider credentials.",
         "count":       1,
-        "link":        "/import-export?tab=connections",
-        "link_label":  "Open data connections",
+        "action":      "vault_passphrase_change",
+        "action_label": "Change passphrase",
         "severity":    SEVERITY_WARNING,
         "required":    True,
     }
@@ -165,12 +168,12 @@ def _vault_passphrase_check_task(request: Request | None) -> dict | None:
     return {
         "id":          "vault_passphrase_check",
         "title":       "Confirm your vault passphrase",
-        "description": "The rule for how hard a vault passphrase must be to guess has changed since yours was "
-                       "last checked. Unlock the vault by typing your passphrase, rather than with a passkey, "
-                       "so it can be checked. No credentials backup can be taken until then.",
+        "description": "The vault needs to be unlocked with your passphrase, not a passkey, so it can be "
+                       "validated against the current strength rule. Until then backups will not contain the "
+                       "data provider credentials.",
         "count":       1,
-        "link":        "/import-export?tab=connections",
-        "link_label":  "Open data connections",
+        "action":      "vault_passphrase_check",
+        "action_label": "Validate passphrase",
         "severity":    SEVERITY_INFO,
     }
 
