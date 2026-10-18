@@ -294,8 +294,12 @@ export const api = {
     }),
   // Drop a linked connection. Where the provider supports it this also revokes the credential at the
   // provider; where it does not (SimpleFIN has no revocation call) only the local copy goes.
-  disconnectProvider: (provider, external_id) =>
-    request(`/providers/${provider}/disconnect`, { method: 'POST', body: JSON.stringify({ external_id }) }),
+  // `removeWithoutRevoking` is the answer to a `revoke_failed` refusal: remove it here knowing the access
+  // may still be live at the provider.
+  disconnectProvider: (provider, external_id, { removeWithoutRevoking = false } = {}) =>
+    request(`/providers/${provider}/disconnect`, {
+      method: 'POST', body: JSON.stringify({ external_id, remove_without_revoking: removeWithoutRevoking }),
+    }),
   // Rebuild a connection's local account rows from its still-valid credential (no re-link) — the recovery
   // when a restore rolled back the accounts but kept the connection. Caller then backfills history via sync.
   refreshConnectionAccounts: (provider, external_id) =>

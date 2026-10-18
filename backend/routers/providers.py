@@ -56,6 +56,9 @@ class ConnectRequest(BaseModel):
 
 class DisconnectRequest(BaseModel):
     external_id: str
+    # Remove the connection here although the provider refused to revoke it: the user's answer to the
+    # `revoke_failed` refusal below, given knowing the access may still be live.
+    remove_without_revoking: bool = False
 
 
 class RefreshAccountsRequest(BaseModel):
@@ -432,6 +435,34 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Connection not found")
+    credential = None
+    revoked = False
+    if body.remove_without_revoking:
+        reason = "provider_refused"
+    else:
+        credential, revoked = _revoke_for_disconnect(request, provider, row, user)
+        reason = None if revoked else "no_credential" if credential is None else "provider_cannot_revoke"
+    with get_db() as conn:
+        conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
+        # The disconnect is the one row a removed connection keeps: when it went, and whether access ended at
+        # the provider or only here. Everything else about a connection that no longer exists is history
+        # nobody reads, and would otherwise sit in the log under a pill for something that is gone.
+        connection_log.delete_for_connection(conn, row["id"])
+        connection_log.write_event(
+            conn, event=connection_log.DISCONNECT, provider=provider, connection_id=row["id"],
+            institution=row["institution"], detail={"revoked": revoked, "reason": reason},
+        )
+    return {"ok": True, "revoked": revoked}
+
+
+def _revoke_for_disconnect(request: Request, provider: str, row, user) -> tuple:
+    """Revoke a connection's credential at its provider ahead of removing it: `(credential, revoked)`, the
+    credential None when there was none to send.
+
+    A provider that refuses is a `revoke_failed` 502 and the connection stays, so a passing failure can be
+    retried rather than the user believing the token dead when it may still be live. Some refusals never
+    pass — the app credentials changed to another environment, or the provider account ended — so the
+    refusal is also where the user can choose to remove it anyway (`remove_without_revoking`)."""
     app_config = require_app_config(request, provider)
     credential = None
     try:
@@ -451,33 +482,17 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
         # not revoked, which for a provider that *can* revoke is a real caveat.
         credential = None
 
-    revoked = False
-    if credential is not None:
-        try:
-            get_adapter(provider).remove(app_config, credential)
-            revoked = get_adapter(provider).revokes_on_disconnect
-        except Exception as exc:
-            # Keep the local connection if provider-side revocation failed, so the user can retry rather
-            # than believe the token is dead when it may still be live.
-            message = f"Could not revoke the connection at the provider: {exc}"
-            connection_log.record_event(event=connection_log.DISCONNECT, provider=provider,
-                                        connection_id=row["id"], institution=row["institution"], error=message,
-                                        detail=connection_log.error_detail(exc))
-            raise HTTPException(status_code=502, detail=message)
-    with get_db() as conn:
-        conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
-        # The disconnect is the one row a removed connection keeps: when it went, and whether access ended at
-        # the provider or only here. Everything else about a connection that no longer exists is history
-        # nobody reads, and would otherwise sit in the log under a pill for something that is gone.
-        connection_log.delete_for_connection(conn, row["id"])
-        connection_log.write_event(
-            conn, event=connection_log.DISCONNECT, provider=provider, connection_id=row["id"],
-            institution=row["institution"],
-            detail={"revoked": revoked,
-                    "reason": None if revoked
-                    else "no_credential" if credential is None else "provider_cannot_revoke"},
-        )
-    return {"ok": True, "revoked": revoked}
+    if credential is None:
+        return None, False
+    try:
+        get_adapter(provider).remove(app_config, credential)
+    except Exception as exc:
+        message = f"Could not revoke the connection at the provider: {exc}"
+        connection_log.record_event(event=connection_log.DISCONNECT, provider=provider,
+                                    connection_id=row["id"], institution=row["institution"], error=message,
+                                    detail=connection_log.error_detail(exc))
+        raise HTTPException(status_code=502, detail={"code": "revoke_failed", "message": message})
+    return credential, get_adapter(provider).revokes_on_disconnect
 
 
 @router.post("/{provider}/refresh-accounts")

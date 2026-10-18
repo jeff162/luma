@@ -553,6 +553,8 @@ export default function ConnectionsTab({ onShowHistory }) {
   const [waitingRequests, setWaitingRequests] = useState([])
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
+  // Set when the provider refused to revoke: `{ target, message }`, offering removal without revoking.
+  const [revokeRefused, setRevokeRefused] = useState(null)
   const [disconnecting, setDisconnecting] = useState(false)
   // The open connection card's "⋯" menu. One at a time, so it lives on the tab rather than per card.
   const [cardMenu, setCardMenu] = useState(null) // { connectionId, provider, connection, anchorRect }
@@ -1067,8 +1069,28 @@ export default function ConnectionsTab({ onShowHistory }) {
       await refresh()
     } catch (e) {
       if (await retriedAfterUnlock(e, confirmDisconnect)) return
+      const target = disconnectTarget
       setDisconnectTarget(null)
-      setNotice({ title: 'Could not disconnect', description: e.message })
+      // A refusal can be one that never clears (app credentials moved to another environment, a provider
+      // account that ended), so the connection can be removed anyway, said plainly to leave access live.
+      if (e.detail?.code === 'revoke_failed') setRevokeRefused({ target, message: e.message })
+      else setNotice({ title: 'Could not disconnect', description: e.message })
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  async function removeWithoutRevoking() {
+    const { target } = revokeRefused
+    setDisconnecting(true)
+    try {
+      await api.disconnectProvider(target.provider, target.external_id, { removeWithoutRevoking: true })
+      setRevokeRefused(null)
+      await onAccountsChanged?.()
+      await refresh()
+    } catch (e) {
+      setRevokeRefused(null)
+      setNotice({ title: 'Could not remove the connection', description: e.message })
     } finally {
       setDisconnecting(false)
     }
@@ -1669,6 +1691,19 @@ export default function ConnectionsTab({ onShowHistory }) {
           cancelDisabled={disconnecting}
           onConfirm={confirmDisconnect}
           onCancel={() => setDisconnectTarget(null)}
+        />
+      ) : null}
+
+      {revokeRefused ? (
+        <AppConfirmDialog
+          title="The provider refused to revoke this connection"
+          description={`${revokeRefused.message} Removing it here deletes the connection from Luma and keeps its accounts and transactions, but does not end its access at ${providerLabel(revokeRefused.target.provider)}. That access may still be live; revoke it from the provider's dashboard or the institution's website.`}
+          borderColor="var(--warning)"
+          confirmLabel={disconnecting ? 'Removing…' : 'Remove anyway'}
+          confirmDisabled={disconnecting}
+          cancelDisabled={disconnecting}
+          onConfirm={removeWithoutRevoking}
+          onCancel={() => setRevokeRefused(null)}
         />
       ) : null}
 

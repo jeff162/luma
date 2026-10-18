@@ -135,3 +135,42 @@ class CredentiallessConnectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefusedRevocationTests(unittest.TestCase):
+    """A provider that will never accept the revoke (app credentials since moved to another environment, a
+    provider account that ended) must not leave a connection that cannot be removed."""
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    def test_a_refused_revoke_keeps_the_connection_until_it_is_removed_anyway(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/providers/plaid/config",
+                        json={"client_id": "cid", "secret": "sek", "env": "sandbox"})
+            with mock.patch.object(plaid_service, "exchange_public_token",
+                                   return_value={"access_token": "access-1", "item_id": "item-1"}), \
+                 mock.patch.object(plaid_service, "fetch_accounts", return_value=ACCOUNTS):
+                client.post("/api/plaid/exchange", json={"public_token": "public-1"})
+
+            with mock.patch.object(plaid_service, "remove_item", side_effect=RuntimeError("wrong environment")):
+                refused = client.post("/api/providers/plaid/disconnect", json={"external_id": "item-1"})
+            self.assertEqual(refused.status_code, 502, refused.text)
+            self.assertEqual(refused.json()["detail"]["code"], "revoke_failed")
+            with get_db() as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0], 1)
+
+            with mock.patch.object(plaid_service, "remove_item") as remove:
+                removed = client.post("/api/providers/plaid/disconnect",
+                                      json={"external_id": "item-1", "remove_without_revoking": True})
+            self.assertEqual(removed.status_code, 200, removed.text)
+            remove.assert_not_called()
+            self.assertFalse(removed.json()["revoked"])
+            with get_db() as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0], 0)
+            entry = client.get("/api/sync/diagnostics").json()["entries"][0]
+            self.assertEqual((entry["event"], entry["detail"]["reason"]), ("disconnect", "provider_refused"))

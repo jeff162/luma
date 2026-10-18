@@ -355,6 +355,7 @@ const REVOKE_TEXT = {
 const DISCONNECT_TEXT = {
   no_credential: 'Disconnected — there was no stored credential to revoke',
   provider_cannot_revoke: 'Disconnected here only — this provider cannot revoke access; revoke it at the provider',
+  provider_refused: 'Removed here only — the provider refused to revoke access; revoke it at the provider',
 }
 
 // Null for a sync row, which the log describes with its own fields.

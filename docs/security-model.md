@@ -114,6 +114,12 @@ access ended when it did not is worse off than one who knows to go and revoke it
 revocation call is an ordinary supported case; the remedy is to revoke the token at the provider, rotate
 the vault passphrase and key, then re-link.
 
+**A refused revocation keeps the connection until the user removes it anyway.** A refusal may pass, so
+disconnect stops and says what the provider answered rather than dropping a token that may still be live.
+Some never pass: the app credentials moved to another environment, or the provider account ended. So the
+refusal offers removal without revoking, stating that the access may still be live and where to end it,
+and the Sync log records the disconnect as not revoked.
+
 ### Responding to an exposure
 
 **How a leaked credential is retired is the provider's to define, so each step follows that provider's

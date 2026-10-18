@@ -1014,7 +1014,9 @@ import card. The full rule is in `data-model.md`.
 
 - **Disconnect** (`POST /api/providers/{provider}/disconnect`) revokes the token at the provider where
   the adapter's `remove` can, then drops the `connection` row and keeps accounts and transactions. Where
-  `revokes_on_disconnect` is false, `remove` is a no-op and the confirm dialog says so.
+  `revokes_on_disconnect` is false, `remove` is a no-op and the confirm dialog says so. A provider that
+  refuses is a `revoke_failed` 502 that keeps the row; `remove_without_revoking` then drops it without
+  calling the provider (`security-model.md` → *Revocation, in both directions*).
 
 - **The mapping seam** (`connection_account`, `routers/connections.py`,
   `services/connection_mapping.py`). Connecting records the provider's accounts as unmapped and creates

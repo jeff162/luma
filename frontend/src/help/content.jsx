@@ -2730,6 +2730,12 @@ export const HELP_TOPICS = [
           For Plaid, {APP_NAME}'s own access (its client ID and secret) is kept; it can be revoked only
           by signing into the Plaid Dashboard.
         </p>
+        <p>
+          If the provider refuses to revoke the access, for instance after the Plaid client ID and secret
+          were changed to another environment, the connection is kept and <strong>Remove anyway</strong> is
+          offered. That removes it from {APP_NAME} without ending its access at the provider, which then
+          has to be revoked there.
+        </p>
       </>
     ),
   },
