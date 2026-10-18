@@ -345,13 +345,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # or its rule changes what it holds. v80 records on each Amazon card the Amazon account it imported
 # into, which the import history groups a vendor's cards by; older cards are backfilled from their rows,
 # and a card with none (an items-only card holding parked detail) is left unattributed. v81 adds
-# `rule_conflict`, the rule pairs a categorization pass caught deciding a transaction arbitrarily.
+# `rule_conflict`, the rule pairs a categorization pass caught deciding a transaction arbitrarily. v82 adds
+# `backup_history`, the backups this system made.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 81
+CURRENT_VERSION = 82
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2572,6 +2573,29 @@ def _add_rule_conflict(conn):
     """)
 
 
+@migration(82)
+def _add_backup_history(conn):
+    # See the baseline CREATE. Empty on an existing database: no backup made before it was recorded.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backup_history (
+            id                   TEXT PRIMARY KEY,
+            made_at              TEXT NOT NULL,
+            made_by              TEXT,
+            filename             TEXT,
+            encrypted            INTEGER,
+            key_labels           TEXT,
+            credentials_included INTEGER,
+            credentials_left_out TEXT,
+            total_bytes          INTEGER,
+            ledger_bytes         INTEGER,
+            accounts_bytes       INTEGER,
+            documents_bytes      INTEGER,
+            document_count       INTEGER,
+            restored_at          TEXT
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2663,6 +2687,12 @@ def get_db_instance_id(conn) -> str:
     row = conn.execute("SELECT value FROM db_meta WHERE key = 'instance_id'").fetchone()
     if row and row["value"]:
         return row["value"]
+    return new_db_instance_id(conn)
+
+
+def new_db_instance_id(conn) -> str:
+    """Give the database a fresh `instance_id`, the identifier its backups carry. A restore calls this, so
+    a backup made before it reads as another system's (`data-model.md` → *Backups*)."""
     instance_id = str(uuid.uuid4())
     conn.execute(
         "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
@@ -3748,6 +3778,26 @@ def init_db(db_path: str | None = None):
                 rule_id_high TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
                 txn_id       TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
                 PRIMARY KEY (rule_id_low, rule_id_high)
+            );
+            -- The backups this system made, and the file its data was last restored from
+            -- (services/backup_history.py). Sizes are bytes as stored in the archive; `key_labels` is a
+            -- JSON list of the backup keys an encrypted file was sealed to. `restored_at` is set only on the
+            -- row for the file a restore came from.
+            CREATE TABLE IF NOT EXISTS backup_history (
+                id                   TEXT PRIMARY KEY,
+                made_at              TEXT NOT NULL,
+                made_by              TEXT,
+                filename             TEXT,
+                encrypted            INTEGER,
+                key_labels           TEXT,
+                credentials_included INTEGER,
+                credentials_left_out TEXT,
+                total_bytes          INTEGER,
+                ledger_bytes         INTEGER,
+                accounts_bytes       INTEGER,
+                documents_bytes      INTEGER,
+                document_count       INTEGER,
+                restored_at          TEXT
             );
 
             -- Typed links between transactions: a general association primitive (services/txn_links.py).

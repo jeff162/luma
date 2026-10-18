@@ -357,6 +357,11 @@ lands on an empty install, the one it came from, or another. Restoring the accou
 and a file that turns sign-in on is restored only with the password of an administrator in it, so the
 operator keeps a way in: the administrator they then sign in as.
 
+**A restore makes a new system.** Restoring the financial data gives the install a new backup identifier,
+so every backup made before it, the restored file included, reads afterwards as another system's and
+needs the different-system confirmation (`data-model.md` → *The compatibility guard*). The backup to rely
+on after a restore is one taken after it.
+
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.
 

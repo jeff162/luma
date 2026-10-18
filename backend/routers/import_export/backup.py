@@ -19,7 +19,8 @@ independent of the import-run workflow:
   transaction with foreign-key checks deferred, repairing dangling references at the end. The payload
   is stamped with the source `instance_id` + `access_mode`; restore's compatibility guard uses these
   to refuse a silent cross-system/cross-mode wipe (409 unless `force`) while still allowing an empty
-  target or a same-instance self-restore. (Payload is version 10; versions 7-9 are still accepted,
+  target or a same-instance self-restore. Every restore of the financial data gives the target a new
+  `instance_id`, so a backup made before it reads as another system's. (Payload is version 10; versions 7-9 are still accepted,
   with their pre-rename columns translated on restore — v7's account columns
   `plaid_account_id`/`plaid_item_id` to the 6b-3 shape, and pre-v9's `plaid_transaction_id` to
   `external_transaction_id`. Older versions are no longer accepted.)
@@ -75,6 +76,7 @@ from backend.db.database import (
     get_db,
     get_db_instance_id,
     get_db_version,
+    new_db_instance_id,
     redate_held_sync_duplicate,
     redate_txn_row_to_transaction_date,
     run_post_restore_data_init,
@@ -84,7 +86,7 @@ from backend.db.control_database import auth_required
 from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
-from backend.services import accounts_backup, crypto_service
+from backend.services import accounts_backup, backup_history, crypto_service
 from backend.services.documents import (
     copy_document_file_from,
     document_file_path,
@@ -658,6 +660,9 @@ BACKUP_SECTIONS = (
     ("amazon_pending_items", "amazon_pending_item", "SELECT * FROM amazon_pending_item ORDER BY rowid"),
     # UI/layout preferences (page layouts, dashboard tag reports, ...), keyed by scope_id.
     ("ui_preferences", "ui_preference", "SELECT * FROM ui_preference ORDER BY rowid"),
+    # The backups this system made. Not restored like the rest: a restore of this system's own backup keeps
+    # the live history, which already holds everything this copy does (see `_restore_backup_history`).
+    ("backup_history", "backup_history", "SELECT * FROM backup_history ORDER BY rowid"),
     # Attached receipts and invoices — the rows only. Each row's *file* rides as its own
     # `documents/<id>` member (see `_write_document_members`), which is the whole reason documents are
     # files rather than blobs: the bytes never enter this JSON.
@@ -674,10 +679,11 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
 # `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, 15 the
-# `connections` section, and 16 the `import_batch_rejected_rows` section — all purely additive, which is
-# why an older archive still restores through exactly the same path with the new section simply absent.
-BACKUP_PAYLOAD_VERSION = 16
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+# `connections` section, 16 the `import_batch_rejected_rows` section, and 17 the `backup_history` section
+# — all purely additive, which is why an older archive still restores through exactly the same path with
+# the new section simply absent.
+BACKUP_PAYLOAD_VERSION = 17
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 
 # How old a backup's resume points may be and still be handed back to a provider. Plaid documents a
 # `/transactions/sync` cursor as valid for at least a year after it was issued; past that nothing vouches
@@ -845,8 +851,10 @@ def _write_ndjson_member(zf, name: str, rows) -> dict:
     return {"sha256": digest.hexdigest(), "rows": count}
 
 
-def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part: Optional[dict] = None) -> None:
-    """Write a backup of `kind` into `sink` (any writable binary file object).
+def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part: Optional[dict] = None,
+                         made_by: Optional[str] = None) -> dict:
+    """Write a backup of `kind` into `sink` (any writable binary file object), and return its
+    `exported_at` with the sizes `archive_sizes` reports.
 
     `accounts_part` (`accounts_backup.collect`) is written when given. A `data` kind without it is for tests
     that build the older files. Data rows go straight from their cursor into the zip
@@ -856,6 +864,7 @@ def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part
     member, which is only known once that member has been written.
     """
     members = {}
+    exported_at = utcnow_iso()
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for section, _table, query in BACKUP_SECTIONS:
             name = _section_member(section)
@@ -889,7 +898,10 @@ def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part
                 # by a newer build (which may carry columns this build can't represent — the restore
                 # guard refuses that downgrade unless forced).
                 "schema_version": get_db_version(conn),
-                "exported_at":    utcnow_iso(),
+                "exported_at":    exported_at,
+                # Who took it, by name rather than id: the history row a restore writes for this file
+                # outlives the people of the system it came from.
+                "made_by":        made_by,
                 # System identity, so restore can tell "my own backup" from "a different system's", and
                 # which access mode it came from. Used by the restore compatibility guard.
                 "instance_id":    get_db_instance_id(conn),
@@ -901,6 +913,23 @@ def write_backup_archive(conn, sink, kind: str = BACKUP_KIND_DATA, accounts_part
                 "members":        members,
             }).encode("utf-8"),
         )
+        sizes = archive_sizes(zf)
+    return {"exported_at": exported_at, **sizes}
+
+
+def archive_sizes(zf) -> dict:
+    """How much of an archive is the ledger, the accounts part and the attached documents, in bytes as
+    stored, read from the zip's directory without opening a member. `meta.json` counts as ledger."""
+    sizes = {"ledger_bytes": 0, "accounts_bytes": 0, "documents_bytes": 0, "document_count": 0}
+    for info in zf.infolist():
+        if info.filename.startswith(DOCUMENT_MEMBER_PREFIX):
+            sizes["documents_bytes"] += info.compress_size
+            sizes["document_count"] += 1
+        elif info.filename.startswith("accounts/"):
+            sizes["accounts_bytes"] += info.compress_size
+        else:
+            sizes["ledger_bytes"] += info.compress_size
+    return sizes
 
 
 def build_backup_data(conn) -> dict:
@@ -928,15 +957,18 @@ def build_backup_data(conn) -> dict:
 
 
 def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list[dict], kind: str,
-                              credentials_included: Optional[bool] = None) -> dict:
+                              credentials_included: Optional[bool] = None,
+                              exported_at: Optional[str] = None) -> dict:
     manifest = {
         "format": "luma-encrypted-backup",
         "version": 1,
         # Outside the ciphertext deliberately: what the file holds decides which restore choices to offer,
         # and that has to be known before anyone has produced a private key. It discloses what the file
-        # holds, not anything in it.
+        # holds, not anything in it. The time it was taken is what the suggested filename already says,
+        # and lets the restore confirmation say how far back the restore goes.
         "kind": kind,
         **({"credentials_included": credentials_included} if credentials_included is not None else {}),
+        **({"exported_at": exported_at} if exported_at else {}),
         "cipher": "AES-256-GCM",
         "wrapped_keys": [],
         "nonce": urlsafe_b64encode(nonce).decode("ascii"),
@@ -962,7 +994,8 @@ def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list
 
 
 def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BACKUP_KIND_DATA,
-                            credentials_included: Optional[bool] = None) -> None:
+                            credentials_included: Optional[bool] = None,
+                            exported_at: Optional[str] = None) -> None:
     """Seal an already-written archive into the encrypted envelope, streaming.
 
     The envelope format is untouched by the streaming: `AESGCM.encrypt()` is one-shot and needs both
@@ -973,7 +1006,7 @@ def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BA
     """
     content_key = AESGCM.generate_key(bit_length=256)
     nonce = os.urandom(12)
-    manifest = _build_encrypted_manifest(content_key, nonce, recipients, kind, credentials_included)
+    manifest = _build_encrypted_manifest(content_key, nonce, recipients, kind, credentials_included, exported_at)
     encryptor = Cipher(algorithms.AES(content_key), modes.GCM(nonce)).encryptor()
 
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
@@ -1030,6 +1063,28 @@ def backup_status(request: Request):
         return {"credentials_left_out": accounts_backup.credentials_left_out(conn, getattr(request.state, "user", None))}
 
 
+@router.get("/backup/history", dependencies=[Depends(require_admin_or_local)])
+def get_backup_history():
+    """The backups this system made, newest first, with the history's retention."""
+    with get_db() as conn:
+        return {"backups": backup_history.list_rows(conn), "retention_days": backup_history.retention_days(conn)}
+
+
+class BackupHistoryRetentionRequest(BaseModel):
+    days: int
+
+
+@router.put("/backup/history/retention", dependencies=[Depends(require_admin_or_local)])
+def set_backup_history_retention(body: BackupHistoryRetentionRequest):
+    """How many days the history keeps. Applied on the spot; the newest row is kept whatever its age."""
+    with get_db() as conn:
+        try:
+            days = backup_history.set_retention_days(conn, body.days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"retention_days": days, "backups": backup_history.list_rows(conn)}
+
+
 @router.get("/backup", dependencies=[Depends(require_admin_or_local)])
 def export_backup(
     request: Request,
@@ -1056,10 +1111,11 @@ def export_backup(
                 raise HTTPException(status_code=400, detail="No enabled backup keys are configured")
         accounts_part = accounts_backup.collect(conn, user)
 
+    made_by = (user or {}).get("display_name") or (user or {}).get("username")
     artifact = backup_temp_file()
     try:
         with get_db() as conn:
-            write_backup_archive(conn, artifact, BACKUP_KIND_FULL, accounts_part)
+            written = write_backup_archive(conn, artifact, BACKUP_KIND_FULL, accounts_part, made_by)
         if encrypted:
             # The plain archive becomes the plaintext of the encrypted one; the database is no longer
             # needed, so the connection is already closed by the time the cipher runs.
@@ -1067,7 +1123,7 @@ def export_backup(
             try:
                 plain.seek(0)
                 write_encrypted_archive(plain, selected, artifact, BACKUP_KIND_FULL,
-                                        accounts_part["credentials"] is not None)
+                                        accounts_part["credentials"] is not None, written["exported_at"])
             finally:
                 plain.close()
         size = artifact.tell()
@@ -1076,14 +1132,26 @@ def export_backup(
         artifact.close()
         raise
 
-    # Deliberately not allowed to fail the export: the file is the valuable thing, the note about it a
-    # courtesy, and a control-DB hiccup must not cost someone their backup.
+    filename = _dated_backup_filename("luma_backup", ".encrypted.zip" if encrypted else ".zip")
+    # Deliberately not allowed to fail the export: the file is the valuable thing, the notes about it a
+    # courtesy, and a database hiccup must not cost someone their backup.
     try:
         accounts_backup.record_export(user, accounts_part)
     except Exception as exc:                                        # pragma: no cover - defensive
         log_error(f"[backup] could not record the backup: {exc}", exc_info=exc)
+    try:
+        with get_db() as conn:
+            backup_history.record(
+                conn, made_at=written["exported_at"], made_by=made_by, filename=filename,
+                encrypted=encrypted, key_labels=[r["label"] for r in selected] if encrypted else None,
+                credentials_included=accounts_part["credentials"] is not None,
+                credentials_left_out=(accounts_part.get("credentials_left_out") or {}).get("code"),
+                total_bytes=size, ledger_bytes=written["ledger_bytes"], accounts_bytes=written["accounts_bytes"],
+                documents_bytes=written["documents_bytes"], document_count=written["document_count"],
+            )
+    except Exception as exc:                                        # pragma: no cover - defensive
+        log_error(f"[backup] could not record the backup in the history: {exc}", exc_info=exc)
 
-    filename = _dated_backup_filename("luma_backup", ".encrypted.zip" if encrypted else ".zip")
     return StreamingResponse(
         _stream_file_out(artifact),
         media_type="application/zip",
@@ -1665,8 +1733,11 @@ def _restore_preflight(header: dict, force: bool, *, restores_data: bool = True,
         })
 
 
-def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
+def _restore_sections(conn, header: dict, section_rows, backup_version, source: Optional[dict] = None) -> dict:
     """Wipe and rebuild every data table from `section_rows`, inside one transaction.
+
+    `source` describes the uploaded file, for the history row a restore from another system writes for
+    it (`_restore_backup_history`).
 
     All-or-nothing on purpose. The restore has many cross-table and self-referential foreign keys, and a
     single correct insert order would be brittle, so the whole wipe+reload runs with foreign-key checks
@@ -1679,13 +1750,14 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     rather than by the ledger: `accounts`, because its connection links are reconciled against the live
     `connection` table as a set, and `connection_accounts`, which is reconciled against the accounts.
     """
-    # Whether these are still this machine's watched folders has to be decided *before* anything is
-    # touched, because the restore adopts the backup's `instance_id` further down and the question is
-    # unanswerable afterwards. An empty target counts as a different instance: nothing about a fresh
-    # install says another machine's paths still mean what they meant there.
-    restoring_onto_another_instance = (
-        not _target_has_data(conn) or header.get("instance_id") != get_db_instance_id(conn)
-    )
+    # Whether the backup is this system's own has to be decided *before* anything is touched, because the
+    # restore gives the system a new `instance_id` further down and the question is unanswerable
+    # afterwards. It decides whose backup history survives, and whether these are still this machine's
+    # watched folders, where an empty target also counts as another system: nothing about a fresh install
+    # says another machine's paths still mean what they meant there.
+    backup_instance = header.get("instance_id")
+    same_system = bool(backup_instance) and backup_instance == get_db_instance_id(conn)
+    restoring_onto_another_instance = not same_system or not _target_has_data(conn)
 
     conn.execute("BEGIN")
     conn.execute("PRAGMA defer_foreign_keys = ON")
@@ -1718,7 +1790,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     _insert_section(conn, "connection_account", connection_accounts)
     del accounts, connection_accounts
 
-    reconciled = {"owners", "connections", "accounts", "connection_accounts"}
+    reconciled = {"owners", "connections", "accounts", "connection_accounts", "backup_history"}
     transforms = {
         "transactions": _transaction_transform(backup_version),
         "import_batches": _local_connection,
@@ -1730,20 +1802,15 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
         _insert_section(conn, table, section_rows(section), transforms.get(section))
 
     _apply_referential_rules(conn)
+    # After the preferences, which hold the history's retention.
+    _restore_backup_history(conn, same_system, section_rows("backup_history"), header, source)
 
-    # A restore is a full replacement: afterward the data *is* exactly the backup's system, so the DB
-    # adopts the backup's identity (`instance_id`) rather than keeping the target's stale one. Otherwise
-    # re-restoring the same backup would read as "a different system" even though the content is identical
-    # — the case that bites when a backup is restored into a fresh DB and then restored again. The
-    # pre-restore compatibility guard is unaffected: it compares the *incoming* backup against the
-    # *pre-restore* data to decide whether confirmation is needed; this only sets the identity the DB
-    # carries once that data is gone.
-    backup_instance_id = header.get("instance_id")
-    if backup_instance_id:
-        conn.execute(
-            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
-            (str(backup_instance_id),),
-        )
+    # Every restore makes a new system: the data has gone back in time or come from elsewhere, so a backup
+    # made before it, here or on the system the file came from, is no longer this system's own and has to
+    # pass the compatibility guard's `different_system` question. Restoring the same file twice therefore
+    # asks the second time, which is correct, since the second restore would erase whatever the first one
+    # was followed by.
+    new_db_instance_id(conn)
 
     # A restored source carries the paths of the machine the backup came from, and a path that resolves
     # here means something else — the installs in use include a source checkout and a portable build
@@ -1779,6 +1846,28 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
         section: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for section, table, _query in BACKUP_SECTIONS
     }
+
+
+def _restore_backup_history(conn, same_system: bool, rows, header: dict, source: Optional[dict]) -> None:
+    """Decide whose backup history the restored system keeps (`services/backup_history.py`).
+
+    Restoring this system's own backup keeps the live history, which already holds every row the file's
+    copy does and every backup made since; the table is not in the wipe for that reason. Anything else
+    takes the file's history, as a restore onto an empty system does, and adds a row for the file itself,
+    since a backup never holds its own row."""
+    if same_system:
+        return
+    conn.execute("DELETE FROM backup_history")
+    _insert_section(conn, "backup_history", rows)
+    source = source or {}
+    backup_history.record(
+        conn, made_at=header.get("exported_at"), made_by=header.get("made_by"), filename=source.get("filename"),
+        encrypted=source.get("encrypted"), key_labels=source.get("key_labels"),
+        credentials_included=header.get("credentials_included"), total_bytes=source.get("total_bytes"),
+        ledger_bytes=source.get("ledger_bytes"), accounts_bytes=source.get("accounts_bytes"),
+        documents_bytes=source.get("documents_bytes"), document_count=source.get("document_count"),
+        restored_at=utcnow_iso(),
+    )
 
 
 # --- restore_state: carrying a restore across the gap between the ledger and the files ------------
@@ -1900,14 +1989,19 @@ def restore_backup(body: RestoreRequest):
     Version 10 archives have their own entry point (`restore_from_archive`) that streams instead; this one
     is bounded by whatever the caller already materialized.
     """
-    payload = body.data
+    return restore_payload(body.data, body.force)
+
+
+def restore_payload(payload: dict, force: bool = False, source: Optional[dict] = None) -> dict:
+    """`restore_backup` for a payload already in hand, with the uploaded file's `source` description when
+    there was one."""
     backup_version = payload.get("version")
     if backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
         raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
     # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
     # wiping the target. No-op for backups that predate the hash field.
     _verify_payload_content_hash(payload)
-    _restore_preflight(payload, body.force)
+    _restore_preflight(payload, force)
 
     def section_rows(section):
         return (dict(row) for row in payload.get(section) or [])
@@ -1917,7 +2011,7 @@ def restore_backup(body: RestoreRequest):
     _begin_restore(payload, None)
     try:
         with get_db() as conn:
-            counts = _restore_sections(conn, payload, section_rows, backup_version)
+            counts = _restore_sections(conn, payload, section_rows, backup_version, source)
     finally:
         _abandon_restore_if_staging()
     documents = _restore_documents(None)
@@ -1927,12 +2021,15 @@ def restore_backup(body: RestoreRequest):
 
 def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None, *,
                          include_data: bool = True, include_accounts: bool = False,
-                         admin_username: Optional[str] = None, admin_password: Optional[str] = None) -> dict:
+                         admin_username: Optional[str] = None, admin_password: Optional[str] = None,
+                         source: Optional[dict] = None) -> dict:
     """Destructive restore straight from an opened version-10-or-later archive, one member at a time.
 
     `artifact_path` is where the staged copy of this archive lives, when it has one. Recording it is
     what makes the documents phase resumable: the ledger commits before a single file is written, so an
     interruption after that point needs the source still to exist.
+
+    `source` describes the uploaded file (`_restore_backup_history`); the sizes are read here.
 
     `include_data` and `include_accounts` choose which of the parts the file holds to apply; a part the file
     does not hold is not applied whatever is asked. Everything that can refuse — the digests, the
@@ -1959,7 +2056,8 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         _begin_restore(meta, artifact_path)
         try:
             with get_db() as conn:
-                counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
+                counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section),
+                                           backup_version, {**(source or {}), **archive_sizes(zf)})
         finally:
             # Clears the slot only if the ledger never committed. A successful restore has already moved
             # the marker to `documents_pending` inside its own transaction, and that one has to survive.
@@ -2196,13 +2294,14 @@ def decrypt_archive_to_temp(zf, private_key_bytes: Optional[bytes], passphrase: 
     return plaintext
 
 
-def _restore_from_zip(zf, force: bool, artifact_path: Optional[str] = None, **accounts_options) -> dict:
+def _restore_from_zip(zf, force: bool, artifact_path: Optional[str] = None, source: Optional[dict] = None,
+                      **accounts_options) -> dict:
     """Restore an opened backup zip, whichever generation it is: version 10 streams from its members,
     older versions are a single JSON object that has to be read whole. `accounts_options` are
     `restore_from_archive`'s, and mean nothing to the older versions, which never carried accounts."""
     if META_MEMBER in set(zf.namelist()):
-        return restore_from_archive(zf, force, artifact_path=artifact_path, **accounts_options)
-    return restore_backup(RestoreRequest(data=_read_single_json_member(zf), force=force))
+        return restore_from_archive(zf, force, artifact_path=artifact_path, source=source, **accounts_options)
+    return restore_payload(_read_single_json_member(zf), force, source)
 
 
 def _single_json_member_name(zf) -> str:
@@ -2310,6 +2409,7 @@ def identify_backup_zip(zf) -> dict:
             # variant — a credentials payload is already ciphertext and gains nothing from a second layer.
             "kind": manifest.get("kind") or BACKUP_KIND_DATA,
             **_credentials_flag(manifest),
+            "exported_at": manifest.get("exported_at"),
             "encrypted": True,
             "container": "zip",
             "version": manifest.get("version"),
@@ -2323,6 +2423,7 @@ def identify_backup_zip(zf) -> dict:
         return {
             "kind": meta.get("kind") or BACKUP_KIND_DATA,
             **_credentials_flag(meta),
+            "exported_at": meta.get("exported_at"),
             "encrypted": False,
             "container": "zip",
             "version": meta.get("version"),
@@ -2332,7 +2433,8 @@ def identify_backup_zip(zf) -> dict:
     kind = _payload_kind(payload, _single_json_member_name(zf))
     if not kind:
         raise _unrecognized_backup()
-    return {"kind": kind, "encrypted": False, "container": "zip", "version": payload.get("version")}
+    return {"kind": kind, "exported_at": payload.get("exported_at"), "encrypted": False, "container": "zip",
+            "version": payload.get("version")}
 
 
 def identify_backup_file(fileobj) -> dict:
@@ -2352,7 +2454,8 @@ def identify_backup_file(fileobj) -> dict:
     kind = _payload_kind(payload)
     if not kind:
         raise _unrecognized_backup()
-    return {"kind": kind, "encrypted": False, "container": "json", "version": payload.get("version")}
+    return {"kind": kind, "exported_at": payload.get("exported_at"), "encrypted": False, "container": "json",
+            "version": payload.get("version")}
 
 
 _KIND_NAMES = {
@@ -2637,15 +2740,21 @@ async def restore_backup_file(
         await _spool_upload(file, staged)
         # Identify before anything else: a credentials backup reaching this endpoint should be told what
         # it is, not met with a complaint about the names of the members inside it.
-        _require_kind(identify_backup_file(staged), BACKUP_KIND_DATA, BACKUP_KIND_FULL)
+        identification = identify_backup_file(staged)
+        _require_kind(identification, BACKUP_KIND_DATA, BACKUP_KIND_FULL)
+        source = {
+            "filename": file.filename, "total_bytes": staged.seek(0, os.SEEK_END),
+            "encrypted": identification.get("encrypted", False),
+            "key_labels": [r["label"] for r in identification.get("recipients") or []] or None,
+        }
         staged.seek(0)
         if not zipfile.is_zipfile(staged):
             staged.seek(0)
-            return restore_backup(RestoreRequest(data=_read_bare_json(staged), force=force))
+            return restore_payload(_read_bare_json(staged), force, source)
         staged.seek(0)
         with zipfile.ZipFile(staged) as zf:
             if not _is_encrypted_archive(zf):
-                return _restore_from_zip(zf, force, artifact_path=staged_path, **accounts_options)
+                return _restore_from_zip(zf, force, artifact_path=staged_path, source=source, **accounts_options)
             plaintext = decrypt_archive_to_temp(zf, private_key_bytes, private_key_passphrase)
             try:
                 with zipfile.ZipFile(plaintext) as inner:
@@ -2655,7 +2764,7 @@ async def restore_backup_file(
                     # cannot be reopened without the private key. An interrupted documents phase here is
                     # finished by restoring the same backup again, which the marker's recorded identity
                     # lets the app confirm.
-                    return _restore_from_zip(inner, force, **accounts_options)
+                    return _restore_from_zip(inner, force, source=source, **accounts_options)
             finally:
                 plaintext.close()
     finally:

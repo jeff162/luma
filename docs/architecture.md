@@ -606,7 +606,7 @@ form refuses to import until each one is mapped and an unattended path may not t
 - **Settings are admin-gated** (`PATCH /import-export/profiles/{id}/watch`, `require_admin_or_local`),
   because naming a directory is a statement about the server's filesystem; see `security-model.md` →
   *Reading and deleting outside the data directory*. A restore from another instance switches watching
-  off; the verdict is taken before the wipe, since the restore adopts the backup's `instance_id`.
+  off; the verdict is taken before the wipe, since every restore gives the system a new `instance_id`.
 - **The folder is picked by browsing the server, not the viewer's machine** (`GET
   /import-export/watch/browse`, same gate, read-only, creates nothing). The browser's own pickers
   (`webkitdirectory`, `showDirectoryPicker`) choose on the machine the page is open on and yield

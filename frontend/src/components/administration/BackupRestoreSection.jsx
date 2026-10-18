@@ -24,9 +24,14 @@
 // right upload control first meant asking them to know how the app is split
 // internally. Every restore routes through the confirm overlay, which names
 // what it replaces.
+//
+// Every restore of the financial data gives the system a new backup identifier, so a backup made before
+// it reads as another system's. The completion panel says so, and it is the only way out: a restore that
+// replaces the sign-in accounts has signed this tab out too, so the panel holds the shell's answer to the
+// lost session (`holdSessionLost`) until its reload.
 
 import { useEffect, useState } from 'react'
-import { api, downloadUrl } from '../../lib/api.js'
+import { api, downloadUrl, holdSessionLost } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { Subsection } from '../SectionListPage.jsx'
@@ -34,7 +39,8 @@ import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
-import { formatDate } from '../../lib/utils.js'
+import { formatDate, formatTimestamp } from '../../lib/utils.js'
+import { formatBytes, formatShare } from '../../lib/storageFormat.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
@@ -83,6 +89,11 @@ export default function BackupRestoreSection() {
   const [restoring, setRestoring] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState(null)
   const [restoreSuccess, setRestoreSuccess] = useState(null)
+  const [restoreGaveNewIdentifier, setRestoreGaveNewIdentifier] = useState(false)
+  const [history, setHistory] = useState(null)
+  const [historyRetention, setHistoryRetention] = useState(null)
+  const [savingRetention, setSavingRetention] = useState(false)
+  const [historyError, setHistoryError] = useState('')
   // What to put back from a backup holding both parts. Both by default: that restores the system.
   const [restoreData, setRestoreData] = useState(true)
   const [restoreAccounts, setRestoreAccounts] = useState(true)
@@ -144,6 +155,32 @@ export default function BackupRestoreSection() {
     return () => { alive = false }
   }, [vault])
 
+  async function loadHistory() {
+    try {
+      const res = await api.getBackupHistory()
+      setHistory(res.backups || [])
+      setHistoryRetention(res.retention_days ?? null)
+    } catch (e) {
+      setHistoryError(e.message || 'Could not load the backup history.')
+    }
+  }
+
+  useEffect(() => { loadHistory() }, [])
+
+  async function saveHistoryRetention(days) {
+    setSavingRetention(true)
+    setHistoryError('')
+    try {
+      const res = await api.setBackupHistoryRetention(days)
+      setHistory(res.backups || [])
+      setHistoryRetention(res.retention_days ?? null)
+    } catch (e) {
+      setHistoryError(e.message || 'That setting could not be saved.')
+    } finally {
+      setSavingRetention(false)
+    }
+  }
+
   // Fetch-and-save rather than navigate: a navigation hands the response to the browser, so any error
   // status renders as a raw JSON page with the app gone from under it.
   // With one enabled recipient there is no choice to make, so the encrypted backup starts immediately.
@@ -174,6 +211,7 @@ export default function BackupRestoreSection() {
     setDownloading(true)
     try {
       await downloadUrl(url)
+      loadHistory()
     } catch (e) {
       setBackupMsg(`❌ ${e.message || 'Could not generate the backup'}`)
     }
@@ -278,6 +316,9 @@ export default function BackupRestoreSection() {
       return
     }
     setRestoring(true)
+    // Before the request rather than on its answer: the restore's own completion fires the app's refetches,
+    // and with the accounts replaced each of them is a 401.
+    if (restoreReplacesAccounts) holdSessionLost(true)
     try {
       const result = await api.restoreBackupFile(file, privateKeyFile, privateKeyPassphrase, force, {
         includeData: restoreReplacesData,
@@ -302,9 +343,11 @@ export default function BackupRestoreSection() {
       }
       setRestoreMsg(null)
       setAdminPassword('')
+      setRestoreGaveNewIdentifier(!!result.restored_counts)
       setRestoreSuccess(`Restore completed. ${sentences.join(' ')}`)
     }
     catch (e) {
+      holdSessionLost(false)
       const code = e.detail?.code
       if (code === 'admin_password_required' || code === 'incorrect_admin_password') {
         // Nothing was touched. The fields appear, and the next attempt carries what is typed in them.
@@ -340,6 +383,8 @@ export default function BackupRestoreSection() {
   function requestRestore() {
     if (restoreBlocked) return
     const name = restoreFile?.name ? ` from ${restoreFile.name}` : ''
+    const takenAt = formatTimestamp(restoreInspection?.exported_at)
+    const taken = takenAt ? ` The backup was taken ${takenAt}.` : ''
     if (restoreKind === 'credentials') {
       setPendingConfirm({
         type: 'credentials',
@@ -357,7 +402,7 @@ export default function BackupRestoreSection() {
       setPendingConfirm({
         type: 'data',
         title: restoreReplacesData ? 'Replace everything with this backup?' : 'Replace accounts & secrets with this backup?',
-        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}`,
+        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}${taken}`,
         confirmLabel: restoreButtonLabel,
         variant: 'danger',
       })
@@ -366,13 +411,13 @@ export default function BackupRestoreSection() {
     setPendingConfirm(targetHasData ? {
       type: 'data',
       title: 'Replace all data with this backup?',
-      message: `This will replace accounts, categories, rules, import settings, and transactions${name}.`,
+      message: `This will replace accounts, categories, rules, import settings, and transactions${name}.${taken}`,
       confirmLabel: 'Restore data backup',
       variant: 'danger',
     } : {
       type: 'data',
       title: 'Load this data backup?',
-      message: `This system has no data yet, so this just loads the backup${name} into it — nothing is replaced.`,
+      message: `This system has no data yet, so this just loads the backup${name} into it — nothing is replaced.${taken}`,
       confirmLabel: 'Load backup',
       variant: 'warn',
       note: '',
@@ -423,6 +468,43 @@ export default function BackupRestoreSection() {
               background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
               border: '1px solid color-mix(in srgb, var(--danger) 35%, var(--border))',
             }}>{backupMsg}</div>
+          ) : null}
+        </Card>
+      </Subsection>
+
+      <Subsection title="Backup history">
+        <Card style={{ display: 'grid', gap: 12 }}>
+          {historyError ? (
+            <div style={{ fontSize: 13, color: 'var(--danger)' }}>{historyError}</div>
+          ) : null}
+          {history && history.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>No backups have been made.</div>
+          ) : null}
+          {history && history.length > 0 ? <BackupHistoryTable rows={history} /> : null}
+          {/* The history's one setting, in the shape the sync log gives its own: a sentence around a single
+              number, saved on blur because shortening the window deletes the older rows at once. */}
+          {historyRetention != null ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--muted)' }}>
+              <label htmlFor="backup-history-retention-days">Keep backups in the history for</label>
+              <input
+                key={historyRetention}
+                id="backup-history-retention-days"
+                type="number"
+                min="1"
+                max="3650"
+                defaultValue={historyRetention}
+                disabled={savingRetention}
+                onBlur={e => {
+                  const next = Number(e.target.value)
+                  if (Number.isInteger(next) && next !== historyRetention) saveHistoryRetention(next)
+                }}
+                style={{
+                  font: 'inherit', fontSize: 12.5, width: 72, padding: '3px 6px', borderRadius: 6,
+                  border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+                }}
+              />
+              <span>days. The most recent backup is always kept.</span>
+            </div>
           ) : null}
         </Card>
       </Subsection>
@@ -764,7 +846,6 @@ export default function BackupRestoreSection() {
 
       {restoreSuccess && (
         <div
-          onClick={() => setRestoreSuccess(null)}
           style={{
             position: 'fixed',
             inset: 0,
@@ -791,6 +872,9 @@ export default function BackupRestoreSection() {
           >
             <div style={{ fontSize: 16, fontWeight: 600 }}>Restore completed</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>{restoreSuccess}</div>
+            {restoreGaveNewIdentifier ? (
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>This restore gave the system a new backup identifier.</div>
+            ) : null}
             <div style={{
               fontSize: 12,
               color: 'var(--success)',
@@ -809,6 +893,68 @@ export default function BackupRestoreSection() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// One row per backup, newest first. The documents column carries the share of the archive they take,
+// which is the figure that says whether documents are becoming the bulk of a backup.
+function BackupHistoryTable({ rows }) {
+  const cell = { padding: '6px 8px', borderTop: '1px solid var(--border)', verticalAlign: 'top' }
+  const head = { ...cell, borderTop: 'none', fontWeight: 600, textAlign: 'left', color: 'var(--muted)', fontSize: 12 }
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr>
+            <th style={head}>Made</th>
+            <th style={head}>By</th>
+            <th style={head}>File</th>
+            <th style={{ ...head, textAlign: 'right' }}>Size</th>
+            <th style={{ ...head, textAlign: 'right' }}>Documents</th>
+            <th style={head}>Credentials</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => {
+            const parts = (row.ledger_bytes || 0) + (row.accounts_bytes || 0) + (row.documents_bytes || 0)
+            const share = formatShare(row.documents_bytes, parts)
+            return (
+              <tr key={row.id}>
+                <td style={{ ...cell, whiteSpace: 'nowrap' }}>{formatTimestamp(row.made_at) || '—'}</td>
+                <td style={cell}>{row.made_by || '—'}</td>
+                <td style={{ ...cell, wordBreak: 'break-all' }}>
+                  <div>{row.filename || '—'}</div>
+                  {row.encrypted ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      Encrypted{row.key_labels?.length ? ` to ${row.key_labels.join(', ')}` : ''}
+                    </div>
+                  ) : null}
+                  {row.restored_at ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      This system was restored from it {formatTimestamp(row.restored_at)}
+                    </div>
+                  ) : null}
+                </td>
+                <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {row.total_bytes != null ? formatBytes(row.total_bytes) : '—'}
+                </td>
+                <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {row.document_count != null ? (
+                    <>
+                      <div>{row.document_count === 0 ? 'None' : formatBytes(row.documents_bytes)}</div>
+                      {share ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{share}</div> : null}
+                    </>
+                  ) : '—'}
+                </td>
+                <td style={cell}>
+                  {row.credentials_included == null ? '—' : row.credentials_included ? 'Included' : 'Left out'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

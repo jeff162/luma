@@ -1953,7 +1953,8 @@ with the accounts members beside its sections.
 A file's `kind` says what it holds: `full` for a backup written now, `data` for one from before the
 accounts part, and `credentials` for the standalone credentials backup that preceded it. It is declared in
 `meta.json` and, for an encrypted archive, in `manifest.json` outside the ciphertext, with
-`credentials_included`, so the restore can offer its choices before a private key is produced. A file
+`credentials_included` and `exported_at`, so the restore can offer its choices and say how old the file is
+before a private key is produced. A file
 without the field is identified by the sections it carries. A standalone credentials file restores
 through its own endpoint, which refuses every other kind by name, as the archive restore refuses it.
 
@@ -2030,9 +2031,29 @@ the accounts part skips `mode_mismatch`, since the file's sign-in setting comes 
 accounts part alone is checked by none of the three: each is a question about the ledger, and the
 confirmation before it names what it replaces.
 
-**A restore adopts the backup's `instance_id`**, since afterwards the data is the backup's lineage.
-Restoring one backup twice into a fresh database therefore does not trip the guard. The id also
-namespaces browser-local UI caches.
+**Every restore of the financial data gives the system a new `instance_id`** (`new_db_instance_id`). A
+restore moves the system back in time or brings it from elsewhere, so whatever backups preceded it, here
+or on the system the file came from, are no longer this system's own: restoring one of them, the same
+file included, asks the `different_system` question. Whether the backup was this system's own is decided
+before the wipe, for the backup history and the watched folders. The id also namespaces browser-local UI
+caches, which a restore therefore starts afresh.
+
+### The backup history
+
+`backup_history` (`services/backup_history.py`) holds a row per backup made, written when the file is
+complete on the server: when, by whom (a name, since the row can outlive the people of the system it came
+from), the suggested filename, the keys an encrypted file was sealed to, whether the credentials were
+included, and the archive's size divided into ledger, accounts part and documents. The documents share is
+the signal that documents are becoming the bulk of a backup
+([`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)).
+
+- **It rides the data backup, and the restore decides whose history survives.** Restoring this system's
+  own backup keeps the live history, which already holds every row the file's copy does and every backup
+  made since; the table is outside the wipe for that reason. Any other restore takes the file's history and
+  adds a row for the file itself (`restored_at` set), since a backup never holds its own row; its sizes are
+  read from the archive and its maker from `meta.json`'s `made_by`.
+- **Retention is by age**, a ledger setting in the shared preference scope, and the newest row is never
+  purged.
 
 ### A connection is split across the two parts
 
@@ -2550,8 +2571,8 @@ and owed decisions*.
   → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
 - **Account type as a filtering and search axis.** It exists as a rule scope only.
   → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
-- **Restoring an incremental chain**: the document delta, and restore with no merge mode.
-  → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
+- **Incremental backups for attached documents**, once documents are the bulk of a backup.
+  → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:
   an attributed node lists purchases dated outside the displayed period.
   → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)

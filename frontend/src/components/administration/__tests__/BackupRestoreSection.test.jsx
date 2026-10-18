@@ -31,10 +31,12 @@ let backupStatus = { credentials_left_out: null }
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
+  holdSessionLost: () => {},
   api: {
     getBackupRecipients:        async () => recipients,
     getAuthStatus:              async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
     getBackupStatus:            async () => backupStatus,
+    getBackupHistory:           async () => ({ backups: [], retention_days: 365 }),
     exportBackup:               (encrypted, ids) => (
       encrypted
         ? `/api/import-export/backup?encrypted=true${ids?.length ? `&recipients=${ids.join(',')}` : ''}`

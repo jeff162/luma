@@ -30,7 +30,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException, UploadFile
 
 from backend.db import control_database
+from backend.services import backup_history
 from backend.db.control_database import auth_required
+from backend.time_utils import utcnow_iso
 from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import (
     BACKUP_PAYLOAD_VERSION,
@@ -46,6 +48,7 @@ from backend.routers.import_export.backup import (
     _verify_payload_content_hash,
     build_backup_data,
     create_backup_recipient,
+    restore_payload,
     export_backup,
     generate_backup_keypair,
     inspect_backup_file,
@@ -148,6 +151,7 @@ TABLE_TO_SECTION = {
     "amazon_funding_map": "amazon_funding_map",
     "txn_split": "txn_splits",
     "document": "documents",
+    "backup_history": "backup_history",
 }
 
 
@@ -411,6 +415,15 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "VALUES (?, NULL, 'garage-quote.pdf', 'application/pdf', ?, ?, '2026-04-17T09:00:00Z')",
                     (self.stored_document, len(self.stored_document_bytes),
                      hashlib.sha256(self.stored_document_bytes).hexdigest()),
+                )
+                # Dated now so the history's retention cannot age it out from under a later run.
+                conn.execute(
+                    "INSERT INTO backup_history (id, made_at, made_by, filename, encrypted, key_labels, "
+                    "credentials_included, credentials_left_out, total_bytes, ledger_bytes, accounts_bytes, "
+                    "documents_bytes, document_count, restored_at) "
+                    "VALUES (?, ?, 'Robin', 'luma_backup.encrypted.zip', 1, '[\"Offsite key\"]', 0, "
+                    "'weak_passphrase', 9000, 5000, 1000, 3000, 2, ?)",
+                    (str(uuid.uuid4()), utcnow_iso(), utcnow_iso()),
                 )
 
     def _user_data_tables(self) -> set[str]:
@@ -782,21 +795,77 @@ class BackupRestoreTests(BackupFixtureTestCase):
             result = restore_backup(RestoreRequest(data=payload, force=True))
         self.assertTrue(result["ok"])
 
-    def test_restore_adopts_backup_instance_id(self):
-        # A full restore replaces the data, so afterward the DB *is* the backup's system and takes on
-        # its instance_id. This is what stops a re-restore of the same backup (now over the data it
-        # itself produced) from reading as "a different system" — the fresh-DB-then-restore-again case.
+    def test_every_restore_makes_a_new_system(self):
+        """A restore moves the system back in time or brings it from elsewhere, so every backup made before
+        it, the restored file included, has to pass the different-system question afterwards."""
         self._seed_complete()
         payload = self._export_payload()
-        payload["instance_id"] = "backup-origin-system"
+        with self._use_db_path():
+            with get_db() as conn:
+                before = get_db_instance_id(conn)
+            restore_backup(RestoreRequest(data=payload))  # this system's own backup: no question asked
+            with get_db() as conn:
+                after = get_db_instance_id(conn)
+            with self.assertRaises(HTTPException) as ctx:
+                restore_backup(RestoreRequest(data=payload))
+        self.assertNotIn(after, (before, payload["instance_id"]))
+        self.assertIn("different_system", ctx.exception.detail["reasons"])
+
+    def _history(self) -> list[dict]:
+        with self._use_db_path():
+            with get_db() as conn:
+                return [dict(r) for r in conn.execute("SELECT * FROM backup_history ORDER BY rowid")]
+
+    def test_restoring_this_systems_own_backup_keeps_the_live_history(self):
+        self._seed_complete()
+        payload = self._export_payload()
+        with self._use_db_path():
+            with get_db() as conn:
+                backup_history.record(conn, filename="made-after-the-backup.zip")
+        live = self._history()
+        with self._use_db_path():
+            restore_backup(RestoreRequest(data=payload))
+        self.assertEqual(self._history(), live)
+
+    def test_restoring_another_systems_backup_takes_its_history_and_records_the_file(self):
+        self._seed_complete()
+        payload = self._export_payload()
+        carried = self._history()
+        payload["instance_id"] = "another-system"
+        payload["made_by"] = "Robin"
         payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
-            restore_backup(RestoreRequest(data=payload, force=True))  # force: target had its own data
             with get_db() as conn:
-                self.assertEqual(get_db_instance_id(conn), "backup-origin-system")
-            # The same backup now restores again WITHOUT force: it is recognized as this system's own.
-            result = restore_backup(RestoreRequest(data=payload))
-        self.assertTrue(result["ok"])
+                backup_history.record(conn, filename="only-on-this-system.zip")
+            restore_payload(payload, force=True, source={"filename": "from-elsewhere.zip", "total_bytes": 123})
+        history = self._history()
+        self.assertEqual(history[:-1], carried)
+        restored = history[-1]
+        self.assertEqual((restored["filename"], restored["made_by"], restored["made_at"], restored["total_bytes"]),
+                         ("from-elsewhere.zip", "Robin", payload["exported_at"], 123))
+        self.assertIsNotNone(restored["restored_at"])
+
+    def test_an_export_records_how_its_size_divides(self):
+        self._seed_complete()
+        with self._use_db_path():
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=False, recipients=None))
+        row = self._history()[-1]
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            documents = [i for i in zf.infolist() if i.filename.startswith("documents/")]
+        self.assertEqual(row["total_bytes"], len(body))
+        self.assertEqual(row["document_count"], len(documents))
+        self.assertEqual(row["documents_bytes"], sum(i.compress_size for i in documents))
+        self.assertGreater(row["ledger_bytes"], 0)
+        self.assertGreater(row["accounts_bytes"], 0)
+
+    def test_history_retention_never_purges_the_newest_row(self):
+        with self._use_db_path():
+            with get_db() as conn:
+                backup_history.record(conn, made_at="2001-01-01T00:00:00", filename="older.zip")
+                backup_history.record(conn, made_at="2002-01-01T00:00:00", filename="newest.zip")
+                backup_history.set_retention_days(conn, 1)
+                names = [r["filename"] for r in backup_history.list_rows(conn)]
+        self.assertEqual(names, ["newest.zip"])
 
 
 if __name__ == "__main__":
@@ -1272,9 +1341,9 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._seed_complete()
         _key, private_pem = self._add_recipient()
         tables = self._user_data_tables()
-        before = self._counts(tables)
         with self._use_db_path():
             body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+        before = self._counts(tables)
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
@@ -1341,9 +1410,9 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._seed_complete()
         _key, private_pem = self._add_recipient()
         tables = self._user_data_tables()
-        before = self._counts(tables)
         with self._use_db_path():
             body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+        before = self._counts(tables)
         sealed = bytearray(zipfile.ZipFile(io.BytesIO(body)).read("payload.bin"))
         sealed[len(sealed) // 2] ^= 0xFF
         tampered = self._rewrite_member(body, "payload.bin", bytes(sealed))
@@ -1398,8 +1467,8 @@ class BackupArchiveTests(BackupFixtureTestCase):
         with self._use_db_path():
             plain = asyncio.new_event_loop().run_until_complete(
                 inspect_backup_file(file=self._upload(self._write_archive(), "luma_backup.zip")))
-        self.assertEqual(plain, {"kind": "data", "encrypted": False, "container": "zip",
-                                 "version": BACKUP_PAYLOAD_VERSION})
+        self.assertEqual(plain, {"kind": "data", "exported_at": plain["exported_at"], "encrypted": False,
+                                 "container": "zip", "version": BACKUP_PAYLOAD_VERSION})
 
         self._add_recipient()
         with self._use_db_path():
@@ -1687,11 +1756,11 @@ class BackupKeypairTests(BackupFixtureTestCase):
         # endpoints the app calls, with a passphrase in play.
         self._seed_complete()
         tables = self._user_data_tables()
-        before = self._counts(tables)
         generated = self._generate(key_size=2048, passphrase="a passphrase")
         with self._use_db_path():
             create_backup_recipient(BackupRecipientCreate(label="Generated", public_key=generated["public_key"]))
             body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+        before = self._counts(tables)
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(

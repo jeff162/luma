@@ -67,15 +67,26 @@ function signalDataMutated() {
  * **Suppressed for a window after it fires.** A page holds several requests in flight, so one lapse
  * produces a burst of 401s; and the bootstrap the signal triggers makes its own calls, which may 401
  * again while it works. Without the window those would feed each other.
+ *
+ * **A surface that ended the session itself can hold the signal** (`holdSessionLost`). A restore that
+ * replaces the sign-in accounts signs everyone out, the requesting tab included, and its own completion
+ * panel is the way out: it says what happened and reloads. Answering the next 401 would tear that panel
+ * down under the person reading it.
  */
 export const SESSION_LOST_EVENT = 'luma:session-lost'
 
 const SESSION_LOST_QUIET_MS = 5000
 const AUTH_PATH_PREFIX = '/auth/'
 let sessionLostAt = 0
+let sessionLostHeld = false
+
+export function holdSessionLost(held) {
+  sessionLostHeld = held
+}
 
 function signalSessionLost(path) {
   if (typeof window === 'undefined') return
+  if (sessionLostHeld) return
   if (path.startsWith(AUTH_PATH_PREFIX)) return
   const now = Date.now()
   if (now - sessionLostAt < SESSION_LOST_QUIET_MS) return
@@ -1243,6 +1254,11 @@ export const api = {
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
   // Whether a backup taken now would leave the data provider credentials out, and why.
   getBackupStatus: () => request('/import-export/backup/status'),
+  getBackupHistory: () => request('/import-export/backup/history'),
+  setBackupHistoryRetention: (days) =>
+    request('/import-export/backup/history/retention', {
+      method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
+    }),
   // A backup is always the financial data and the accounts; what to put back is chosen at restore.
   // `recipientIds` narrows an encrypted backup to a chosen subset; omitted means every enabled recipient,
   // which is what a single-recipient install always wants.

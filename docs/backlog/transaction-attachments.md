@@ -100,9 +100,9 @@ something the user has to think about. That is the falsification signal, and it 
 space-reclamation view below rather than waiting for a complaint.
 
 **If it turns out wrong, nothing is redesigned** — three already-identified items get promoted: the
-streaming backup export (done), the **document delta** in
-[`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) (additive-only, and
-tractable precisely because documents are immutable), and the space-reclamation view. The property worth
+streaming backup export (done), **incremental document backups** in
+[`document-incremental-backups.md`](document-incremental-backups.md) (additive-only, and tractable
+precisely because documents are immutable), and the space-reclamation view. The property worth
 preserving in any further decision here: let a heavy user be *inefficient*, never *broken*.
 
 ## Space reclamation — chosen, never scheduled
@@ -144,6 +144,6 @@ file-versus-row write order makes possible. Decide when either is built; do not 
 ## Cross-refs
 
 - [`online-categorizer.md`](online-categorizer.md) — the shared opt-in / LLM / approval subsystem
-- [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — the document delta
+- [`document-incremental-backups.md`](document-incremental-backups.md) — incremental document backups
 - [`database-diagnostics.md`](database-diagnostics.md) — the other candidate home for reclamation
 - [`../building-a-connector.md`](../building-a-connector.md) — the capability-declaration pattern to copy

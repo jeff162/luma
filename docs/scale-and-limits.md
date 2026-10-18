@@ -276,8 +276,9 @@ build and the DevTools hook each inflate render cost enough to change which cost
   small once zipped, so it is always sent in full; documents are immutable once written but grow
   forever, so only they need a delta, and "which files does the target lack" is answerable by id alone.
   Both prerequisites, id-addressed members and a digest per document, exist.
-- **Restoring a chain is unsolved.** The compatibility guard's checks would have to apply across files,
-  and restore is wipe-and-rebuild with no merge mode.
+- **Restore is wipe-and-rebuild with no merge mode**, so a chain of incremental files restores only where
+  one file decides what belongs and the rest are a store to draw from. Documents fit that; the ledger
+  does not.
 - **A bound is safe only once what falls outside it is reachable.** Paging a list before its archive
   exists hides rows with no way back to them.
 - **Paging `GET /import-export/batches` breaks the callers that read it as an aggregate over all
@@ -297,9 +298,9 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **Re-bounding the import-history fetch**, which means moving the aggregate consumers above off the
   whole-list payload first.
   → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
-- **Whether the document delta is worth building.** The ledger half needs nothing; the open part is
-  restoring a chain.
-  → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
+- **Incremental backups for attached documents**, once the backup history shows documents as the bulk
+  of a backup. The ledger half needs nothing.
+  → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
 - **Dependency-based cache invalidation**, if transaction-derived views proliferate enough that the
   hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
 - **A structural database check does not answer whether the data is coherent**: a cursor ahead of a

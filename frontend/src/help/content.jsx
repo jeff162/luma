@@ -4088,7 +4088,8 @@ export const HELP_TOPICS = [
             <strong>About</strong> lists the current version, license,
             a pointer to the github repository, and the instance identifier. The instance identifier is
             stored in backups so that a restore can warn before a backup is restored to a system
-            other than the one which it came from. For an administrator, About is also where the check
+            other than the one which it came from. Every restore gives the system a new identifier, so a
+            backup made before a restore is treated as coming from another system. For an administrator, About is also where the check
             for a new version is switched on or off. When it is on, {APP_NAME} periodically checks for a
             new release and adds a task when one is available.
             The task can be dismissed, and returns with the next release.
@@ -4490,6 +4491,14 @@ export const HELP_TOPICS = [
           two-factor secrets. The data provider credentials are protected by the vault whether or not
           the file is encrypted.
         </p>
+        <p>
+          <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
+          name {APP_NAME} gave it, its size, and how much of that is attached documents. A browser that
+          renames a download, or a download that never finished, is not reflected there. Entries older
+          than the number of days set below the list are removed, except the most recent one. The
+          history is part of the financial data, so restoring a backup from another system brings that
+          system's history with it, plus an entry for the restored file.
+        </p>
 
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
         <p>
@@ -4523,6 +4532,12 @@ export const HELP_TOPICS = [
             administrator in it, so someone can still sign in afterwards.
           </li>
         </ul>
+        <p>
+          Restoring the financial data gives the installation a new backup identifier. Every backup made
+          before the restore, including the file just restored, is afterwards treated as coming from
+          another system and asks for confirmation before it replaces anything. A backup made after the
+          restore is the one to rely on.
+        </p>
         <p>
           A passphrase or recovery code that has been replaced is worth keeping, with the date it was
           replaced, for as long as a backup made under it might be restored.

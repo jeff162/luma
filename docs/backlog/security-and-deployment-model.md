@@ -252,8 +252,7 @@ discussion now in `../security-model.md`:
 ## Cross-refs
 
 - [`../security-model.md`](../security-model.md) — where everything else in this file went.
-- [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — restoring an
-  incremental chain. The vault's data-DB-ciphertext / control-DB-keys split, and why the credentials and
-  the vault travel as one part of a backup, are in `../security-model.md` → *Secrets in backup and export*.
+- The vault's data-DB-ciphertext / control-DB-keys split, and why the credentials and the vault travel
+  as one part of a backup, are in `../security-model.md` → *Secrets in backup and export*.
 - [`ofx-direct-connect.md`](ofx-direct-connect.md) — the worked example of a credential that is the
   institution's own login and cannot be revoked in-app. Parked on coverage, not on this.

@@ -201,12 +201,9 @@ scale — rather than by feature.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **reduced to restoring an
-  incremental chain.** The backup of everything, the restore that chooses which part to put back, and
-  replacement of the accounts are built and documented in [`../data-model.md`](../data-model.md)
-  → *Backups* and [`../security-model.md`](../security-model.md) → *Secrets in backup and export*. What
-  stays: the document delta is the tractable half; restoring a chain has no merge mode to stand on, and a
-  date-windowed backup is a slice, not disaster recovery.
+- [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not
+  needed yet.** Document-only backups, with each data backup carrying only the documents added since the
+  last one. Started when the backup history shows documents as the bulk of a backup.
 - [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
   unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
   and every other rejected alternative — is in [`../operations.md`](../operations.md), with building in
