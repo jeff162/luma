@@ -13,6 +13,7 @@ import base64
 import functools
 import hashlib
 import hmac
+import json
 import os
 import re
 import sqlite3
@@ -283,11 +284,33 @@ def init_control_db():
             -- It lives in the control DB beside `vault_slot` because it describes vault state and must
             -- survive a *data* restore — the event most likely to be followed by wondering which backup
             -- still opens.
+            --
+            -- Beside the wrapping, what else opened the file when it was written, so the reset dialog can
+            -- say which secrets a backup needs: `recovery_issued_at` (the exporter's recovery code, by
+            -- issue time, NULL when they had none) and `passkey_credential_ids` (a JSON list), plus
+            -- `seal_digest`, the workspace key the file's credentials are under, which a retired key is
+            -- matched against (`retired_vault_key`). All three are NULL on rows written before they
+            -- existed, which say nothing either way.
             CREATE TABLE IF NOT EXISTS credentials_export (
                 id                      TEXT PRIMARY KEY,
                 user_id                 TEXT REFERENCES user_account(id) ON DELETE CASCADE,
                 wrapped_dek_fingerprint TEXT NOT NULL,
-                exported_at             TEXT NOT NULL DEFAULT (datetime('now'))
+                exported_at             TEXT NOT NULL DEFAULT (datetime('now')),
+                recovery_issued_at      TEXT,
+                passkey_credential_ids  TEXT,
+                seal_digest             TEXT
+            );
+
+            -- The workspace keys that stopped being this vault's, one row per slot seal that held one
+            -- (`crypto_service.seal_digest`), and why: a reset after a `lost` or a `compromised`
+            -- passphrase, or a key `replaced` by rotation. A backup's credentials sealed under a key
+            -- retired for any reason but `lost` are not restored: they are exposed, or under a key someone
+            -- who should no longer read them knew. Kept in the control DB, outside what an accounts
+            -- restore replaces, since restoring an old file is exactly what this has to outlive.
+            CREATE TABLE IF NOT EXISTS retired_vault_key (
+                seal_digest TEXT PRIMARY KEY,
+                reason      TEXT NOT NULL,
+                retired_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             -- One row per signed-in browser, so the server can end a session rather than only ask the
@@ -355,6 +378,10 @@ def init_control_db():
             )
         except Exception:
             pass
+        export_columns = {r["name"] for r in conn.execute("PRAGMA table_info(credentials_export)")}
+        for column in ("recovery_issued_at", "passkey_credential_ids", "seal_digest"):
+            if column not in export_columns:
+                conn.execute(f"ALTER TABLE credentials_export ADD COLUMN {column} TEXT")
 
         admin_count = conn.execute(
             "SELECT COUNT(*) FROM user_account WHERE role = 'admin'"
@@ -1407,15 +1434,20 @@ def upgrade_vault_slot_to_format_2(
             )
 
 
-def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str) -> None:
-    """Note that a credentials backup was written against this wrapping of the DEK.
+def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str, *,
+                              recovery_issued_at: str | None = None,
+                              passkey_credential_ids: list[str] | None = None,
+                              seal_digest: str | None = None) -> None:
+    """Note that a credentials backup was written against this wrapping of the DEK, and what else opened it.
 
     Append-only and unbounded in principle, but bounded in practice by how often a person exports
     credentials by hand; pruning would cost the exact history the change warning reads."""
     with get_control_db() as conn:
         conn.execute(
-            "INSERT INTO credentials_export (id, user_id, wrapped_dek_fingerprint) VALUES (?,?,?)",
-            (str(uuid.uuid4()), user_id, wrapped_dek_fingerprint),
+            "INSERT INTO credentials_export (id, user_id, wrapped_dek_fingerprint, recovery_issued_at, "
+            "passkey_credential_ids, seal_digest) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), user_id, wrapped_dek_fingerprint, recovery_issued_at,
+             json.dumps(passkey_credential_ids or []), seal_digest),
         )
 
 
@@ -1436,16 +1468,86 @@ def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def credentials_exports_any() -> list[dict]:
-    """Every recorded credentials export, newest first, whatever wrapping it carried.
+def credentials_exports_detail() -> list[dict]:
+    """Every recorded export with what opened it and who took it, newest first. `passkey_credential_ids`
+    is decoded to a list."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.*, COALESCE(u.display_name, u.username) AS made_by
+            FROM   credentials_export e LEFT JOIN user_account u ON u.id = e.user_id
+            ORDER  BY e.exported_at DESC, e.rowid DESC
+            """
+        ).fetchall()
+    exports = []
+    for row in rows:
+        entry = dict(row)
+        try:
+            entry["passkey_credential_ids"] = json.loads(entry["passkey_credential_ids"] or "[]")
+        except (TypeError, ValueError):
+            entry["passkey_credential_ids"] = []
+        exports.append(entry)
+    return exports
 
-    The deliberate opposite of `credentials_exports_for_fingerprint`, and both rules are right for their
-    own caller. A passphrase *change* warns only about the backups it is about to strand, so naming ones
-    already stranded is noise. A vault *reset* is asking the opposite question — recovery restores a
-    backup with the passphrase it was made under, so an export from an era whose passphrase is still
-    remembered is precisely the file that rescues the workspace, and filtering to the current wrapping
-    would hide the only rung of the ladder that costs nothing.
-    """
+
+def record_retired_vault_seals(seal_digests: list[str], reason: str) -> None:
+    """Record workspace-key seals that stopped being this vault's. A seal already recorded keeps its first
+    reason and date: a resumed rotation passes the same ones again."""
+    with get_control_db() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO retired_vault_key (seal_digest, reason) VALUES (?, ?)",
+            [(digest, reason) for digest in seal_digests if digest],
+        )
+
+
+def retired_vault_seal_reasons(seal_digests: list[str]) -> set[str]:
+    """Why any of these seals were retired; empty when none was."""
+    wanted = [d for d in seal_digests if d]
+    if not wanted:
+        return set()
+    with get_control_db() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT reason FROM retired_vault_key WHERE seal_digest IN ({', '.join('?' * len(wanted))})",
+            wanted,
+        ).fetchall()
+    return {r["reason"] for r in rows}
+
+
+def latest_vault_key_retirement(reasons: tuple[str, ...] | None = None) -> dict | None:
+    """The most recent retirement, optionally of the given reasons, as `{reason, retired_at}`."""
+    where = f"WHERE reason IN ({', '.join('?' * len(reasons))})" if reasons else ""
+    with get_control_db() as conn:
+        row = conn.execute(
+            f"SELECT reason, retired_at FROM retired_vault_key {where} ORDER BY retired_at DESC, rowid DESC LIMIT 1",
+            tuple(reasons or ()),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+# When the data provider credentials were last replaced at their providers (`exposure_response`), which
+# leaves every credentials backup made before it holding credentials the providers no longer accept. Stored
+# in the `datetime('now')` shape `credentials_export.exported_at` has, so the two compare as strings.
+_CREDENTIALS_REISSUED_AT = "credentials_reissued_at"
+
+
+def record_credentials_reissued() -> None:
+    with get_control_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_setting (key, value, updated_at) VALUES (?, datetime('now'), datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (_CREDENTIALS_REISSUED_AT,),
+        )
+
+
+def credentials_reissued_at() -> str | None:
+    return get_app_setting(_CREDENTIALS_REISSUED_AT)
+
+
+def credentials_exports_any() -> list[dict]:
+    """Every recorded credentials export, newest first, whatever wrapping it carried: whether any backup
+    holds credentials that reissuing them at their providers has just retired."""
     with get_control_db() as conn:
         rows = conn.execute(
             "SELECT id, exported_at FROM credentials_export ORDER BY exported_at DESC, id DESC"

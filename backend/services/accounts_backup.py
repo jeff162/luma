@@ -113,12 +113,19 @@ def collect(conn, user: dict | None) -> dict:
 
 def record_export(user: dict | None, part: dict) -> None:
     """Note which passphrase wrapping went into the file, so a later passphrase change can name the
-    backups it is about to strand (`control_database.record_credentials_export`)."""
+    backups it is about to strand, and what else opens it, for the reset dialog to say
+    (`control_database.record_credentials_export`)."""
     if part["credentials"] is None:
         return
-    fingerprint = crypto_service.exported_slots_fingerprint(part["credentials"]["vault_slots"])
+    slots = part["credentials"]["vault_slots"]
+    fingerprint = crypto_service.exported_slots_fingerprint(slots)
     if user and user.get("id") and fingerprint:
-        control_database.record_credentials_export(user["id"], fingerprint)
+        control_database.record_credentials_export(
+            user["id"], fingerprint,
+            recovery_issued_at=next((s.get("issued_at") for s in slots if s.get("method") == "recovery"), None),
+            passkey_credential_ids=[s["credential_id"] for s in slots if s.get("method") == "passkey"],
+            seal_digest=crypto_service.exported_slots_seal_digest(slots),
+        )
 
 
 def check_restoring_admin(part: dict, username: str | None, password: str | None) -> None:

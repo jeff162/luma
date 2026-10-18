@@ -82,6 +82,7 @@ from backend.db.database import (
     run_post_restore_data_init,
 )
 from backend.db.demo_data import is_demo_data_loaded
+from backend.db import control_database
 from backend.db.control_database import auth_required
 from backend.app_logging import log_error
 from backend.runtime_config import app_name
@@ -1177,9 +1178,22 @@ def _target_has_data(conn) -> bool:
 @router.get("/restore/target-status")
 def restore_target_status():
     """Lets the restore UI tailor its confirmation: a fresh (empty) system gets a light prompt, a
-    system with real data gets the strong "this overwrites everything" warning."""
+    system with real data gets the strong "this overwrites everything" warning.
+
+    `relinked_since_reset` names the connections reconnected since the vault was last reset after a lost
+    passphrase. Every credential here was cleared by that reset, so one held now was linked since, and
+    restoring the accounts part of a backup older than the reset replaces it with the backup's or clears
+    it. After any other retirement the backup's credentials are not restored at all, so nothing is said."""
     with get_db() as conn:
-        return {"has_data": _target_has_data(conn)}
+        status = {"has_data": _target_has_data(conn)}
+        retirement = control_database.latest_vault_key_retirement()
+        if retirement and retirement["reason"] == "lost":
+            names = [r["institution"] or r["provider"] for r in conn.execute(
+                "SELECT institution, provider FROM connection WHERE COALESCE(credential_enc, '') != '' ORDER BY rowid"
+            )]
+            if names:
+                status["relinked_since_reset"] = {"reset_at": retirement["retired_at"], "connections": names}
+        return status
 
 
 def _wipe_user_data_tables(conn):
@@ -2048,8 +2062,15 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     verify_archive_members(zf, meta)
     _restore_preflight(meta, force, restores_data=restores_data, perimeter_follows=restores_accounts)
     accounts_part = read_accounts_part(zf, meta) if restores_accounts else None
+    withheld = None
     if accounts_part is not None:
         _check_restoring_admin(accounts_part, admin_username, admin_password)
+        # Credentials under a key retired after an exposure or a replacement are not put back; the rest of
+        # the part restores as a file without credentials does (`crypto_service.UNTRUSTED_RETIREMENTS`).
+        if accounts_part["credentials"] is not None:
+            withheld = crypto_service.exported_slots_retired(accounts_part["credentials"].get("vault_slots"))
+            if withheld:
+                accounts_part["credentials"] = None
 
     result = {"ok": True}
     if restores_data:
@@ -2069,6 +2090,8 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         result["accounts"] = accounts_backup.apply(accounts_part)
         # The identities every session was authenticated against have just been replaced.
         result["signed_out"] = True
+        if withheld:
+            result["credentials_withheld"] = withheld
     result["restored_at"] = utcnow_iso()
     return result
 
@@ -2636,6 +2659,12 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version >= 2 else []
     slots = _exported_slots(d, version) if encrypted else []
     user = getattr(request.state, "user", None)
+    if encrypted and crypto_service.exported_slots_retired(slots):
+        raise HTTPException(status_code=409, detail={
+            "code": "credentials_retired",
+            "message": "These credentials were sealed under a vault key that was replaced or reset after an "
+                       "exposure, so they are not restored. Reconnect the data sources instead.",
+        })
 
     # A file whose ciphertext is already valid here needs nothing: the rows go back verbatim — no
     # secret, no re-encryption. Two ways to establish that, and the second exists because the first

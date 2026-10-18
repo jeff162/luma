@@ -39,8 +39,8 @@ import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
-import { formatDate, formatTimestamp } from '../../lib/utils.js'
-import { formatBytes, formatShare } from '../../lib/storageFormat.js'
+import { formatDate, formatTimestamp, parseTimestamp } from '../../lib/utils.js'
+import { formatBytes } from '../../lib/storageFormat.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
@@ -81,6 +81,9 @@ export default function BackupRestoreSection() {
   // Whether this system already holds data — drives the restore confirmation wording (strong
   // overwrite warning vs. a light "load into a fresh system"). Default to true (cautious) until known.
   const [targetHasData, setTargetHasData] = useState(true)
+  // The connections reconnected since the vault was last reset after a lost passphrase, which restoring
+  // the accounts part of an older backup takes their current credentials from.
+  const [relinkedSinceReset, setRelinkedSinceReset] = useState(null)
   const [restoreInspection, setRestoreInspection] = useState(null)
   const [inspectError, setInspectError] = useState('')
   const [inspectingRestore, setInspectingRestore] = useState(false)
@@ -247,8 +250,10 @@ export default function BackupRestoreSection() {
     try {
       const status = await api.getRestoreTargetStatus()
       setTargetHasData(!!status?.has_data)
+      setRelinkedSinceReset(status?.relinked_since_reset || null)
     } catch {
       setTargetHasData(true)
+      setRelinkedSinceReset(null)
     }
   }
 
@@ -341,6 +346,9 @@ export default function BackupRestoreSection() {
         const users = result.accounts.users ?? 0
         sentences.push(`Restored ${users} sign-in account${users === 1 ? '' : 's'}. Everyone has been signed out.`)
       }
+      if (result.credentials_withheld) {
+        sentences.push('The data provider credentials were not restored, because the vault key they were sealed under was replaced or reset after an exposure.')
+      }
       setRestoreMsg(null)
       setAdminPassword('')
       setRestoreGaveNewIdentifier(!!result.restored_counts)
@@ -396,13 +404,20 @@ export default function BackupRestoreSection() {
       return
     }
     if (restoreReplacesAccounts) {
+      // Only where the file's date is known to precede the reset: a backup taken since holds the
+      // reconnected credentials itself.
+      const resetAt = relinkedSinceReset && parseTimestamp(relinkedSinceReset.reset_at)
+      const relinkLost = resetAt && restoreInspection?.credentials_included !== false && restoreInspection?.exported_at
+        && parseTimestamp(restoreInspection.exported_at) < resetAt
+        ? ` The vault was reset after this backup was taken, so ${relinkedSinceReset.connections.join(', ')} lose${relinkedSinceReset.connections.length === 1 ? 's' : ''} the credentials reconnected since.`
+        : ''
       const replaced = restoreReplacesData
         ? 'all financial data, the sign-in accounts and settings, backup keys and data provider credentials'
         : 'the sign-in accounts and settings, backup keys and data provider credentials'
       setPendingConfirm({
         type: 'data',
         title: restoreReplacesData ? 'Replace everything with this backup?' : 'Replace accounts & secrets with this backup?',
-        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}${taken}`,
+        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}${taken}${relinkLost}`,
         confirmLabel: restoreButtonLabel,
         variant: 'danger',
       })
@@ -480,12 +495,12 @@ export default function BackupRestoreSection() {
           {history && history.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>No backups have been made.</div>
           ) : null}
-          {history && history.length > 0 ? <BackupHistoryTable rows={history} /> : null}
+          {history && history.length > 0 ? <BackupHistoryList rows={history} /> : null}
           {/* The history's one setting, in the shape the sync log gives its own: a sentence around a single
               number, saved on blur because shortening the window deletes the older rows at once. */}
           {historyRetention != null ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--muted)' }}>
-              <label htmlFor="backup-history-retention-days">Keep backups in the history for</label>
+              <label htmlFor="backup-history-retention-days">Keep prior backups in the history for</label>
               <input
                 key={historyRetention}
                 id="backup-history-retention-days"
@@ -503,7 +518,7 @@ export default function BackupRestoreSection() {
                   border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
                 }}
               />
-              <span>days. The most recent backup is always kept.</span>
+              <span>days</span>
             </div>
           ) : null}
         </Card>
@@ -897,64 +912,49 @@ export default function BackupRestoreSection() {
   )
 }
 
-// One row per backup, newest first. The documents column carries the share of the archive they take,
-// which is the figure that says whether documents are becoming the bulk of a backup.
-function BackupHistoryTable({ rows }) {
-  const cell = { padding: '6px 8px', borderTop: '1px solid var(--border)', verticalAlign: 'top' }
-  const head = { ...cell, borderTop: 'none', fontWeight: 600, textAlign: 'left', color: 'var(--muted)', fontSize: 12 }
+// One entry per backup, newest first, on two lines so it fits the card at any width: when, who and how
+// big, then the file and what it holds. The documents share is the figure that says whether documents are
+// becoming the bulk of a backup. A filename too long for the card is cut short with the whole of it on
+// hover; the details after it wrap rather than push it out.
+function BackupHistoryList({ rows }) {
+  const muted = { fontSize: 12, color: 'var(--muted)' }
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-        <thead>
-          <tr>
-            <th style={head}>Made</th>
-            <th style={head}>By</th>
-            <th style={head}>File</th>
-            <th style={{ ...head, textAlign: 'right' }}>Size</th>
-            <th style={{ ...head, textAlign: 'right' }}>Documents</th>
-            <th style={head}>Credentials</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => {
-            const parts = (row.ledger_bytes || 0) + (row.accounts_bytes || 0) + (row.documents_bytes || 0)
-            const share = formatShare(row.documents_bytes, parts)
-            return (
-              <tr key={row.id}>
-                <td style={{ ...cell, whiteSpace: 'nowrap' }}>{formatTimestamp(row.made_at) || '—'}</td>
-                <td style={cell}>{row.made_by || '—'}</td>
-                <td style={{ ...cell, wordBreak: 'break-all' }}>
-                  <div>{row.filename || '—'}</div>
-                  {row.encrypted ? (
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                      Encrypted{row.key_labels?.length ? ` to ${row.key_labels.join(', ')}` : ''}
-                    </div>
-                  ) : null}
-                  {row.restored_at ? (
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                      This system was restored from it {formatTimestamp(row.restored_at)}
-                    </div>
-                  ) : null}
-                </td>
-                <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {row.total_bytes != null ? formatBytes(row.total_bytes) : '—'}
-                </td>
-                <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {row.document_count != null ? (
-                    <>
-                      <div>{row.document_count === 0 ? 'None' : formatBytes(row.documents_bytes)}</div>
-                      {share ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{share}</div> : null}
-                    </>
-                  ) : '—'}
-                </td>
-                <td style={cell}>
-                  {row.credentials_included == null ? '—' : row.credentials_included ? 'Included' : 'Left out'}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div style={{ display: 'grid' }}>
+      {rows.map((row, index) => {
+        const parts = (row.ledger_bytes || 0) + (row.accounts_bytes || 0) + (row.documents_bytes || 0)
+        const percent = parts && row.documents_bytes ? (row.documents_bytes / parts) * 100 : 0
+        const share = !percent ? '' : percent < 1 ? '<1%' : `~${Math.min(100, Math.round(percent))}%`
+        const details = [
+          row.document_count == null ? null
+            : row.document_count === 0 ? 'no documents'
+              : `documents ${formatBytes(row.documents_bytes)}${share ? ` (${share})` : ''}`,
+          row.encrypted ? `encrypted${row.key_labels?.length ? ` to ${row.key_labels.join(', ')}` : ''}` : null,
+          row.restored_at ? `this system was restored from it ${formatTimestamp(row.restored_at)}` : null,
+        ].filter(Boolean)
+        return (
+          <div key={row.id} style={{
+            display: 'grid', gap: 2, padding: '8px 0', fontSize: 13,
+            borderTop: index === 0 ? 'none' : '1px solid var(--border)',
+          }}>
+            <div>
+              <strong style={{ fontWeight: 600 }}>{formatTimestamp(row.made_at) || 'Unknown date'}</strong>
+              {row.made_by ? ` · ${row.made_by}` : ''}
+              {row.total_bytes != null ? ` · ${formatBytes(row.total_bytes)}` : ''}
+            </div>
+            <div style={{ ...muted, display: 'flex', flexWrap: 'wrap', columnGap: 6, minWidth: 0 }}>
+              {row.filename ? (
+                <span title={row.filename} style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {row.filename}
+                </span>
+              ) : null}
+              {details.map(detail => <span key={detail}>· {detail}</span>)}
+              {row.credentials_included == null ? null : row.credentials_included
+                ? <span>· credentials included</span>
+                : <span style={{ color: 'var(--warning, #d97706)' }}>· credentials left out</span>}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

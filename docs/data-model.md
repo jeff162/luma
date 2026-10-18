@@ -2135,7 +2135,16 @@ which also records `accounts_version`.
   moves the rows with it, since the same passphrase still opens those files. The passphrase-change
   dialog uses it to name the backups that would put the old passphrase back. It is in the control
   database so it survives a data restore, and a restore of the accounts part keeps the rows of everyone it
-  keeps.
+  keeps. Each row also records what else opened the file (the exporter's recovery code by issue time, their
+  passkeys by credential id) and `seal_digest`, the key it is under. The reset dialog lists the newest
+  backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup
+  tasks compare the newest with the vault now (`routers/tasks.py` → `_backup_due_tasks`).
+- **`retired_vault_key`** (control database) records each seal of a key a reset or a rotation retired,
+  with the reason. Credentials under a key retired as `compromised` or `replaced` are not restored, from
+  an archive's accounts part (`credentials_withheld`) or a standalone credentials file
+  (`credentials_retired`); the rest of the part restores as a file without credentials does. A key
+  retired as `lost` is one nobody else has, so its backups stay the way back. It survives an accounts
+  restore, which is exactly what it has to outlive.
 
 ### The standalone credentials backup
 

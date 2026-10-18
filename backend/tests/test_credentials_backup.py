@@ -460,25 +460,18 @@ class CredentialsBackupTests(unittest.TestCase):
 
     # ---- after the workspace key is replaced -----------------------------
 
-    def test_a_backup_from_before_a_rotation_is_reopened_not_copied(self):
-        # Rotation replaces the key and leaves every slot's wrapping alone, so a file from before it still
-        # looks like this install's own by its wrapping — and copied verbatim, its credentials would sit
-        # under a key nothing here can open any more. It has to be reopened with a secret and re-keyed.
+    def test_a_backup_from_before_a_rotation_is_refused(self):
+        # A key is replaced because someone who should no longer read the credentials knew it, so a file
+        # sealed under it is not put back, with a secret or without one (`crypto_service.UNTRUSTED_RETIREMENTS`).
         with api_client() as (client, _):
-            user_id = self._seed(client)
+            self._seed(client)
             payload = self._export(client)
             self.assertEqual(client.post("/api/auth/vault/rotate").status_code, 200)
-            client.post("/api/auth/vault/lock")
 
-            r = client.post("/api/import-export/restore/credentials", json={"data": payload})
-            self.assertEqual(r.status_code, 400, r.text)
-            self.assertEqual(r.json()["detail"]["code"], "backup_secret_required")
-
-            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
             r = client.post("/api/import-export/restore/credentials",
                             json={"data": payload, "passphrase": PASSPHRASE})
-            self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(r.json()["detail"]["code"], "credentials_retired")
 
     def test_a_backup_from_before_a_vault_reset_restores_into_the_new_vault(self):
         # The recovery ladder's backup rung: the passphrase is lost, the vault is reset (a new key, every

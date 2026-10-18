@@ -44,6 +44,7 @@ from backend.db.control_database import (
     enable_auth_with_admin,
     list_users,
     password_policy_label,
+    record_credentials_reissued,
     recovery_code_count,
     replace_recovery_codes,
     set_password_policy,
@@ -68,7 +69,7 @@ from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_lo
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
 from backend.services import app_passkey, attempt_limiter, crypto_service, sign_in_sessions
-from backend.services.exposure_response import SyncInProgress, app_secrets_to_rotate, reissue_all_credentials
+from backend.services.exposure_response import REISSUED, SyncInProgress, app_secrets_to_rotate, reissue_all_credentials
 from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
 from backend.authorization import require_admin, require_admin_or_local
@@ -1345,10 +1346,9 @@ def vault_reset_preview(request: Request):
         # one most easily forgotten, since somebody reaching this dialog is thinking about the passphrase.
         "own_passkeys": [p for p in crypto_service.user_passkey_slots(user["id"]) if not p["pending"]],
         "has_recovery_code": crypto_service.has_recovery_code(user["id"]),
-        # Unfiltered on purpose: a backup taken under a *previous* passphrase is precisely the one that
-        # still opens, which is the opposite of what the passphrase-change warning wants. See
-        # `control_database.credentials_exports_any`.
-        "credentials_backups": [{"exported_at": e["exported_at"]} for e in credentials_exports_any()],
+        # Not limited to the current passphrase: a backup taken under a *previous* one is precisely the one
+        # that still opens, which is the opposite of what the passphrase-change warning wants.
+        "credentials_backups": crypto_service.credentials_backups_by_passphrase(),
         "confirm_phrase": RESET_CONFIRM_PHRASE,
     }
 
@@ -1438,6 +1438,9 @@ def vault_reissue_credentials(request: Request):
         raise locked
     except SyncInProgress as exc:
         raise HTTPException(status_code=409, detail={"code": "sync_running", "message": str(exc)})
+    # For the backup task (`routers/tasks.py` → `_backup_due_tasks`), only when something was replaced.
+    if any(o["outcome"] == REISSUED for o in outcomes):
+        record_credentials_reissued()
     return {
         "outcomes": outcomes,
         "app_secrets_to_rotate": app_secrets_to_rotate(),
@@ -1538,7 +1541,10 @@ def vault_rotate(request: Request):
             "message": "A stored credential could not be read with the current key, so it cannot be "
                        "re-encrypted. Reconnect the affected connection, then try again.",
         })
-    return {"result": result, "user": _session_payload(user)}
+    # Every credentials backup made before now is under the key just retired, so its credentials will
+    # not be restored (`crypto_service.UNTRUSTED_RETIREMENTS`); the result panel says a new one is needed.
+    return {"result": result, "user": _session_payload(user),
+            "has_credentials_backups": bool(credentials_exports_any())}
 
 
 # --- Passkey slots (WebAuthn PRF) -----------------------------------------------------------------

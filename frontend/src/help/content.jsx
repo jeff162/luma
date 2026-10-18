@@ -2807,7 +2807,7 @@ export const HELP_TOPICS = [
                 <td><strong>Can&apos;t open it?</strong></td>
                 <td>Shown while the vault is locked, for a forgotten passphrase. It lists the ways back
                   in, cheapest first: a passkey, another person who can open the vault, the recovery
-                  code, a backup holding the vault. The last resort rebuilds the vault. That keeps the ledger
+                  code, a backup holding the vault, with what opens each one. The last resort rebuilds the vault. That keeps the ledger
                   and each connection&apos;s account mapping, and every connection has to be
                   reconnected.</td>
               </tr>
@@ -4019,6 +4019,8 @@ export const HELP_TOPICS = [
           <li>recurring detection that has not caught up with changed transactions</li>
           <li>a problem fetching transactions from a data connection</li>
           <li>an error recorded in the log file</li>
+          <li>a change since the last backup that makes earlier backups less useful, such as a new vault
+            passphrase, a replaced vault key or replaced data provider credentials</li>
         </ul>
         <p>Anything which might require attention will appear here.</p>
         <p>
@@ -4531,6 +4533,13 @@ export const HELP_TOPICS = [
             When the backup turns sign-in on, the restore first asks for the username and password of an
             administrator in it, so someone can still sign in afterwards.
           </li>
+          <li>
+            A backup made before <strong>Replace vault key</strong>, or before the vault was rebuilt for
+            a compromised passphrase, restores everything except the data provider credentials, which
+            are under a key that is no longer trusted. After a vault rebuilt for a forgotten passphrase,
+            restoring an older backup's accounts &amp; secrets replaces the credentials of connections
+            reconnected since, and the confirmation names them.
+          </li>
         </ul>
         <p>
           Restoring the financial data gives the installation a new backup identifier. Every backup made
@@ -4565,9 +4574,15 @@ export const HELP_TOPICS = [
                   changed since the backup makes no difference.</td>
               </tr>
               <tr>
-                <td>The same installation, after <strong>Replace vault key</strong> or a rebuilt vault</td>
+                <td>The same installation, after the vault was rebuilt for a forgotten passphrase</td>
                 <td>One of the generating user's unlock methods as it was at the time: the passphrase,
                   the recovery code, or a passkey.</td>
+              </tr>
+              <tr>
+                <td>The same installation, after <strong>Replace vault key</strong> or a vault rebuilt
+                  for a compromised passphrase</td>
+                <td>Nothing is restored. The credentials in the file are under a key that is no longer
+                  trusted, so the connections are reconnected instead.</td>
               </tr>
               <tr>
                 <td>A different installation</td>

@@ -51,6 +51,9 @@ CONTROL_TABLES_LEFT_OUT = {
     # This install's own record of the backups it wrote, kept so a passphrase change can name the files it
     # strands. It describes files, not people, and must survive a restore — the moment it is most wanted.
     "credentials_export",
+    # The workspace keys this install retired. Like the export record it describes this install's history,
+    # and a restore must not erase the record that refuses an old file's credentials.
+    "retired_vault_key",
     # Carried in part: the perimeter's two keys (`cdb.PERIMETER_SETTING_KEYS`). The rest describe the
     # machine — the session signing secret and cookie name, the proxy certificate accepted here, error
     # counters, update checks.
@@ -426,6 +429,80 @@ class AccountsBackupTests(unittest.TestCase):
             r = self._restore_accounts(client, content)
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(cdb.export_identities(), identities)
+
+
+    # ---- a retired key, and what a backup needs -----------------------
+
+    def _restore_after_retirement(self, retire) -> tuple[dict, str]:
+        with api_client(base_url=SITE) as (client, _):
+            user_id = self._seed_vault(client)
+            content = self._export(client)
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            with in_browser_session(client):
+                retire(user_id)
+            r = self._restore_accounts(client, content)
+            self.assertEqual(r.status_code, 200, r.text)
+            with get_db() as conn:
+                credential_enc = conn.execute("SELECT credential_enc FROM connection WHERE id = 'conn-1'").fetchone()[0]
+        return r.json(), credential_enc
+
+    def test_credentials_under_a_key_retired_as_untrusted_are_not_restored(self):
+        for retire, reason in ((lambda uid: cs.reset_vault(uid, reason="compromised"), "compromised"),
+                               (lambda uid: cs.rotate_dek(uid), "replaced")):
+            with self.subTest(reason=reason):
+                result, credential_enc = self._restore_after_retirement(retire)
+                self.assertEqual(result.get("credentials_withheld"), reason)
+                if reason == "compromised":
+                    self.assertIsNone(credential_enc, "the reset's clearing stands")
+
+    def test_credentials_under_a_key_lost_with_its_passphrase_are_restored(self):
+        result, credential_enc = self._restore_after_retirement(lambda uid: cs.reset_vault(uid, reason="lost"))
+        self.assertNotIn("credentials_withheld", result)
+        self.assertIsNotNone(credential_enc)
+
+    def test_the_reset_dialog_lists_one_backup_per_passphrase_with_what_opens_it(self):
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            self._export(client)
+            self._export(client)
+            changed = client.post("/api/auth/vault/change-passphrase", json={
+                "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-renewed",
+            })
+            self.assertEqual(changed.status_code, 200, changed.text)
+            self._export(client)
+            backups = cs.credentials_backups_by_passphrase()
+        self.assertEqual([(b["passphrase_current"], b["recovery"], b["passkeys"]) for b in backups],
+                         [(True, "current", ["Laptop"]), (False, "current", ["Laptop"])])
+
+    def test_a_passphrase_change_after_a_backup_asks_for_a_new_one_until_it_is_taken(self):
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            tasks = lambda: {t["id"] for t in client.get("/api/tasks").json()["tasks"]}  # noqa: E731
+            self.assertNotIn("backup_due_vault_change", tasks(), "no backup was ever taken")
+            self._export(client)
+            client.post("/api/auth/vault/change-passphrase", json={
+                "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-renewed",
+            })
+            self.assertIn("backup_due_vault_change", tasks())
+            self._export(client)
+            self.assertNotIn("backup_due_vault_change", tasks())
+
+
+    def test_credentials_replaced_after_a_backup_ask_for_a_new_one(self):
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            tasks = lambda: {t["id"] for t in client.get("/api/tasks").json()["tasks"]}  # noqa: E731
+            self._export(client)
+            # Both stamps have one-second resolution; the export is moved back so the order is the test's.
+            with cdb.get_control_db() as conn:
+                conn.execute("UPDATE credentials_export SET exported_at = datetime('now', '-1 minute')")
+            cdb.record_credentials_reissued()
+            self.assertIn("backup_due_credentials_replaced", tasks())
+            self._export(client)
+            with cdb.get_control_db() as conn:
+                conn.execute("UPDATE credentials_export SET exported_at = datetime('now', '+1 minute') "
+                             "WHERE exported_at = (SELECT MAX(exported_at) FROM credentials_export)")
+            self.assertNotIn("backup_due_credentials_replaced", tasks())
 
 
 class RestoringAdminCheckTests(unittest.TestCase):

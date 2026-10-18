@@ -924,6 +924,84 @@ def _dek_seal(slot: dict | None) -> str | None:
     return slot.get("wrapped_dek") if slot.get("format", 1) == 1 else slot.get("sealed_dek")
 
 
+def seal_digest(seal: str | None) -> str | None:
+    """A stable marker for one slot's seal of the workspace key, to recognize that seal again once the key
+    behind it is retired (`control_database.retired_vault_key`). Equality is the whole contract, as for
+    `wrapped_dek_fingerprint`."""
+    if not seal:
+        return None
+    return hashlib.sha256(b"vault.seal.v1|" + seal.encode("utf-8")).hexdigest()
+
+
+def _slot_seal_digests(slots: list[dict]) -> list[str]:
+    """Every seal these slots hold, the previous one of an unfinished rotation included."""
+    digests = []
+    for slot in slots or []:
+        for seal in (_dek_seal({"format": 1, **slot}), slot.get("sealed_dek_prev")):
+            digest = seal_digest(seal)
+            if digest:
+                digests.append(digest)
+    return digests
+
+
+def exported_slots_seal_digest(exported: list[dict]) -> str | None:
+    """The seal a credentials backup's first slot carries, recorded with the export so a key retired later
+    can be matched against it."""
+    digests = _slot_seal_digests((exported or [])[:1])
+    return digests[0] if digests else None
+
+
+# Retired for these reasons, a key's credentials are not put back: after a compromise they are exposed,
+# and after a replacement they are under a key someone who should no longer read them knew. A key lost
+# with its passphrase is a key nobody else has, so its backups remain the way back.
+UNTRUSTED_RETIREMENTS = ("compromised", "replaced")
+
+
+def exported_slots_retired(exported: list[dict]) -> str | None:
+    """Why a backup's credentials must not be restored, when their key was retired as untrusted, or None."""
+    reasons = cdb.retired_vault_seal_reasons(_slot_seal_digests(exported))
+    for reason in UNTRUSTED_RETIREMENTS:
+        if reason in reasons:
+            return reason
+    return None
+
+
+def credentials_backups_by_passphrase() -> list[dict]:
+    """The credentials backups that could put this vault back, newest first: the newest one taken under
+    each passphrase each member has had, with what opens it now.
+
+    Grouped by the wrapping fingerprint, which changes exactly when a passphrase does, so each entry stands
+    for one passphrase's lifespan. A backup whose key was retired as untrusted is left out, since its
+    credentials would not be restored. What opens the file is said as it compares with now: the passphrase
+    and recovery code as the current ones or those in use when it was taken (the code only where the
+    member had one), and any passkey it carries that is still registered to them."""
+    seen = set()
+    entries = []
+    for export in cdb.credentials_exports_detail():
+        key = (export["user_id"], export["wrapped_dek_fingerprint"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if export["seal_digest"] and cdb.retired_vault_seal_reasons([export["seal_digest"]]) & set(UNTRUSTED_RETIREMENTS):
+            continue
+        user_id = export["user_id"]
+        recovery = None
+        if export["recovery_issued_at"]:
+            recovery = "current" if export["recovery_issued_at"] == recovery_code_issued_at(user_id) else "then"
+        carried = set(export["passkey_credential_ids"])
+        entries.append({
+            "exported_at": export["exported_at"],
+            "made_by": export["made_by"],
+            "passphrase_current": export["wrapped_dek_fingerprint"] == current_wrapped_dek_fingerprint(user_id),
+            "recovery": recovery,
+            "passkeys": [
+                s["label"] for s in cdb.list_vault_slots(user_id, method="passkey")
+                if s["credential_id"] in carried and slot_holds_dek(s)
+            ],
+        })
+    return entries
+
+
 def _site_digest(salt: bytes, rp_id: str) -> str:
     return hashlib.sha256(b"vault.passkey-site.v1|" + salt + b"|" + rp_id.lower().encode("utf-8")).hexdigest()
 
@@ -1401,7 +1479,11 @@ def rotate_dek(user_id: str) -> dict:
                 )
                 rewritten += 1
 
-    # Phase 3 — the old key has no ciphertext left to open.
+    # Phase 3 — the old key has no ciphertext left to open. Recorded as retired first, from the previous
+    # seals the slots still hold, so a resumed rotation records it too.
+    cdb.record_retired_vault_seals(
+        [seal_digest(s["sealed_dek_prev"]) for s in cdb.list_vault_slots() if s["sealed_dek_prev"]], "replaced",
+    )
     cdb.clear_vault_slot_previous_deks()
     _cache_put(user_id, new_dek)
     # Every other session holds only keys that now open nothing. Dropping them makes those sessions read as
@@ -1799,7 +1881,9 @@ def reset_vault(user_id: str, *, reason: str) -> dict:
 
     # Last, and only once the ciphertext is gone. Reversed, an interruption between the two would leave
     # unopenable rows behind a vault that still looked configured — a state with no way out but a second
-    # reset, and no screen that would say so.
+    # reset, and no screen that would say so. The key is recorded as retired before its slots go, since
+    # they are the only record of which seals held it.
+    cdb.record_retired_vault_seals(_slot_seal_digests(cdb.list_vault_slots()), reason)
     cdb.delete_all_vault_slots()
     lock_all()
     return {"connections_needing_relink": connections, "reason": reason}

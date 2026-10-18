@@ -19,7 +19,7 @@
 //      workspace key, so again nothing is re-encrypted and no connection is reconnected.
 //   3. A backup carrying the vault        → complete recovery with an older passphrase or code: restoring
 //      it puts the vault back as it was when it was taken. Named here so the reset does not read as pure
-//      loss when a rescue file exists.
+//      loss when a rescue file exists, one line per passphrase each member has had, saying what opens it.
 //   4. Rebuild                            → destructive, irreversible, and the only rung that re-links.
 //
 // **Every rung above the last is a reason, never a bar.** An earlier design refused the rebuild outright
@@ -52,6 +52,29 @@ const OUTCOME_NOTE = {
   manual: 'Revoke this one yourself at the provider — it stays live until you do.',
   failed: 'The provider refused the revocation. Revoke this one yourself.',
   unreadable: 'Its stored credential could not be read, so nothing could be sent. Revoke it yourself.',
+}
+
+// What opens one backup, as it compares with now (`crypto_service.credentials_backups_by_passphrase`).
+// A secret in use when the backup was taken is named that way only when it is not the current one.
+function backupOpensWith(backup) {
+  const then = 'in use at the time of the backup'
+  const recovery = backup.recovery
+  let secrets
+  if (!recovery) {
+    secrets = backup.passphrase_current ? 'the current passphrase' : `the passphrase ${then}`
+  } else if (backup.passphrase_current && recovery === 'current') {
+    secrets = 'the current passphrase or the current recovery code'
+  } else if (!backup.passphrase_current && recovery === 'then') {
+    secrets = `the passphrase or the recovery code ${then}`
+  } else if (backup.passphrase_current) {
+    secrets = `the current passphrase, or the recovery code ${then}`
+  } else {
+    secrets = `the passphrase ${then}, or the current recovery code`
+  }
+  const passkeys = (backup.passkeys || []).map(label => `“${label}”`)
+  const passkey = passkeys.length === 0 ? ''
+    : `, or the current passkey ${passkeys.length === 1 ? passkeys[0] : `${passkeys.slice(0, -1).join(', ')} or ${passkeys.at(-1)}`}`
+  return `Requires ${secrets}${passkey}, to open.`
 }
 
 // The shown-once panel. Shared by this dialog and Vault settings because both mint a code and both owe
@@ -258,7 +281,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
               their own and be approved from Vault settings.
             </p>
           ) : null}
-          {backups.length > 0 ? (
+          {/* After a compromise the backups' credentials are not restored, so they are no way back. */}
+          {backups.length > 0 && outcome.reason === 'lost' ? (
             <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
               A backup holding the vault is on file. Restoring its accounts &amp; secrets puts the vault back
               as it was when it was taken, opened by the passphrase or recovery code in force then, and the connections it
@@ -424,15 +448,18 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {/* 3 — free, but taken on Backup / Restore, so it is context here rather than an action of its
               own. */}
           {backups.length > 0 ? (
-            <Rung title="A backup holding the vault is on file">
+            <Rung title={backups.length === 1 ? 'A backup holding the vault is on file' : 'Backups holding the vault are on file'}>
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                The most recent was taken {formatDate(String(backups[0].exported_at).slice(0, 10))}.
-                Restoring its accounts &amp; secrets on Administration → Backup / Restore puts the vault back
-                as it was then, opened
-                by the passphrase or recovery code in force when it was taken, not your current ones — so if
-                you still have an older passphrase or code, it recovers everything without reconnecting
+                Restoring the accounts &amp; secrets of a backup on Administration → Backup / Restore puts the
+                vault back as it was when the backup was taken, and recovers everything without reconnecting
                 anything. It also puts back the sign-in accounts as they were and signs everyone out.
               </p>
+              {backups.map(backup => (
+                <p key={`${backup.exported_at}-${backup.made_by}`} style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
+                  Taken {formatDate(String(backup.exported_at).slice(0, 10))}
+                  {backup.made_by ? ` by ${backup.made_by}` : ''}. {backupOpensWith(backup)}
+                </p>
+              ))}
             </Rung>
           ) : null}
 

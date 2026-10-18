@@ -13,7 +13,7 @@
 // a session that could not prove it holds one.
 
 import { useCallback, useEffect, useState } from 'react'
-import { AppConfirmDialog, AppDialog, Button, DialogActions, Input, SectionEyebrow, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppDialog, AppNoticeDialog, Button, DialogActions, Input, SectionEyebrow, Spinner } from './ui.jsx'
 import { NO_AUTOFILL_PROPS } from '../lib/sensitiveFields.js'
 import { PASSKEY_UNAVAILABLE, passkeyAvailability, registerPasskey } from '../lib/vaultPasskey.js'
 import { RecoveryCodeReveal } from './VaultRecoveryDialog.jsx'
@@ -76,6 +76,9 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   const [newPasskeyLabel, setNewPasskeyLabel] = useState('')
   const [issuedRecoveryCode, setIssuedRecoveryCode] = useState('')
   const [confirmingRotate, setConfirmingRotate] = useState(false)
+  // Set once the key is replaced: a panel rather than the status line, because when a credentials backup
+  // exists it has to say that a new one is needed, and a line inside this dialog is easily missed.
+  const [rotateResult, setRotateResult] = useState(null)
   const [confirmingReissue, setConfirmingReissue] = useState(false)
   // What the exposure response did and what it left, kept on screen so the steps it lists can be worked
   // through from here — the passphrase change and key replacement it leads into are in this dialog.
@@ -535,10 +538,23 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           confirmDisabled={busy === 'rotate'}
           cancelDisabled={busy === 'rotate'}
           onConfirm={async () => {
-            await run('rotate', () => api.rotateVault(), 'The vault key was replaced.')
+            let result = null
+            await run('rotate', async () => { result = await api.rotateVault() })
             setConfirmingRotate(false)
+            if (result) setRotateResult(result)
           }}
           onCancel={() => setConfirmingRotate(false)}
+        />
+      ) : null}
+
+      {rotateResult ? (
+        <AppNoticeDialog
+          title="Vault key replaced"
+          description={rotateResult.has_credentials_backups
+            ? 'A new backup is required, data provider credentials cannot be restored from existing backups.'
+            : undefined}
+          onClose={() => setRotateResult(null)}
+          width="min(460px, 100%)"
         />
       ) : null}
 
