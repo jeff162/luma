@@ -18,7 +18,9 @@ import CurrencySection from '../components/settings/CurrencySection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
 import ImportStorageSection from '../components/settings/ImportStorageSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
-import { RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection } from '../components/settings/TrashSections.jsx'
+import {
+  BackupHistoryTrashSection, RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection,
+} from '../components/settings/TrashSections.jsx'
 import AboutSection from '../components/settings/AboutSection.jsx'
 
 export default function Settings() {
@@ -40,7 +42,7 @@ export default function Settings() {
   }, [])
   useEffect(() => { loadStorage() }, [loadStorage])
   const trash = storage?.trash
-  const trashTotal = trash ? trash.transactions + trash.duplicates + trash.rules : 0
+  const trashTotal = trash ? trash.transactions + trash.duplicates + trash.rules + (trash.backup_history || 0) : 0
   const detailBytes = storage?.import_detail?.bytes || 0
   const detailShare = formatShare(detailBytes, storage?.database_bytes).replace('about ', '')
   const counted = (title, count) => (trash ? `${title} (${count.toLocaleString()})` : title)
@@ -61,6 +63,12 @@ export default function Settings() {
           <Subsection title={counted('Rules', trash?.rules)}>
             <RulesTrashSection onChanged={loadStorage} />
           </Subsection>
+          {/* The backup history is an administrator's, so only they are shown or counted its trash. */}
+          {canAdminister ? (
+            <Subsection title={counted('Backup history', trash?.backup_history ?? 0)}>
+              <BackupHistoryTrashSection onChanged={loadStorage} />
+            </Subsection>
+          ) : null}
         </div>
       ),
     },

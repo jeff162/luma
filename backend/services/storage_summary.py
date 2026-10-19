@@ -20,8 +20,9 @@ TRASH_DUPLICATES_SQL = "COALESCE(dedupe_resolved_by, '') IN ('amazon_merge', 'am
 TRASH_DELETED_SQL = "COALESCE(rejection_reason, '') <> 'duplicate_confirmed'"
 
 
-def trash_counts(conn) -> dict:
-    """How many items each Trash subsection holds — the whole bucket, where the section lists a page."""
+def trash_counts(conn, *, backup_history: bool = False) -> dict:
+    """How many items each Trash subsection holds — the whole bucket, where the section lists a page.
+    `backup_history` adds the backup history's trash, which only an administrator is shown."""
     txn = conn.execute(f"""
         SELECT COALESCE(SUM(CASE WHEN {TRASH_DUPLICATES_SQL} THEN 1 ELSE 0 END), 0) AS duplicates,
                COALESCE(SUM(CASE WHEN NOT ({TRASH_DUPLICATES_SQL}) AND {TRASH_DELETED_SQL} THEN 1 ELSE 0 END), 0)
@@ -30,16 +31,20 @@ def trash_counts(conn) -> dict:
         WHERE  trashed_at IS NOT NULL
     """).fetchone()
     rules = conn.execute("SELECT COUNT(*) FROM category_rule WHERE deleted_at IS NOT NULL").fetchone()[0]
-    return {
+    counts = {
         "transactions": int(txn["transactions"]),
         "duplicates": int(txn["duplicates"]),
         "rules": int(rules),
     }
+    if backup_history:
+        counts["backup_history"] = int(conn.execute(
+            "SELECT COUNT(*) FROM backup_history WHERE deleted_at IS NOT NULL").fetchone()[0])
+    return counts
 
 
-def storage_summary(conn) -> dict:
+def storage_summary(conn, *, backup_history: bool = False) -> dict:
     return {
         "database_bytes": database_bytes(conn),
         "import_detail": detail_storage_total(conn),
-        "trash": trash_counts(conn),
+        "trash": trash_counts(conn, backup_history=backup_history),
     }

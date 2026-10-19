@@ -36,11 +36,11 @@ import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { Subsection } from '../SectionListPage.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
+import { BackupHistoryList } from './BackupHistoryList.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
 import { formatDate, formatTimestamp, parseTimestamp } from '../../lib/utils.js'
-import { formatBytes } from '../../lib/storageFormat.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
@@ -169,6 +169,25 @@ export default function BackupRestoreSection() {
   }
 
   useEffect(() => { loadHistory() }, [])
+
+  async function renameHistoryEntry(id, filename) {
+    setHistoryError('')
+    try {
+      setHistory((await api.renameBackupHistoryEntry(id, filename)).backups || [])
+    } catch (e) {
+      setHistoryError(e.message || 'The filename could not be saved.')
+      throw e
+    }
+  }
+
+  async function trashHistoryEntry(id) {
+    setHistoryError('')
+    try {
+      setHistory((await api.trashBackupHistoryEntry(id)).backups || [])
+    } catch (e) {
+      setHistoryError(e.message || 'That backup could not be moved to the trash.')
+    }
+  }
 
   async function saveHistoryRetention(days) {
     setSavingRetention(true)
@@ -495,7 +514,9 @@ export default function BackupRestoreSection() {
           {history && history.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>No backups have been made.</div>
           ) : null}
-          {history && history.length > 0 ? <BackupHistoryList rows={history} /> : null}
+          {history && history.length > 0 ? (
+            <BackupHistoryList rows={history} onRename={renameHistoryEntry} onTrash={trashHistoryEntry} />
+          ) : null}
           {/* The history's one setting, in the shape the sync log gives its own: a sentence around a single
               number, saved on blur because shortening the window deletes the older rows at once. */}
           {historyRetention != null ? (
@@ -532,10 +553,8 @@ export default function BackupRestoreSection() {
           onClose={() => setRecipientChoice(null)}
           actions={<>
             <Button variant="ghost" onClick={() => setRecipientChoice(null)}>Cancel</Button>
-            {/* Not "Generate encrypted backup": that is the button on the page behind this, and two
-                controls with one label is a question about which one just ran. */}
             <Button onClick={confirmRecipientChoice} disabled={recipientChoice.length === 0}>
-              Encrypt backup
+              Generate encrypted backup
             </Button>
           </>}
         >
@@ -908,53 +927,6 @@ export default function BackupRestoreSection() {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-// One entry per backup, newest first, on two lines so it fits the card at any width: when, who and how
-// big, then the file and what it holds. The documents share is the figure that says whether documents are
-// becoming the bulk of a backup. A filename too long for the card is cut short with the whole of it on
-// hover; the details after it wrap rather than push it out.
-function BackupHistoryList({ rows }) {
-  const muted = { fontSize: 12, color: 'var(--muted)' }
-  return (
-    <div style={{ display: 'grid' }}>
-      {rows.map((row, index) => {
-        const parts = (row.ledger_bytes || 0) + (row.accounts_bytes || 0) + (row.documents_bytes || 0)
-        const percent = parts && row.documents_bytes ? (row.documents_bytes / parts) * 100 : 0
-        const share = !percent ? '' : percent < 1 ? '<1%' : `~${Math.min(100, Math.round(percent))}%`
-        const details = [
-          row.document_count == null ? null
-            : row.document_count === 0 ? 'no documents'
-              : `documents ${formatBytes(row.documents_bytes)}${share ? ` (${share})` : ''}`,
-          row.encrypted ? `encrypted${row.key_labels?.length ? ` to ${row.key_labels.join(', ')}` : ''}` : null,
-          row.restored_at ? `this system was restored from it ${formatTimestamp(row.restored_at)}` : null,
-        ].filter(Boolean)
-        return (
-          <div key={row.id} style={{
-            display: 'grid', gap: 2, padding: '8px 0', fontSize: 13,
-            borderTop: index === 0 ? 'none' : '1px solid var(--border)',
-          }}>
-            <div>
-              <strong style={{ fontWeight: 600 }}>{formatTimestamp(row.made_at) || 'Unknown date'}</strong>
-              {row.made_by ? ` · ${row.made_by}` : ''}
-              {row.total_bytes != null ? ` · ${formatBytes(row.total_bytes)}` : ''}
-            </div>
-            <div style={{ ...muted, display: 'flex', flexWrap: 'wrap', columnGap: 6, minWidth: 0 }}>
-              {row.filename ? (
-                <span title={row.filename} style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {row.filename}
-                </span>
-              ) : null}
-              {details.map(detail => <span key={detail}>· {detail}</span>)}
-              {row.credentials_included == null ? null : row.credentials_included
-                ? <span>· credentials included</span>
-                : <span style={{ color: 'var(--warning, #d97706)' }}>· credentials left out</span>}
-            </div>
-          </div>
-        )
-      })}
     </div>
   )
 }

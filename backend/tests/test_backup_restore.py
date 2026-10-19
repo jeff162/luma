@@ -20,6 +20,7 @@ import unittest
 import uuid
 import zipfile
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -56,7 +57,9 @@ from backend.routers.import_export.backup import (
     restore_backup_file,
     restore_credentials,
     restore_credentials_file,
+    restore_backup_history_entry,
     restore_from_archive,
+    trash_backup_history_entry,
     router,
     update_backup_recipient,
     write_backup_archive,
@@ -866,6 +869,36 @@ class BackupRestoreTests(BackupFixtureTestCase):
                 backup_history.set_retention_days(conn, 1)
                 names = [r["filename"] for r in backup_history.list_rows(conn)]
         self.assertEqual(names, ["newest.zip"])
+
+    def test_retention_keeps_the_newest_row_outside_the_trash(self):
+        """A trashed row is not one the history shows, so protecting it would let every shown row age
+        out and leave a history that reads as "no backup was ever made"."""
+        # Inside the default window, so both survive until the window is shortened.
+        days_ago = lambda n: (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=n)).isoformat()
+        with self._use_db_path():
+            with get_db() as conn:
+                backup_history.record(conn, made_at=days_ago(3), filename="older.zip")
+                backup_history.record(conn, backup_id="never-saved", made_at=days_ago(2), filename="never-saved.zip")
+            trash_backup_history_entry("never-saved")
+            with get_db() as conn:
+                backup_history.set_retention_days(conn, 1)
+                names = [r["filename"] for r in backup_history.list_rows(conn)]
+        self.assertEqual(names, ["older.zip"])
+
+    def test_trashing_a_history_row_withdraws_its_credentials_record(self):
+        """The vault's recovery and passphrase-change lists read the credentials record, written at the
+        same moment as the history row and just as unaware of whether the file was saved. Trashing the row
+        is how someone says it was not, so the record has to follow it out and back."""
+        with self._use_db_path():
+            with get_db() as conn:
+                backup_history.record(conn, backup_id="b1", filename="cancelled.zip")
+            control_database.record_credentials_export(None, "fingerprint", backup_id="b1")
+            trash_backup_history_entry("b1")
+            withdrawn = control_database.credentials_exports_for_fingerprint("fingerprint")
+            restore_backup_history_entry("b1")
+            restored = control_database.credentials_exports_for_fingerprint("fingerprint")
+        self.assertEqual(withdrawn, [])
+        self.assertEqual(len(restored), 1)
 
 
 if __name__ == "__main__":

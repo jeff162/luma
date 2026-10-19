@@ -111,10 +111,10 @@ def collect(conn, user: dict | None) -> dict:
     return part
 
 
-def record_export(user: dict | None, part: dict) -> None:
+def record_export(user: dict | None, part: dict, backup_id: str | None = None) -> None:
     """Note which passphrase wrapping went into the file, so a later passphrase change can name the
     backups it is about to strand, and what else opens it, for the reset dialog to say
-    (`control_database.record_credentials_export`)."""
+    (`control_database.record_credentials_export`). `backup_id` names the file's backup history row."""
     if part["credentials"] is None:
         return
     slots = part["credentials"]["vault_slots"]
@@ -125,6 +125,7 @@ def record_export(user: dict | None, part: dict) -> None:
             recovery_issued_at=next((s.get("issued_at") for s in slots if s.get("method") == "recovery"), None),
             passkey_credential_ids=[s["credential_id"] for s in slots if s.get("method") == "passkey"],
             seal_digest=crypto_service.exported_slots_seal_digest(slots),
+            backup_id=backup_id,
         )
 
 

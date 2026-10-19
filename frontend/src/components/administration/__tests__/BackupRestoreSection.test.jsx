@@ -31,25 +31,25 @@ let backupStatus = { credentials_left_out: null }
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
-  holdSessionLost: () => {},
+  holdSessionLost: () => { },
   api: {
-    getBackupRecipients:        async () => recipients,
-    getAuthStatus:              async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
-    getBackupStatus:            async () => backupStatus,
-    getBackupHistory:           async () => ({ backups: [], retention_days: 365 }),
-    exportBackup:               (encrypted, ids) => (
+    getBackupRecipients: async () => recipients,
+    getAuthStatus: async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
+    getBackupStatus: async () => backupStatus,
+    getBackupHistory: async () => ({ backups: [], retention_days: 365 }),
+    exportBackup: (encrypted, ids) => (
       encrypted
         ? `/api/import-export/backup?encrypted=true${ids?.length ? `&recipients=${ids.join(',')}` : ''}`
         : '/api/import-export/backup'
     ),
-    inspectBackupFile:          async () => inspection,
-    getRestoreTargetStatus:     async () => ({ has_data: true }),
-    restoreCredentialsFile:     (...args) => restoreCredentialsFile(...args),
-    restoreBackupFile:          (...args) => restoreBackupFile(...args),
-    unlockVault:                (...args) => unlockVault(...args),
-    changeVaultPassphrase:      (...args) => changeVaultPassphrase(...args),
-    vaultCredentialsBackups:    async () => ({ backups: [] }),
-    vaultPassphraseStrength:    async () => ({ score: 4, shortfall: null }),
+    inspectBackupFile: async () => inspection,
+    getRestoreTargetStatus: async () => ({ has_data: true }),
+    restoreCredentialsFile: (...args) => restoreCredentialsFile(...args),
+    restoreBackupFile: (...args) => restoreBackupFile(...args),
+    unlockVault: (...args) => unlockVault(...args),
+    changeVaultPassphrase: (...args) => changeVaultPassphrase(...args),
+    vaultCredentialsBackups: async () => ({ backups: [] }),
+    vaultPassphraseStrength: async () => ({ score: 4, shortfall: null }),
   },
 }))
 
@@ -199,7 +199,8 @@ describe('encrypted backup recipient scope', () => {
 
     // Every enabled recipient is pre-ticked; unticking one narrows the file to the rest.
     await user.click(screen.getByRole('checkbox', { name: /^Home NAS/ }))
-    await user.click(screen.getByText('Encrypt backup'))
+    // The dialog's button shares the page button's label and renders after it.
+    await user.click(screen.getAllByRole('button', { name: 'Generate encrypted backup' }).at(-1))
 
     expect(downloadUrl).toHaveBeenCalledWith('/api/import-export/backup?encrypted=true&recipients=r2')
   })

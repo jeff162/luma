@@ -45,7 +45,8 @@ class ApiContractTests(unittest.TestCase):
             body = r.json()
             self.assertGreater(body["database_bytes"], 0)
             self.assertEqual(body["import_detail"], {"rows": 0, "bytes": 0})
-            self.assertEqual(body["trash"], {"transactions": 0, "duplicates": 0, "rules": 0})
+            # Local mode answers as an administrator, so the backup history trash is counted too.
+            self.assertEqual(body["trash"], {"transactions": 0, "duplicates": 0, "rules": 0, "backup_history": 0})
 
     def test_seeded_data_is_served_from_the_temp_db(self):
         # init_db seeds the category group skeleton (incl. the protected Unassigned group); starter

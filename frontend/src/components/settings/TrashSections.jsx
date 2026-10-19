@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 import { Card, Button, Spinner, EmptyState, AppConfirmDialog } from '../ui.jsx'
 import { RuleMatcherText } from '../RuleSummary.jsx'
+import { BackupHistoryEntry } from '../administration/BackupHistoryList.jsx'
 
 // Whether a trashed transaction was removed by import reconciliation (an Amazon merge or per-copy
 // discard) rather than deleted directly by the user — the discriminator between the two
@@ -411,6 +412,90 @@ export function RulesTrashSection({ onChanged }) {
                     style={{ color: 'var(--danger)' }}>Remove</Button>
                 </div>
               </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </>
+  )
+}
+
+export function BackupHistoryTrashSection({ onChanged }) {
+  // Backup history entries moved to the trash from Administration → Backup / Restore, for a backup that
+  // was not kept. Restore puts one back in the history; emptying removes them for good.
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [workingId, setWorkingId] = useState('')
+  const [emptying, setEmptying] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmEmpty, setConfirmEmpty] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    try {
+      setItems((await api.getBackupHistoryTrash()).backups || [])
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load the backup history trash')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  async function restore(id) {
+    setWorkingId(id); setError('')
+    try { setItems((await api.restoreBackupHistoryEntry(id)).backups || []); onChanged?.() }
+    catch (err) { setError(err.message || 'Failed to restore the backup history entry') }
+    finally { setWorkingId('') }
+  }
+  async function emptyTrash() {
+    setConfirmEmpty(false); setEmptying(true); setError('')
+    try { setItems((await api.emptyBackupHistoryTrash()).backups || []); onChanged?.() }
+    catch (err) { setError(err.message || 'Failed to empty the backup history trash') }
+    finally { setEmptying(false) }
+  }
+
+  return (
+    <>
+      {confirmEmpty ? (
+        <AppConfirmDialog
+          title="Empty backup history trash?"
+          description="This permanently deletes every trashed backup history entry. The backup files themselves are not affected."
+          confirmLabel="Empty backup history trash"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={emptyTrash}
+          onCancel={() => setConfirmEmpty(false)}
+          width="min(620px, 100%)"
+        />
+      ) : null}
+
+      <Card style={{ display: 'grid', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
+            Backup history entries removed on the Backup / Restore page can be restored here.
+          </div>
+          <Button small variant="ghost" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
+            {emptying ? 'Emptying…' : 'Empty backup history trash'}
+          </Button>
+        </div>
+        {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
+        {loading && items.length === 0 ? <Spinner /> : items.length === 0 ? (
+          <EmptyState message="No trashed backup history entries." />
+        ) : (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', padding: '0 14px', background: 'var(--surface2)' }}>
+            {items.map((row, index) => (
+              <BackupHistoryEntry
+                key={row.id}
+                row={row}
+                first={index === 0}
+                actions={(
+                  <Button small onClick={() => restore(row.id)} disabled={workingId === row.id || emptying}>
+                    {workingId === row.id ? 'Restoring…' : 'Restore'}
+                  </Button>
+                )}
+              />
             ))}
           </div>
         )}

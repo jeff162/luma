@@ -2052,8 +2052,13 @@ the signal that documents are becoming the bulk of a backup
   made since; the table is outside the wipe for that reason. Any other restore takes the file's history and
   adds a row for the file itself (`restored_at` set), since a backup never holds its own row; its sizes are
   read from the archive and its maker from `meta.json`'s `made_by`.
-- **Retention is by age**, a ledger setting in the shared preference scope, and the newest row is never
-  purged.
+- **Retention is by age**, a ledger setting in the shared preference scope, and the newest row outside the
+  trash is never purged.
+- **A row can be wrong, so it can be corrected or trashed.** It is written before the browser saves the
+  file, and nothing reports whether the save happened or what name it used. `filename` is editable, and
+  `deleted_at` is the history's trash (Settings → Trash, for an administrator). Trashing a row withdraws the
+  `credentials_export` row made with the same file (*The accounts part* below), which shares its id
+  as `backup_id`, and restoring it puts that row back.
 
 ### A connection is split across the two parts
 
@@ -2136,7 +2141,9 @@ which also records `accounts_version`.
   dialog uses it to name the backups that would put the old passphrase back. It is in the control
   database so it survives a data restore, and a restore of the accounts part keeps the rows of everyone it
   keeps. Each row also records what else opened the file (the exporter's recovery code by issue time, their
-  passkeys by credential id) and `seal_digest`, the key it is under. The reset dialog lists the newest
+  passkeys by credential id) and `seal_digest`, the key it is under. `backup_id` names the file's
+  `backup_history` row, and `withdrawn_at` is set while that row is in the trash; every reader skips a
+  withdrawn row. The reset dialog lists the newest
   backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup
   tasks compare the newest with the vault now (`routers/tasks.py` → `_backup_due_tasks`).
 - **`retired_vault_key`** (control database) records each seal of a key a reset or a rotation retired,

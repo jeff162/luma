@@ -291,6 +291,11 @@ def init_control_db():
             -- `seal_digest`, the workspace key the file's credentials are under, which a retired key is
             -- matched against (`retired_vault_key`). All three are NULL on rows written before they
             -- existed, which say nothing either way.
+            --
+            -- `backup_id` is the data DB's `backup_history` row for the same file, and `withdrawn_at` is
+            -- set while that row is in the trash: the record is written before the browser saves the file,
+            -- and someone who cancelled the save says so by trashing the row. A withdrawn record is read
+            -- by nothing.
             CREATE TABLE IF NOT EXISTS credentials_export (
                 id                      TEXT PRIMARY KEY,
                 user_id                 TEXT REFERENCES user_account(id) ON DELETE CASCADE,
@@ -298,7 +303,9 @@ def init_control_db():
                 exported_at             TEXT NOT NULL DEFAULT (datetime('now')),
                 recovery_issued_at      TEXT,
                 passkey_credential_ids  TEXT,
-                seal_digest             TEXT
+                seal_digest             TEXT,
+                backup_id               TEXT,
+                withdrawn_at            TEXT
             );
 
             -- The workspace keys that stopped being this vault's, one row per slot seal that held one
@@ -379,7 +386,7 @@ def init_control_db():
         except Exception:
             pass
         export_columns = {r["name"] for r in conn.execute("PRAGMA table_info(credentials_export)")}
-        for column in ("recovery_issued_at", "passkey_credential_ids", "seal_digest"):
+        for column in ("recovery_issued_at", "passkey_credential_ids", "seal_digest", "backup_id", "withdrawn_at"):
             if column not in export_columns:
                 conn.execute(f"ALTER TABLE credentials_export ADD COLUMN {column} TEXT")
 
@@ -1437,7 +1444,8 @@ def upgrade_vault_slot_to_format_2(
 def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str, *,
                               recovery_issued_at: str | None = None,
                               passkey_credential_ids: list[str] | None = None,
-                              seal_digest: str | None = None) -> None:
+                              seal_digest: str | None = None,
+                              backup_id: str | None = None) -> None:
     """Note that a credentials backup was written against this wrapping of the DEK, and what else opened it.
 
     Append-only and unbounded in principle, but bounded in practice by how often a person exports
@@ -1445,10 +1453,24 @@ def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str,
     with get_control_db() as conn:
         conn.execute(
             "INSERT INTO credentials_export (id, user_id, wrapped_dek_fingerprint, recovery_issued_at, "
-            "passkey_credential_ids, seal_digest) VALUES (?,?,?,?,?,?)",
+            "passkey_credential_ids, seal_digest, backup_id) VALUES (?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), user_id, wrapped_dek_fingerprint, recovery_issued_at,
-             json.dumps(passkey_credential_ids or []), seal_digest),
+             json.dumps(passkey_credential_ids or []), seal_digest, backup_id),
         )
+
+
+def set_credentials_exports_withdrawn(backup_id: str, withdrawn: bool) -> None:
+    """Withdraw the credentials-export record made with a backup, or put it back, as its backup history
+    row moves into or out of the trash. Withdrawing again keeps the first date."""
+    with get_control_db() as conn:
+        if withdrawn:
+            conn.execute(
+                "UPDATE credentials_export SET withdrawn_at = datetime('now') "
+                "WHERE backup_id = ? AND withdrawn_at IS NULL",
+                (backup_id,),
+            )
+        else:
+            conn.execute("UPDATE credentials_export SET withdrawn_at = NULL WHERE backup_id = ?", (backup_id,))
 
 
 def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
@@ -1461,7 +1483,8 @@ def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
         return []
     with get_control_db() as conn:
         rows = conn.execute(
-            "SELECT id, exported_at FROM credentials_export WHERE wrapped_dek_fingerprint = ? "
+            "SELECT id, exported_at FROM credentials_export "
+            "WHERE wrapped_dek_fingerprint = ? AND withdrawn_at IS NULL "
             "ORDER BY exported_at DESC, id DESC",
             (fingerprint,),
         ).fetchall()
@@ -1476,6 +1499,7 @@ def credentials_exports_detail() -> list[dict]:
             """
             SELECT e.*, COALESCE(u.display_name, u.username) AS made_by
             FROM   credentials_export e LEFT JOIN user_account u ON u.id = e.user_id
+            WHERE  e.withdrawn_at IS NULL
             ORDER  BY e.exported_at DESC, e.rowid DESC
             """
         ).fetchall()
@@ -1550,7 +1574,8 @@ def credentials_exports_any() -> list[dict]:
     holds credentials that reissuing them at their providers has just retired."""
     with get_control_db() as conn:
         rows = conn.execute(
-            "SELECT id, exported_at FROM credentials_export ORDER BY exported_at DESC, id DESC"
+            "SELECT id, exported_at FROM credentials_export WHERE withdrawn_at IS NULL "
+            "ORDER BY exported_at DESC, id DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 

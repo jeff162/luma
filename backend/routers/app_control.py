@@ -19,11 +19,11 @@ signed-in user to take the service away from everyone else.
 
 from typing import Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
-from backend.authorization import require_admin_or_local
+from backend.authorization import is_admin_or_local, require_admin_or_local
 from backend.db.database import get_db
 from backend.runtime_config import bundled_license_path, third_party_notices
 from backend.services import proxy_certificate, update_check
@@ -182,8 +182,8 @@ def auto_update_check():
 
 
 @router.get("/storage-summary")
-def get_storage_summary():
+def get_storage_summary(request: Request):
     """What the trash holds and how much the import records take, against the size of the database —
     read once by Settings so its section list can say so before a section is opened."""
     with get_db() as conn:
-        return storage_summary(conn)
+        return storage_summary(conn, backup_history=is_admin_or_local(request))

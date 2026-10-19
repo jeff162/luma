@@ -4054,7 +4054,8 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
-            sections that empty separately.
+            sections that empty separately. An administrator also sees the backup history entries
+            removed from the Backup / Restore page.
           </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
@@ -4501,9 +4502,11 @@ export const HELP_TOPICS = [
         </p>
         <p>
           <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
-          name {APP_NAME} gave it, its size, and how much of that is attached documents. A browser that
-          renames a download, or a download that never finished, is not reflected there. Entries older
-          than the number of days set below the list are removed, except the most recent one. The
+          name {APP_NAME} gave it, its size, and how much of that is attached documents. {APP_NAME}
+          records a backup before the browser saves it, so a backup that was not kept, or was saved
+          under another name, is not reflected there. An entry's menu corrects its filename or moves
+          it to Settings → Trash. Entries older than the number of days set below the list are
+          removed, except the most recent one. The
           history is part of the financial data, so restoring a backup from another system brings that
           system's history with it, plus an entry for the restored file.
         </p>

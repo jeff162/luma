@@ -1263,6 +1263,17 @@ export const api = {
     request('/import-export/backup/history/retention', {
       method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
     }),
+  renameBackupHistoryEntry: (id, filename) =>
+    request(`/import-export/backup/history/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: JSON.stringify({ filename }), suppressMutationSignal: true,
+    }),
+  trashBackupHistoryEntry: (id) =>
+    request(`/import-export/backup/history/${encodeURIComponent(id)}`, { method: 'DELETE', suppressMutationSignal: true }),
+  getBackupHistoryTrash: () => request('/import-export/backup/history-trash'),
+  restoreBackupHistoryEntry: (id) =>
+    request(`/import-export/backup/history-trash/${encodeURIComponent(id)}/restore`, { method: 'POST', suppressMutationSignal: true }),
+  emptyBackupHistoryTrash: () =>
+    request('/import-export/backup/history-trash/empty', { method: 'POST', suppressMutationSignal: true }),
   // A backup is always the financial data and the accounts; what to put back is chosen at restore.
   // `recipientIds` narrows an encrypted backup to a chosen subset; omitted means every enabled recipient,
   // which is what a single-recipient install always wants.

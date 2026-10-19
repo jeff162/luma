@@ -1086,6 +1086,60 @@ def set_backup_history_retention(body: BackupHistoryRetentionRequest):
         return {"retention_days": days, "backups": backup_history.list_rows(conn)}
 
 
+class BackupHistoryFilenameRequest(BaseModel):
+    filename: str
+
+
+@router.patch("/backup/history/{backup_id}", dependencies=[Depends(require_admin_or_local)])
+def rename_backup_history_entry(backup_id: str, body: BackupHistoryFilenameRequest):
+    """Correct the filename a row records to the one the file was saved under."""
+    with get_db() as conn:
+        try:
+            found = backup_history.rename(conn, backup_id, body.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not found:
+            raise HTTPException(status_code=404, detail="That backup is not in the history.")
+        return {"backups": backup_history.list_rows(conn)}
+
+
+def _move_backup_history_entry(backup_id: str, trashed: bool) -> None:
+    # The ledger row first: the credentials record follows it, and a retry after the second write fails
+    # finds the row already moved and writes the second again.
+    with get_db() as conn:
+        if not backup_history.set_trashed(conn, backup_id, trashed):
+            raise HTTPException(status_code=404, detail="That backup is not in the history.")
+    control_database.set_credentials_exports_withdrawn(backup_id, trashed)
+
+
+@router.delete("/backup/history/{backup_id}", dependencies=[Depends(require_admin_or_local)])
+def trash_backup_history_entry(backup_id: str):
+    """Move a row to the trash: the backup it records was not kept, or not where the row says."""
+    _move_backup_history_entry(backup_id, True)
+    with get_db() as conn:
+        return {"backups": backup_history.list_rows(conn)}
+
+
+@router.get("/backup/history-trash", dependencies=[Depends(require_admin_or_local)])
+def get_backup_history_trash():
+    with get_db() as conn:
+        return {"backups": backup_history.list_rows(conn, trashed=True)}
+
+
+@router.post("/backup/history-trash/{backup_id}/restore", dependencies=[Depends(require_admin_or_local)])
+def restore_backup_history_entry(backup_id: str):
+    _move_backup_history_entry(backup_id, False)
+    with get_db() as conn:
+        return {"backups": backup_history.list_rows(conn, trashed=True)}
+
+
+@router.post("/backup/history-trash/empty", dependencies=[Depends(require_admin_or_local)])
+def empty_backup_history_trash():
+    with get_db() as conn:
+        backup_history.empty_trash(conn)
+        return {"backups": []}
+
+
 @router.get("/backup", dependencies=[Depends(require_admin_or_local)])
 def export_backup(
     request: Request,
@@ -1136,14 +1190,16 @@ def export_backup(
     filename = _dated_backup_filename("luma_backup", ".encrypted.zip" if encrypted else ".zip")
     # Deliberately not allowed to fail the export: the file is the valuable thing, the notes about it a
     # courtesy, and a database hiccup must not cost someone their backup.
+    # One id for the two records of this file, so trashing its history row can withdraw the other.
+    backup_id = str(uuid.uuid4())
     try:
-        accounts_backup.record_export(user, accounts_part)
+        accounts_backup.record_export(user, accounts_part, backup_id)
     except Exception as exc:                                        # pragma: no cover - defensive
         log_error(f"[backup] could not record the backup: {exc}", exc_info=exc)
     try:
         with get_db() as conn:
             backup_history.record(
-                conn, made_at=written["exported_at"], made_by=made_by, filename=filename,
+                conn, backup_id=backup_id, made_at=written["exported_at"], made_by=made_by, filename=filename,
                 encrypted=encrypted, key_labels=[r["label"] for r in selected] if encrypted else None,
                 credentials_included=accounts_part["credentials"] is not None,
                 credentials_left_out=(accounts_part.get("credentials_left_out") or {}).get("code"),
