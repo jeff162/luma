@@ -91,6 +91,14 @@ in the app on the About (`/api/app/third-party-licenses`).
   `backend/requirements.txt`, with environment markers evaluated — so a dependency that only exists on one
   platform, or only through an extra (`uvicorn[standard]`), is included exactly where it is installed.
   The Python runtime's own `LICENSE.txt` heads the section.
+- A library **compiled into a package's extension module** is credited beside that package, because
+  nothing collected reveals it: it arrives inside a file the package already accounts for, and the
+  package's license files speak only for its own code. cryptography's wheels link OpenSSL statically on
+  every platform, so the kit carries an `OpenSSL <version> (compiled into cryptography)` entry, its version
+  read from cryptography itself and its text from `scripts/license-texts/openssl.txt`. OpenSSL 3 and later
+  are Apache-2.0, which asks for a copy of the license to accompany any copy distributed in object form —
+  and a statically linked one is exactly that. The accepted major series are listed in
+  `_EMBEDDED_LIBRARIES`; one outside them stops the build until its license has been read.
 - The **shared libraries** come from `analysis.binaries` — PyInstaller's own record of what it copied
   off the build machine, which is why the file is written from inside the spec rather than before it. OpenSSL, SQLite, zlib and about nine others arrive that way, from neither PyPI nor
   python.org. Each is traced to the package that installed it (`dpkg-query`, or `rpm` on a Fedora build)
@@ -124,15 +132,6 @@ in the app on the About (`/api/app/third-party-licenses`).
   machine, or a future major series whose license has to be read again, stops the build rather than
   inheriting this attribution.
 
-  **A library from Homebrew is credited through its keg**, which on a Mac plays the part a Debian package
-  plays on Linux. Where a package publishes no wheel for the platform, pip builds it from source against
-  what the machine provides, and on an Intel Mac that is cryptography against Homebrew's OpenSSL:
-  `libcrypto.3.dylib` and the `legacy.dylib` provider module it loads, both under
-  `<cellar>/openssl@3/<version>/`. That keg is one formula at one version, and Homebrew copies the
-  upstream license file into its root, so the entry is named for the formula and its version and carries
-  that file. The cellar is read from `brew --cellar` rather than assumed. A keg with no license file
-  stops the build.
-
   **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
   from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose
   license asks for more than its notice — for a capability the app never uses. Dropping it takes ncurses
@@ -142,7 +141,7 @@ in the app on the About (`/api/app/third-party-licenses`).
 that do not, put the upstream text in `scripts/license-texts/<name>.txt` (server) or
 `frontend/scripts/license-texts/<name>.txt` (web), with leading `#` lines saying where it was taken from —
 those lines are reproduced in the notice, so a reader can tell a supplied text from a shipped one.
-`nulltype`, `victory-vendor` and the macOS framework's `openssl` are the current three. A shared library the package manager cannot name, or
+`nulltype`, `victory-vendor` and `openssl` (for the macOS framework's copy and the one compiled into cryptography) are the current three. A shared library the package manager cannot name, or
 whose package ships no copyright file, stops the build the same way — a system library carries no metadata
 of its own, so one missed here leaves no trace in the finished kit. Third-party material carried in the source tree
 rather than installed (the passphrase word list) is listed alongside the packages, its notice read from
@@ -186,8 +185,10 @@ dependably published. **The Intel kit is not attached to releases** because it h
 Intel Mac; a smoke test on the CI runner is all it gets. It stays in every tag build so a break that
 only happens on Intel shows up when it is introduced. Publishing it starts with somebody testing a build
 on Intel hardware, and that includes the lowest macOS it will start on: cryptography publishes no Intel
-wheel, so the build links Homebrew's OpenSSL (*What the kit carries besides the program*), and
-Homebrew builds its libraries for the macOS release of the machine that installed them.
+wheel, so the build compiles it from source with Homebrew's OpenSSL linked in statically, and Homebrew
+builds its libraries for the macOS release of the machine that installed them. Statically, because
+linked as shared libraries that OpenSSL carries the same file names as the one built into the Python
+framework, PyInstaller keeps one file per name, and the kit ends up with half of each.
 
 **The ad-hoc signature is load-bearing.** `_assemble_macos_app` ends with
 `codesign --force --deep --sign -`. This is not notarization and Gatekeeper still asks the user to

@@ -1,8 +1,9 @@
-# OpenSSL 3.0.16, which the python.org macOS installer builds into the Python framework rather than
-# linking from the system, ships its license as LICENSE.txt beside its source but installs no copy of it
-# into the framework, and macOS has no package manager that can be asked for one. This is that file,
-# taken verbatim from https://github.com/openssl/openssl/blob/openssl-3.0.16/LICENSE.txt; every release in
-# the OpenSSL 3 series carries the same Apache License 2.0 text.
+# OpenSSL reaches a kit in two ways, and neither carries its license: built into the Python framework by
+# the python.org macOS installer, which installs no copy of the text, and compiled into cryptography's
+# extension module, whose wheels ship cryptography's own license files alone. This is the license OpenSSL
+# ships as LICENSE.txt beside its source, taken verbatim from
+# https://github.com/openssl/openssl/blob/openssl-3.0.16/LICENSE.txt; the OpenSSL 3 and 4 series carry the
+# same Apache License 2.0 text (checked against openssl-4.0.3/LICENSE.txt).
 
 
                                  Apache License

@@ -30,9 +30,12 @@ so there that is already covered.
 **macOS has neither.** The python.org installer builds OpenSSL into the Python framework rather than
 linking the system's, no package manager on that machine installed it, and the framework's `LICENSE.txt`
 speaks for CPython alone. Those libraries are therefore credited by name from a text this repository
-supplies, the same answer as a wheel that ships none. What a Mac build collects from Homebrew — an
-extension module built from source links against it — is credited through Homebrew's keg instead, which
-plays the part a Debian package does on Linux.
+supplies, the same answer as a wheel that ships none.
+
+**A library compiled into a distribution's own extension module is a fourth source**, and the only one
+nothing collected can reveal: it arrives inside a file the distribution already accounts for, while the
+distribution's license files speak only for its own code. cryptography is the case — its wheels carry
+OpenSSL statically linked — so each such library is credited beside the distribution that carries it.
 
 **What Windows still collects from outside Python is Microsoft's own C runtime**, and it is named here
 rather than traced: PyInstaller asks for the Universal CRT and the VC14 runtime by name whatever directory
@@ -41,7 +44,6 @@ terms let an application carry these and ask for no notice in return, which is t
 `VCRUNTIME140.dll` needs none where the Python installer drops it.
 """
 
-import functools
 import os
 import re
 import shutil
@@ -162,6 +164,63 @@ _BUNDLED_FRAMEWORK_LIBRARIES = {
         version=lambda: ssl.OPENSSL_VERSION.split()[1],
     ),
 }
+
+
+class _EmbeddedLibrary(NamedTuple):
+    """A library a distribution compiles into its own extension module, credited under the version that
+    module reports. Its license text is the `scripts/license-texts/` entry named after it, and `series`
+    holds the major versions that text has been checked against: a new major series is a license to read
+    again rather than one to assume, so a version outside it stops the build."""
+
+    name: str
+    declared: str
+    source: str
+    version: Callable[[], str]
+    series: frozenset[str]
+
+
+def _cryptography_openssl_version() -> str:
+    # Imported here because only a build environment is required to have cryptography installed.
+    from cryptography.hazmat.backends.openssl import backend
+
+    # "OpenSSL 4.0.3 29 Sep 2026" is the shape of what it reports.
+    return backend.openssl_version_text().split()[1]
+
+
+# cryptography's wheels link OpenSSL statically on every platform, and the Intel Mac build, which has no
+# wheel to install, compiles it the same way (`.github/workflows/release.yml`). Its license files cover
+# cryptography alone, and no shared library is collected for that copy, so nothing else credits it.
+_EMBEDDED_LIBRARIES = {
+    "cryptography": _EmbeddedLibrary(
+        name="OpenSSL",
+        declared="Apache-2.0",
+        source="https://www.openssl.org/",
+        version=_cryptography_openssl_version,
+        series=frozenset({"3", "4"}),
+    ),
+}
+
+
+def _embedded_entry(dist_name: str) -> list[str]:
+    """The rendered entry for what a distribution compiles in, or nothing if it carries no such library."""
+    embedded = _EMBEDDED_LIBRARIES.get(canonicalize_name(dist_name))
+    if embedded is None:
+        return []
+    version = embedded.version()
+    text = supplement_text(embedded.name)
+    if version.split(".")[0] not in embedded.series or text is None:
+        raise SystemExit(
+            f"{dist_name} carries {embedded.name} {version} compiled in, and no license text checked "
+            f"against that series is supplied for it. Read that release's license, then update "
+            f"scripts/license-texts/{canonicalize_name(embedded.name)}.txt and the series this script "
+            "accepts."
+        )
+    return [
+        "", RULE, f"{embedded.name} {version} (compiled into {dist_name})",
+        f"License: {embedded.declared}",
+        f"Source: {embedded.source}",
+        "", text,
+    ]
 
 
 def _read_requirements(path: Path) -> list[Requirement]:
@@ -304,57 +363,14 @@ def _package_copyright(package: str) -> str | None:
     return None
 
 
-# What Homebrew copies into the root of a keg from the formula's source tree, narrowed to the files that
-# carry license terms (Homebrew's `Metafiles`: copying, copyright, license, licence, notice).
-_KEG_LICENSE_FILE = re.compile(r"^(copying|copyright|licen[cs]e|notice)([-._].*)?$", re.IGNORECASE)
-
-
-@functools.cache
-def _homebrew_cellar() -> Path | None:
-    """Where Homebrew installs on this machine, asked of Homebrew itself: `/usr/local/Cellar` on an Intel
-    Mac and `/opt/homebrew/Cellar` on Apple Silicon, but a prefix is the installer's choice."""
-    if not shutil.which("brew"):
-        return None
-    found = subprocess.run(["brew", "--cellar"], capture_output=True, text=True, check=False)
-    if found.returncode != 0 or not found.stdout.strip():
-        return None
-    return Path(found.stdout.strip()).resolve()
-
-
-def _homebrew_keg(path: Path, cellar: Path | None = None) -> Path | None:
-    """The Homebrew keg a collected library was installed into — `<cellar>/<formula>/<version>` — or
-    `None` for a library Homebrew did not install.
-
-    This is how an extension module built from source on the build machine arrives: pip falls back to the
-    sdist where a package publishes no wheel for the platform, and the build links whatever Homebrew
-    provides. The keg is Homebrew's equivalent of a Debian package: one formula at one version, carrying
-    the upstream license text Homebrew copied into it."""
-    cellar = cellar if cellar is not None else _homebrew_cellar()
-    if cellar is None:
-        return None
-    try:
-        formula, version = path.relative_to(cellar).parts[:2]
-    except ValueError:
-        return None
-    return cellar / formula / version
-
-
-def _keg_license(keg: Path) -> str | None:
-    """The license text Homebrew installed at the root of a keg, or `None` if the formula's source carried
-    none Homebrew recognized."""
-    files = sorted(f for f in keg.iterdir() if f.is_file() and _KEG_LICENSE_FILE.match(f.name))
-    texts = [f.read_text(encoding="utf-8", errors="replace").strip() for f in files]
-    return "\n\n".join(texts) if texts else None
-
-
 def _bundled_component(path: Path, platform: str = sys.platform) -> str | None:
     """Which bundled component a collected library belongs to, or `None` if nothing here speaks for it.
 
     macOS only, and only for a library that came out of the Python installation itself: on Linux a library
     inside the installation is traced to the package that installed it, and on Windows the whole prefix
     already counts as Python. Restricted to that prefix rather than matched on the file name alone, so a
-    copy of OpenSSL from somewhere else on the machine is credited by whatever installed it, or stops the
-    build, rather than being credited to a provenance it does not have."""
+    copy of OpenSSL from somewhere else on the machine — a Homebrew one, say — stops the build instead of
+    being credited to a provenance it does not have."""
     if platform != "darwin":
         return None
     installation = os.path.normcase(str(Path(sys.base_prefix).resolve()))
@@ -376,17 +392,12 @@ def native_library_notices(binaries) -> str:
     if not libraries:
         return ""
     by_package: dict[str, list[Path]] = {}
-    by_keg: dict[Path, list[Path]] = {}
     by_component: dict[str, list[Path]] = {}
     unattributed = []
     for path in libraries:
         package = _owning_package(path)
         if package is not None:
             by_package.setdefault(package, []).append(path)
-            continue
-        keg = _homebrew_keg(path)
-        if keg is not None:
-            by_keg.setdefault(keg, []).append(path)
             continue
         component = _bundled_component(path)
         if component is None:
@@ -401,17 +412,6 @@ def native_library_notices(binaries) -> str:
             unattributed += [str(p) for p in by_package[package]]
             continue
         entries.append((package, [], by_package[package], text))
-    for keg in sorted(by_keg):
-        text = _keg_license(keg)
-        if text is None:
-            unattributed += [str(p) for p in by_keg[keg]]
-            continue
-        entries.append((
-            f"{keg.parent.name} {keg.name}",
-            [f"Source: https://formulae.brew.sh/formula/{keg.parent.name}"],
-            by_keg[keg],
-            text,
-        ))
     for component in sorted(by_component):
         bundled = _BUNDLED_FRAMEWORK_LIBRARIES[component]
         text = supplement_text(component)
@@ -503,6 +503,7 @@ def server_notices(requirements: Path = REQUIREMENTS) -> str:
         out.append(f"Source: {_source(dist)}")
         for entry_name, text in texts:
             out += ["", *([f"[{entry_name}]"] if len(texts) > 1 else []), text]
+        out += _embedded_entry(name)
     if missing:
         raise SystemExit(
             "These packages ship no license text: " + ", ".join(missing) + ". Add the upstream text as "
