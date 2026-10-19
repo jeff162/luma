@@ -1,0 +1,1 @@
+Correction: the Python version did not change; builds and the main CI jobs stay on 3.12 (one CI job also tests 3.14).
