@@ -68,45 +68,40 @@ MINIMUM_MACOS = "11.0"
 # file to find out.
 READ_ME_PORTABLE = """Luma - portable build
 
-Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
+Run the `luma` executable. It starts the application, prints its address, and opens a browser.
 Press Ctrl+C in the terminal window to stop it.
 
-Data lives in this folder, in luma-data.db and luma-control.db and the documents folder, and stays here when the application is
-closed. Moving or copying this whole folder moves the data with it.
+Data lives in this folder, in luma-data.db and luma-control.db and the documents folder, and stays here when the application is closed. Moving or copying this whole folder moves the data with it.
 
-No configuration is needed. To change a setting such as the port (8010 unless changed), copy
-env_example.txt to a file named .env in this folder and edit it. Administration -> Startup configuration
-shows every effective value and where it came from.
+Configuration is not required. To change a setting such as the port (8010 unless changed), make a copy of env_example.txt as .env and make the desired changes. Administration -> Startup configuration shows the current source of the available settings.
 
 Options:
   --no-browser    start without opening a browser, just print the address
 
 This build is unsigned, so the operating system may warn about it the first time it runs.
 
-Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one. The
-other software included in this build, and the license of each, is listed in THIRD-PARTY-LICENSES.txt.
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file. Other software included in this build and their licenses is listed in THIRD-PARTY-LICENSES.txt.
 """
 
 READ_ME_INSTALLED = """Luma - installed build
 
-Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
+Run the `luma` executable. It starts the application, prints its address, and opens a browser.
 Press Ctrl+C in the terminal window to stop it.
 
-Data lives in the per-user application data directory for this operating system, not in this folder, so
-it survives replacing or moving the application. Administration -> Startup configuration reports the
-exact location in use. Setting DATA_DIR overrides it.
+Data lives in the per-user application data directory, not in the folder with the application. Administration -> Startup configuration reports the
+exact location in use. DATA_DIR in an .env file can be used to specify a different location.
 
-No configuration is needed. To change a setting such as the port (8010 unless changed), copy
-env_example.txt to a file named .env in that same per-user directory and edit it. Administration ->
-Startup configuration shows the exact path, every effective value, and where each came from.
+Configuration is not required. To change a setting make a copy of env_example.txt as .env and make the desired changes. Administration -> Startup configuration shows current source of the various settings.
 
 Options:
   --no-browser    start without opening a browser, and just print the address
 
-This build is unsigned, so the operating system will warn about it the first time it runs.
+This build is unsigned, so the operating system will warn about it the first time it runs. On macOS, 
+ xattr -dr com.apple.quarantine /Applications/{DEFAULT_APP_NAME}.app
+can be used to clear the quarantine flag before the first launch. This can also be done after running the application in the system menu.
 
-Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one. The
-other software included in this build, and the license of each, is listed in THIRD-PARTY-LICENSES.txt.
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file. The
+other software included in this build, and their license, is listed in THIRD-PARTY-LICENSES.txt.
 """
 
 # Gatekeeper is the reason this one is long. The gesture most people know for opening an unsigned
@@ -116,8 +111,7 @@ READ_ME_MACOS = f"""{DEFAULT_APP_NAME} - macOS
 
 To install, drag {DEFAULT_APP_NAME} to the Applications folder.
 
-This build is unsigned and has not been notarized, so macOS refuses it on first launch. Opening it from
-the Finder context menu no longer works around that on macOS 15 and later. What does:
+This build is unsigned and has not been notarized, so macOS refuses it on first launch. To resolve this:
 
   1. Double-click {DEFAULT_APP_NAME}, and dismiss the warning that appears.
   2. Open System Settings -> Privacy & Security and scroll down to Security.
