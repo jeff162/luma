@@ -158,7 +158,9 @@ Luma for a single machine is distributed as a self-contained download. The curre
 | Linux (x86-64)             | `luma-<version>-linux-x64.tar.gz`   | Portable             |
 | Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.tar.gz` | Portable             |
 | macOS (Apple Silicon)      | `luma-<version>-macos-arm64.dmg`    | Drag to Applications |
-| macOS (Intel)              | `luma-<version>-macos-x64.dmg`      | Drag to Applications |
+| macOS (Intel)              | Not published — untested            | Drag to Applications |
+
+**macOS (Intel) is built but not published**, because it has not been tested on an Intel Mac. A tagged release's build of it is downloadable from that run of the [Release workflow](https://github.com/jeff162/luma/actions/workflows/release.yml) (a GitHub sign-in is needed, and the files expire after 90 days), and a fresh one can be built by running the workflow with the `macos-15-intel` platform.
 
 **The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run. 
 

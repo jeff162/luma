@@ -28,7 +28,9 @@
 # macOS builds both architectures. `macos-13`, the last Intel image under that name, was retired in
 # December 2025; `macos-15-intel` replaces it and is the last x86_64 image GitHub plans to offer, until
 # roughly August 2027. Two images rather than one universal2 binary, because universal2 would need
-# universal2 wheels for `cryptography` and `pydantic-core` and those are not dependably published.
+# universal2 wheels for `cryptography` and `pydantic-core` and those are not dependably published. The
+# Intel kit is built on every tag but not attached to releases, since nobody has tested it on an Intel
+# Mac (`docs/releasing.md` → *macOS specifics*).
 #
 # A manual run can build a single platform instead of all five, which is for testing an artifact on a
 # machine that is in front of somebody — the Intel Mac above all, which is otherwise only ever built

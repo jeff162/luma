@@ -234,6 +234,36 @@ def test_a_bundled_library_carries_the_license_text_supplied_for_it():
     assert "Apache License" in text
 
 
+def test_a_library_homebrew_installed_is_credited_to_its_keg(tmp_path):
+    """Asserted from any platform, like the rules above. Where a package publishes no wheel for the
+    platform, pip builds it from source against Homebrew's libraries — cryptography on an Intel Mac links
+    Homebrew's OpenSSL — and the keg, one formula at one version, carries the upstream license text
+    Homebrew copied out of the formula's source. A keg without one stops the build like any other library
+    nothing speaks for."""
+    cellar = tmp_path / "Cellar"
+    keg = cellar / "openssl@3" / "3.6.3"
+    (keg / "lib" / "ossl-modules").mkdir(parents=True)
+    (keg / "LICENSE.txt").write_text("Apache License\nVersion 2.0, January 2004\n")
+    (keg / "README.md").write_text("OpenSSL\n")
+    collected = [
+        ("libcrypto.3.dylib", str(keg / "lib" / "libcrypto.3.dylib"), "BINARY"),
+        ("legacy.dylib", str(keg / "lib" / "ossl-modules" / "legacy.dylib"), "BINARY"),
+    ]
+    with mock.patch.object(notices, "_owning_package", return_value=None), \
+         mock.patch.object(notices, "_homebrew_cellar", return_value=cellar.resolve()):
+        text = notices.native_library_notices(collected)
+        assert "openssl@3 3.6.3" in text
+        assert "Provides: legacy.dylib, libcrypto.3.dylib" in text
+        assert "Apache License" in text
+        assert "OpenSSL\n" not in text
+        (keg / "LICENSE.txt").unlink()
+        with pytest.raises(SystemExit) as refusal:
+            notices.native_library_notices(collected)
+    assert "libcrypto.3.dylib" in str(refusal.value)
+    # A library outside the cellar is not Homebrew's to speak for.
+    assert notices._homebrew_keg(Path("/usr/lib/libz.1.dylib"), cellar.resolve()) is None
+
+
 def test_a_build_with_no_collected_libraries_says_nothing():
     """Windows takes its libraries from a Python whose own license file lists them, so a build there
     leaves this section out entirely."""
