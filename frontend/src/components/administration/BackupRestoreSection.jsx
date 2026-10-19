@@ -920,7 +920,7 @@ export default function BackupRestoreSection() {
               Reload the page to continue.
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button small onClick={() => window.location.reload()}>
+              <Button small onClick={() => window.location.assign('/')}>
                 Reload now
               </Button>
             </div>

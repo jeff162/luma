@@ -44,6 +44,18 @@ def clear_preferences(scope_id: str) -> None:
         conn.execute("DELETE FROM ui_preference WHERE scope_id = ?", (scope_id,))
 
 
+# The page each person last had open, which the shell returns them to when they next sign in. The key is the
+# frontend's (`STARTUP_ROUTE_PREFERENCE_KEY` in `App.jsx`).
+STARTUP_ROUTE_PREF_KEY = "ui.startupRoute"
+
+
+def forget_startup_routes() -> None:
+    """Everyone's next sign-in lands on the dashboard. A restore calls this: the page it remembered for the
+    person restoring is the restore page, and the one a backup carries is from when it was taken."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM ui_preference WHERE pref_key = ?", (STARTUP_ROUTE_PREF_KEY,))
+
+
 # ---------------------------------------------------------------------------
 # Ledger-level settings
 # ---------------------------------------------------------------------------

@@ -88,6 +88,7 @@ from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
 from backend.services import accounts_backup, backup_history, crypto_service
+from backend.services.preferences import forget_startup_routes
 from backend.services.documents import (
     copy_document_file_from,
     document_file_path,
@@ -2085,6 +2086,7 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
     finally:
         _abandon_restore_if_staging()
     documents = _restore_documents(None)
+    forget_startup_routes()
     compact_if_worthwhile(reason="restored a backup")
     return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
 
@@ -2148,6 +2150,7 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         result["signed_out"] = True
         if withheld:
             result["credentials_withheld"] = withheld
+    forget_startup_routes()
     result["restored_at"] = utcnow_iso()
     return result
 

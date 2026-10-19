@@ -2201,6 +2201,10 @@ shared state: the category workspace draft (`system_category_workspace_draft`), 
 (`system_dashboard_tag_reports`) and the ledger currency. Which report a user has open
 (`ui.dashboard.spendingViewBy`) is per user.
 
+A restore clears everyone's remembered page (`ui.startupRoute`), so each person's next sign-in lands on
+the dashboard (`preferences.forget_startup_routes`). Otherwise the person restoring would return to the
+restore page, and everyone else to the page they had open when the backup was taken.
+
 Ledger-level settings the user chooses, such as the reimbursement reminder default and the sync-log
 retention, sit in a reserved shared scope of `ui_preference` and not in `db_meta`, which backups leave
 out.
