@@ -27,9 +27,9 @@ For the shortest local startup path, use the launcher scripts documented in
 [README.md](README.md).
 
 **Toolchain:** **Python 3.12 or newer**, and **Node.js 22.12 or newer**. The packaged downloads are
-built on 3.12, and CI runs the backend suite on 3.14 as well.
+built on 3.12, and CI runs the backend suite on 3.14.
 
-The venv belongs at `backend/venv/` — that is where the scripts in `scripts/` expect it.
+The scripts in scripts/ look for `backend/venv/`.
 
 ```bash
 # backend
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_luma.ps1   # Windows Po
 Or individually:
 
 ```bash
-# backend — from the REPO ROOT, not from backend/, since the app is imported as backend.main
+# backend — from the REPO ROOT, not from backend/
 uvicorn backend.main:app --reload --reload-dir backend --port 8011
 
 # frontend
@@ -64,24 +64,21 @@ When `npm install` reports advisories, determine whether they are build/test rel
 
 Configuration is via the `.env` file. This is only needed to change one of the defaults, many of which are useful in a development environment. env_example.txt describes the various settings.
 
-The `LUMA_ENV_FILE` environment variable is useful for building test script. This is not a `.env` file setting as it points at the `.env` file to use. This redirects the database for the **the backend
-only**. `scripts/run-e2e-backend.sh` uses this  `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly
-so they do not see this. 
+The `LUMA_ENV_FILE` environment variable is useful for building test scripts. This is not a `.env` file setting as it points at the `.env` file to use. This redirects the database for the **the backend
+only**. `scripts/run-e2e-backend.sh` uses this  `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly so they do not see this. 
 
 Shell examples and local tooling should stay WSL-friendly where practical.
 
 ### Working with an AI assistant
 
-The repo carries its own agent instructions, and they may worth pointing an assistant at explicitly
-before it starts editing. The agents do not always follow the guidelines but for the most part they help.
-
-A reasonable opening instruction:
+The repo carries instructions, and they may worth pointing an assistant at explicitly with:
 
 > Check `CLAUDE.md`, your memory, and the relevant `docs/` before diving in.
 
-**Give that instruction even though the files are meant to be automatic.** Claude Code loads
-`CLAUDE.md` into context on its own and still benefits from being told to act on it — an instruction
-that arrives as ambient background gets treated as background. Naming the files in the prompt may provide a bit of emphasis.
+It may help to reduce the number of explicit instructions which get ignored by the agent if this
+instruction is given even though it reads the files anyway. Claude claims that by explicitly telling 
+it to read `CLAUDE.md` the contents are given more weight. It is unclear why Claude feels it is ok to
+ignore the written instructions in the first place, but this does seem to help with that trouble. 
 
 - **[CLAUDE.md](CLAUDE.md)** is the one Claude Code picks up automatically. It carries the hard rule
   and a routing index into `docs/`.
