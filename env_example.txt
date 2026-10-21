@@ -1,7 +1,7 @@
 # Optional Luma configuration overrides
 #
 # The .env file is used to override the default settings. Save a copy of this file as
-# .env and edit it as needed. Changes require a restart to take effect.
+# .env before editing. Changes require a restart to take effect.
 #
 # Where .env should be stored:
 #   Portable download (Windows, Linux)   the folder holding the luma program
@@ -9,12 +9,12 @@
 #   Source checkout                      the top folder of the checkout
 #   Docker                               the folder holding docker-compose.yml
 #
-# Administration -> Startup configuration shows the exact path (whether or not the file exists yet),
-# every effective value, and where each value came from.
+# Administration -> Startup configuration shows the path where .env lives and the source
+# of the various settings.
 #
-# Not every setting applies to every installation:
-#   [all]       applies to every installation
-#   [download]  a downloaded build: the portable download or the macOS app
+# Some settings only apply to certain deployments:
+#   [all]       
+#   [download]  the portable download or the macOS app
 #   [source]    running from a source checkout with the start scripts
 #   [docker]    running with docker-compose
 #
@@ -24,8 +24,8 @@
 # ------------------------------------------------------------------------------
 
 # DATA_DIR [all]
-# The folder holding both databases (luma-data.db, luma-control.db) and the documents folder. Pointing a
-# second copy of Luma at a different folder is how two installations share one machine.
+# Folder holding the databases (luma-data.db, luma-control.db) and the documents folder.
+# Mostly useful for development environments (test v prod copies with the same build).
 # Default:
 #   Portable download   the folder holding the luma program (a relative path is taken from there too)
 #   macOS app           ~/Library/Application Support/Luma
@@ -37,38 +37,38 @@
 # 2. Ports
 # ------------------------------------------------------------------------------
 #
-# The browser always connects to the frontend port. A downloaded build is one program on that one port,
-# and so is the application under Docker, where it is the port the proxy beside it passes requests to.
+# The browser always connects to the frontend port.
 # Running from source adds a separate frontend server, which passes API requests on to the backend port
 # behind it.
 
 # FRONTEND_PORT [all]
 # The port the browser connects to. If it is busy, a downloaded build starts on a free port and reports
-# which: in the terminal, or in luma-desktop.log beside the data for the macOS app. The start scripts
-# refuse to start instead, naming the busy port, and so does a downloaded build in server mode or the
-# application under Docker.
+# the port it choose. The startup scripts (for working with source), server deployment and the Docker
+# configuration refuse to start if the port is busy.
 # Default: 8010
 # FRONTEND_PORT=8010
 
 # BACKEND_HOST [source]
-# Address the backend listens on. This computer only by default. 0.0.0.0 makes it reachable from other
-# devices on the network, where it serves the built interface as well, over plain HTTP: from another
-# device there are no passkeys, and a data source can only be connected from this computer.
+# Address the backend listens on. By default this 127.0.0.1 which makes it only accessible from the
+# local host as the frontend is the only connection. 0.0.0.0 makes it reachable from other
+# devices on the network, where it serves the interface in dist/ from 'npm run build' as well, plain HTTP.
+# Generally this is not set.
 # Default: 127.0.0.1
-# BACKEND_HOST=0.0.0.0
+# BACKEND_HOST=127.0.0.1
 
 # BACKEND_PORT [source]
-# The port the backend listens on behind the frontend server. A downloaded build does not use it.
+# The port the backend listens on behind the frontend server. Only used when building from source.
 # Default: 8011
 # BACKEND_PORT=8011
 
 # FRONTEND_HOST [download] [source]
 # Address the browser connects to: the development frontend from source, and a downloaded build in
-# server mode. This computer only by default. 0.0.0.0 makes it reachable from other devices on the
-# network over plain HTTP, with the limits described under BACKEND_HOST; a downloaded build in server
+# server mode. This computer only (localhost) by default. 0.0.0.0 makes it reachable from other devices on
+# the network over plain HTTP, with the limits described under BACKEND_HOST; a downloaded build in server
 # mode is otherwise meant to sit behind a reverse proxy that provides HTTPS. Outside server mode a
-# downloaded build always accepts connections from this computer only. Default: localhost
-# FRONTEND_HOST=0.0.0.0
+# downloaded build always accepts connections from this computer only. 
+# Default: localhost
+# FRONTEND_HOST=localhost
 
 # ------------------------------------------------------------------------------
 # 3. Sessions and deployment
@@ -93,9 +93,9 @@
 # SERVER_MODE=true
 
 # MDNS_NAME [download] [docker]
-# The name a server-mode installation answers to on the local network, without the .local ending, so
-# other devices reach it at <name>.local. A reverse proxy in front has to be configured with the same
-# name. Two installations on one network need different names: one already in use refuses to start.
+# The name a server-mode installation advertises on the local network, so it can be reached at <name>.local.
+#A reverse proxy in front has to be configured with the same name. Two installations on one network need 
+# different names: one already in use refuses to start.
 # Default: luma
 # MDNS_NAME=luma
 
@@ -137,7 +137,7 @@
 # Where the development frontend sends API requests. Derived from BACKEND_PORT when unset.
 # VITE_API_PROXY_TARGET=http://localhost:8011
 
-# LUMA_ENV_FILE [source] cannot be set in this file, because it chooses which file is read. Set in the
-# environment before starting the backend, it points the backend (only) at a different override file;
+# LUMA_ENV_FILE [source] cannot be set in this file, because it chooses which file is read. Set this in 
+# the environment before starting the backend, it points the backend (only) at a different override file;
 # the start scripts and the development frontend still read this one for their ports. The browser test
 # harness uses it to run against throwaway databases.
