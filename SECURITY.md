@@ -29,7 +29,7 @@ branches, and no backports to earlier tags.
 - Anything that exposes **vault-protected credentials**: the envelope encryption, the per-user key
   slots, the key-replacement path, or a route that returns a stored provider credential.
 - **Authentication or session flaws** when the sign-in perimeter is enabled — bypass, fixation,
-  privilege escalation between identities, or admin-gated settings reachable without admin.
+  privilege escalation between identities, or admin-gated settings reachable without admin rights.
 - **Injection of any kind** — SQL injection, stored or reflected XSS, template injection, path traversal
   in the import, backup, or restore paths.
 - **Weaknesses in backup encryption**, or a backup that carries more than it should.
@@ -45,7 +45,7 @@ oversights, and reports about them will be closed with a pointer here:
   form. If the database files and any unencrypted backup are considered sensitive artifacts
   is the operator's responsibility to protect them — keep them off shared and cloud-synced locations.
   Encrypted backup is available to assist with this.
-- **The sign-in password is network-access control, not disk encryption.** It governs who can reach a
+- **The sign-in password is network-access control, nothing else.** It governs who can reach a
   running instance. It does not encrypt the database and does not protect files copied off the disk.
 - **A local user with filesystem access can read the ledger.** There is no defense against an attacker
   who already has the account the app runs under.
