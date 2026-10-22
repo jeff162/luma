@@ -50,6 +50,7 @@ import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal, MatchingTransactionsReport } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
 import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
+import { useStableOrder } from '../lib/useStableOrder.js'
 import TransactionDetail from './TransactionDetail.jsx'
 import { localStore, sessionStore } from '../lib/browserStorage.js'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
@@ -102,6 +103,8 @@ function bulkLinkButtonStyle(disabled) {
 // A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
 // saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
 // card labels its editor for that and routes the save through the refinement endpoint.
+const merchantGroupKey = group => group.key
+
 function isRefinedPendingSuggestion(suggestion) {
   return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'
 }
@@ -161,7 +164,6 @@ export default function ImportRuleSuggestionReview({
   const listTopRef = useRef(null)
   const stickyPanelRef = useRef(null)
   const pendingBulkAnchorRef = useRef(null)
-  const merchantGroupOrderRef = useRef({ signature: '', keys: [] })
   const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
   const [editingKeywordDraft, setEditingKeywordDraft] = useState('')
   const [openConflictGroupId, setOpenConflictGroupId] = useState(null)
@@ -407,6 +409,46 @@ export default function ImportRuleSuggestionReview({
     for (const suggestion of byId.values()) ordered.push(suggestion)
     return ordered
   }, [filteredSuggestions, displayOrderIds])
+  // Merchant groups of the visible suggestions, keyed by the backend's `review_group_id`.
+  const merchantGroups = useMemo(() => {
+    const groups = []
+    const groupByMerchant = new Map()
+    for (const suggestion of visibleSuggestions) {
+      const key = suggestion.review_group_id
+      let group = groupByMerchant.get(key)
+      if (!group) {
+        group = { key, members: [] }
+        groupByMerchant.set(key, group)
+        groups.push(group)
+      }
+      group.members.push(suggestion)
+    }
+    return groups
+  }, [visibleSuggestions])
+  const compareMerchantGroups = useCallback((a, b) => {
+    if (sortOrder === 'row_count') {
+      const aRows = a.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
+      const bRows = b.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
+      if (aRows !== bRows) return bRows - aRows
+    }
+    const aLabel = getRuleSuggestionMerchantGroupLabel(a.members[0])
+    const bLabel = getRuleSuggestionMerchantGroupLabel(b.members[0])
+    return String(aLabel).localeCompare(String(bLabel), undefined, { sensitivity: 'base' })
+  }, [sortOrder])
+  // Group order comes from the visible row counts, then holds while the same merchant set is on screen so
+  // resolving one card doesn't shove its siblings away. A change to that set re-sorts.
+  const orderedMerchantGroups = useStableOrder(merchantGroups, {
+    getId: merchantGroupKey,
+    compare: compareMerchantGroups,
+    resetKey: [
+      sortOrder,
+      reviewFilter,
+      normalizedMerchantFilter,
+      selectedOwnerIds.map(String).slice().sort().join(','),
+      lookbackYears,
+      merchantGroups.map(merchantGroupKey).slice().sort().join('\n'),
+    ].join('|'),
+  })
   const visibleConflictContext = useMemo(
     () => getConflictContext(visibleSuggestions),
     [visibleSuggestions],
@@ -2786,55 +2828,9 @@ export default function ImportRuleSuggestionReview({
             // reads together. The group identity is the backend's `review_group_id` — the displayed
             // merchant, not the exact keyword: a refined selection such as "merchant contains X renewal"
             // is still part of merchant X's neighborhood. In pending/conflicts/older views, a conflict
-            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards. Establish group order from
-            // the visible row counts, then keep that order stable while the same merchant set remains on
-            // screen so resolving one card doesn't shove its siblings away.
+            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards.
             const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
-            const groups = []
-            const groupByMerchant = new Map()
-            for (const suggestion of visibleSuggestions) {
-              const key = suggestion.review_group_id
-              let group = groupByMerchant.get(key)
-              if (!group) {
-                group = { key, members: [] }
-                groupByMerchant.set(key, group)
-                groups.push(group)
-              }
-              group.members.push(suggestion)
-            }
-            function compareGroups(a, b) {
-              if (sortOrder === 'row_count') {
-                const aRows = a.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
-                const bRows = b.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
-                if (aRows !== bRows) return bRows - aRows
-              }
-              const aLabel = getRuleSuggestionMerchantGroupLabel(a.members[0])
-              const bLabel = getRuleSuggestionMerchantGroupLabel(b.members[0])
-              return String(aLabel).localeCompare(String(bLabel), undefined, { sensitivity: 'base' })
-            }
-            const groupKeySet = groups.map(group => group.key).slice().sort().join('\n')
-            const groupContextSignature = [
-              sortOrder,
-              reviewFilter,
-              normalizedMerchantFilter,
-              selectedOwnerIds.map(String).slice().sort().join(','),
-              lookbackYears,
-              groupKeySet,
-            ].join('|')
-            let orderedGroups
-            if (merchantGroupOrderRef.current.signature === groupContextSignature) {
-              const byKey = new Map(groups.map(group => [group.key, group]))
-              orderedGroups = merchantGroupOrderRef.current.keys
-                .map(key => byKey.get(key))
-                .filter(Boolean)
-            } else {
-              orderedGroups = [...groups].sort(compareGroups)
-              merchantGroupOrderRef.current = {
-                signature: groupContextSignature,
-                keys: orderedGroups.map(group => group.key),
-              }
-            }
-            return orderedGroups.map(group => renderMerchantGroup(group, useConflictCards))
+            return orderedMerchantGroups.map(group => renderMerchantGroup(group, useConflictCards))
           })()}
         </div>
       )}

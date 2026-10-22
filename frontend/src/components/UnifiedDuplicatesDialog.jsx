@@ -31,7 +31,7 @@
 //   shared pattern across tables, the right move is to extend PillGridTable's header to accept
 //   custom node labels and migrate this dialog at the same time as the others.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -49,6 +49,7 @@ import {
 import { isMatchedElsewhere, isMatchedTransfer, kindMeta, kindRank } from '../lib/duplicateKinds.js'
 import { UndoToast } from './CategoryTreePrimitives.jsx'
 import { summarizeBulkOutcome } from '../lib/bulkRequestOutcome.js'
+import { useStableOrder } from '../lib/useStableOrder.js'
 import { AccountIdentityPrompt } from './importExport/AccountIdentityPrompt.jsx'
 import { notifyAccountsChanged } from '../App.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
@@ -133,7 +134,10 @@ function formatAmount(value) {
 // Pure per-entry helpers (like reviewKindOf above) — they read only their `entry` argument and module-level
 // constants, no props/state, so they live at module scope: stable identities that don't need to be listed
 // as hook dependencies where the selection summary and sort/render use them.
-const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
+//
+// An entry is named by its incoming row rather than its kind, because resolving a row changes its kind (a
+// restored duplicate turns back into a review item) and it must stay the same row in the list's order.
+const entryId = (entry) => (entry.incoming?.txn_id ? `txn:${entry.incoming.txn_id}` : `row:${entry.incoming?.row_number ?? ''}`)
 
 // Every side of an entry is summarized as "date · merchant · amount" — which is exactly the projection
 // that hides *why* the pair matched, since the rules compare captured source text and two rows can match
@@ -328,12 +332,13 @@ export default function UnifiedDuplicatesDialog({
 
   const settledKindTotal = SETTLED_KIND_PILLS.reduce((sum, k) => sum + (reviewKindBreakdown[k.key] || 0), 0)
 
-  const visibleEntries = useMemo(() => {
-    const filtered = activeKindFilter
-      ? scopedEntries.filter(e => matchesKindFilter(e, activeKindFilter))
-      : activeRuleFilter
-        ? scopedEntries.filter(e => (e.rule_key || '') === activeRuleFilter)
-        : scopedEntries
+  const matchesActiveFilter = useCallback((entry) => (
+    activeKindFilter ? matchesKindFilter(entry, activeKindFilter)
+      : activeRuleFilter ? (entry.rule_key || '') === activeRuleFilter
+        : true
+  ), [activeKindFilter, activeRuleFilter])
+
+  const compareEntries = useMemo(() => {
     const dir = sortState.dir === 'asc' ? 1 : -1
     const getKey = (entry) => {
       switch (sortState.key) {
@@ -346,7 +351,7 @@ export default function UnifiedDuplicatesDialog({
         default:         return ''
       }
     }
-    return [...filtered].sort((a, b) => {
+    return (a, b) => {
       const av = getKey(a); const bv = getKey(b)
       if (av < bv) return -1 * dir
       if (av > bv) return 1 * dir
@@ -360,8 +365,17 @@ export default function UnifiedDuplicatesDialog({
         if (ar > br) return 1
       }
       return 0
-    })
-  }, [scopedEntries, activeRuleFilter, activeKindFilter, sortState])
+    }
+  }, [sortState])
+
+  // Resolving a row changes its Kind, which is the default sort, so a re-sort after the reload would
+  // carry it to the top of the list. The order holds until the user picks a sort, a filter or a scope.
+  const visibleEntries = useStableOrder(scopedEntries, {
+    getId: entryId,
+    compare: compareEntries,
+    include: matchesActiveFilter,
+    resetKey: [batchId, accountFilter?.id || '', activeKindFilter || '', activeRuleFilter || '', sortState.key, sortState.dir].join('|'),
+  })
 
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 

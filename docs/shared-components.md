@@ -42,6 +42,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | `PillGridTable` / `PillTableHeader` | A table with sortable, reorderable or resizable columns. | `components/PillGridTable.jsx`, `components/PillTableHeader.jsx` |
 | `useColumnPreference` | Remembering column order and widths. | `lib/useColumnPreference.js` |
+| `useStableOrder` | A sorted list whose rows the user acts on, so a reload doesn't move the row they just clicked. | `lib/useStableOrder.js` |
 | `WindowedRows` | A long list. Heights are measured per item, so section headers can be interleaved with rows. | `components/WindowedRows.jsx` |
 | `MatchReport` | A report table that sets each record beside the record it matched. | `components/importExport/MatchReport.jsx` |
 

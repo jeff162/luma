@@ -114,6 +114,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Long lists are windowed** with `WindowedRows`. Column widths must come from the shared grid template
   rather than from browser table auto-sizing, or the columns jump while scrolling. Sort and selection
   stay driven from the full list, never the mounted rows.
+- **Acting on a row doesn't reorder the list.** An action often changes what a row sorts by, and a
+  re-sort after the reload moves the next row under the cursor. `useStableOrder` keeps the order until
+  the user picks a new sort, filter or scope.
 - **A paged list sorts on the server.** A client-side sort over a partly loaded list orders only the rows
   that happen to be loaded. `usePagedTransactions` owns paging and sort for transaction lists; a one-shot
   capped fetch silently drops rows.
