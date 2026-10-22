@@ -28,6 +28,7 @@ vi.mock('../../lib/api.js', () => ({
     getReimbursement: vi.fn(),
     getOutstandingReimbursements: vi.fn(),
     updateReimbursement: vi.fn(),
+    createReimbursement: vi.fn(),
     addReimbursementClaims: vi.fn(),
     removeReimbursementTransaction: vi.fn(),
     uncompleteReimbursement: vi.fn(),
@@ -470,5 +471,89 @@ describe('completing from a host with no category list', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(await screen.findByRole('button', { name: /Choose category/ })).toBeTruthy()
     expect(api.getCategories).not.toHaveBeenCalled()
+  })
+})
+
+
+/*
+ * An untracked expense opened from the report: the same editor, with nothing written until Save. Save
+ * creates the record with its name and reminder in one request; linking acts at once, as it does on a
+ * record, so it creates the record holding both rows.
+ */
+describe('a draft from an untracked expense', () => {
+  const LOOSE = {
+    txn_id: 't9', date: '2026-08-14', amount: 120, payee: 'Hardware Store', account_name: 'Everyday',
+    receivable: 120, unclaimed: 120, parts: [],
+  }
+  const PAYMENT = {
+    txn_id: 'r9', date: '2026-09-01', amount: -100, payee: 'From Sam', account_name: 'Everyday',
+    receivable: -100, unclaimed: -100, parts: [],
+  }
+
+  function openDraft({ onClose = () => {} } = {}) {
+    return render(
+      <StrictMode>
+        <ReimbursementEditorDialog
+          untrackedRow={LOOSE}
+          txnId="t9"
+          categories={CATEGORIES}
+          onClose={onClose}
+          onSaved={() => {}}
+        />
+      </StrictMode>,
+    )
+  }
+
+  it('closes without writing anything', async () => {
+    const onClose = vi.fn()
+    openDraft({ onClose })
+    expect(await screen.findByText('Hardware Store')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalled()
+    expect(api.createReimbursement).not.toHaveBeenCalled()
+    expect(api.getReimbursement).not.toHaveBeenCalled()
+  })
+
+  it('offers neither completing nor unlinking, which need a record', async () => {
+    openDraft()
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Mark complete' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Stop tracking/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Remove this transaction/ })).toBeNull()
+  })
+
+  it('creates the record with its name and reminder on Save', async () => {
+    api.createReimbursement.mockResolvedValue(record({ id: 'link-9' }))
+    openDraft()
+    await userEvent.type(await screen.findByLabelText('Name'), 'Work')
+    await userEvent.selectOptions(screen.getByLabelText('Reminder'), 'off')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.createReimbursement).toHaveBeenCalledWith({
+      claims: [{ txn_id: 't9', amount: 120, label: null }],
+      counterparty: 'Work',
+      remind_on: null,
+      clear_reminder: true,
+    }))
+    expect(api.updateReimbursement).not.toHaveBeenCalled()
+  })
+
+  it('creates the record holding both rows when another is linked, without offering itself', async () => {
+    api.getOutstandingReimbursements.mockResolvedValue({
+      total: 20, reimbursements: [], loose: [LOOSE, PAYMENT], reminder_days: 30,
+    })
+    api.createReimbursement.mockResolvedValue(record({ id: 'link-9' }))
+    openDraft()
+    await userEvent.click(await screen.findByRole('button', { name: /Link another transaction/ }))
+    expect(await screen.findByText(/From Sam/)).toBeTruthy()
+    expect(screen.getAllByText(/Hardware Store/)).toHaveLength(1)
+    await userEvent.click(screen.getByRole('button', { name: /This transaction/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Add to this reimbursement/ }))
+    await waitFor(() => expect(api.createReimbursement).toHaveBeenCalledWith({
+      claims: [
+        { txn_id: 't9', amount: 120, label: null },
+        { txn_id: 'r9', amount: -100, label: null },
+      ],
+    }))
+    expect(api.addReimbursementClaims).not.toHaveBeenCalled()
   })
 })

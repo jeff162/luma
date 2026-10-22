@@ -15,6 +15,7 @@ import {
   claimRemainder,
   completeExplanation,
   completionTargets,
+  draftReimbursement,
   hasRepayment,
   movableClaims,
   needsTargetChoice,
@@ -79,8 +80,17 @@ import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
  * Fields are explicit-submit; linking, settling and unlinking act at once, each behind its own confirm
  * or its own button. The form is seeded once and deliberately not reset from a reload, so refetching
  * after a link cannot discard a counterparty the user had already typed.
+ *
+ * **An untracked expense opens here too, as a draft** (`untrackedRow` in place of `linkId`), so the
+ * reimbursements report opens the same editor whichever row is clicked. Nothing is written until Save,
+ * which creates the record with its name and reminder in one request; closing leaves the row as it was.
+ * Linking another transaction still acts at once, so in a draft it creates the record holding both, and
+ * the dialog carries on as the editor of that record. Completing and unlinking need a record, so a draft
+ * does not offer them; nor does it offer moving a portion off another record, which needs one to move to.
  */
-export default function ReimbursementEditorDialog({ linkId, txnId, categories, onAddCategory, onClose, onSaved }) {
+export default function ReimbursementEditorDialog({
+  linkId, untrackedRow = null, txnId, categories, onAddCategory, onClose, onSaved,
+}) {
   const [reimbursement, setReimbursement] = useState(null)
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState(null)
@@ -108,6 +118,12 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   const [addedCategories, setAddedCategories] = useState([])
 
   useEffect(() => {
+    if (untrackedRow) {
+      setReimbursement(draftReimbursement(untrackedRow))
+      setForm(current => current || { counterparty: '', reminderMode: FOLLOWING_DEFAULT, remindOn: '' })
+      setLoading(false)
+      return undefined
+    }
     let cancelled = false
     setLoading(true)
     api.getReimbursement(linkId)
@@ -127,7 +143,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
       .catch(err => { if (!cancelled) setError(err?.message || 'This reimbursement could not be loaded.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [linkId])
+  }, [linkId, untrackedRow])
 
   const hostHasCategories = Array.isArray(categories) && categories.length > 0
   useEffect(() => {
@@ -160,12 +176,14 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   }, [])
 
   const members = reimbursement?.members || []
+  // Still a draft until something writes it; Save or a link replaces it with the record the server returns.
+  const isDraft = !!reimbursement && !reimbursement.id
   const status = reimbursementStatus(reimbursement)
   const targets = completionTargets(reimbursement)
   // Repaid in full needs no category and no target — the button is the whole interaction.
   const nothingToMove = status === 'square'
   const completeIsPrimary = primaryAction(reimbursement) === 'complete'
-  const completeAvailable = !!reimbursement && status !== 'completed' && status !== 'none'
+  const completeAvailable = !!reimbursement && !isDraft && status !== 'completed' && status !== 'none'
   // Completing something nothing has been repaid against is a real outcome — the write-off — so it is
   // reachable rather than blocked. What keeps it from being an accidental click is that it is never the
   // accented button and it cannot happen without choosing a category for the money first.
@@ -192,18 +210,31 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
     if (!next) onClose?.()
   }
 
+  // The draft's own claim: the row's whole unclaimed amount, as `draftReimbursement` shows it.
+  function draftClaim() {
+    return { txn_id: untrackedRow.txn_id, amount: untrackedRow.unclaimed, label: null }
+  }
+
   async function saveFields() {
     setSaving(true)
     setError('')
     try {
-      const updated = await api.updateReimbursement(reimbursement.id, {
-        counterparty: form.counterparty,
-        // Three fields rather than one nullable date: a record can carry its own date, be switched off,
-        // or go back to following the household default, and "off" must not read as "unset".
-        remind_on: form.reminderMode === 'date' ? form.remindOn : null,
-        clear_reminder: form.reminderMode === REMINDER_OFF,
-        follow_default_reminder: form.reminderMode === FOLLOWING_DEFAULT,
-      })
+      const updated = isDraft
+        // A new record follows the default unless told otherwise, so create takes no third field.
+        ? await api.createReimbursement({
+          claims: [draftClaim()],
+          counterparty: form.counterparty,
+          remind_on: form.reminderMode === 'date' ? form.remindOn : null,
+          clear_reminder: form.reminderMode === REMINDER_OFF,
+        })
+        : await api.updateReimbursement(reimbursement.id, {
+          counterparty: form.counterparty,
+          // Three fields rather than one nullable date: a record can carry its own date, be switched
+          // off, or go back to following the household default, and "off" must not read as "unset".
+          remind_on: form.reminderMode === 'date' ? form.remindOn : null,
+          clear_reminder: form.reminderMode === REMINDER_OFF,
+          follow_default_reminder: form.reminderMode === FOLLOWING_DEFAULT,
+        })
       setReimbursement(updated)
       onSaved?.(updated)
       onClose?.()
@@ -217,8 +248,9 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
     setError('')
     try {
       const report = await api.getOutstandingReimbursements()
-      setLoose(report.loose || [])
-      setMovable(movableClaims(report, reimbursement.id))
+      // A draft's own row is still loose on the server, so it would otherwise be offered to itself.
+      setLoose((report.loose || []).filter(row => !isDraft || row.txn_id !== untrackedRow.txn_id))
+      setMovable(isDraft ? [] : movableClaims(report, reimbursement.id))
       setLinkOpen(true)
     } catch (err) {
       setError(err?.message || 'The unlinked receivables could not be loaded.')
@@ -249,10 +281,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   async function linkPortion(row, portion) {
     setLinkOpen(false)
     setError('')
+    const claim = { txn_id: row.txn_id, amount: portion.amount, label: portion.label }
     try {
-      publish(await api.addReimbursementClaims(reimbursement.id, [
-        { txn_id: row.txn_id, amount: portion.amount, label: portion.label },
-      ]))
+      publish(isDraft
+        ? await api.createReimbursement({ claims: [draftClaim(), claim] })
+        : await api.addReimbursementClaims(reimbursement.id, [claim]))
     } catch (err) {
       setError(err?.message || 'That transaction could not be added.')
     }
@@ -317,9 +350,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
       title={form ? reimbursementDisplayLabel({ counterparty: form.counterparty })
         : (reimbursement ? reimbursementDisplayLabel(reimbursement) : 'Reimbursement')}
       description={
-        reimbursement
-          ? 'Money that left as an expense and comes back later. Linking transactions changes nothing about them; settling moves what is left over into a real category.'
-          : undefined
+        isDraft
+          ? 'Money that left as an expense and comes back later. This one is not tracked yet; saving starts tracking it.'
+          : reimbursement
+            ? 'Money that left as an expense and comes back later. Linking transactions changes nothing about them; settling moves what is left over into a real category.'
+            : undefined
       }
       onClose={onClose}
       width="min(620px, 100%)"
@@ -329,7 +364,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
           {/* Unpairing sits with the other actions rather than loose in the body, and apart from them:
               it undoes the record itself, where everything to its right acts on what the record holds. */}
           <div>
-            {reimbursement && status !== 'completed' ? (
+            {reimbursement && !isDraft && status !== 'completed' ? (
               <Button
                 variant="ghost"
                 onClick={() => setUnlinking(true)}
@@ -348,7 +383,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
           <Button variant="ghost" onClick={onClose} disabled={saving}>
             {fieldsEdited ? 'Cancel' : 'Close'}
           </Button>
-          {reimbursement && status !== 'completed' ? (
+          {reimbursement && !isDraft && status !== 'completed' ? (
             <Button
               variant={completeIsPrimary ? 'primary' : 'ghost'}
               onClick={() => {
@@ -420,7 +455,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
                 key={member.txn_id}
                 member={member}
                 isThisRow={member.txn_id === txnId}
-                onRemove={status === 'completed' ? null : () => setPendingRemoval(member)}
+                onRemove={status === 'completed' || isDraft ? null : () => setPendingRemoval(member)}
               />
             ))}
           </div>

@@ -753,16 +753,39 @@ def _resolve_claims(
     return resolved
 
 
+def _requested_reminder(
+    *,
+    remind_on: Optional[str] = None,
+    clear_reminder: bool = False,
+    follow_default_reminder: bool = False,
+    current: Optional[str] = None,
+) -> Optional[str]:
+    """The stored reminder a request asks for: `None` follows the default, `""` is off, a date is chosen.
+    A request that names none of the three keeps `current`."""
+    if follow_default_reminder:
+        return None
+    if clear_reminder:
+        return ""
+    if remind_on is not None:
+        return _clean_date(remind_on)
+    return current
+
+
 def create_reimbursement(
     conn: sqlite3.Connection,
     claims: Iterable[dict],
     *,
     counterparty: Optional[str] = None,
+    remind_on: Optional[str] = None,
+    clear_reminder: bool = False,
 ) -> dict:
     """Start tracking a reimbursement over these portions. Never touches the transactions themselves.
 
     A single expense portion with no repayment yet is a perfectly good reimbursement — it is the "nobody
     has paid me back" case and the state most of them live in — so there is deliberately no minimum.
+
+    The reminder is accepted here so an editor that is drafting a record can save its name and reminder
+    in the same write that creates it. Passing neither leaves the record following the household default.
     """
     resolved = _resolve_claims(conn, _normalize_claims(claims))
     link_id = create_link(
@@ -770,9 +793,12 @@ def create_reimbursement(
         REIMBURSEMENT_LINK_KIND,
         [(txn_id, _role_for(claim["amount"])) for txn_id, claim in resolved.items()],
         external_ref=_clean_text(counterparty, MAX_COUNTERPARTY_LENGTH),
-        # No reminder of its own: a new record follows the household default, measured from its own
-        # oldest expense. Stamping a date here would freeze it at today's setting.
-        metadata=_metadata(resolved),
+        # No reminder of its own unless one was asked for: a new record follows the household default,
+        # measured from its own oldest expense. Stamping a date here would freeze it at today's setting.
+        metadata=_metadata(
+            resolved,
+            remind_on=_requested_reminder(remind_on=remind_on, clear_reminder=clear_reminder),
+        ),
     )
     return _load(conn, link_id)
 
@@ -801,14 +827,12 @@ def update_reimbursement(
     record nobody named is exactly the one worth labelling."""
     existing = _load(conn, link_id)
     link = get_link(conn, link_id)
-    if follow_default_reminder:
-        next_reminder = None
-    elif clear_reminder:
-        next_reminder = ""
-    elif remind_on is not None:
-        next_reminder = _clean_date(remind_on)
-    else:
-        next_reminder = _read_remind_on(link.get("metadata"))
+    next_reminder = _requested_reminder(
+        remind_on=remind_on,
+        clear_reminder=clear_reminder,
+        follow_default_reminder=follow_default_reminder,
+        current=_read_remind_on(link.get("metadata")),
+    )
     conn.execute(
         "UPDATE txn_link SET external_ref = ? WHERE id = ?",
         (_clean_text(counterparty, MAX_COUNTERPARTY_LENGTH), link_id),

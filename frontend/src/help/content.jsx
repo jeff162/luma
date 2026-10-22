@@ -1084,8 +1084,9 @@ export const HELP_TOPICS = [
           waiting for repayment.
         </p>
         <p>
-          Clicking a row opens it: a paired one opens its record, an unpaired one opens its transaction.
-          A drop that landed on the wrong row is taken back from the <strong>Undo</strong> on the
+          Clicking an expected row opens its reimbursement. One not yet tracked opens unsaved, and
+          becomes tracked on <strong>Save</strong> or when another transaction is linked to it; closing
+          it changes nothing. Clicking a received row opens its transaction. A drop that landed on the wrong row is taken back from the <strong>Undo</strong> on the
           notice that follows it &mdash; pairing changes nothing about the transactions, so undoing it
           leaves them exactly as they were.
         </p>

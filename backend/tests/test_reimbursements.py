@@ -812,6 +812,29 @@ class ApiContractTests(unittest.TestCase):
             )
             self.assertEqual(off.json()["remind_on"], "")
 
+    def test_a_record_is_created_with_its_name_and_reminder_in_one_request(self):
+        # What the editor's draft sends on Save: nothing exists until then, so the name and reminder must
+        # arrive with the claims rather than in a second write that could fail after the first.
+        from backend.tests._api_client import api_client
+
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            dated = client.post("/api/reimbursements", json={
+                "claims": [{"txn_id": seeded["expense"]}],
+                "counterparty": "Friends",
+                "remind_on": "2026-12-01",
+            })
+            self.assertEqual(dated.status_code, 200, dated.text)
+            self.assertEqual(dated.json()["counterparty"], "Friends")
+            self.assertEqual(dated.json()["remind_on"], "2026-12-01")
+
+            client.delete(f"/api/reimbursements/{dated.json()['id']}")
+            off = client.post("/api/reimbursements", json={
+                "claims": [{"txn_id": seeded["expense"]}],
+                "clear_reminder": True,
+            })
+            self.assertEqual(off.json()["remind_on"], "")
+
     def test_a_portion_moves_between_records_over_the_api(self):
         from backend.tests._api_client import api_client
 

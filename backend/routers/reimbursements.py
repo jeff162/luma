@@ -68,6 +68,10 @@ class ClaimIn(BaseModel):
 class ReimbursementCreate(BaseModel):
     claims: list[ClaimIn]
     counterparty: Optional[str] = None
+    # A new record follows the household default unless it is given a date or switched off, so the
+    # third state `ReimbursementUpdate` carries is not needed here.
+    remind_on: Optional[str] = None
+    clear_reminder: bool = False
 
 
 class ReimbursementUpdate(BaseModel):
@@ -161,6 +165,8 @@ def create(body: ReimbursementCreate):
             conn,
             [claim.model_dump() for claim in body.claims],
             counterparty=body.counterparty,
+            remind_on=body.remind_on,
+            clear_reminder=body.clear_reminder,
         ))
 
 

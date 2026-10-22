@@ -64,7 +64,7 @@ export default function ReimbursementsReportDialog({
   const [report, setReport] = useState(null)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(null)
-  // A not-yet-tracked row opens its transaction, not a reimbursement editor — see openLooseRow.
+  // A received row opens its transaction, not a reimbursement editor — see openLooseRow.
   const [looseTxn, setLooseTxn] = useState(null)
   // Which right-column row is in flight, which left-column entry is under it, and the drop awaiting a
   // portion choice. The dragged row is module-adjacent state rather than dataTransfer because `dragover`
@@ -133,15 +133,11 @@ export default function ReimbursementsReportDialog({
   }
 
   /*
-   * A row in "Not tracked yet" opens the **transaction**, not the reimbursement editor — there is no
-   * reimbursement to edit, which is what makes it untracked, and the editor has no create mode. Its
-   * detail panel is where the act lives: the reimbursable section there already decides what to offer
-   * from the row's sign, its portions and what is left unclaimed, so nothing about that flow is restated
-   * here.
+   * A row in the Received column opens the **transaction**. A payment on its own is not a reimbursement
+   * to edit, and its detail panel's reimbursable section already offers what it can repay.
    *
    * Fetched by id because a loose row carries only date, payee and amount — the panel needs the whole
-   * transaction. This click previously stored `{ linkId: null }` into state that only rendered for a
-   * truthy `linkId`, so every one of these rows silently did nothing.
+   * transaction.
    */
   async function openLooseRow(row) {
     setError('')
@@ -161,12 +157,13 @@ export default function ReimbursementsReportDialog({
       : entry.row.payee
   }
 
+  // Every Expected entry opens the reimbursement editor; an untracked expense opens it as a draft that
+  // nothing is written for until it is saved. Whether a record exists yet is not something the reader
+  // should have to know to predict which screen a click opens.
   function openEntry(entry) {
-    if (entry.kind === 'record') {
-      setEditing({ linkId: entry.id, txnId: entry.members?.[0]?.txn_id })
-      return
-    }
-    openLooseRow(entry.row)
+    setEditing(entry.kind === 'record'
+      ? { linkId: entry.id, txnId: entry.members?.[0]?.txn_id }
+      : { untrackedRow: entry.row, txnId: entry.row.txn_id })
   }
 
   // Only a droppable target highlights and accepts. Without the preventDefault the browser refuses the
@@ -477,9 +474,10 @@ export default function ReimbursementsReportDialog({
         />
       ) : null}
 
-      {editing?.linkId ? (
+      {editing ? (
         <ReimbursementEditorDialog
           linkId={editing.linkId}
+          untrackedRow={editing.untrackedRow}
           txnId={editing.txnId}
           categories={categories}
           onAddCategory={onAddCategory}
@@ -546,8 +544,8 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
           : 'var(--surface2)',
       }}
     >
-      {/* The row opens its record (or its transaction), which nothing about a list row says on its own —
-          the ledger's ↗ on hover is how the rest of the app makes that readable. */}
+      {/* The row opens its reimbursement (a draft one, if untracked), which nothing about a list row
+          says on its own — the ledger's ↗ on hover is how the rest of the app makes that readable. */}
       <button type="button" onClick={onOpen} title="Open" style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
           {/* The due marker and the owners go ahead of the name rather than after it: the marker is the

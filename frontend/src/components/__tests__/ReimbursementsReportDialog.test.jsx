@@ -30,6 +30,7 @@ vi.mock('../../lib/api.js', () => ({
     createReimbursement: vi.fn(),
     removeReimbursementTransaction: vi.fn(),
     deleteReimbursement: vi.fn(),
+    getReimbursementSettings: vi.fn(() => Promise.resolve({ reminder_days: 30 })),
   },
 }))
 
@@ -76,30 +77,40 @@ describe('ReimbursementsReportDialog', () => {
 })
 
 
-// The rows under "Not tracked yet" were buttons that did nothing: the click stored `{ linkId: null }`
-// into state which only ever rendered for a *truthy* linkId, so every untracked row was inert. There is
-// no reimbursement to edit on one — that is what makes it untracked — so it opens the transaction, where
-// the reimbursable section already knows what to offer.
+// Every Expected row opens the reimbursement editor, so the screen a click opens does not depend on
+// whether a record exists yet. An untracked expense opens it as an unsaved draft; a received payment is
+// not a reimbursement on its own and opens its transaction.
 describe('an untracked row', () => {
-  it('opens the transaction it belongs to', async () => {
-    api.getTransactions.mockResolvedValue({ transactions: [{ id: 't9', amount: 120 }] })
+  const PAYMENT = { txn_id: 'r9', date: '2026-09-01', payee: 'From Sam', unclaimed: -166, parts: [] }
+
+  it('opens an untracked expense in the reimbursement editor, writing nothing', async () => {
     open({ total: 120, reimbursements: [], loose: [LOOSE] })
     await userEvent.click(await screen.findByRole('button', { name: /Hardware Store/ }))
 
-    await waitFor(() => expect(api.getTransactions).toHaveBeenCalledWith(
-      expect.objectContaining({ ids: 't9' }),
-    ))
-    expect(await screen.findByTestId('txn-panel')).toBeTruthy()
-    expect(screen.getByTestId('txn-panel').textContent).toBe('t9')
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeTruthy()
+    expect(screen.queryByTestId('txn-panel')).toBeNull()
+    expect(api.getTransactions).not.toHaveBeenCalled()
     expect(api.getReimbursement).not.toHaveBeenCalled()
+    expect(api.createReimbursement).not.toHaveBeenCalled()
+  })
+
+  it('opens a received payment as its transaction', async () => {
+    api.getTransactions.mockResolvedValue({ transactions: [{ id: 'r9', amount: -166 }] })
+    open({ total: -166, reimbursements: [], loose: [PAYMENT] })
+    await userEvent.click(await screen.findByRole('button', { name: /From Sam/ }))
+
+    await waitFor(() => expect(api.getTransactions).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: 'r9' }),
+    ))
+    expect((await screen.findByTestId('txn-panel')).textContent).toBe('r9')
   })
 
   it('says so rather than doing nothing when the transaction cannot be fetched', async () => {
     // Silence is what the bug looked like from the outside; a dead click must not be reachable again by
     // way of a failed request.
     api.getTransactions.mockRejectedValue(new Error('That transaction could not be opened.'))
-    open({ total: 120, reimbursements: [], loose: [LOOSE] })
-    await userEvent.click(await screen.findByRole('button', { name: /Hardware Store/ }))
+    open({ total: -166, reimbursements: [], loose: [PAYMENT] })
+    await userEvent.click(await screen.findByRole('button', { name: /From Sam/ }))
     expect(await screen.findByText(/could not be opened/)).toBeTruthy()
   })
 })

@@ -317,6 +317,41 @@ export function reimbursementBoard(report, { ownerId = null, dueOnly = false, to
   }
 }
 
+/*
+ * An untracked expense as the record that saving it in the editor would create, so the editor can
+ * show a loose row with the same layout as a tracked one before anything is written.
+ *
+ * It claims the row's whole unclaimed amount, as a board drop onto the row does. With one expense and
+ * nothing repaid, the figures the server would compute are just that amount, so nothing here is a
+ * second copy of `_summarize`'s arithmetic.
+ */
+export function draftReimbursement(row) {
+  const claim = round2(row?.unclaimed)
+  return {
+    id: null,
+    counterparty: '',
+    owed: claim,
+    repaid: 0,
+    residual: claim,
+    completion: null,
+    completed: false,
+    remind_on: null,
+    expense_date: row?.date || null,
+    members: [{
+      txn_id: row?.txn_id,
+      date: row?.date,
+      amount: row?.amount,
+      payee: row?.payee,
+      account_name: row?.account_name,
+      trashed: false,
+      claim,
+      claim_label: null,
+      receivable: row?.receivable,
+      role: 'expense',
+    }],
+  }
+}
+
 function ownersOf(rows) {
   const seen = []
   for (const row of rows || []) {
