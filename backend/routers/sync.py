@@ -44,6 +44,7 @@ from backend.services.providers.config import (
 )
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.paypal_funding import pair_after_ingest
+from backend.services.pending_supersession import oldest_held_pending_date, settle_vanished_pending
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
     categorize_transaction,
@@ -1536,6 +1537,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # in page 3's coverage as an ordinary account that simply had no activity. Only the caller
                 # spans the pages, so only the caller can keep the claim off it for the rest of the pull.
                 unsupported_accounts: set[str] = set()
+                pending_since = oldest_held_pending_date(conn, connection["id"])
                 for _ in range(_MAX_PAGES_PER_CALL):
                     # Nothing may be held open across the fetch below. This is the commit the restructure
                     # exists for; on the first pass it also flushes the in-progress marker so the rest of
@@ -1559,8 +1561,16 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                         # work belongs to a pull rather than a page and must not repeat per page.
                         continuing=pages > 0,
                         budget_checkpoint=_checkpoint_budget,
+                        pending_since=pending_since,
                     )
                     page_removed.extend(page["removed"])
+                    # A provider that cannot report removals lists what it returned whole instead; a held
+                    # pending row missing from such a listing is paired with its replacement here, before
+                    # the page is applied, or removed with the rest after the drain.
+                    page_removed.extend(settle_vanished_pending(
+                        conn, connection["id"], page["added"], page.get("complete_listings"),
+                        account_for=_account_for,
+                    ))
                     cursor = page["next_cursor"]
                     final_status = page["update_status"]
                     # Defaulted rather than required so an adapter written before this field still reads as

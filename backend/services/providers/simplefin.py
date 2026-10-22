@@ -397,6 +397,27 @@ def _problem_messages(payload: dict) -> tuple[list[str], list[str]]:
     return actionable[:_MAX_MESSAGES], advisory[:_MAX_MESSAGES]
 
 
+def _impaired_by_problems(payload: dict) -> tuple[set[str], set[str]] | None:
+    """`(conn_ids, account_ids)` the response's user-actionable problems name, or None when a problem names
+    neither and so could concern any account. An account a bank problem touches may be returned stale or
+    short, so its rows cannot be read as a complete listing."""
+    conn_ids: set[str] = set()
+    account_ids: set[str] = set()
+    for problem in (payload.get("errlist") or payload.get("errors") or []):
+        if not isinstance(problem, dict):
+            return None
+        code = str(problem.get("code") or "").strip()
+        if code and not code.startswith(_USER_ACTIONABLE_CODE_PREFIXES):
+            continue
+        if not (problem.get("conn_id") or problem.get("account_id")):
+            return None
+        if problem.get("conn_id"):
+            conn_ids.add(str(problem["conn_id"]))
+        if problem.get("account_id"):
+            account_ids.add(str(problem["account_id"]))
+    return conn_ids, account_ids
+
+
 def _merge_advisories(store: dict, entries: list[dict]) -> None:
     """Fold one request's advisories into a pull's running set, keyed on the message.
 
@@ -857,6 +878,7 @@ class SimpleFinAdapter(ProviderAdapter):
                       account_ids: list[str] | None = None,
                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
                       *, end_of_day: bool, pool: str, requested: list | None = None,
+                      listed: list | None = None,
                       ) -> tuple[list[dict], list[str], list[dict], dict[str, str]]:
         """One request: transactions in one window, the non-fatal problems reported alongside them split
         into `(warnings, advisories)`, and the accounts whose rows were discarded for being in another
@@ -870,7 +892,12 @@ class SimpleFinAdapter(ProviderAdapter):
         default so a new call site has to answer the question rather than inherit an answer. `pool` is the
         allowance this request is charged against, and follows the same rule for the same reason — it is
         passed rather than inferred from `account_ids` because narrowing the payload and charging an
-        account's own bucket are two independent decisions that merely happen to coincide today."""
+        account's own bucket are two independent decisions that merely happen to coincide today.
+
+        `listed`, when passed, receives a complete listing (see `complete_listings` in `ProviderAdapter`)
+        for each account the response returned whole: present, in the ledger's currency, and named by no
+        bank problem. Only a window whose end carries today may be listed, since an older window's end is
+        exclusive."""
         # The bounds are *instants*, not dates — **confirmed against the live server**, not inferred: the
         # same 30-day window requested with a midnight end and a 23:59:59 end returned 56 and 58
         # transactions respectively. The two rows in the gap are why the long bound exists at all.
@@ -912,6 +939,7 @@ class SimpleFinAdapter(ProviderAdapter):
         ), repeated={"account": [_strip_prefix(a) for a in account_ids]} if account_ids else None)
         out = []
         dropped: dict[str, str] = {}
+        impaired = _impaired_by_problems(payload) if listed is not None else None
         for a in payload.get("accounts") or []:
             account_external_id = _ACCOUNT_ID_PREFIX + str(a.get("id"))
             transactions = a.get("transactions") or []
@@ -927,6 +955,10 @@ class SimpleFinAdapter(ProviderAdapter):
                 row = self._normalize_txn(account_external_id, t)
                 if row["date"]:
                     out.append(row)
+            if (listed is not None and impaired is not None
+                    and str(a.get("conn_id")) not in impaired[0] and str(a.get("id")) not in impaired[1]):
+                listed.append({"external_account_id": account_external_id,
+                               "start": start.isoformat(), "end": end.isoformat()})
         return out, warnings, advisories, dropped
 
     def fetch_transactions(
@@ -970,22 +1002,30 @@ class SimpleFinAdapter(ProviderAdapter):
 
     def _fetch_recent(self, credential: str, state: dict, today: date, warnings: dict,
                       advisories: dict, dropped: dict[str, str], ledger_currency: str,
-                      requested: list | None = None) -> list[dict]:
+                      requested: list | None = None, pending_since: str | None = None,
+                      listed: list | None = None) -> list[dict]:
         """The recent window — one request, overlapping what is already held.
 
         The overlap is the provider's own guidance and covers a real case: a transaction can post with a
         date earlier than the moment it becomes visible, so a window starting exactly where the last one
         ended would step over it. `through` advances only here and only after the fetch, because it is a
         claim about data actually in hand.
+
+        The window also reaches back to the oldest held pending row (`pending_since`), within
+        `WINDOW_DAYS`, because it is the only window listed completely: a pending row outside it can never
+        be seen to have gone, and a hold can stay pending longer than the overlap.
         """
         through = date.fromisoformat(state["through"]) if state.get("through") else today
         window_start = min(through - timedelta(days=INCREMENTAL_OVERLAP_DAYS), today)
+        if pending_since:
+            window_start = min(window_start, max(date.fromisoformat(pending_since),
+                                                 today - timedelta(days=WINDOW_DAYS)))
         rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
             credential, window_start, today, ledger_currency=ledger_currency,
             # The top-up is always the newest bound there is, so its end runs to the close of today —
             # otherwise every sync would miss whatever posted since midnight and never come back for it.
             # Charged to the shared bucket: the top-up is unfiltered, covering every account at once.
-            end_of_day=True, pool=_SHARED_POOL, requested=requested)
+            end_of_day=True, pool=_SHARED_POOL, requested=requested, listed=listed)
         warnings.update(dict.fromkeys(window_warnings))
         _merge_advisories(advisories, window_advisories)
         dropped.update(window_dropped)
@@ -1171,7 +1211,7 @@ class SimpleFinAdapter(ProviderAdapter):
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
         request_budget: dict | None = None, continuing: bool = False,
-        budget_checkpoint=None,
+        budget_checkpoint=None, pending_since: str | None = None,
     ) -> dict:
         """Walk history for whichever accounts still want it, or top up the recent window.
 
@@ -1212,6 +1252,8 @@ class SimpleFinAdapter(ProviderAdapter):
         # from it — but it is the one record of what was actually asked for, which neither the row counts nor
         # the resume checkpoint can reconstruct.
         requested_windows: list[dict] = []
+        # Only the recent window is listed: it is unfiltered and ends today, and a walk window is neither.
+        complete_listings: list[dict] = []
 
         if account_targets:
             # Where the walk will begin: the newest point any account still wants data from.
@@ -1237,7 +1279,7 @@ class SimpleFinAdapter(ProviderAdapter):
                     try:
                         added.extend(self._fetch_recent(
                             credential, state, today, warnings, advisories, dropped_currency,
-                            ledger_currency, requested_windows))
+                            ledger_currency, requested_windows, pending_since, complete_listings))
                     except SimpleFinRateLimited:
                         # Refused before the walk even started, so there is nothing to walk with either.
                         # `through` is untouched, so the next run re-asks for this same window.
@@ -1261,7 +1303,7 @@ class SimpleFinAdapter(ProviderAdapter):
             try:
                 added.extend(self._fetch_recent(
                     credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
-                    requested_windows))
+                    requested_windows, pending_since, complete_listings))
             except SimpleFinRateLimited:
                 rate_limited = resume_later = True
         else:
@@ -1289,7 +1331,8 @@ class SimpleFinAdapter(ProviderAdapter):
             "added":         added,
             "modified":      [],
             # Permanently empty: SimpleFIN has no way to report that a transaction was removed. Not the
-            # same as it confirming that none were.
+            # same as it confirming that none were. A vanished pending row is inferred by the caller from
+            # `complete_listings` instead.
             "removed":       [],
             "next_cursor":   json.dumps(state),
             # A page is `WINDOWS_PER_PAGE` windows, so a walk with history left asks the caller to come
@@ -1320,6 +1363,7 @@ class SimpleFinAdapter(ProviderAdapter):
             # meaningful only for an adapter that pulls ranges: a cursor provider asks for "everything since
             # this token" and has no window to report.
             "requested_windows": requested_windows,
+            "complete_listings": complete_listings,
             # Banks on this access URL that reported a problem while the others delivered normally.
             "warnings": list(warnings),
             # What the server said about *our* requests — a range it considers too wide, and so on. Never

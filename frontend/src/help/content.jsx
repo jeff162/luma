@@ -3680,6 +3680,7 @@ export const HELP_TOPICS = [
     summary: 'A Cross-account match means what appears to be the same transaction came in from different sources on different accounts. Options are: Keep both (they\'re two distinct transactions), Discard new, or Replace existing. Keep existing/Replace options related to what account the transaction is mapped to.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           A <strong>cross-account match</strong> is what looks like the same transaction arriving from
           more than one source on <em>different accounts</em>. This can be real, two people paid for the
@@ -3692,6 +3693,8 @@ export const HELP_TOPICS = [
           decides what becomes of it. The amount already matches &mdash; that is what flagged the pair
           &mdash; so where both sources also describe it identically, the merge confirms the duplicate and
           the row leaves the active ledger as a <strong>duplicate in this account (confirmed)</strong>.
+          When one copy is still pending and the other has posted, the pending copy is the one removed,
+          and its renames, notes and tags move to the posted copy.
           Detaching the accounts reverses that, and a single row can be restored on its own. Where the two
           descriptions merely resemble each other, or share nothing but the payee, that is not conclusive,
           so the row stays in review as a <strong>possible duplicate in this
@@ -3707,8 +3710,14 @@ export const HELP_TOPICS = [
           <li><strong>Discard new</strong> &mdash; the just-imported row is the duplicate; keep the copy
             already in the ledger.</li>
           <li><strong>Replace existing</strong> &mdash; the just-imported row is the <em>better</em> record
-            (e.g. it has the correct account). Keep it and remove the existing one.</li>
+            (e.g. it has the correct account, or it is the posted copy of a pending charge). Keep it and
+            remove the existing one; the existing row&apos;s renames, notes and tags move to it.</li>
         </ul>
+        <p>
+          A pending amount carries a <strong>P</strong> marker. When the existing row is pending and the
+          new one has posted, Replace existing is listed first: Discard new would keep the pending copy,
+          which is left out of every total and which nothing will settle.
+        </p>
         <p>
           For Replace existing, the categorization comes from the new file if the new file is the only
           file with the box checked to import categories from the file. If both files, only the old file, or neither file,

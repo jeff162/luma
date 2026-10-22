@@ -136,6 +136,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Transaction ids must be globally unique](building-a-connector.md#transaction-ids-must-be-globally-unique)
 - [Zero-amount rows](building-a-connector.md#zero-amount-rows)
 - [Dates a source does not have](building-a-connector.md#dates-a-source-does-not-have)
+- [Pending rows a source stops sending](building-a-connector.md#pending-rows-a-source-stops-sending)
 - [Currency](building-a-connector.md#currency)
 - [The published guide is not the contract](building-a-connector.md#the-published-guide-is-not-the-contract)
 - [Request budgets and pausing](building-a-connector.md#request-budgets-and-pausing)

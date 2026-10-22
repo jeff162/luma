@@ -204,6 +204,24 @@ class SyncDedupeTests(unittest.TestCase):
         self.assertEqual(res["deduped"], 1)
         self.assertIn("covered", " ".join(self._duplicate_reasons()).lower())
 
+    def test_a_pending_row_elsewhere_does_not_corroborate_a_covered_payment(self):
+        # The ledger probe names a charge on another account as proof a covered payment is already held.
+        # A pending row is no such proof: setting the posted copy aside left the pending one standing in
+        # for the charge, out of every total.
+        self._csv_batch([("2026-07-01", -5.00, "Bakery")])
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO account (id, name, display_name, type, owner_id)"
+                " VALUES ('acct-other', 'Other card', 'Other card', 'credit', ?)", (SHARED_OWNER_ID,))
+            conn.execute(
+                "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,"
+                " date, is_pending, content_hash) VALUES ('held-pending', 'acct-other', ?, -21.25,"
+                " 'Lakeside Grill', 'Lakeside Grill', 'LAKESIDE GRILL', '2026-07-12', 1, 'h-pending')",
+                (SHARED_OWNER_ID,))
+        self._map("existing")
+        res = self._sync([self._synced("p1", "2026-07-13", -21.25, "Lakeside Grill", "LAKESIDE GRILL")])
+        self.assertEqual((res["added"], res["deduped"]), (1, 0))
+
     def test_the_same_row_imports_when_the_account_is_unmapped(self):
         # The contrast that shows the mapping is what does the work: with no mapping the provider
         # account is nobody's alias, coverage cannot apply, and the row lands as it always did.

@@ -4,6 +4,31 @@
 import React from 'react'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 
+// The "P" chip marking a pending transaction, shared so every place that shows an amount marks it alike.
+export function PendingMarker() {
+  return (
+    <span
+      title="Pending transaction"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 16,
+        height: 16,
+        borderRadius: 999,
+        fontSize: 10,
+        fontWeight: 700,
+        color: 'var(--accent2)',
+        background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
+        border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))',
+        flexShrink: 0,
+      }}
+    >
+      P
+    </span>
+  )
+}
+
 export default function AmountDisplay({ amount, isPending = false, align = 'right', style = {} }) {
   return (
     <span
@@ -18,27 +43,7 @@ export default function AmountDisplay({ amount, isPending = false, align = 'righ
         ...style,
       }}
     >
-      {isPending && (
-        <span
-          title="Pending transaction"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 16,
-            height: 16,
-            borderRadius: 999,
-            fontSize: 10,
-            fontWeight: 700,
-            color: 'var(--accent2)',
-            background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-            border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))',
-            flexShrink: 0,
-          }}
-        >
-          P
-        </span>
-      )}
+      {isPending && <PendingMarker />}
       <span>{formatTransactionAmount(amount)}</span>
     </span>
   )

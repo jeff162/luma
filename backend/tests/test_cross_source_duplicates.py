@@ -432,6 +432,76 @@ class SameAccountResolutionTests(_LedgerTestCase):
                                   "the one row asked about is still cleared")
 
 
+class PostedOverPendingTests(_LedgerTestCase):
+    """A charge seen pending from one source and posted from the other keeps the posted copy, whichever
+    one carries the flag. The pending copy is left out of totals and nothing will ever settle it."""
+
+    def _flag_posted_against_pending(self):
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET is_pending = 1 WHERE id = 'a1'")
+            conn.execute(
+                "UPDATE txn SET suspect_duplicate_of = 'a1', suspect_duplicate_reason = 'cross_account'"
+                " WHERE id = 'b1'")
+
+    def test_the_pending_copy_is_the_one_trashed(self):
+        self._flag_posted_against_pending()
+        with self._db() as conn:
+            self.assertEqual(promote_in_group_suspects_to_confirmed(conn, [ACCOUNT]), 1)
+        posted, pending = self._suspect("b1"), self._suspect("a1")
+        self.assertIsNone(posted["trashed_at"])
+        self.assertIsNone(posted["suspect_duplicate_of"])
+        self.assertIsNotNone(pending["trashed_at"])
+        self.assertEqual(pending["suspect_duplicate_of"], "b1", "the audit pointer names the survivor")
+        self.assertEqual(pending["dedupe_resolved_by"], AUTO_CROSS_SOURCE_RESOLVED_BY)
+
+    def test_the_users_edits_move_to_the_posted_copy(self):
+        self._flag_posted_against_pending()
+        with self._db() as conn:
+            conn.execute("INSERT INTO category (id, name) VALUES ('cat-treats', 'Treats')")
+            conn.execute("INSERT INTO tag (id, name, color) VALUES ('tag-trip', 'Trip', '#888888')")
+            conn.execute(
+                "UPDATE txn SET category_id = 'cat-treats', category_overridden = 1,"
+                " category_source = 'manual', display_name = 'Snacks', display_name_source = 'manual',"
+                " notes = 'for the drive' WHERE id = 'a1'")
+            conn.execute("INSERT INTO txn_tag (txn_id, tag_id, manual_state) VALUES ('a1', 'tag-trip', 1)")
+            promote_in_group_suspects_to_confirmed(conn, [ACCOUNT])
+            posted = conn.execute("SELECT * FROM txn WHERE id = 'b1'").fetchone()
+            tagged = conn.execute(
+                "SELECT manual_state FROM txn_tag WHERE txn_id = 'b1' AND tag_id = 'tag-trip'").fetchone()
+        self.assertEqual((posted["category_id"], posted["category_overridden"]), ("cat-treats", 1))
+        self.assertEqual(posted["display_name"], "Snacks")
+        self.assertEqual(posted["notes"], "for the drive")
+        self.assertEqual(tagged["manual_state"], 1)
+
+    def test_replace_existing_carries_the_users_name_notes_and_tags(self):
+        # The report's own "keep the new one" moves the same edits the automatic resolution does.
+        self._flag_posted_against_pending()
+        with self._db() as conn:
+            conn.execute("INSERT INTO tag (id, name, color) VALUES ('tag-trip', 'Trip', '#888888')")
+            conn.execute(
+                "UPDATE txn SET display_name = 'Snacks', display_name_source = 'manual',"
+                " notes = 'for the drive' WHERE id = 'a1'")
+            conn.execute("INSERT INTO txn_tag (txn_id, tag_id, manual_state) VALUES ('a1', 'tag-trip', 1)")
+            self.assertTrue(resolve_suspect(conn, "b1", action="replace")["resolved"])
+            posted = conn.execute("SELECT * FROM txn WHERE id = 'b1'").fetchone()
+            tagged = conn.execute("SELECT 1 FROM txn_tag WHERE txn_id = 'b1' AND manual_state = 1").fetchone()
+        self.assertEqual((posted["display_name"], posted["notes"]), ("Snacks", "for the drive"))
+        self.assertIsNotNone(tagged)
+
+    def test_a_split_pending_row_is_left_as_the_survivor(self):
+        # A split does not move with the edits, so trashing its row would strand it.
+        self._flag_posted_against_pending()
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET is_split = 1 WHERE id = 'a1'")
+            promote_in_group_suspects_to_confirmed(conn, [ACCOUNT])
+        self.assertIsNone(self._suspect("a1")["trashed_at"])
+        self.assertIsNotNone(self._suspect("b1")["trashed_at"])
+
+
 class DismissalSurvivesARescanTests(_LedgerTestCase):
     """A Keep must outlive a re-scan.
 

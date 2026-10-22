@@ -41,6 +41,7 @@ two shapes hit several of them unchanged:
 - [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
 - [Zero-amount rows](#zero-amount-rows)
 - [Dates a source does not have](#dates-a-source-does-not-have)
+- [Pending rows a source stops sending](#pending-rows-a-source-stops-sending)
 - [Currency](#currency)
 - [The published guide is not the contract](#the-published-guide-is-not-the-contract)
 - [Request budgets and pausing](#request-budgets-and-pausing)
@@ -375,6 +376,31 @@ So an adapter must decide, per date field, **which values mean "absent"** — no
   fields, `posted_date` among them, not merely clear the pending flag — see `_refresh_provider_fields` in
   `routers/sync.py`. A field written from a
   provisional version of a row is provisional until the row is superseded.
+
+## Pending rows a source stops sending
+
+A source with a change feed says when a pending row is superseded: Plaid names the pending row a posted
+one replaces and lists a cancelled one in `removed`. A source without one says nothing. SimpleFIN keeps the
+id when a charge settles at its pending amount, but a charge whose amount changes as it settles (a tip on
+a restaurant charge) posts under a **new** id, and the pending row just stops appearing. Duplicate
+detection cannot pair the two, the amounts differing, so without more the pending row stays forever.
+
+**Absence is the evidence, and only inside a complete listing.** Such an adapter reports
+`complete_listings`: accounts and date ranges for which the response holds every transaction, pending
+included. A held pending row dated inside one and missing from the response is gone at the provider
+(`services/pending_supersession.py`). It is paired with the posted row that replaced it when exactly one
+arriving row qualifies (same direction, an amount from equal to double, a date within two days, descriptors
+agreeing at the exact text tier) and that row qualifies for nothing else; the pairing is written as the
+`pending_external_transaction_id` a change feed would send, so the conversion keeps the user's edits.
+Anything else is removed. A pending row a duplicate resolution kept over a posted copy is the charge's
+only live record, so that copy is restored from the trash first and takes over its edits.
+
+- **A listing is a strong claim.** An account the response omitted, discarded for its currency, or
+  reported a bank problem for is not listed, since its rows may be stale or short. A problem that names no
+  connection or account withholds every listing in that response.
+- **Only a window that ends today is listed.** SimpleFIN lists its recent window, and reaches it back to
+  the oldest held pending row (`pending_since`, within `WINDOW_DAYS`) so a hold pending longer than the
+  routine overlap is still judged.
 
 ## Currency
 

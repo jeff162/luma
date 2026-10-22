@@ -129,6 +129,34 @@ class ImportPendingReconciliationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["category_id"], self.category_id)  # category preserved
         self.assertIsNone(row["trashed_at"])
 
+    async def test_a_posted_row_from_another_source_settles_a_held_pending_row(self):
+        # The pending copy came from a data connection and names the charge differently, so the same-source
+        # conversion above cannot see it, and the ladder skips pending rows. The posted copy is imported
+        # and flagged against it, and the finalize sweep keeps the posted one, taking the user's rename.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, status, source_kind)"
+                " VALUES ('card-sync', 'sync card', 'completed', 'connection_sync')")
+            conn.execute(
+                "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name,"
+                " display_name_source, raw_name, date, is_pending, content_hash, import_batch_id)"
+                " VALUES ('held-pending', ?, ?, -10.0, 'Corner Cafe', 'Morning coffee', 'manual',"
+                " 'SQ *CORNER CAFE', '2026-08-01', 1, 'hash-held', 'card-sync')",
+                (self.account_id, SHARED_OWNER_ID),
+            )
+
+        res = await self._import(
+            "Date,Description,Account,Amount,Pending\n"
+            "2026-08-01,Corner Cafe,Checking,10.00,posted\n"
+        )
+        self.assertEqual((res["imported"], res["deduped"]), (1, 0))
+        pending = self._row(id="held-pending")[0]
+        posted = self._row(raw_name="Corner Cafe")[0]
+        self.assertIsNotNone(pending["trashed_at"])
+        self.assertIsNone(posted["trashed_at"])
+        self.assertEqual(posted["is_pending"], 0)
+        self.assertEqual(posted["display_name"], "Morning coffee")
+
 
 if __name__ == "__main__":
     unittest.main()

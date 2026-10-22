@@ -169,6 +169,13 @@ function enrichTargetExists(entry) {
   return !!matched.id
 }
 
+// A flagged pair whose existing row is pending and whose incoming row has posted: the incoming row is the
+// settled charge, so Replace existing is the resolution to offer first. Discard new would keep a row that
+// is left out of every total and that nothing will settle.
+function replacesPending(entry) {
+  return entry.kind === 'soft_flag' && !!entry.matched?.is_pending && !entry.incoming?.is_pending
+}
+
 function actionsFor(entry) {
   if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
   if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
@@ -909,7 +916,7 @@ export default function UnifiedDuplicatesDialog({
               variant="ghost"
               disabled={pendingBulk || selectionSummary.replace === 0}
               onClick={() => runBulk('replace')}
-              title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories."
+              title="The new file's row is the correct record (e.g. correct account, or the posted copy of a pending charge): keep it and remove the existing duplicate. The existing row's renames, notes and tags move to it; categorization follows whichever file was set to use its imported categories."
             >
               Replace existing ({selectionSummary.replace})
             </Button>
@@ -984,11 +991,15 @@ export default function UnifiedDuplicatesDialog({
             { key: 'matched', label: 'Matched existing', width: 340, minWidth: 160, render: (entry) => matchedBlock(entry.matched, entry.reason_text) },
             { key: 'resolve', label: 'Resolve', width: 210, minWidth: 140, render: (entry) => {
               const a = actionsFor(entry)
+              const replace = a.replace ? (
+                <Button variant={replacesPending(entry) ? 'primary' : 'ghost'} style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account, or the posted copy of a pending charge): keep it and remove the existing duplicate. The existing row's renames, notes and tags move to it; categorization follows whichever file was set to use its imported categories.">Replace existing</Button>
+              ) : null
               return (
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {replacesPending(entry) ? replace : null}
                   {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep both rows. Records the judgement for this pair only, so neither a later import nor a re-scan flags it again — undoable from the toast, and from the Dismissed filter afterwards.">Keep both</Button> : null}
                   {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
-                  {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
+                  {replacesPending(entry) ? null : replace}
                   {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
                   {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
                   {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}

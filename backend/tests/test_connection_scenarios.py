@@ -1069,6 +1069,154 @@ class ConnectionScenarioTests(unittest.TestCase):
         self.assertFalse(row["reauth_required"])
         self.assertEqual(row["consecutive_sync_failures"], 1, "it is still counted as a failure")
 
+    # ---- pending rows the bank stops sending ------------------------------
+
+    def _pending(self, txn_id, day, amount, memo, payee):
+        """A charge the bank holds as pending: dated, but with no posting instant yet."""
+        txn = Txn(txn_id, "Demo Checking", day, amount, payee, memo=memo, payee=payee,
+                  pending=True, unposted=True)
+        self.sim.ledger.append(txn)
+        return txn
+
+    def _settle(self, pending, txn_id, amount, *, memo=None):
+        """The bank replaces a pending charge with a posted one under a new id, as a tip does."""
+        self.sim.ledger.remove(pending)
+        return self._posted(txn_id, amount, pending, memo=memo)
+
+    def _posted(self, txn_id, amount, pending, *, memo=None):
+        """A charge posting today, made on the day `pending` was."""
+        txn = Txn(txn_id, "Demo Checking", self.sim.today.isoformat(), amount, pending.payee,
+                  memo=memo or pending.memo, payee=pending.payee, transacted_at=pending.transacted_at)
+        self.sim.ledger.append(txn)
+        return txn
+
+    def _held(self, txn_id):
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT * FROM txn WHERE external_transaction_id = ?", (f"{CHECKING}:{txn_id}",)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def _backfilled_with_pending(self, *pending_rows):
+        """Connect, backfill, then a day later sync the given pending charges in as held rows."""
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True)
+        self.sim.advance_days(1)
+        held = [self._pending(*args) for args in pending_rows]
+        self._sync(days=90)
+        for txn in held:
+            self.assertEqual(self._held(txn.id)["is_pending"], 1)
+        return held
+
+    def test_a_tip_settling_under_a_new_id_converts_the_pending_row_in_place(self):
+        today = self.sim.today.isoformat()
+        (pending,) = self._backfilled_with_pending(
+            ("pend-tab", today, "-30.00", "SQ *HARBOR TAVERN", "Harbor Tavern"))
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET display_name = 'Dinner out', display_name_source = 'manual' "
+                         "WHERE external_transaction_id = ?", (f"{CHECKING}:pend-tab",))
+        original_id = self._held("pend-tab")["id"]
+
+        self.sim.advance_days(1)
+        self._settle(pending, "post-tab", "-36.00", memo="SQ *HARBOR TAVERN #2")
+        self._sync(days=90)
+
+        self.assertIsNone(self._held("pend-tab"), "the pending id is gone from the ledger")
+        settled = self._held("post-tab")
+        self.assertEqual(settled["id"], original_id, "the pending row itself became the posted one")
+        self.assertEqual((settled["is_pending"], settled["amount"]), (0, 36.0))
+        self.assertIsNone(settled["trashed_at"])
+        self.assertEqual(settled["display_name"], "Dinner out", "the user's edit survived")
+
+    def test_a_pending_row_the_bank_drops_without_a_replacement_is_removed(self):
+        today = self.sim.today.isoformat()
+        cancelled, kept = self._backfilled_with_pending(
+            ("pend-hold", today, "-75.00", "FUEL STOP 0412", "Fuel Stop"),
+            ("pend-cafe", today, "-6.50", "CORNER CAFE", "Corner Cafe"),
+        )
+        self.sim.advance_days(1)
+        self.sim.ledger.remove(cancelled)
+        self._sync(days=90)
+
+        self.assertIsNotNone(self._held("pend-hold")["trashed_at"], "the cancelled hold left the ledger")
+        self.assertIsNone(self._held("pend-cafe")["trashed_at"], "a row still being sent is untouched")
+
+    def test_two_possible_replacements_remove_the_pending_row_rather_than_guess(self):
+        # Carrying a pending row's edits onto the wrong one of two same-merchant charges is worse than
+        # dropping them, so an ambiguous settlement falls back to removal and both charges arrive new.
+        today = self.sim.today.isoformat()
+        (pending,) = self._backfilled_with_pending(
+            ("pend-deli", today, "-12.00", "MAIN ST DELI", "Main St Deli"))
+        self.sim.advance_days(1)
+        self._settle(pending, "post-deli-a", "-13.00")
+        self._posted("post-deli-b", "-14.00", pending)
+        self._sync(days=90)
+
+        self.assertIsNotNone(self._held("pend-deli")["trashed_at"])
+        self.assertIsNone(self._held("post-deli-a")["trashed_at"])
+        self.assertIsNone(self._held("post-deli-b")["trashed_at"])
+
+    def test_a_bank_problem_on_the_account_holds_off_judging_its_pending_rows(self):
+        # An account a bank problem touches may come back stale or short, so a pending row missing from it
+        # proves nothing. Once the problem clears, the same absence does.
+        today = self.sim.today.isoformat()
+        (pending,) = self._backfilled_with_pending(
+            ("pend-shop", today, "-20.00", "HARDWARE BARN", "Hardware Barn"))
+        self.sim.advance_days(1)
+        self.sim.ledger.remove(pending)
+        self.sim.errlist_for = lambda params: [
+            {"code": "con.auth", "msg": "Authentication required", "conn_id": "CON-SIMPLEFIN-DEMO"},
+        ]
+        self._sync(days=90)
+        self.assertIsNone(self._held("pend-shop")["trashed_at"])
+
+        self.sim.errlist_for = lambda params: []
+        self._sync(days=90)
+        self.assertIsNotNone(self._held("pend-shop")["trashed_at"])
+
+    def test_a_pending_row_kept_over_a_posted_duplicate_brings_that_copy_back(self):
+        # A duplicate resolution that kept the pending copy left it as the charge's only live record, so
+        # removing it alone would take the charge out of the ledger.
+        today = self.sim.today.isoformat()
+        (pending,) = self._backfilled_with_pending(
+            ("pend-meat", today, "-90.00", "VALLEY BUTCHER", "Valley Butcher"))
+        held = self._held("pend-meat")
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,"
+                " date, posted_date, is_pending, trashed_at, rejection_reason, dedupe_resolved_by,"
+                " suspect_duplicate_of, suspect_duplicate_reason)"
+                " VALUES ('csv-meat', ?, ?, 90.0, 'Valley Butcher', 'Valley Butcher', 'VALLEY BUTCHER',"
+                " ?, ?, 0, '2026-08-10T00:00:00Z', 'duplicate_confirmed', 'user', ?, 'cross_account')",
+                (held["account_id"], held["owner_id"], today, today, held["id"]),
+            )
+            conn.execute("UPDATE txn SET notes = 'half for the freezer' WHERE id = ?", (held["id"],))
+        self.sim.advance_days(1)
+        self.sim.ledger.remove(pending)
+        self._sync(days=90)
+
+        self.assertIsNotNone(self._held("pend-meat")["trashed_at"])
+        with self._db() as conn:
+            restored = conn.execute("SELECT * FROM txn WHERE id = 'csv-meat'").fetchone()
+        self.assertIsNone(restored["trashed_at"], "the posted copy is back in the ledger")
+        self.assertIsNone(restored["suspect_duplicate_of"])
+        self.assertEqual(restored["notes"], "half for the freezer")
+
+    def test_a_pending_row_older_than_the_overlap_is_still_judged(self):
+        # The routine window starts a few days before the last sync, so a hold left pending longer than
+        # that would fall outside it and never be seen to go. The window reaches back to it instead.
+        start = self.sim.today.isoformat()
+        (pending,) = self._backfilled_with_pending(
+            ("pend-hotel", start, "-200.00", "LAKESIDE INN", "Lakeside Inn"))
+        self.sim.advance_days(12)
+        self._sync(days=90)
+        self.assertIsNone(self._held("pend-hotel")["trashed_at"], "still pending at the bank, still held")
+
+        self.sim.advance_days(1)
+        self.sim.ledger.remove(pending)
+        self._sync(days=90)
+        self.assertIsNotNone(self._held("pend-hotel")["trashed_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

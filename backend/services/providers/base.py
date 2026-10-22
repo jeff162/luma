@@ -210,13 +210,13 @@ class ProviderAdapter(ABC):
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
         request_budget: dict | None = None, continuing: bool = False,
-        budget_checkpoint=None,
+        budget_checkpoint=None, pending_since: str | None = None,
     ) -> dict:
         """One pull's worth of change, plus the state the sync loop needs to decide what happens next:
 
             {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
              update_status, backfill_complete, resume_later, account_coverage, warnings, advisories,
-             unsupported_currency, requested_windows}
+             unsupported_currency, requested_windows, complete_listings}
 
         Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
         `pending_external_transaction_id`: when a posted transaction supersedes a pending one, this holds the
@@ -346,6 +346,18 @@ class ProviderAdapter(ABC):
         adapter can make many requests inside one call and stop partway, so neither the rows returned nor
         the resume checkpoint can reconstruct what was looked at. Optional, and empty for a cursor provider,
         which asks for "everything since this token" and has no window to name.
+
+        `complete_listings` is `[{"external_account_id", "start", "end"}]`: accounts and inclusive ISO date
+        ranges for which this page's `added` holds **every** transaction the provider has, pending ones
+        included. It is how a provider with no way to report a removal still gets a superseded or cancelled
+        pending row retired: a held pending row dated inside a listed range and absent from `added` is gone
+        at the provider (`services/pending_supersession.py`). A listing is a strong claim, so an account the
+        response omitted, discarded, or reported a problem for is never listed. Optional; a cursor provider,
+        which reports removals itself, omits it.
+
+        `pending_since` is the date of the oldest pending row the caller holds for this connection, or None.
+        An adapter that reports `complete_listings` may reach back to it so a charge left pending longer
+        than its routine overlap is still listed. Others ignore it.
 
         Reporting per account rather than per connection is not tidiness. One figure applied to every
         account over-claims the moment a pull covers some of them and not others, and an overstated coverage

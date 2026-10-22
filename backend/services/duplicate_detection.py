@@ -1032,7 +1032,7 @@ def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: i
     return conn.execute(
         f"""SELECT t.id, t.date, t.amount, t.account_id,
                   COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
-                  t.raw_name, t.import_evidence_json, t.import_batch_id,
+                  t.raw_name, t.import_evidence_json, t.import_batch_id, t.is_pending,
                   {_account_label_sql('a')} AS account_name
            FROM   txn t JOIN account a ON a.id = t.account_id
            WHERE  ROUND(t.amount, 2) = ROUND(?, 2)
@@ -1126,6 +1126,10 @@ def find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str,
     # the card charge behind a wallet purchase. The opposite-signed row of that amount and merchant is
     # the *refund*, and taking a refund as corroboration is what would keep a real payment out.
     for r in _amount_window_rows(conn, receiving_account_id, on_date, _PAYMENT_MATCH_WINDOW_DAYS, amount):
+        # A pending row corroborates nothing, as everywhere else in the ladder: it is superseded when the
+        # charge posts, and naming it set the posted copy aside while the pending one stayed out of totals.
+        if r["is_pending"]:
+            continue
         haystack = _row_text_haystack(r)
         if any(tok in haystack for tok in tokens):
             return {
@@ -3865,6 +3869,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.amount                   AS new_amount,
             COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, '')) AS new_merchant,
             t1.account_id               AS new_account_id,
+            t1.is_pending               AS new_is_pending,
             {_account_label_sql('a1')} AS new_account_name,
             COALESCE(NULLIF(a1p.display_name, ''), a1p.name) AS new_account_merged_into,
             COALESCE(a1.parent_account_id, a1.id)            AS new_account_root,
@@ -3875,6 +3880,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t2.id                       AS existing_id,
             t2.date                     AS existing_date,
             t2.amount                   AS existing_amount,
+            t2.is_pending               AS existing_is_pending,
             COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, '')) AS existing_merchant,
             {_account_label_sql('a2')} AS existing_account_name,
             COALESCE(NULLIF(a2p.display_name, ''), a2p.name) AS existing_account_merged_into,
@@ -3920,11 +3926,13 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             "account_name": row["new_account_name"],
             "account_id": row["new_account_id"],
             "account_merged_into": row["new_account_merged_into"],
+            "is_pending": bool(row["new_is_pending"]),
         }
         matched = enrich_with_source({
             "id": row["existing_id"],
             "date": row["existing_date"],
             "amount": row["existing_amount"],
+            "is_pending": bool(row["existing_is_pending"]),
             "merchant": row["existing_merchant"],
             "account_name": row["existing_account_name"],
             "account_merged_into": row["existing_account_merged_into"],
@@ -3996,7 +4004,8 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         ONLY when the incoming file is the sole one with that flag set; otherwise adopt the existing
         row's category (covers existing-only and the both/neither tie). The adopted category is
         written as a manual override so rule reruns don't undo it, and a NULL existing category is
-        never copied (we don't downgrade a categorized row to uncategorized). Unlike 'keep',
+        never copied (we don't downgrade a categorized row to uncategorized). The existing row's manual
+        name, notes and tag choices move to the survivor (`carry_user_edits`). Unlike 'keep',
         'replace' does NOT assert the two accounts are distinct and does not cascade — it is a
         per-row "these are the same transaction" decision.
     """
@@ -4057,6 +4066,7 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
                 """,
                 (existing["category_id"], txn_id),
             )
+        carry_user_edits(conn, existing["id"], txn_id, category=False)
         # Remove the existing row as a confirmed duplicate, pointing its audit at the incoming row
         # that replaced it (so its own batch's report can show + Restore it), then clear the
         # surviving incoming row's suspect flag so it stays as an active, distinct transaction.
@@ -4420,6 +4430,12 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     same account, two independent sources) and means the user is never asked about it. They are stamped
     `AUTO_CROSS_SOURCE_RESOLVED_BY` rather than `'auto_merge'`, because no merge produced them and
     `restore_auto_merged_after_detach` must not un-trash them when some unrelated account is detached.
+
+    **A posted suspect of a pending row survives it.** The flag lands on whichever copy arrived second,
+    and a charge first seen pending is usually seen posted second; trashing the posted copy left the
+    pending one standing in for the charge, out of every total, with nothing ever to settle it. Such a pair
+    is promoted the other way round (`promote_posted_over_pending`): the pending row is trashed pointing
+    at the posted one, which takes over the user's edits.
     """
     account_id_list = [aid for aid in (account_ids or []) if aid]
     if not account_id_list:
@@ -4428,7 +4444,9 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     review_only_ph = _placeholders(REVIEW_ONLY_SOFT_FLAG_REASONS)
     rows = conn.execute(
         f"""
-        SELECT t1.id, (t1.account_id = t2.account_id) AS same_account
+        SELECT t1.id, (t1.account_id = t2.account_id) AS same_account, t2.id AS target_id,
+               t1.is_pending AS suspect_pending, t2.is_pending AS target_pending,
+               t1.suspect_duplicate_reason
         FROM   txn t1
         JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
         JOIN   account a1 ON a1.id = t1.account_id
@@ -4445,6 +4463,20 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     ).fetchall()
     if not rows:
         return 0
+    # Inverted only where the pending row is this sweep's sole target: two posted suspects of one pending
+    # row are duplicates of each other too, and keeping both would trade one wrong copy for another.
+    targets = Counter(r["target_id"] for r in rows)
+    inverted = [
+        r for r in rows
+        if not r["suspect_pending"] and r["target_pending"] and targets[r["target_id"]] == 1
+        and not _carries_structure(conn, r["target_id"])
+    ]
+    for r in inverted:
+        promote_posted_over_pending(
+            conn, posted_id=r["id"], pending_id=r["target_id"], reason=r["suspect_duplicate_reason"],
+        )
+    inverted_ids = {r["id"] for r in inverted}
+    rows = [r for r in rows if r["id"] not in inverted_ids]
     ids = [r["id"] for r in rows]
     # `dedupe_resolved_by='auto_merge'` marks this as an automatic, undoable resolution. If the
     # user subsequently detaches the accounts, `restore_auto_merged_after_detach` looks for this
@@ -4468,6 +4500,7 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
         ],
     )
     trash_txns(conn, ids)
+    ids.extend(r["target_id"] for r in inverted)
     # Same-batch transitive clear: a single CSV asserts (via account-column) that rows on
     # different accounts in that file are distinct transactions. If a promoted row Y (now
     # identified with its canonical target X via the merge) had a same-batch sibling Z on a
@@ -4477,6 +4510,124 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     # helper docstring.)
     _clear_same_batch_siblings_after_promotion(conn, ids)
     return len(ids)
+
+
+def _carries_structure(conn: sqlite3.Connection, txn_id: str) -> bool:
+    """Whether a row holds a split or belongs to a transaction link: structure `carry_user_edits` does not
+    move, so trashing the row in favour of another would strand it."""
+    return bool(conn.execute(
+        """
+        SELECT 1 FROM txn WHERE id = ? AND is_split = 1
+        UNION ALL SELECT 1 FROM txn_split WHERE txn_id = ?
+        UNION ALL SELECT 1 FROM txn_link_member WHERE txn_id = ?
+        LIMIT 1
+        """,
+        (txn_id, txn_id, txn_id),
+    ).fetchone())
+
+
+def carry_user_edits(conn: sqlite3.Connection, from_id: str, to_id: str, *, category: bool = True) -> None:
+    """Copy what the user set by hand on one copy of a charge onto the copy that replaces it: a manual
+    category, a manual name, notes the replacement lacks, and manual tag choices. What rules and imports
+    set is left alone, since the replacement was categorized and named by the same rules on arrival.
+    `category=False` leaves the category to a caller with its own rule for it."""
+    source = conn.execute(
+        "SELECT category_id, category_overridden, category_source, display_name, display_name_source, notes"
+        " FROM txn WHERE id = ?",
+        (from_id,),
+    ).fetchone()
+    if not source:
+        return
+    if category and source["category_overridden"]:
+        conn.execute(
+            "UPDATE txn SET category_id = ?, category_overridden = 1, category_source = ? WHERE id = ?",
+            (source["category_id"], source["category_source"], to_id),
+        )
+    if source["display_name_source"] == "manual":
+        conn.execute(
+            "UPDATE txn SET display_name = ?, display_name_source = 'manual' WHERE id = ?",
+            (source["display_name"], to_id),
+        )
+    if source["notes"]:
+        conn.execute(
+            "UPDATE txn SET notes = ? WHERE id = ? AND COALESCE(notes, '') = ''", (source["notes"], to_id),
+        )
+    conn.execute(
+        """
+        INSERT INTO txn_tag (txn_id, tag_id, rule_present, manual_state)
+        SELECT ?, tag_id, 0, manual_state FROM txn_tag WHERE txn_id = ? AND manual_state != 0
+        ON CONFLICT(txn_id, tag_id) DO UPDATE SET manual_state = excluded.manual_state
+        """,
+        (to_id, from_id),
+    )
+
+
+def promote_posted_over_pending(conn: sqlite3.Connection, *, posted_id: str, pending_id: str,
+                                reason: Optional[str]) -> None:
+    """Confirm a posted row and a pending row as one charge, keeping the posted copy. The pending row is
+    trashed as the duplicate, pointing at the posted row and marked as an automatic resolution (by merge
+    when the two sit on different accounts of a group, so a detach undoes it), and the posted row takes
+    over its edits."""
+    same_account = conn.execute(
+        "SELECT a.account_id = b.account_id AS same FROM txn a, txn b WHERE a.id = ? AND b.id = ?",
+        (posted_id, pending_id),
+    ).fetchone()
+    resolved_by = AUTO_CROSS_SOURCE_RESOLVED_BY if same_account and same_account["same"] else "auto_merge"
+    carry_user_edits(conn, pending_id, posted_id)
+    conn.execute(
+        """
+        UPDATE txn
+        SET    rejection_reason = 'duplicate_confirmed',
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               dedupe_resolved_by = ?, suspect_duplicate_of = ?, suspect_duplicate_reason = ?
+        WHERE  id = ?
+        """,
+        (resolved_by, posted_id, reason, pending_id),
+    )
+    conn.execute(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = NULL, suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  id = ?
+        """,
+        (posted_id,),
+    )
+    trash_txns(conn, [pending_id])
+
+
+def reinstate_displaced_posted(conn: sqlite3.Connection, pending_id: str) -> Optional[str]:
+    """Restore the posted copy a duplicate resolution trashed in favour of `pending_id`, carrying the
+    pending row's edits onto it, and return its id; None when the pending row displaced nothing.
+
+    For a pending row about to leave the ledger: without this, the charge it stood in for would leave
+    with it. A resolution chose the pending copy when the user kept it in the duplicate report, or when it
+    predates `_promote_posted_over_pending`."""
+    row = conn.execute(
+        """
+        SELECT id FROM txn
+        WHERE  suspect_duplicate_of = ? AND rejection_reason = 'duplicate_confirmed'
+          AND  trashed_at IS NOT NULL AND is_pending = 0
+        ORDER  BY date DESC, id
+        LIMIT  1
+        """,
+        (pending_id,),
+    ).fetchone()
+    if not row:
+        return None
+    conn.execute(
+        """
+        UPDATE txn
+        SET    rejection_reason = NULL, dedupe_resolved_by = NULL,
+               suspect_duplicate_of = NULL, suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  id = ?
+        """,
+        (row["id"],),
+    )
+    restore_txns(conn, [row["id"]])
+    carry_user_edits(conn, pending_id, row["id"])
+    return row["id"]
 
 
 def _clear_same_batch_siblings_after_promotion(conn: sqlite3.Connection, promoted_ids: list[str]) -> int:

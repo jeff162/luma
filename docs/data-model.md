@@ -360,6 +360,11 @@ A pending transaction appears in lists and is left out of summary totals. A list
 (spending, income, cash flow) is the set behind a figure, so it drops pending rows and
 excluded-from-totals categories too.
 
+The import duplicate ladder never names a pending row as what an incoming row duplicates, the ledger
+probe for a covered payment included: a pending row is superseded when its charge posts, and naming it
+would set the posted copy aside. A posted copy from another source is imported and flagged against the
+pending row instead, and resolving that pair keeps the posted copy.
+
 ### Trash and duplicate resolution
 
 `trashed_at IS NOT NULL` soft-deletes a row. Every read path filters it out; the row stays in `txn`
@@ -1268,7 +1273,10 @@ never blocked.
 
 `promote_in_group_suspects_to_confirmed` runs at import finalize, after a sync, and on an account merge.
 It confirms exact matches whose two sides share a group (`auto_merge`) or an account
-(`auto_cross_source`), so import order and merge order give the same result.
+(`auto_cross_source`), so import order and merge order give the same result. A posted suspect of a
+pending row is confirmed the other way round: the pending copy is trashed pointing at the posted one,
+which takes over the pending row's manual category, name, notes and tags (`carry_user_edits`). A pending
+row holding a split or a link stays the survivor, since neither moves.
 
 An account merge also runs `scan_scope_for_cross_account_duplicates` over the group first, because
 import-time detection compares only incoming rows against existing ones. A single account is a valid
@@ -1365,7 +1373,9 @@ the batch, so it follows a file whose batch is assigned to another source. The m
 - **A pending row converts in place** when it posts, matched on the provider's
   `pending_transaction_id`, so the user's category, name and tags stay. The CSV path does the same on
   account, date and source text, and depends on `ColumnMap` carrying the `pending` column to
-  `parse_pending_flag`.
+  `parse_pending_flag`. A provider with no such pointer and no removals (SimpleFIN) has a pending row
+  that vanishes from a complete listing paired with its unambiguous replacement, or else removed
+  (`building-a-connector.md` → *Pending rows a source stops sending*).
 - **`initial_sync_complete`** records that the historical pull finished. "Nothing more right now" and
   "history is complete" are separate adapter signals (`resume_later`, `backfill_complete`): a metered
   provider can stop mid-backfill, and marking it complete would strand the unfetched history.

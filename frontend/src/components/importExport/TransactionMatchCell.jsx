@@ -3,6 +3,7 @@
 
 import React from 'react'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
+import { PendingMarker } from '../AmountDisplay.jsx'
 
 // The shared record cell for a match report (duplicate detection, Amazon reconciliation, …): one
 // transaction rendered as "date · merchant · amount" with its account underneath, plus an optional
@@ -31,7 +32,7 @@ export function SourceFileLink({ filename, batchId, importedAt, dateStart, dateE
   )
 }
 
-// One side of a match. `record` is { date, merchant, amount, account_name, account_merged_into?,
+// One side of a match. `record` is { date, merchant, amount, is_pending?, account_name, account_merged_into?,
 // csv_values?, source? }. `null` renders a muted em-dash. `csv_values` (a raw import row) is exposed on
 // hover so a merchant-less funding leg is still identifiable; `account_merged_into` annotates a later
 // account merge without hiding what the file said.
@@ -53,6 +54,7 @@ export function TransactionMatchCell({ record, onDrillThrough }) {
         {' · '}
         <span>{record.merchant || ''}</span>
         {' · '}
+        {record.is_pending ? <span style={{ display: 'inline-flex', verticalAlign: 'middle', marginRight: 4 }}><PendingMarker /></span> : null}
         <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{Number.isFinite(Number(record.amount)) ? formatTransactionAmount(record.amount) : ''}</span>
       </div>
       {acct ? (

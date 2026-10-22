@@ -41,7 +41,8 @@ class FakeCursorAdapter(ProviderAdapter):
 
     def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730,
                                 account_targets=None, ledger_currency=DEFAULT_LEDGER_CURRENCY,
-                                request_budget=None, continuing=False, budget_checkpoint=None):
+                                request_budget=None, continuing=False, budget_checkpoint=None,
+                                pending_since=None):
         self.calls.append({"cursor": cursor, "days_requested": days_requested,
                            "account_targets": account_targets, "ledger_currency": ledger_currency,
                            "request_budget": request_budget, "continuing": continuing})
