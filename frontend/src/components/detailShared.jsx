@@ -22,7 +22,7 @@
  *     key so changing a filter starts over at page 1.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
@@ -436,17 +436,20 @@ export function detailRangeStableKey(mode, selectedMonth) {
 //   all   → the full span the chart is showing (its first..last month), so the list, the footer
 //           count/total (summed from the same trend rows), and the chart always agree — even where the
 //           trend itself is capped below the true history (the category drawer's month window; an
-//           account's trend is its full history).
+//           account's trend is its full history). `includeMonth` widens that span to a month the chart
+//           has no bar for: the merchant report opens on its transaction's month, which may hold only
+//           pending rows, and the trend leaves those out like every summary.
 // Month-end upper bounds use `${month}-31`: transaction dates compare lexically, so it includes every
 // day of that month without needing the real last day.
-export function computeDetailRange(mode, selectedMonth, trend) {
+export function computeDetailRange(mode, selectedMonth, trend, includeMonth = null) {
   const rows = Array.isArray(trend) ? trend : []
   let params
   let windowRows
   let label
   if (mode === 'all') {
-    const first = rows[0]?.month
-    const last = rows[rows.length - 1]?.month
+    const months = [rows[0]?.month, rows[rows.length - 1]?.month, includeMonth].filter(Boolean).sort()
+    const first = months[0]
+    const last = months[months.length - 1]
     params = (first && last) ? { date_start: `${first}-01`, date_end: `${last}-31` } : {}
     windowRows = rows
     label = 'All time'
@@ -651,9 +654,18 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth, isMonthA
   const dimNonActive = !!selectedMonth || !!isMonthActive
   const [windowEnd, setWindowEnd] = useState(null)
 
-  useEffect(() => {
-    // Fresh trend data should reopen on its newest segment rather than staying stranded in an old scrolled window.
-    setWindowEnd(null)
+  useLayoutEffect(() => {
+    // Fresh trend data reopens on the segment holding the selected month — the newest one unless the panel
+    // opened on an older month (the merchant report opens on its transaction's) — rather than staying
+    // stranded in whatever window was scrolled to before. The segment is the one paging lands on, so the
+    // arrows step from it as they would from the newest. A layout effect, so the newest segment is never
+    // painted first.
+    const idx = trend.findIndex(d => d.month === selectedMonth)
+    if (idx === -1) { setWindowEnd(null); return }
+    const pages = Math.floor((trend.length - 1 - idx) / DETAIL_WINDOW_MONTHS)
+    const end = Math.max(DETAIL_WINDOW_MONTHS - 1, trend.length - 1 - pages * DETAIL_WINDOW_MONTHS)
+    setWindowEnd(pages === 0 ? null : trend[Math.min(trend.length - 1, end)].month)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fresh trend data re-windows; a bar click changes selectedMonth to a bar already in view
   }, [trend])
 
   if (!trend.length) {

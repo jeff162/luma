@@ -160,17 +160,24 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       .catch(() => {})
     return () => { cancelled = true }
   }, [txn])
+  // The report opens on the month of the transaction it was opened from, so that row is in the list. That
+  // month need not be a bar: the trend leaves pending rows out like every summary, while the list is the
+  // lossless feed, so a month holding only a pending charge is selected with no bar and still lists it. A
+  // row outside the caller's date scope has no place in this report, so it falls back to the newest bar.
+  const openedMonth = txn?.date
+    && (!dateStart || txn.date >= dateStart) && (!dateEnd || txn.date <= dateEnd)
+    ? txn.date.slice(0, 7) : null
   // The transaction list defaults to the selected month but can widen to that bar's year or the whole
   // charted span (DetailRangeControl). `range` derives the fetch window + count/total; `rangeKey` keeps
   // the memo/fetch stable so re-clicking a bar inside the same window doesn't reload identical rows.
   const [rangeMode, setRangeMode] = useState('month')
   const rangeKey = detailRangeStableKey(rangeMode, selectedMonth)
   const range = useMemo(
-    () => computeDetailRange(rangeMode, selectedMonth, trend),
+    () => computeDetailRange(rangeMode, selectedMonth, trend, openedMonth),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rangeKey subsumes selectedMonth; recomputing on every anchor click would refetch identical rows in year/all-time mode
-    [rangeMode, rangeKey, trend],
+    [rangeMode, rangeKey, trend, openedMonth],
   )
-  const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
+  const anchorReady = rangeMode === 'all' ? (trend.length > 0 || !!openedMonth) : !!selectedMonth
   const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}` : null
   // The window + payee: what the list fetches, what "select all matching" resolves, and what a download of
   // the list exports.
@@ -224,7 +231,9 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
-      if (rows.length > 0) {
+      if (openedMonth) {
+        setSelectedMonth(openedMonth)
+      } else if (rows.length > 0) {
         setSelectedMonth(rows[rows.length - 1].month)
       }
     }).catch(() => {
@@ -235,7 +244,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       setTrendLoading(false)
     })
     return () => { cancelled = true }
-  }, [payee, dateStart, dateEnd, showPayeeActivity])
+  }, [payee, dateStart, dateEnd, showPayeeActivity, openedMonth])
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, patch) {
@@ -684,7 +693,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
           )}
 
           {anchorReady && (
-            <div style={{ marginTop: 24, height: monthSectionHeight }}>
+            <div style={{ marginTop: 24, minHeight: monthSectionHeight }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
                   {range.label} · {payee}

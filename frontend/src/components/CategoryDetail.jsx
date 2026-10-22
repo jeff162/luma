@@ -170,7 +170,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
           )}
 
           {anchorReady && (
-            <div style={{ marginTop: 24, height: monthSectionHeight }}>
+            <div style={{ marginTop: 24, minHeight: monthSectionHeight }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
                   {range.label} · {category.name}
