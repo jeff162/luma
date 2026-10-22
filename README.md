@@ -136,7 +136,7 @@ Local-first also means the security model is easy to reason about — but it's w
 
 - **The optional sign-in password is application access control.** It governs who on the local machine or network (for server installs) can reach a running instance. It does not encrypt the database, does not prevent someone from examining the database file directly with SQLite. 2FA is available for use with sign-in passwords, passkeys are available as a convenience.
 
-- **Data-source tokens are encrypted at rest.** There is a token which authorizes Luma to interact with the data provider. Some data providers may also issue tokens for each individual account connection. Luma only uses read access but these tokens may be able to authorize transfers or payments. Since they are sensitive, all of these tokens are kept in a passphrase-protected vault. The vault passphrase is separate from the sign-in password. Losing every way into the vault means re-linking the data sources, the ledger itself is not affected. Backups of data source tokens are encrypted. 
+- **Data-source tokens are encrypted at rest.** There is a token which authorizes Luma to interact with the data provider. Some data providers may also issue tokens for each individual account connection. Luma only uses read access but these tokens may be able to authorize transfers or payments. Since they are sensitive, all of these tokens are kept in a passphrase-protected vault. The vault passphrase is separate from the sign-in password. Losing every way into the vault means re-linking the data sources, the ledger itself is not affected. Backups of data source tokens are encrypted.
 
 - **A household shares one vault, and each person has their own access.** When there is no vault passphrase set any user can create one. After the vault passphrase is created, a subsequent user requests access to the vault by creating their own vault passphrase which posts a request to the user(s) who can unlock the vault to approve the request. Passphrases are not revealed in the process.
 
@@ -150,7 +150,7 @@ Local-first also means the security model is easy to reason about — but it's w
 
 Luma for a single machine is distributed as a self-contained download. The current build is available at the [releases page](https://github.com/jeff162/luma/releases).
 
-[Running Luma as a server](#running-luma-as-a-server) describes how to deploy Luma in a server configuration. 
+[Running Luma as a server](#running-luma-as-a-server) describes how to deploy Luma in a server configuration.
 
 | Platform                   | Download                            | Shape                |
 | -------------------------- | ----------------------------------- | -------------------- |
@@ -162,7 +162,7 @@ Luma for a single machine is distributed as a self-contained download. The curre
 
 **macOS (Intel) is built but not published**, because it has not been tested on an Intel Mac. A tagged release's build of it is downloadable from that run of the [Release workflow](https://github.com/jeff162/luma/actions/workflows/release.yml) (a GitHub sign-in is needed, and the files expire after 90 days), and a fresh one can be built by running the workflow with the `macos-15-intel` platform.
 
-**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run. 
+**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run.
 
 ### Windows and Linux — portable
 
@@ -195,7 +195,7 @@ Using **System Settings**
 2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.
 3. Choose **Open Anyway** beside the message naming Luma, and confirm.
 
-macOS keeps its data in `~/Library/Application Support/Luma`. 
+macOS keeps its data in `~/Library/Application Support/Luma`.
 
 An application started from Finder has no terminal, so the startup messages go to `luma-desktop.log` in that directory.
 
@@ -224,11 +224,11 @@ One computer runs Luma and the other computers on the local network open it in a
 
 How to set one up with HTTPS:
 
-- **Docker on Linux** is the easiest way. 
+- **Docker on Linux** is the easiest way.
 - **On Windows**, the easiest way is to put the Caddy executable in the directory with Luma. Luma handles starting and configuring Caddy.
 - **On Linux without Docker**, Caddy is installed from the distribution's packages and systemd is used to start Luma at boot and keep it running. Luma can provide the configuration files.
 
-Instructions for the last two, and what each connecting computer does on its first visit, are in the application under **Help → Running Luma as a server**. Start the downloaded version of Luma to read them. A Mac can be the server as well, with Caddy and starting at boot set up using that system's own tools.
+The steps for each are below, and the same instructions are in the application under **Help → Running Luma as a server**. A Mac can be the server as well, with Caddy and starting at boot set up using that system's own tools.
 
 `luma --server` starts Luma in server mode and creates a name on the network, `luma.local`, to reach the app. While not recommended Luma can be configured as a server without HTTPS. The following details the issues:
 
@@ -244,7 +244,7 @@ The two restrictions have different causes. The passkey requirement is from the 
 
 **Without HTTPS the vault passphrase travels over the local network unencrypted.** Anyone who captures it and has a copy of either the database or a backup can extract the data provider secrets from that copy. This should be considered before using Luma in a server configuration without HTTPS.
 
-Caddy and HTTPS are quite easy to configure. The biggest issue is that the server's certifcate must be added to each client's certifiacate store as a trusted certificate.
+Caddy and HTTPS are quite easy to configure. The biggest issue is that the server's certificate must be added to each client's certificate store as a trusted certificate. The sign-in page links to the certificate and to instructions for installing it.
 
 ### With Docker
 
@@ -262,7 +262,7 @@ On a Linux host, if Docker with the Compose plugin is available, this is a strai
    docker compose logs app
    ```
 
-The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443 have to be free for Caddy. Each connecting computer installs the server's certificate on its first visit, as described in the Help topic above. The fingerprint for comparison is displayed by:
+The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443 have to be free for Caddy. Each connecting computer installs the server's certificate on its first visit, as described in [On each computer that connects](#on-each-computer-that-connects). The fingerprint for comparison is displayed by:
 
 ```sh
 docker compose exec app python -m backend.desktop --certificate-fingerprint
@@ -273,6 +273,67 @@ Updating to a newer release is `docker compose pull` followed by `docker compose
 Docker Desktop on Windows and macOS runs containers inside a virtual machine, which does not work for a Luma server, so this only works on Linux.
 
 If running from a source checkout, `docker compose up -d --build` builds the image from the source instead of pulling the published one.
+
+### On Linux without Docker
+
+Run these as the user the server should run as, from the folder the download was unpacked into.
+
+1. Create a file named `.env` beside the program containing `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+
+2. Install Caddy from the distribution's packages.
+
+3. Give Caddy its configuration, which Luma writes for the name and port in use:
+
+   ```sh
+   ./luma --caddyfile | sudo tee /etc/caddy/Caddyfile
+   sudo systemctl reload caddy
+   ```
+
+4. Install Luma as a service, so it starts whenever the computer does:
+
+   ```sh
+   ./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now luma
+   ```
+
+5. Open `https://luma.local` from another computer. If a different name was chosen, `journalctl -u luma` shows the address.
+
+A firewall on the server has to allow TCP port 443 and UDP port 5353. Changing `MDNS_NAME` or `FRONTEND_PORT` later means repeating step 3; moving the folder means repeating step 4.
+
+### On Windows
+
+Luma runs Caddy itself and starts when its user signs in. From the folder the download was unpacked into:
+
+1. Create the `.env` file as in step 1 for Linux.
+
+2. Download Caddy for Windows and put `caddy.exe` in the same folder as `luma.exe`. Luma starts, configures and stops it.
+
+3. In a command prompt in that folder, run once:
+
+   ```sh
+   luma --start-at-sign-in
+   ```
+
+   From the next sign-in on, Luma starts as a server with no window, behind an icon in the notification area that shows the address, opens Luma, and stops and starts it. `luma --server --tray` starts it straight away, and `luma --no-start-at-sign-in` undoes the step.
+
+4. The first time each one runs, Windows Firewall asks which networks may reach Caddy and which may reach Luma. **Private networks** covers the other computers in a household; **Public networks** also lets anyone on a public network the server joins reach the sign-in page. If the other computers still cannot connect, Windows may be treating the home network as public; the profile is set under the network's properties in Windows Settings.
+
+The server runs while that user is signed in. Replacing `luma.exe` with a newer version in the same folder, after choosing **Exit** on the icon, needs nothing further. After moving the folder, or unpacking a newer version into a different one, run `luma --start-at-sign-in` again from there.
+
+**To start with the computer instead, with nobody signed in**, use a scheduled task in place of step 3:
+
+1. In **Task Scheduler**, choose **Create Task** and select **Run whether user is logged on or not**.
+2. Add a trigger of **At startup**, and an action that starts `luma.exe --server` from its folder.
+3. Clear **Stop the task if it runs longer than 3 days** and, on a laptop, **Start the task only if the computer is on AC power**.
+
+A server started this way has no icon in the notification area. Its address is on the start line of `luma.log`, beside the data.
+
+### On each computer that connects
+
+The first visit shows a browser warning, because Caddy issues its own certificate and no computer trusts it yet. Continue past the warning once, choose **Browser warning about this server? Install its certificate** on the sign-in screen, and follow the steps shown for that kind of computer. Once the browser is closed and reopened the warning is gone. With sign-in protection off there is no sign-in screen; the same download and steps are under **Administration → Server certificate**.
+
+To be sure a computer received the server's own certificate, compare the fingerprint it shows against the one printed on the server by `luma --certificate-fingerprint`. **Administration → Server certificate** also has a box that takes a fingerprint and reports whether it matches.
 
 ## Locked out
 
