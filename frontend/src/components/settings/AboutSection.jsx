@@ -94,7 +94,7 @@ export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, bu
           <AboutRow
             label="Instance ID"
             value={dbInstanceId || 'Unavailable'}
-            help="Unique identifier for the database. Used to warn when restoring a backup from a different database."
+            help="Unique identifier for the database."
           />
           {/* Where the licenses of everything else this copy carries are. A packaged build has them all in
               one file frozen in beside the LICENSE; elsewhere the generated list covers the web interface
@@ -115,8 +115,8 @@ export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, bu
                 </a>
               )}
               help={thirdPartyNoticesScope === 'build'
-                ? 'Every package and component in this build, with the license text each one ships.'
-                : 'The packages in the web interface, with the license text each one ships. A packaged build lists the server\u2019s software too; in a checkout those dependencies are installed separately, each with its own license.'}
+                ? 'License text for the components included in this build.'
+                : 'License text for the packages in the web interface. A packaged build also lists the server\u2019s software; in a checkout those dependencies are installed separately, each with its own license.'}
             />
           ) : null}
           {/* The attribution CC BY 4.0 asks for wherever the list is conveyed: creator, license with a link,
