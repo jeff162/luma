@@ -268,6 +268,22 @@ describe('split editor remainder gate', () => {
     expect(fields[1].value).toBe('')
   })
 
+  it('distributes the remainder across the filled amounts, and undoes every one it changed', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    await amountFields()
+    await user.click(screen.getByText('+ Item'))
+    const three = screen.getAllByLabelText('Amount')
+
+    await user.type(three[0], '50')
+    await user.type(three[1], '25')   // the third stays empty and must not take a share
+    await user.click(screen.getByText('Distribute remainder'))
+    expect(three.map(f => f.value)).toEqual(['66.67', '33.33', ''])
+
+    await user.click(screen.getByText('Undo'))
+    expect(three.map(f => f.value)).toEqual(['50', '25', ''])
+  })
+
   it('retires the undo as soon as anything else is edited', async () => {
     // A stash that outlived a later edit would restore a figure unrelated to what is on screen —
     // worse than offering no undo. Any change to the form takes the offer away.

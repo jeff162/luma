@@ -871,9 +871,10 @@ export const HELP_TOPICS = [
           <strong>Remaining</strong> counts down as the amounts are filled in, and turns
           into <strong>Fully allocated</strong> when the items account for the transaction exactly.
           <strong> Save split</strong> stays unavailable until then.
-          <strong> Add remainder to selected</strong> drops whatever is left into the amount last worked
-          in -- useful for the final line -- and turns into an undo to reverse the operation if it went
-          to the wrong part.
+          <strong> Add remainder to selected</strong> drops whatever is left into the line last worked
+          in -- useful for the final line. <strong>Distribute remainder</strong> spreads it across every
+          line that has an amount, in proportion to each -- one way to fold tax and shipping into item
+          prices entered without them. Either one turns into an undo to reverse the operation.
         </p>
 
         <h4>What the editor will not accept</h4>

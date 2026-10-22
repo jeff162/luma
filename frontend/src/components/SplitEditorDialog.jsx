@@ -34,6 +34,7 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude, formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
 import { round2 } from '../lib/manualTransaction.js'
+import { distributeRemainder } from '../lib/splitDistribution.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input, Tooltip } from './ui.jsx'
@@ -69,6 +70,12 @@ function blankRow() {
   return { key: `row-${Math.random().toString(36).slice(2)}`, category_id: null, amount: '', label: '' }
 }
 
+// Whether a row has a weight to take a proportional share of the remainder by — whole cents, the unit
+// distributeRemainder weighs in, so the rows it changes and the rows stashed for undo are the same set.
+function holdsAmount(row) {
+  return Math.round(toAmount(row.amount) * 100) !== 0
+}
+
 const labelStyle = {
   color: 'var(--muted)', fontSize: 11, fontWeight: 600,
   letterSpacing: '0.05em', textTransform: 'uppercase',
@@ -80,15 +87,15 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [suggestion, setSuggestion] = useState(null)
-  // Which amount field the remainder action will land in. Set on focus and deliberately *not* cleared
-  // on blur: pressing the button blurs the field, so a selection that ended at blur could never be
-  // acted on.
+  // Which row "Add remainder to selected" will land in: the line last worked in, whichever of its fields
+  // that was, or the line just added. Deliberately *not* cleared on blur: pressing the button blurs the
+  // field, so a selection that ended at blur could never be acted on.
   const [selectedKey, setSelectedKey] = useState(null)
-  // The amount the remainder action overwrote, so it can be put back. Kept only while that action is
-  // still the most recent change to the form: it is the one edit here that replaces a figure the user
-  // typed with a computed one, so its prior value is otherwise unrecoverable — but a stash that
-  // outlived a later edit would restore a number that no longer relates to anything on screen, which
-  // is worse than offering no undo at all. Every mutation below retires it.
+  // The amounts a remainder action overwrote, by row key, so they can be put back. Kept only while that
+  // action is still the most recent change to the form: the remainder actions are the edits here that
+  // replace figures the user typed with computed ones, so the prior values are otherwise unrecoverable —
+  // but a stash that outlived a later edit would restore numbers that no longer relate to anything on
+  // screen, which is worse than offering no undo at all. Every mutation below retires it.
   const [remainderUndo, setRemainderUndo] = useState(null)
 
   const amount = Number(txn?.amount) || 0
@@ -102,6 +109,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   const allocated = rows.reduce((sum, row) => sum + toAmount(row.amount), 0)
   const remaining = Math.round((total - allocated) * 100) / 100
   const balanced = Math.abs(remaining) < CENT
+  const distributable = rows.some(holdsAmount)
   // What stops Save, as the sentence its hover shows — one expression for both, so the button is never
   // greyed for a reason the hover does not give. Several can be unmet at once; the order is the order of
   // the work, so the total, which "Add remainder" usually settles last, is named last.
@@ -200,12 +208,24 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setRows(prev => prev.map(r => (r.key === selectedKey ? { ...r, amount: next } : r)))
     // Stashed verbatim, not re-formatted: putting back "30" where the user typed "30" is the edit
     // being reversed; normalizing it to "30.00" would be a second change wearing an undo's label.
-    setRemainderUndo({ key: selectedKey, amount: row.amount })
+    setRemainderUndo({ [selectedKey]: row.amount })
+  }
+
+  // Spread what is unallocated across every line that has an amount, in proportion to it. A line with
+  // no amount is left alone: it has no weight to take a share by, and a computed figure appearing in it
+  // would read as an allocation the user never made.
+  function distributeRemainderAcrossRows() {
+    const next = distributeRemainder(rows.map(r => toAmount(r.amount)), remaining)
+    if (!next) return
+    const stash = {}
+    rows.forEach(r => { if (holdsAmount(r)) stash[r.key] = r.amount })
+    setRows(prev => prev.map((r, i) => (r.key in stash ? { ...r, amount: next[i].toFixed(2) } : r)))
+    setRemainderUndo(stash)
   }
 
   function undoRemainder() {
     if (!remainderUndo) return
-    setRows(prev => prev.map(r => (r.key === remainderUndo.key ? { ...r, amount: remainderUndo.amount } : r)))
+    setRows(prev => prev.map(r => (r.key in remainderUndo ? { ...r, amount: remainderUndo[r.key] } : r)))
     setRemainderUndo(null)
   }
 
@@ -394,6 +414,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                     name="split-part-description"
                     autoComplete="off"
                     title={row.label || undefined}
+                    onFocus={() => setSelectedKey(row.key)}
                     onChange={value => update(row.key, { label: value })}
                     style={{ fontSize: 12, padding: '5px 8px' }}
                   />
@@ -403,7 +424,9 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       categories={categories}
                       compact
                       showSelectedBadge
-                      onChange={id => update(row.key, { category_id: id })}
+                      // Selected on the pick rather than on focus: WebKit does not focus a button
+                      // on click, so the picker's trigger cannot be relied on to report one.
+                      onChange={id => { setSelectedKey(row.key); update(row.key, { category_id: id }) }}
                       onAddCategory={onAddCategory}
                       // The picker portals its dropdown to <body> at 1100 by default, which is *behind*
                       // an AppDialog (1200) — it has to be raised to be visible from inside one.
@@ -432,6 +455,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                     onClick={() => {
                       if (!removable) return
                       setRemainderUndo(null)
+                      setSelectedKey(key => (key === row.key ? null : key))
                       setRows(prev => prev.filter(r => r.key !== row.key))
                     }}
                     aria-label="Remove this category from the split"
@@ -451,7 +475,13 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
               <Button
                 variant="ghost"
                 style={COMPACT_ACTION_BTN_STYLE}
-                onClick={() => { setRemainderUndo(null); setRows(prev => [...prev, blankRow()]) }}
+                onClick={() => {
+                  // A new, empty line is usually the one the remainder is meant for.
+                  const added = blankRow()
+                  setRemainderUndo(null)
+                  setSelectedKey(added.key)
+                  setRows(prev => [...prev, added])
+                }}
               >+ Item</Button>
             </div>
           </div>
@@ -480,32 +510,44 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
             </div>
           </div>
 
-          {/* Below the rule, only the action on the remainder — right-aligned, under the amount
+          {/* Below the rule, only the actions on the remainder — right-aligned, under the amount
               column whose figures it settles. Takes the shared compact footprint so it stays a quiet
               helper rather than competing with Save for weight.
               Hidden rather than unmounted once the split balances: the row keeps its height, so
               finishing a split doesn't resize the panel under the cursor. `visibility: hidden` is the
               form that does this honestly — the space is held, but the control leaves the tab order
               and the accessibility tree exactly as an unmounted one would. */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             {remainderUndo ? (
               <Button
                 variant="ghost"
                 style={COMPACT_ACTION_BTN_STYLE}
                 onClick={undoRemainder}
-                title="Put the previous amount back"
+                title="Put the previous amounts back"
               >Undo</Button>
             ) : (
-              <Tooltip content={selectedKey
-                ? 'Add what is left over to the highlighted amount'
-                : 'Click an amount above to choose where the remainder goes'}>
-                <Button
-                  variant="ghost"
-                  style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
-                  onClick={addRemainderToSelected}
-                  disabled={!selectedKey}
-                >Add remainder to selected</Button>
-              </Tooltip>
+              <>
+                <Tooltip content={distributable
+                  ? 'Share what is left among the amounts above, in proportion to each'
+                  : 'Enter an amount above to share the remainder by'}>
+                  <Button
+                    variant="ghost"
+                    style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
+                    onClick={distributeRemainderAcrossRows}
+                    disabled={!distributable}
+                  >Distribute remainder</Button>
+                </Tooltip>
+                <Tooltip content={selectedKey
+                  ? 'Add what is left over to the highlighted amount'
+                  : 'Click a line above to choose where the remainder goes'}>
+                  <Button
+                    variant="ghost"
+                    style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
+                    onClick={addRemainderToSelected}
+                    disabled={!selectedKey}
+                  >Add remainder to selected</Button>
+                </Tooltip>
+              </>
             )}
           </div>
 
