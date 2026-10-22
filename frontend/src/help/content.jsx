@@ -142,6 +142,7 @@ export const HELP_TOPICS = [
     summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else (accounts, owners, categories, tags, rules) exists to make these two better.`,
     body: () => (
       <>
+        <p>**needs review** - just a read though, keeping up to date @ end removed</p>
         <p>
           Two features sit at the center of {APP_NAME}: <strong>reports</strong> (mostly through the
           dashboard) and <strong>searching</strong> the transaction history. Accounts, owners, categories,
@@ -238,10 +239,6 @@ export const HELP_TOPICS = [
             Use the <strong>Dashboard</strong> page to dig into categories to see if things look right.
           </li>
         </ol>
-        <p>
-          After that, <HelpLink to="/help/keeping-up-to-date">keeping the ledger up to date</HelpLink> is
-          a short routine.
-        </p>
       </>
     ),
   },
@@ -389,131 +386,91 @@ export const HELP_TOPICS = [
   {
     id: 'import-strategy',
     section: 'getting-started',
-    title: 'Choosing how to bring data in',
+    title: 'Loading transactions',
     surfaces: ['Getting started'],
-    summary: 'Transactions come from files, from a data connection, or from both, depending on what is available, what it costs and who sees the data. Amazon and PayPal exports add the purchase detail neither one carries.',
+    summary: 'Transactions can be loaded from files, via a data connection, or from both, depending on what is available for the various sources. Amazon, PayPal and P2P payer exports can be added to capture purchase detail for otherwise opaque transactions.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Transactions come from files, from a data connection, or from both. Which suits depends on
-          what is available, what it costs, how much downloading is tolerable, and who else gets to see
-          the transactions.
+          Transactions come from files, from a data connection, or from both. Some sources of information
+          such as Amazon transaction detail is only available as a file, others can be pulled from a data provider.
+          The issues affecting which route is picked tend to be convenience, cost, and privacy.
         </p>
         <ul>
           <li>
             <strong>Downloading from each bank.</strong> Most banks and card issuers offer a CSV
             export. It costs nothing and no one else sees the data, but staying current means a fresh
-            file from each one: trivial for two accounts, a chore for a dozen. Moving from another tool
-            usually starts with a file too, since its export often holds the whole history, further
-            back than a connection can reach.
+            file from each one: trivial for two accounts, a chore for a dozen. CSV files are often used
+            for moving between tools of this nature as a way to preserve the already curated transaction data.
+            For this situation Luma can be asked to build rules from the incoming data to preserve
+            that work.
           </li>
           <li>
-            <strong>An aggregated view&apos;s export.</strong> Some budgeting apps, and a growing number
-            of banks and brokerages, can link accounts held elsewhere and show them in one place, often
-            at no charge. Where one can export everything as a single CSV, many downloads become one.
-            In exchange, that service sees every transaction from the linked accounts.
+            <strong>An aggregated view&apos;s export.</strong> Some budgeting apps, brokerage accounts
+            and a growing number of banks can link outside accounts held elsewhere and show them in one place, often
+            at no charge. When they support exporting everything as a CSV, this can be a convenient way to keep all
+            the accounts up to date from a single CSV export/import.
+            Like with all aggregation services, this means that the institution and possibly the
+            connection service can see every transaction from the linked accounts.
           </li>
           <li>
-            <strong>A <HelpLink to="/help/data-providers">data provider</HelpLink>.</strong> Where one
-            operates, a paid provider connects {APP_NAME} to the accounts directly. New transactions
-            arrive with each sync, started by hand, and nothing is downloaded. The price varies by
-            country, and the provider sees the transactions.
+            <strong>A <HelpLink to="/help/data-providers">data provider</HelpLink>.</strong> If available
+            this provides a connection where {APP_NAME} can download account data directly. A sync button
+            brings in new transactions without requiring exports/imports. The data provider and whatever
+            connection technology they use (some providers are reselling other services) can see the
+            transaction and account data.
           </li>
         </ul>
         <p>
-          None of this is fixed. Free tiers end, prices change and providers come and go, so the choice
-          is worth revisiting, and mixing routes is normal: files once for the older history and a
-          connection from then on is a common shape. Switching or overlapping is safe, because every
-          import is compared against the ledger and history that arrives by two routes is not counted
-          twice, provided each bank account maps to the same account in {APP_NAME} from both.
+          All of this is very flexible and it is fine to mix and match. If data is brought in both from a
+          data provider and via CSV files and there are accounts that are covered by both, it is
+          better to skip the already covered account in the CSV file's data source mapping as this
+          keeps the duplicate transaction report cleaner. If an account is brought in from multiple
+          sources it is likely there are duplicate transactions which will not be able to be
+          resolved automatically and will be posted for review. This does not cause trouble, it is
+          simply extra work.
         </p>
         <p>
           Which accounts are worth bringing in at all is covered
-          under <HelpLink to="/help/page-accounts">the Accounts page</HelpLink>.
+          on <HelpLink to="/help/page-accounts">the Accounts page</HelpLink>.
         </p>
-        <h4>Sources worth adding either way</h4>
-        <p>
-          A card or bank account records where money went, not always what it bought.
-        </p>
+        <h4>Sources worth having</h4>
         <ul>
           <li>
-            An Amazon purchase reads as some form of <strong>AMAZON.COM</strong> and an amount,
-            however the charge arrived. The{' '}
-            <HelpLink to="/help/amazon-import">Amazon order export</HelpLink> adds the orders and,
-            optionally, their items, which is what lets one order be split across categories.
+            If cash flow is all that is interesting, simply adding data from the bank accounts is probably
+            sufficient. Bringing in data from credit card accounts adds transaction detail to the
+            charge which shows up as the monthly credit card payment in the bank account. When the
+            credit card is added the payments are excluded from spending totals so the spending is not
+            double counted.
           </li>
           <li>
-            A purchase paid through PayPal reads as a &ldquo;PAYPAL&hellip;&rdquo; line. PayPal&apos;s
-            own history names the purchase. The{' '}
-            <HelpLink to="/help/paypal-statements">monthly statement PDFs</HelpLink> are the easy way
-            to get that history; the activity CSV adds each purchase&apos;s item title.
+            Amazon purchase detail can be added by exporting the Amazon purchase history
+            using a Chrome browser extension. This provides detail to the charges which
+            show up as some form of <em>AMAZON.COM</em>. Charges which cover multiple
+            purchases on the Amazon end can be split in the ledger to attribute the spending
+            to multiple categories. <HelpLink to="/help/amazon-import">Amazon order export</HelpLink> contains
+            details on exporting the Amazon order history.
+          </li>
+          <li>
+            PayPal CSV exports and <HelpLink to="/help/paypal-statements">PDF statements</HelpLink> can
+            be imported to add purchase detail
+            to the PayPal income/spending recorded on credit card and bank
+            statements.
           </li>
         </ul>
         <p>
-          Neither has to wait for the account that paid: orders and PayPal transactions are matched
-          with their card or bank transactions whichever side arrives first. The steps are
-          in <HelpLink to="/help/purchase-detail">adding purchase detail from Amazon and
+          Details for adding purchase detail from Amazon and PayPal accounts
+          is described in <HelpLink to="/help/purchase-detail">adding purchase detail from Amazon and
             PayPal</HelpLink>.
         </p>
         <h4>Arriving with categorized data</h4>
         <p>
-          An export from another tool often carries a category on every row. Noting that the
-          categories are present in the data, during the import or afterwards on the file&apos;s card,
-          lets <HelpLink to="/help/imported-category-cleanup">Group imported categories</HelpLink> bring
-          them in and <HelpLink to="/help/generate-rules">Generate rules</HelpLink> propose rules that
-          file future imports the same way. That is a quicker start than the starter categories or
-          categorizing from nothing.
+          Data brought in from another tool is often already categorized. <HelpLink to="/help/imported-category-cleanup">Group imported categories</HelpLink> indicates
+          that {APP_NAME} should import
+          categories from the incoming data and <HelpLink to="/help/generate-rules">Generate rules</HelpLink> indicates
+          that {APP_NAME} should generate rules based on the
+          categorization patterns in the incoming data.
         </p>
-      </>
-    ),
-  },
-  {
-    id: 'keeping-up-to-date',
-    section: 'getting-started',
-    title: 'Keeping the ledger up to date',
-    surfaces: ['Getting started'],
-    summary: 'The routine once the accounts are in: bring in what is new, refresh the Amazon and PayPal detail, settle what the import could not, look over what arrived, and check Tasks.',
-    body: () => (
-      <>
-        <p>*needs review*</p>
-        <p>
-          Once the accounts are in, the same handful of steps repeats, at whatever interval suits.
-          Monthly is typical.
-        </p>
-        <ol>
-          <li>
-            <strong>Bring in what is new.</strong> <strong>Sync now</strong> for{' '}
-            <HelpLink to="/help/data-providers">connections</HelpLink>; for files, download the export
-            and drop it on the <strong>Data Import</strong> tab, or leave it in the data source&apos;s{' '}
-            <HelpLink to="/help/watched-folders">watched folder</HelpLink>.
-            Check <strong>Watched folders</strong> on the Import page for anything left for review.
-          </li>
-          <li>
-            <strong>Refresh the detail sources.</strong> Re-export the recent Amazon orders and the
-            latest PayPal statement, as described in{' '}
-            <HelpLink to="/help/purchase-detail">adding purchase detail from Amazon and
-              PayPal</HelpLink>. An export that overlaps the last one is fine.
-          </li>
-          <li>
-            <strong>Settle what the import could not.</strong> A card in the import history says
-            when something on it needs a decision &mdash; see <HelpLink to="/help/duplicate-report">the duplicate-detection
-              report</HelpLink>, <HelpLink to="/help/amazon-reconciliation">Amazon
-                reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
-                  reconciliation</HelpLink>.
-          </li>
-          <li>
-            <strong>Look over what arrived.</strong> The needs-review count on each card opens just
-            those transactions. Correct the ones a rule filed wrongly, categorize the ones no rule
-            caught, and mark the rest reviewed. Accepting the offered rule means the same payee is
-            filed next time. See <HelpLink to="/help/reviewing-transactions">needs
-              review</HelpLink>.
-          </li>
-          <li>
-            <strong>Check <HelpLink to="/help/page-tasks">Tasks</HelpLink></strong> for anything else:
-            a connection needing attention, a new recurring series, a bill whose amount changed.
-          </li>
-        </ol>
       </>
     ),
   },
@@ -522,23 +479,19 @@ export const HELP_TOPICS = [
     section: 'dashboard',
     title: 'The Dashboard',
     surfaces: ['Dashboard'],
-    summary: 'A visual way to explore the ledger. Spending and income are shown as charts rather than lists, which suits both reporting and checking that transactions are filed where they belong.',
+    summary: 'A visual way to explore the ledger.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
           The dashboard is a visual representation of the transaction data. There are various reporting views
-          to investigate where money is going and surface spending patterns. The dashboard is also useful for
-          verifying that transactions are correctly categorized and for digging into details behind anomalous patterns.
-        </p>
-        <p>
-          Page controls:
+          to investigate where money is going and surface spending patterns. The dashboard can also be useful for
+          validating that transactions are correctly categorized and for digging into details behind anomalous patterns.
         </p>
         <ul>
           <li>
-            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow</strong> select the type of report.
-            Expense and Income are pie charts, Cash Flow is a
-            Sankey diagram (<HelpLink to="/help/dashboard-cash-flow">cash flow</HelpLink>).
+            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow:</strong> Expense and Income are pie
+            charts, <HelpLink to="/help/dashboard-cash-flow">Cash Flow</HelpLink> is a
+            Sankey diagram.
           </li>
           <li>
             <strong>Report sub-types:</strong> <strong>Single, Compare, Trends</strong> toggle between examining
@@ -550,38 +503,23 @@ export const HELP_TOPICS = [
             only available on the expense and income reports, not on the cash flow report.
           </li>
           <li>
-            The <strong>filter</strong> at the top of the page affects which transactions are included
+            The <strong>Date</strong> and <strong>filter</strong> controls at the top of the page affect which transactions are included
             for all of the reports.
-          </li>
-          <li>
-            The <strong>period</strong> selector at the top of the page sets the time frame for the{' '}
-            <strong>Single period</strong> report. <strong>Compare</strong> chooses its two periods with its own
-            selectors, and <strong>Trends</strong> chooses the months it covers with its own selector: the
-            last 12 months, the last 2, 3 or 5 years, all of the data, or a single year.
-          </li>
-          <li>
-            In the single period report, the <strong>Trend</strong> chart at the bottom of the page shows
-            the same report over all of the data, with the selected period highlighted. Clicking a bar
-            selects that bar's period, and the selector beside the chart groups the bars by month,
-            quarter or year. For a period such as <strong>Year to date</strong>, it can also repeat that exact
-            span in each earlier year.
           </li>
         </ul>
         <p>
-          Every chart drills down. Clicking a group opens its categories, clicking a category opens
+          Everything can be drilled into to reach the underlying transactions. Clicking a group opens its categories, clicking a category opens
           the transactions behind it, and anything filed wrongly can be corrected from there. Using
           the dashboard to check the data is as much its purpose as reporting on it.
         </p>
         <p>
           The filter and period at the top of the page remain in effect when switching between the Dashboard
-          and Transaction pages so that is another way to view the transaction being displayed by the
-          Dashboard.
+          and Transaction pages so that switching between the views displays the same set of transactions.
         </p>
         <p>
-          Not everything is counted. Categories{' '}
+          Categories{' '}
           <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not included
-          in any of the dashboard reports as this is how credit-card payments and transfers between accounts stay
-          out of spending.
+          in any of the dashboard reports.
         </p>
       </>
     ),
@@ -594,43 +532,37 @@ export const HELP_TOPICS = [
     summary: 'Another way to view spending showing what came in against what went out. Single period uses a Sankey diagram; Trends displays money in and money out as bar graphs by year and by month.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
           <strong>Cash flow</strong> combines spending and income into one graph. It is
           based on transaction dates as opposed to actual money movement. This means that a
           credit card transaction is treated as being paid for on the date of the purchase rather than the
-          date on which the credit card payment was made so the time frame of how income and expenses
-          offset is not 100% accurate.
+          date on which the credit card payment was made so the time frame of when the money actually left
+          is not 100% accurate.
         </p>
         <p>
-          The Sankey diagram used for the <strong>single period</strong> report depicts income on the
-          left, the net in the middle, and expenses on the right. The width of each band is the
-          amount, and the labels and hover text carry the value. Clicking a band drills down into it
-          the same way it works on the pie chart: a group opens its categories, a category opens its
-          transactions. Where a long tail of small buckets becomes too thin to read, the remainder
-          collapses into a single <em>Other</em> band that can be clicked to open the details.
+          The Sankey diagram for the <strong>single period</strong> report depicts income on the
+          left, the net in the middle, and expenses on the right. The width of each band represents the
+          amount. Clicking a band drills down a level: a group opens its categories, a category opens its
+          transactions. When the buckets become too thin to read, the remainder
+          collapses into a single <em>Other</em> band that expands when clicked.
         </p>
         <p>
-          The two sides rarely balance. A period that took in more
-          than it spent ends in a <strong>Net saved</strong> band; one that spent more is funded by
-          a <strong>Net drawdown</strong> band on the incoming side. That band stands for the
-          difference itself rather than for any transactions, so it is the one band that does not
-          open.
+          The difference between spending and income is added as either <strong>Net saved</strong> if
+          positive and <strong>Net drawdown</strong> if negative (expenses exceed income).
         </p>
         <p>
-          <strong>Trends</strong> displays cash flow as bars around a zero line &mdash; money in
-          above it, money out below, with the net drawn across them and the average net marked. The
-          top chart has a bar per year and the bottom chart a bar per month. The selector on the bottom
-          chart chooses the months it covers, and clicking a year in the top chart shows that year's
-          months. Clicking a month opens its transactions; double-clicking switches
-          to the single-period view for that month.
+          <strong>Trends</strong> on the Cash Flow report is displayed as bars around a zero
+          line &mdash; income as a positive bar, expenses as a negative bar with the net spending as
+          a line across the chart. Clicking a month on the bottom chart opens its transactions;
+          double-clicking switches to the single-period view for that month.
         </p>
         <p>
-          A category's <strong>net</strong> for the period decides which side it lands on.
-          A month where returns outweighed purchases puts that category
-          on the incoming side; income clawed back lands on the outgoing side. This is also why the
-          figures net rather than gross: a purchase and its later refund in the same category and
-          period combine to a single net amount, not as two separate movements.
+          Groups and Categories under Expenses can
+          contain income transactions for reimbursable expenses, purchases returned, etc. The income may
+          fall into a different period than the purchase leading a normally negative spending category
+          to be positive (income) for a particular period. On the Dashboard reports, groups and categories
+          are treated as income or expense not by the structure on the categories page but by whether the
+          spending for the period exceeds the income or not.
         </p>
         <p>
           Transactions which are excluded from totals because the category
@@ -638,14 +570,6 @@ export const HELP_TOPICS = [
           (see <HelpLink to="/help/exclude-from-totals">groups excluded from totals</HelpLink>) are
           not included in the cash flow reports the same as they
           are not included in the other dashboard reports.
-        </p>
-        <p>
-          Tag reports are not offered in this frame. A tag signature mixes categories from both
-          directions, so it has no single direction to net; tags, like other criteria, can be used
-          as filters for all of the reports.
-        </p>
-        <p>
-          See also: <HelpLink to="/help/exclude-from-totals">Excluding a group from totals</HelpLink>
         </p>
       </>
     ),
@@ -1108,29 +1032,28 @@ export const HELP_TOPICS = [
     summary: 'Expenses which imply future income or which pair with existing income. Both Income and Expenses are excluded from spending. Alerts if the transaction is not closed in a reasonable time frame.',
     body: () => (
       <>
-        <p>*needs review*</p>
+        <p>*needs review* (start at changing what is paired)</p>
         <p>
-          Some spending gets paid back, either at the time like a dinner out with friends, some at a later date
-          such as work expenses or perhaps a set of tickets bought for friends. These are all transactions where
-          the spending should not be reflected as an expense and the reimbursement should not be
-          reflected as income.
+          Sometimes spending gets paid back. This can be immediately such as a dinner out with friends,
+          or at a later date as with work expenses or perhaps a set of tickets bought for friends. These
+          are all transactions where the spending should not be reflected as an expense and the reimbursement
+          should not be reflected as income.
         </p>
         <p>
-          Tracking reimbursable expenses works by categorizing the reimbursable portion in a category
-          that is a member of the system's <em>Reimbursable</em> group.{' '}
-          <strong>Reimbursable</strong> is similar to the <strong>Transfers</strong> group. Both of them
-          are created by the system, cannot be deleted, and are excluded from
-          spending. <strong>Reimbursable</strong> is different in that the <strong>Reimbursements</strong> button
-          on the Transactions page looks in this category for unresolved transactions that need to be
-          joined as a reimbursement pair. Pairing is useful because it allows the system to generate alerts
-          if repayment is not received in a timely fashion.
+          Reimbursable expenses are created by categorizing the reimbursable portion in a category
+          that is a member of the system's <em>Reimbursable</em> group. The repayment when it arrives
+          is categorized into the same
+          category. <strong>Reimbursable</strong> is similar to the <strong>Transfers</strong> group in that they
+          are both system groups which cannot be deleted and are excluded from
+          spending. Reimbursable spending implies an accompanying income transaction.
         </p>
 
-        <h4>Creating categories</h4>
+        <h4>Reimbursable categories</h4>
         <p>
-          The <em>Reimbursable</em> group ships empty. It may be useful to name the categories so that they
+          It may be useful to name the <em>Reimbursable</em> categories so that they
           indicate <em>what the money is for</em> -- Concert tickets, Work expenses, Health care expense, etc.
-          Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy find the categories.
+          Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy to find the expenses by
+          name, although they can be located by category as well.
         </p>
         <h4>Identifying a reimbursable expense</h4>
         <p>
@@ -1142,31 +1065,22 @@ export const HELP_TOPICS = [
           can come from a single source such as an insurance check for a health expense or from several sources
           such as a group dinner.
         </p>
-        <p>
-          The repayment, when it arrives, is categorized into the reimbursable category too. That is what
-          keeps it out of income, and how it is located when linking expenses and payments.
-        </p>
 
         <h4>Linking payments and expenses</h4>
         <p>
-          Linking ties related payments and expenses together to support tracking the outstanding
-          amount. Linking also allows for naming the transaction set.
-        </p>
-        <p>
-          The <strong>Reimbursement</strong> button at the top of the Transaction screen launches a
-          report containing the unsettled transactions in the reimbursable group and supports pairing
-          expenses and repayments. Dragging a payment to an expense pairs them. Multiple income
-          transactions can be paired with a single expense.
+          Transactions are paired using the <strong>Reimbursements</strong> button
+          on the Transactions page (and in the transaction detail report on the Categories page for a
+          reimbursable category). This displays unpaired spending and income transactions from the <strong>Reimbursable</strong> category
+          so they can be linked to form a reimbursement pair. Dragging a repayment to an expense pairs them. Multiple income
+          transactions can be paired with a single expense. An alert is generated if a transaction remains
+          unpaired for longer than the specified time frame.
         </p>
         <h4>Viewing outstanding reimbursements</h4>
         <p>
-          <strong>Reimbursements</strong> on the Transactions page &mdash; and on the Categories page
-          while the reimbursable group or one of its categories is selected &mdash; lists everything
-          still owed in two columns: <strong>Expected</strong> on the left, holding both tracked records
-          and expenses nothing has claimed yet, and <strong>Received</strong> on the right. A payment can
-          be dragged from the right onto whatever it repays. An untracked row there is not a problem to
-          fix -- it is where every reimbursable sits between the purchase and the repayment. The total of
-          both columns is the balance of the group.
+          The <strong>Reimbursements</strong> button lists the unpaired reimbursement and spending
+          transactions from the reimbursable categories. A payment received can
+          be dragged from the right onto the corresponding expense. Untracked rows represent spending
+          waiting for repayment.
         </p>
         <p>
           Clicking a row opens it: a paired one opens its record, an unpaired one opens its transaction.
@@ -1194,7 +1108,6 @@ export const HELP_TOPICS = [
           undo. Removing the last transaction dissolves the record too, since it would then describe
           nothing.
         </p>
-        <p>*needs review*</p>
         <p>
           While a record claims money in a transaction, that much has to stay in the{' '}
           <em>Reimbursable</em> group. Raising the reimbursable portion of a split is always allowed,
@@ -1293,50 +1206,45 @@ export const HELP_TOPICS = [
     section: 'transactions',
     title: 'Attaching receipts and invoices',
     surfaces: ['Transactions (row marker)', 'Transactions (Stored documents)', 'Transaction detail (Documents)'],
-    summary: 'Receipts and invoices can be attached to a transaction, or stored until the transaction arrives. Parsable text is searchable from the Transactions search box.',
+    summary: 'Receipts and invoices can be attached to a transaction, or stored until the transaction arrives. Text in parsable documents is searchable from the Transactions search box.',
     body: () => (
       <>
-        <p>*needs review*</p>
+        <p>*needs review* (starting at stored documents. waiting to resolve editing of pasted text)</p>
         <p>
-          For some transactions it can be useful to attach supporting documents. This could be to
-          provide additional detail for a large expense or it could be just to store the receipt where it
-          can be easily located later.
+          Paperwork can be attached to a transaction. This could be to
+          provide additional detail for a large or complex expense or it could be used to store receipts where they
+          can be easily located if they contain interesting information.
         </p>
         <p>
-          Attachments are kept in the <strong>Documents</strong> section of the transaction editor, which
-          opens from the pencil at the end of a transaction row or from <strong>Edit transaction&hellip;</strong> in
-          the row's menu. Multiple documents can be attached to a single transaction.
+          Attachments are kept in the <strong>Documents</strong> section of the transaction editor.
+          Multiple documents can be attached to a single transaction. Attachments are stored in the
+          documents directory under the directory holding the transaction database.
         </p>
         <p>
-          A row with attachments also shows a document marker. Clicking it opens the document directly
-          when there is only one, or lists them to choose from when there are several.
+          A row with attachments is flagged with a document marker. Clicking it displays the document.
         </p>
 
         <h4>Attaching a document</h4>
         <p>
-          The Documents section has one box for adding documents, and it accepts them several ways:
+          Documents can be attached directly to a transaction using the transaction editor or
+          they can be uploaded via the <strong>Stored documents</strong> button on the Transactions page.
+          There are several ways to provide a document:
         </p>
         <ul>
           <li>
             <strong>Drop a file</strong> onto the box, or pick one with <strong>Browse&hellip;</strong>.
           </li>
           <li>
-            <strong>Paste an image</strong> -- a screenshot or a photo already on the clipboard. It is
-            attached straight away.
+            <strong>Paste an image</strong> -- a screenshot or a photo already on the clipboard.
           </li>
           <li>
-            <strong>Paste text</strong> from the clipboard. For emailed receipts it may be easier to
-            use copy/paste rather than saving the email as a file. Pasted text waits in the box to be
-            trimmed, then <strong>Attach</strong> adds it.
-          </li>
-          <li>
-            <strong>Stored documents (N)</strong> attaches a document that was stored before the
-            transaction arrived. The button only appears when there are stored documents.
+            <strong>Paste text</strong> from the clipboard. Pasted text can be trimmed before it
+            is stored.
           </li>
         </ul>
         <p>
-          A pasted document is named <code>documentation</code> with an extension for its kind, such
-          as <code>documentation.png</code>. A file keeps its own name.
+          In the transaction editor a stored document can be selected with
+          the <strong>Stored documents (N)</strong> button.  The button only appears when there are stored documents.
         </p>
         <p>
           Using copy/paste with an email usually brings its HTML formatting along, so an itemized table keeps
@@ -1434,48 +1342,48 @@ export const HELP_TOPICS = [
     section: 'categories',
     title: 'Categories and groups',
     surfaces: ['Categories'],
-    summary: 'Categories are assigned to transactions and collected into groups, which is what the dashboard reports on. Groups carry a few behaviors of their own, and three of them are supplied by the system.',
+    summary: 'Categories are assigned to transactions and organized into groups. These are used for reporting.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          The category tree has two levels. A <strong>group</strong> collects related categories, and
-          a <strong>category</strong> is what a transaction is actually assigned to. A transaction is
-          never assigned to a group directly. Reports roll categories up into their group, so the
-          grouping is what decides how the dashboard reads.
+          The category tree has two levels. Transactions are assigned to
+          a <strong>category</strong> and categories are organized into <strong>groups</strong>. Groups can
+          be marked <strong>Exclude from totals</strong>, or assigned a tag, and these propagate
+          to the transactions assigned to the group's categories. Tags can also be assigned to
+          individual categories. Dashboard reports work at both the group and category level.
         </p>
         <p>
-          Categories are created, renamed and moved here, and the right-hand panel
-          holds <HelpLink to="/help/categories-tags">the tags on the selected category or
-            group</HelpLink>. Deleting a category asks what should happen to the transactions in it,
-          and a deleted category moves to the <strong>Inactive</strong> list at the foot of the page
-          rather than disappearing. <strong>Delete empty</strong> clears categories nothing refers to,
-          after listing exactly what would go.
+          When a category is removed, if it is not empty, the transactions are reassigned
+          to another category or marked uncategorized. Deleted categories are kept in the <strong>Inactive</strong> list
+          at the bottom of the page. This acts as a local trash for categories and
+          entries can be restored or purged from the list. The <strong>Delete empty</strong> button
+          removes empty categories.
         </p>
         <p>
-          Categories are optional. The transactions stay searchable without them, and the seed set of
-          groups is there to be used or ignored.
+          Categories are optional. Apart from transactions which should be excluded from the totals and
+          reimbursable expenses, categories are only used for reporting and can be ignored if that is not
+          of interest.
         </p>
-        <h4>The system groups</h4>
-        <p>Three groups are supplied rather than created, because features depend on them.</p>
+        <h4>System groups</h4>
         <ul>
           <li>
-            <strong>Unassigned</strong> holds imported categories that have not been sorted into a
-            reporting group yet. It cannot be renamed or deleted,
-            and <HelpLink to="/help/imported-category-cleanup">Group imported categories</HelpLink> is
-            the workspace for emptying it.
+            <strong>Unassigned</strong> holds categories that were learned from imported transactions
+            which have not been sorted into a
+            reporting group yet. <HelpLink to="/help/imported-category-cleanup">Group imported categories</HelpLink> is
+            where these categories get assigned to groups or deleted.
           </li>
           <li>
-            <strong>Transfers</strong> is where money movement is filed, and ships
-            with <HelpLink to="/help/exclude-from-totals">Exclude from totals</HelpLink> turned on.
-            Imports file their own money-movement rows into it, so it cannot be deleted or moved
-            inside another group. It can be renamed, and its exclusion can be turned off.
+            <strong>Transfers</strong> holds categories related to money movement and by default
+            is marked with <HelpLink to="/help/exclude-from-totals">Exclude from totals</HelpLink> turned on.
+            This is used by the import logic which pairs spending transactions between accounts (a payment
+            to PayPal to fund a PayPal purchase, a credit card payment to clear the charges from the month's
+            transactions) so it cannot be deleted or moved
+            inside another group. It can be renamed, and exclude from totals can be turned off.
           </li>
           <li>
-            <strong>Reimbursable</strong> holds <HelpLink to="/help/reimbursable-expenses">money
-              expected to be paid back</HelpLink>. It cannot be deleted or moved either, and unlike
-            Transfers its exclusion cannot be turned off: the outstanding balance is only meaningful
-            while that money sits outside the totals.
+            <strong>Reimbursable</strong> holds <HelpLink to="/help/reimbursable-expenses">categories for money
+              expected to be paid back</HelpLink>. It cannot be deleted or moved. Unlike
+            Transfers, its exclusion cannot be turned off.
           </li>
         </ul>
       </>
@@ -1533,51 +1441,46 @@ export const HELP_TOPICS = [
     section: 'categories',
     title: 'How tags work',
     surfaces: ['Transactions (Tags)'],
-    summary: "Tags are cross-cutting labels applied at the transaction, category, group, or account level. A transaction's effective tags are the union of all four sources.",
+    summary: "Tags are labels for reporting and filtering applied at the transaction, category, group, and account level. A transaction's effective tags are the union of all four sources.",
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Tags are lightweight labels separate from the category tree. Use them for any cross-cutting
-          dimension to report by &mdash; <em>Essential</em> vs everything else, who an
-          expense belongs to in a household, business vs personal, vacation buckets, and so on. Tags can also be
-          used as placeholders to build complicated expressions which cannot be expressed in the filter.
-        </p>
-        <p>
-          Categories and groups belong to no one &mdash; one tree serves everyone in the ledger, while an
-          account has an owner. So a dimension like personal vs shared, or business vs personal, is a tag
-          rather than a second branch of the category tree or a split of an account.
+          Tags are lightweight labels separate from the category tree. Use them to identify any group
+          of transactions which is interesting to report or filter on. <em>Household spending</em> for example
+          might have expenses across categories beyond the Household expense group. It might be
+          interesting to examine <em>Essential</em> expenses vs everything else. Tags can also be
+          used as placeholders to build complicated 'and' and 'or' expressions beyond what can be done
+          with the filter.
         </p>
         <p>
           A tag can be attached at four levels, and a transaction's <strong>effective
-            tags</strong> are the additive union of all four:
+            tags</strong> are the union of all four:
         </p>
         <ul>
-          <li><strong>Direct (transaction-level)</strong> &mdash; added by a matching rule, or by
-            manually editing one transaction. Manual edits override the rule for that one row.</li>
-          <li><strong>Category-level</strong> &mdash; a tag attached to a leaf category propagates
+          <li><strong>Direct (transaction-level)</strong> &mdash; added by a rule or
+            manually. Manual edits, which can add or remove a tag, override the rule for that row.</li>
+          <li><strong>Category-level</strong> &mdash; a tag attached to a category propagates
             to every transaction in that category.</li>
           <li><strong>Group-level</strong> &mdash; a tag attached to a category group propagates to
-            every transaction in any of the group's leaves.</li>
+            every transaction in any of the group's categories. A transaction can override an
+            inherited tag, but while a category in a group can add tags of its own, it cannot
+            override anything inherited from the group.</li>
           <li><strong>Account-level</strong> &mdash; a tag attached to an account (on the Accounts
             page) propagates to every transaction in that account. For a merged account the top-level
             account's tags carry to its child accounts' transactions, while a merged child's own tags
-            stay dormant until it is detached.</li>
+            stay dormant until it is detached. Merging accounts offers to add the merged child's tags
+            to the parent.</li>
         </ul>
         <p>
-          Pick the level that matches the intent. A tag like <em>Bills</em> probably belongs on a
-          group although if it is only on a single group, there may not be any need for it.
-          A tag such as <em>Essential Expense</em> may get applied to several categories, or even individual
-          transactions which may fall into a category which is not one that is marked. Composing across
-          levels is fine &mdash; the same tag can be on a group, an account and on individual transactions. The
-          expectation is that a tag is on more than one thing, and/or is generated by one or more rules.
+          Composing across levels is fine. The same tag can be on a group, an account and
+          on individual transactions. The expectation is that a tag comes from multiple
+          sources and/or is applied by one or more rules.
         </p>
         <p>
           To hide an inherited tag on a single transaction, uncheck it in that transaction's tag
-          picker (the row's tag popover or the transaction editor). It stays on every other
-          transaction that inherits it, and a strike-through <strong>hidden here</strong> entry in the picker
-          can be checked to restore it. Removing the tag from the category, group, or account drops
-          it from every transaction under that level.
+          picker (the row's tag popover or the transaction editor). A strike-through <strong>hidden here</strong> entry
+          remains in the picker and can be checked to restore it. Removing a tag from the
+          category, group, or account drops it from every transaction that inherited it from that level.
         </p>
         <p>
           See also: <HelpLink to="/help/categories-tags">Tagging categories and groups</HelpLink>{' '}
@@ -1647,64 +1550,70 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'The Rules page',
     surfaces: ['Rules'],
-    summary: 'A rule matches incoming transactions and acts on them, setting a merchant name, a category, tags, or marking them part of a recurring series. Most rules are created while categorizing rather than written here.',
+    summary: 'Rules match incoming transactions and make changes: adding a category, adding a tag, setting a merchant name, or marking it to be included in a recurring series.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          A rule has <strong>conditions</strong> that select the transactions it applies to
-          and <strong>actions</strong> to take on them. Conditions are a keyword together with
-          optional owner, account, account-type and amount limits. Actions set a merchant name,
-          assign a category or tags, or mark the matches as part of a recurring series. Rules run
-          against newly imported data, which is what keeps categorization current without repeating
-          the work.
+          A rule has <strong>matching conditions</strong> to select the transactions it applies to
+          and <strong>actions</strong> to apply. Transactions can be selected by the merchant field,
+          owner, associated account, account-type and amounts. Actions can set the merchant name,
+          assign a category or tags, or mark the transaction as part of a recurring series. Rules run
+          against newly imported data.
         </p>
         <p>
-          The merchant keyword can be more than one word. <strong>And contains</strong> adds a word every
-          match must also have. <strong>Or contains</strong> adds another spelling, for a merchant whose
-          name arrives several ways: at least one of the spellings has to appear. Rules always match the
-          name as it arrived from the bank or the file, never a name a rule or an edit has since given the
-          transaction, so one rule listing the spellings is how a merchant like that is covered.
+          The matching on the merchant field can involve phrases as well as 'and' and 'or' conditions. Only a
+          single 'and' can be used and all 'or' conditions are evaluated first so the supported pattern is
+          (a or b or c) and d where a,b,c, and d can be phrases. Rules match the
+          text as it arrived from the source. Rules never match against something which was
+          changed since it arrived (either manually or by a rule). In addition to matching the
+          merchant field mapped during the import, the stored raw text can be included if desired.
         </p>
-        <HelpHeading anchor="how-rules-come-into-being">How rules come into being</HelpHeading>
+        <HelpHeading anchor="how-rules-come-into-being">Creating rules</HelpHeading>
         <p>
           There are three main ways rules get created:
         </p>
         <ol>
           <li>
-            Importing data from another tool where the transactions have already been carefully categorized, indicate
-            when importing that the data is clean and the categories will be preserved and imported for use;
-            the <strong><HelpLink to="/help/generate-rules">Generate rules</HelpLink></strong> action studies
-            these curated transactions and proposes rules that would reproduce the same categorization on
-            future, uncategorized data -- which get reviewed before anything takes effect.
+            Importing data where the transactions have already been carefully categorized. When importing
+            transactions from a file, the bottom of the mapping screen has an option to import transactions
+            with their current categorization and to bring in the categories from the file and use the
+            categorization in the file to propose matching rules. This can also be specified after the
+            file has been imported (or cleared if it was a mistake). <strong><HelpLink to="/help/generate-rules">Generate rules</HelpLink></strong> describes
+            how to bring in the rules based on a file.
           </li>
           <li>
-            When a transaction is categorized, {APP_NAME} offers to
-            turn that action into a rule -- give it conditions and actions, apply it to other matching
-            transactions, and save it. From then on it runs automatically against newly imported data.
+            When a transaction is categorized {APP_NAME} offers to build a rule matching the action.
+            The rule can be edited and applied to other matching transactions when it is saved.
+            From then on it runs automatically against newly imported data.
           </li>
           <li>
-            When a transaction is marked as part of a recurring series the way that happens is through the
-            Rules editor so the Rules editor is launched filled out with whatever information is available.
+            Marking a transaction in the ledger as part of a recurring series launches the Rules editor
+            as a manually created recurring series is built by creating a rule that indicates it is
+            part of a series.
           </li>
         </ol>
         <p>
-          If starting fresh with no curated data, there is a small <strong>starter
+          If starting fresh, with no historical data to learn from, there is a small <strong>starter
             set</strong> of common categories and rules that can be added via buttons on the Rules and Category pages.
           Rules alter the data, so the starter rules are shown as a list for approval before adding.
         </p>
-        <HelpHeading anchor="applying-rules">Applying rules, and checking them</HelpHeading>
+        <HelpHeading anchor="applying-rules">Manually applying rules, and rule checkups</HelpHeading>
         <p>
-          <strong>Categorize</strong> re-applies every rule across the ledger, changing only rows that
-          are not pinned, so work done by hand is left
-          alone. <HelpLink to="/help/re-categorizing">How transactions get categorized</HelpLink> covers
-          which rows each action is allowed to touch.
+          <strong>Categorize</strong> re-applies the rules across the ledger, leaving any
+          transactions which were modified manually alone. <HelpLink to="/help/re-categorizing">How transactions get categorized</HelpLink> contains details
+          regarding which rows are allowed to touch.
         </p>
         <p>
-          <strong>Rule checkup</strong> reports rules that compete with each other and charges that
-          have drifted outside a rule's amount range. It changes nothing on its own, and carries a
-          count when there is anything to look at. One of its checks reads the transactions rather than
-          the rules, so the report takes a moment on a large ledger.
+          <strong>Rule checkup</strong> scans the set of rules to report problems which may
+          exist involving rules that compete with each other. With rules there is a precedence for
+          which rule is applied when multiple rules match a transaction. For instance there might be
+          a rule to cover "Visa credit card payment" and then a 2nd one for just "card payment". When one rule
+          contains another (also possible with amount ranges) the more specific rule is evaluated first,
+          the longer rule in this case. If however the two rules were "Visa" and "card payment", if a merchant
+          string comes in with "Visa card payment", two rules match but their strings are not overlapping so this
+          is an ambiguous case. The rule checkup reports on ambiguous cases. It also reports if
+          there are two rules with overlapping matching conditions and the same set of actions (e.g. the
+          more restrictive rule is harmless but not needed).
         </p>
       </>
     ),
@@ -1714,23 +1623,31 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'How transactions get categorized',
     surfaces: ['Rules page'],
-    summary: 'Imported and synced transactions are categorized by the rules as they arrive, with a file\'s own categories filling in only what the rules leave. The rules always come first, so it does not matter whether a rule or the file arrived first. Afterward, Categorize re-applies rules but never disturbs a category set by hand; applying a rule to its matching transactions is full-force and overrides even that. A closing section ranks the categorization sources for anyone who wants the full model.',
+    summary: 'Rules are applied to categorize imported and synced transactions as they arrive, with any imported categorization filling in only what is not covered by the rules. The rules always come first, so it does not matter whether a rule or the file arrived first. Afterward, Categorize re-applies rules but never disturbs a category set by hand; applying a rule to its matching transactions is full-force and overrides even that. A closing section ranks the categorization sources for anyone who wants the full model.',
     body: () => (
       <>
+        <p>*needs review* (don't understand the 2nd 2 sentences of the short text)</p>
+        <p>Rules are applied in two situations, as transactions arrive and after certain user actions.
+        </p>
         <h4>As transactions arrive</h4>
-        <p>*needs review*</p>
         <p>
-          Most categorization happens automatically as transactions arrive. Each imported or synced
-          transaction runs through the categorization rules -- the same process triggered by
-          the <strong>Categorize</strong> button on the Rules page. For CSV import this only happens
-          if <strong>Apply categorization rules on import</strong> is selected, which it is by default.
+          The routine situation is that rules get applied automatically as transactions arrive. Each imported or synced
+          transaction runs through the rules -- the same process triggered by
+          the <strong>Categorize</strong> button on the Rules page. This is optional for CSV file imports controlled
+          by the <strong>Apply categorization rules on import</strong> option which defaults to on.
         </p>
         <p>
-          A file imported with <strong>use the categories present in the data</strong> can also bring its own
-          categories, generally as part of an initial seeding from another tool. Rules still come first:
-          the file's category fills in only rows no rule claims. That stays true afterward -- a rule
-          created later takes those rows the next time <strong>Categorize</strong> runs, just as it would
-          have at import. The file's label stays on every row either way.
+          If <strong>use the categories present in the data</strong> is selected the categories in the file are
+          imported for use and the transactions are imported with their categorization in the file.
+          This is generally done as part of an initial seeding from another tool, not with every imported file.
+          Rules still take precedence, the file's category fills in only rows which are not covered
+          by an existing rule. When there are no rules, all the categorized transactions retain their
+          categories. As rules are added, this starts to change and rules added later can claim
+          rows which were imported with their category from the file.
+        </p><p>
+          original text below - the last sentence is a puzzle:</p><p>
+          A file imported with use the categories present in the data can also bring its own categories, generally as part of an initial seeding from another tool. Rules still come first: the file's category fills in only rows no rule claims. That stays true afterward -- a rule created later takes those rows the next time Categorize runs, just as it would have at import. The file's label stays on every row either way.
+
         </p>
         <h4>Once transactions are in</h4>
         <p>
@@ -1818,23 +1735,22 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, and two separate keywords that both turn up in one merchant name, each of which requires refining the conditions. It also lists merchant names where one contains the other, pairs where an owner or account limit lets the shorter keyword win, rules which are essentially duplicates of each other where one can be deleted outright, and pairs that compete over nothing because both rules file the same way.',
+    summary: 'Rules are not ranked manually. The ranking is determined by an algorithm that prioritizes more specific rules. The order of importance is narrow scope, keyword length, then the narrower amount range. Ambiguous situations which require adjusting the rules are listed by Rules checkup: amount ranges that overlap without one containing the other and two separate keywords that both appear in the same transaction.',
     body: () => (
       <>
         <p>
-          More than one rule can match a transaction, and there is no priority list to maintain. The
-          <strong> most specific</strong> rule wins, ranked in a fixed order: a rule scoped to an owner
-          beats one that is not, then a rule pinned to an account, then one scoped to an account type,
+          When multiple rules match a single transaction, the
+          <strong> most specific</strong> rule wins, ranked in the following order based on what they match: a rule scoped by owner
+          beats one that is not, then a rule pinned to an account, then account type,
           then the <strong>longer keyword</strong>, and last the <strong>narrower amount range</strong>.
           The order matters as much as the terms -- scope is settled before keyword length, and keyword
-          length before amount. A rule with several spellings counts only its shortest one, since each
+          length before amount. A rule with several text strings combined with an 'or' counts only its shortest one, since each
           spelling it adds lets it match more transactions, not fewer.
         </p>
         <p>
           Narrower on the amount axis means the <em>smaller range</em>, not the rule with more limits
           set. A rule for charges over $3,000 matches strictly fewer transactions than one for charges
-          over $300, so it wins wherever both apply -- which is what makes a single biller's
-          several bills separable by size, one rule per band.
+          over $300, so it wins wherever both apply.
         </p>
         <h4>Checking for rules that compete</h4>
         <p>
@@ -3253,7 +3169,7 @@ export const HELP_TOPICS = [
         <ol>
           <li>
             Sign in to Amazon, load the orders page and then open the AZAD extension.
-            Check <strong>Show totals in csv downloads</strong>. The other fields are optional.
+            Check <strong>Show totals in CSV downloads</strong>. The other fields are optional.
           </li>
           <li>Select the <strong>Orders</strong> option and select a year or one of the monthly
             time periods.</li>
@@ -3495,7 +3411,7 @@ export const HELP_TOPICS = [
               <li>
                 <strong>Mark reviewed</strong> acknowledges it so it drops out of the attention
                 count (Undo restores it) &mdash; for a charge that is just a purchase the export
-                didn&apos;t cover, with nothing to fix. Works per row or on a bulk selection.
+                didn't cover, with nothing to fix. Works per row or on a bulk selection.
               </li>
             </ul>
           </li>
@@ -3512,8 +3428,8 @@ export const HELP_TOPICS = [
           <strong>Split&hellip;</strong> (<strong>Edit split&hellip;</strong> once split), so an order can be
           divided across categories while it is being reviewed, without finding it again in the ledger &mdash;
           see <HelpLink to="/help/transaction-splits#imported-order">splitting an imported order</HelpLink>.
-          An order with a single item has nothing to divide and doesn&apos;t offer it; the ledger&apos;s own{' '}
-          <strong>Split&hellip;</strong> still does.
+          An order with a single item has nothing to divide and doesn't offer it; the ledger's
+          own <strong>Split&hellip;</strong> still does.
         </p>
         <p>
           Hover any order or charge for its <strong>origin detail</strong> (source file, captured fields,
@@ -4698,39 +4614,39 @@ export const HELP_TOPICS = [
       <>
         <p>
           Sign-in protection exists to keep <strong>non-users out</strong> and to control access to
-          certain administrator functions (users can be designated an administrator or not).
+          certain administrative functions (users can be designated an administrator or not).
           Everyone who signs in sees and edits
           the <strong>same shared data</strong>; the password guards <em>network</em> access only: it
-          is not disk encryption, so
+          is not disk encryption,
           it is not a substitute for keeping the machine itself secure (see{' '}
           <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
         </p>
         <p>*needs review*</p>
         <p>
-          The switch under <strong>Sign-in protection</strong> on the{' '}
-          <HelpLink to="/help/page-administration">Administration</HelpLink> page turns sign-in
-          protection on and off.
-          Turning it on sets a password for the administrator's own account; any other users choose
-          theirs at their next sign-in. Turning it off takes an administrator and removes the
-          password check for everyone, but keeps every account and password, so turning it back on
-          later needs nothing re-entered.
+
+          Sign-in protection is managed on the <HelpLink to="/help/page-administration">Administration</HelpLink> page.
+          Enabling sign-in protection involves selecting a required password policy and creating a password
+          for the current user who becomes an administrator. Other users will be prompted to create a password
+          when they next connect. A password can be entered for them by an administrator but they still will
+          need to choose their own password when they connect. Assigning a password is to prevent a different person
+          from claiming the account before the expected user logs in to set the password. Turning
+          sign-in protection off retains the passwords.
         </p>
         <p>
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to
-          all users, and it can be tightened or relaxed at any time.
+          all users, and it can be tightened or relaxed at any time. This does not affect existing passwords,
+          only newly created passwords.
         </p>
         <p>
           Each user's own password is changed under <strong>Sign-in methods</strong> on the{' '}
           <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is
           required, and the change signs the account out of every other browser.
         </p>
-        <p>*needs review*</p>
         <p>
-          <strong>Passkeys</strong> sign in with a fingerprint, face or device PIN instead of a typed
-          password. Each device gets its own passkey, added under <strong>Sign-in methods</strong> while
-          signed in. The account password keeps working and is still what signs in on a connection
-          that cannot run a passkey &mdash; passkeys need an HTTPS connection to a named host, so an
-          instance reached by IP address cannot use them at all.
+          <strong>Passkeys</strong> involve signing in with a fingerprint, face or device PIN instead of a typed
+          password. This is supported as a convenience as it is often easier to use a passkey than opening
+          a password manager to retrieve a stored password. Passkeys are device-specific and are
+          in addition to a password; they do not replace it.
         </p>
         <p>
           A passkey is <em>not</em> a vault passkey. The vault's passkeys unlock stored data
