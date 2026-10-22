@@ -66,8 +66,13 @@ export const CHART_TOOLTIP_CONTENT_STYLE = {
   color: 'var(--text)',
 }
 
+// The label (the hovered month, year or slice) heads the card rather than reading as one more row.
 export const CHART_TOOLTIP_LABEL_STYLE = {
   color: 'var(--text)',
+  fontWeight: 600,
+  paddingBottom: 4,
+  marginBottom: 4,
+  borderBottom: '1px solid var(--border)',
 }
 
 export const CHART_TOOLTIP_ITEM_STYLE = {

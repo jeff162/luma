@@ -1394,6 +1394,11 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     const avg = periodAverage(total, windowFirstDate, windowLastDate, 'month')
     return { ...s, avg, total }
   }).sort((a, b) => b.total - a.total)
+  // The by-group chart keeps one order for the whole window, so a group holds its place as the pointer
+  // moves across months: the tooltip lists it largest first, and the bands stack smallest at the bottom,
+  // so the two read the same way down the chart. Colors stay with the group, not the rank.
+  const seriesRank = new Map(avgBySeries.map((s, i) => [s.id, i]))
+  const stackedSeries = [...avgBySeries].reverse()
 
   // Annual totals cover every year in the dataset the span reaches, independent of the window chooser up
   // top. Drilling into one year shouldn't collapse this chart down to a single bar, and the span is the
@@ -1555,12 +1560,13 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
                   const net = item?.payload?.[`${name}__net`]
                   return [formatSignedMoneyAmount(net ?? v), s ? s.name : name]
                 }}
+                itemSorter={item => seriesRank.get(item.dataKey)}
                 offset={20}
                 contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
                 labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                 itemStyle={CHART_TOOLTIP_ITEM_STYLE}
               />
-              {series.map(s => (
+              {stackedSeries.map(s => (
                 <Area key={s.id} type="monotone" dataKey={s.id}
                   stroke={s.color} fill={s.color} fillOpacity={0.15}
                   strokeWidth={1.5} stackId="1" name={s.id} />

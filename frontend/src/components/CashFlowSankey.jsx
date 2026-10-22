@@ -127,7 +127,7 @@ function CashFlowTooltip({ payload }) {
   if (!node?.name) return null
   return (
     <div style={CHART_TOOLTIP_CONTENT_STYLE}>
-      <div style={{ ...CHART_TOOLTIP_LABEL_STYLE, marginBottom: 2 }}>{node.name}</div>
+      <div style={CHART_TOOLTIP_LABEL_STYLE}>{node.name}</div>
       <div style={{ color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
         {formatSignedMoneyAmount(node.cashValue)}
       </div>
