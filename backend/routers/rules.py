@@ -195,6 +195,23 @@ def _rule_matches_txn(rule, txn) -> bool:
     return rule_matches_row(rule, txn)
 
 
+def _rule_visibly_changes_txn(rule, rule_tag_ids: set, txn, visible_tag_ids: set) -> bool:
+    """Whether applying `rule` to this matched row changes what the row shows: its category, its name or
+    its tags. The preview's filter and the apply's `updated` count both use it, so the number offered is
+    the number reported. A provenance-only write — a `manual` row already in the rule's category becoming
+    `rule`, or a clean name stored over an identical shown name — is not a change. Nor is anything on a
+    trashed row, which no list shows. A split row's category is never changed (see
+    `_apply_rule_to_existing`). `visible_tag_ids` are the row's effective tags before the apply; every
+    rule tag is visible afterwards, since the apply clears a block on it."""
+    if txn["trashed_at"] is not None:
+        return False
+    if rule["category_id"] is not None and not txn["is_split"] and txn["category_id"] != rule["category_id"]:
+        return True
+    if rule["clean_name"] and resolve_txn_name(txn["merchant_name"], txn["display_name"], txn["raw_name"]) != rule["clean_name"]:
+        return True
+    return bool(rule_tag_ids - visible_tag_ids)
+
+
 def _rule_affected_txn_ids(conn, rule) -> list[str]:
     """The `category_overridden = 0` transactions a rule currently matches — the candidate set for a scoped
     reconcile when the rule is deleted or its scope narrowed with the "re-evaluate this rule's
@@ -213,7 +230,10 @@ def _rule_affected_txn_ids(conn, rule) -> list[str]:
     return [r["id"] for r in rows if _rule_matches_txn(rule, r)]
 
 
-def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None, skipped_splits: Optional[list] = None, capture_prior_keys: Optional[set] = None) -> list[str]:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None, skipped_splits: Optional[list] = None, capture_prior_keys: Optional[set] = None, visible_changes: Optional[list] = None) -> list[str]:
+    # Returns the ids of the matched rows this apply wrote, provenance-only writes included — what a caller
+    # rescans, re-fetches or treats as claimed. `visible_changes` (optional) collects the subset whose shown
+    # category, name or tags changed (`_rule_visibly_changes_txn`), which is the count to report to the user.
     # `capture_prior` (optional): when given, the prior (category_id, category_source, category_overridden)
     # of each row whose category this apply changes is appended to it — the same snapshot shape
     # `restore_categorization_rows` consumes — so an accept can stash it for Undo and put the rows back.
@@ -273,7 +293,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.owner_id,
                t.account_id,
                t.import_evidence_json,
-               t.category_id          AS prior_category_id,
+               t.category_id,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
                t.is_split,
@@ -287,13 +307,13 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         where_params,
     ).fetchall()
 
-    rule_tag_ids = [
+    rule_tag_ids = {
         row["tag_id"]
         for row in conn.execute(
             "SELECT tag_id FROM rule_tag WHERE rule_id = ?",
             (rule_id,),
         ).fetchall()
-    ]
+    }
 
     affected_ids: list[str] = []
     matched_ids: list[str] = []  # every row the rule matches, for the conflicts its arrival can create
@@ -307,6 +327,14 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         # later should come back carrying the category its rule would have given it.
         if txn["trashed_at"] is None and txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
             effect_max_date = txn["date"]
+        # Judged before any write, against the row as it stands.
+        if visible_changes is not None:
+            visible_tag_ids = (
+                {tag["id"] for tag in get_visible_transaction_tag_map(conn, [txn["id"]]).get(txn["id"], [])}
+                if rule_tag_ids else set()
+            )
+            if _rule_visibly_changes_txn(rule, rule_tag_ids, txn, visible_tag_ids):
+                visible_changes.append(txn["id"])
         row_changed = False
         # A split transaction keeps its allocations: the category half of this rule is declined and
         # reported, while the rename half below still runs.
@@ -322,7 +350,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                 if capture_prior is not None:
                     capture_prior.append({
                         "id": txn["id"],
-                        "category_id": txn["prior_category_id"],
+                        "category_id": txn["category_id"],
                         "category_source": txn["prior_category_source"],
                         "category_overridden": txn["prior_category_overridden"],
                     })
@@ -353,7 +381,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                 (txn["id"],),
             ).fetchall()
         }
-        merged_rule_tag_ids = current_rule_tag_ids | set(rule_tag_ids)
+        merged_rule_tag_ids = current_rule_tag_ids | rule_tag_ids
         if would_sync_rule_tags_change(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True):
             sync_rule_tags_for_transaction(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True)
             row_changed = True
@@ -392,7 +420,7 @@ class RulePreview(BaseModel):
 _RULE_PREVIEW_ROW_SQL = """
     SELECT
         t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-        t.is_pending, t.category_overridden, t.notes, t.import_evidence_json,
+        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.notes, t.import_evidence_json,
         COALESCE(a.parent_account_id, a.id) AS account_id,
         t.owner_id,
         COALESCE(a.display_name, a.name) AS account_name,
@@ -442,35 +470,18 @@ def preview_rule(body: RulePreview):
 
     with get_db() as conn:
         rows = conn.execute(_RULE_PREVIEW_ROW_SQL).fetchall()
-
-        affected = []
-        for row in rows:
-            txn = dict(row)
-            if not _rule_matches_txn(rule, txn):
-                continue
-            txn.pop("effective_account_id", None)
-
-            would_change = False
-            if rule["category_id"] is not None and txn["category_id"] != rule["category_id"]:
-                would_change = True
-            if not would_change and rule["clean_name"] and txn["display_name"] != rule["clean_name"]:
-                would_change = True
-            if not would_change and rule_tag_ids:
-                current_rule_tag_ids = {
-                    r["tag_id"]
-                    for r in conn.execute(
-                        "SELECT tag_id FROM txn_tag WHERE txn_id = ? AND rule_present = 1",
-                        (txn["id"],),
-                    ).fetchall()
-                }
-                if would_sync_rule_tags_change(conn, txn["id"], current_rule_tag_ids | rule_tag_ids, clear_manual_blocks=True):
-                    would_change = True
-
-            if would_change:
-                affected.append(txn)
-
-        tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in affected]) if affected else {}
+        matched = [txn for txn in map(dict, rows) if _rule_matches_txn(rule, txn)]
+        # The rows' tags as they stand: needed for every match when the rule adds tags, else only for the
+        # report's tag column on the rows that change.
+        tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in matched]) if rule_tag_ids and matched else {}
+        affected = [
+            txn for txn in matched
+            if _rule_visibly_changes_txn(rule, rule_tag_ids, txn, {tag["id"] for tag in tag_map.get(txn["id"], [])})
+        ]
+        if not rule_tag_ids and affected:
+            tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in affected])
         for txn in affected:
+            txn.pop("effective_account_id", None)
             txn["tags"] = tag_map.get(txn["id"], [])
 
     return {"count": len(affected), "transactions": affected}
@@ -1150,13 +1161,16 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
 def apply_rule(rule_id: str, preserve_manual: bool = False):
     skipped_splits: list = []
     prior_keys: set = set()
+    visible_ids: list = []
     with get_db() as conn:
         affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=preserve_manual, skipped_splits=skipped_splits,
-            capture_prior_keys=prior_keys,
+            capture_prior_keys=prior_keys, visible_changes=visible_ids,
         )
         owe_recurring_rescan(conn, affected_ids, prior_payee_keys=prior_keys)
     settle_owed_rescans()
+    # `updated` counts only the rows whose shown category, name or tags changed — the number the editor's
+    # preview offered — while `transaction_ids` also carries provenance-only writes, which a re-fetch needs.
     # `transaction_ids` lets an in-place caller reconcile exactly the rows the rule changed (re-fetch them
     # by id and merge them back) instead of re-running its scoped query, which would drop the now-
     # recategorized rows out of the view.
@@ -1164,7 +1178,7 @@ def apply_rule(rule_id: str, preserve_manual: bool = False):
     # category — surfaced rather than silent, because an apply that reports "updated 12" while quietly
     # declining 3 rows is telling the user something that is not true.
     return {
-        "updated": len(affected_ids),
+        "updated": len(visible_ids),
         "transaction_ids": affected_ids,
         "skipped_splits": len(skipped_splits),
     }
@@ -1197,6 +1211,7 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
     new_bound = float(cents.to_integral_value(rounding=rounding) / 100)
     skipped_splits: list = []
     prior_keys: set = set()
+    visible_ids: list = []
     with get_db() as conn:
         current = conn.execute(
             """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
@@ -1227,13 +1242,14 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
             ensure_rule_series(conn, rule_id, None)
         affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=True, skipped_splits=skipped_splits, capture_prior_keys=prior_keys,
+            visible_changes=visible_ids,
         )
         owe_recurring_rescan(conn, affected_ids, prior_payee_keys=prior_keys)
     settle_owed_rescans()
     return {
         "rule_id": rule_id,
         column: new_bound,
-        "updated": len(affected_ids),
+        "updated": len(visible_ids),
         "transaction_ids": affected_ids,
         "skipped_splits": len(skipped_splits),
     }

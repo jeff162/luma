@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.rules import _apply_rule_to_existing
+from backend.routers.rules import RulePreview, _apply_rule_to_existing, preview_rule
 from backend.routers.transactions import (
     list_transactions,
     restore_categorization_rows,
@@ -164,6 +164,40 @@ class RuleApplyReconcileTests(unittest.TestCase):
         self.assertEqual(row["category_id"], prior_cat)
         self.assertEqual(row["category_source"], "import")
         self.assertEqual(row["category_overridden"], 0)
+
+    def test_preview_and_apply_count_only_visible_changes(self):
+        # The editor offers the preview's count and the apply reports its own; both must count only rows whose
+        # shown category changes. A manual row already in the rule's category still passes to the rule's
+        # ownership, but nothing on screen changes, so neither count includes it — nor a split row (whose
+        # category the apply declines) or a trashed one.
+        account_id = self._account()
+        category_id = self._expense_leaf("Coffee")
+        rule_id = self._rule(category_id=category_id, keyword="blue bottle")
+        changes = self._txn(account_id=account_id, merchant="BLUE BOTTLE COFFEE")
+        owned_by_hand = self._txn(account_id=account_id, merchant="Blue Bottle #42")
+        split = self._txn(account_id=account_id, merchant="Blue Bottle #7")
+        trashed = self._txn(account_id=account_id, merchant="Blue Bottle #9")
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "UPDATE txn SET category_id = ?, category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                (category_id, owned_by_hand),
+            )
+            conn.execute("UPDATE txn SET is_split = 1 WHERE id = ?", (split,))
+            conn.execute("UPDATE txn SET trashed_at = '2026-04-24T00:00:00' WHERE id = ?", (trashed,))
+
+        with self._use_db_path():
+            preview = preview_rule(RulePreview(keyword="blue bottle", category_id=category_id))
+        self.assertEqual([t["id"] for t in preview["transactions"]], [changes])
+
+        visible: list = []
+        with self._use_db_path(), get_db() as conn:
+            affected = _apply_rule_to_existing(conn, rule_id, visible_changes=visible)
+            owner = conn.execute(
+                "SELECT category_source, category_overridden FROM txn WHERE id = ?", (owned_by_hand,),
+            ).fetchone()
+        self.assertEqual(visible, [changes])
+        self.assertEqual(set(affected), {changes, owned_by_hand, trashed})
+        self.assertEqual((owner["category_source"], owner["category_overridden"]), ("rule", 0))
 
 
 if __name__ == "__main__":
