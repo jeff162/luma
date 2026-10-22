@@ -2107,25 +2107,28 @@ which also records `accounts_version`.
   table left out with its reason.
 - **The backup keys** are the data database's `backup_recipient` rows.
 - **The credentials are copied as stored**: `connection.credential_enc` and `provider_config.secret_enc`,
-  with the exporter's slots (`crypto_service.export_vault_slots`) in a `vault_slots` list. The slots
-  carry their passphrase, recovery-code and passkey material and no other member's. A recovery slot
+  with every vault member's slots (`crypto_service.export_vault_slots`) in a `vault_slots` list, each
+  under its own `user_id`. Which go in is `accounts_backup._carried_slots`: every recovery code and
+  passkey, and every passphrase in an encrypted backup. An unencrypted backup leaves out a passphrase not
+  judged under the current rule or failing it (`crypto_service.passphrase_export_shortfall`). A recovery slot
   carries `issued_at`; a passkey slot its `credential_id`, `prf_salt`, `label`, and `site`, a salted
   digest of the RP id it was registered under. Each carries its strength verdict and the basis it was
   taken under, so it comes back judged.
-- **Export needs no unlocked vault**, since it copies wrapped material. The credentials are **left out**,
-  and the rest of the backup written, while the exporter's passphrase has not been judged under the
-  current rule or fails it (`credentials_export_refusal`), and when there is ciphertext and the exporter
-  holds no slot, since nothing could open the restored credentials (`vault_access_required`).
-  `GET /backup/status` says which before the file is made, and `meta.json` records
-  `credentials_included`. The reasoning is in `security-model.md` → *Secrets in backup and export*.
+- **Export needs no unlocked vault**, since it copies wrapped material, and the person taking it needs no
+  vault access. When there is ciphertext but no slot to carry, the credentials are **left out** and the
+  rest of the backup written: `vault_access_required` when nobody can open the vault,
+  `no_strong_unlock` when an unencrypted backup has left out every way in. `GET /backup/status` says
+  which before the file is made, for both kinds of backup, and lists the passphrases an unencrypted
+  backup leaves out. `meta.json` records `credentials_included`. The reasoning is in `security-model.md` → *Secrets in backup and export*.
 - **Restore replaces.** The credentials are written back verbatim, then `replace_identities` makes the
   control database's people, slots and perimeter exactly the file's in one transaction and ends every
-  sign-in session. A part without the credentials leaves the vault and the credentials here as they are,
+  sign-in session. A part without the credentials — left out of the file, withheld for a retired key, or
+  declined at restore (`include_credentials`) — leaves the vault and the credentials here as they are,
   less the slots of the people it removes; if that leaves nobody able to open the vault, the credentials
   are cleared as a vault reset clears them (`crypto_service.clear_stored_secrets`). A person in both keeps their row, so the id this machine's records hang off survives;
   a person the file does not name is deleted. The slots are adopted under their own `user_id` and `id`,
-  which their AAD binds them to, so the vault opens again for the exporter with the secrets in force at
-  export; the passkey's RP id is recorded at its next unlock. The per-person preferences in the data part
+  which their AAD binds them to, so the vault opens again for each member with a slot in the file, with
+  the secrets in force at export; the passkey's RP id is recorded at its next unlock. The per-person preferences in the data part
   are keyed by the same ids, so a full restore reattaches them.
 - **A file that turns sign-in on needs an administrator of it** (`check_restoring_admin`): the username
   and password of an active admin with a password, checked against the file's own hash before anything is
@@ -2134,14 +2137,16 @@ which also records `accounts_version`.
 - **The data database is written first, then the control database.** No transaction spans them. An
   interruption between leaves credentials under the backup's key beside the old vault, and restoring the
   same file again completes it, since every step is a replacement.
-- **`credentials_export`** (control database) holds one row per backup that carried the credentials: a timestamp
-  and `wrapped_dek_fingerprint`, a digest of the passphrase slot's wrapping. On a keypair slot it covers
+- **`credentials_export`** (control database) holds one row per backup and member whose passphrase it
+  carried (`user_id`): a timestamp and `wrapped_dek_fingerprint`, a digest of that passphrase slot's
+  wrapping. A member whose passphrase was left out gets no row, even when their recovery code or a passkey
+  went in. On a keypair slot it covers
   `wrapped_private_key`, the field a passphrase change alters; a KDF upgrade at unlock alters it too and
   moves the rows with it, since the same passphrase still opens those files. The passphrase-change
   dialog uses it to name the backups that would put the old passphrase back. It is in the control
   database so it survives a data restore, and a restore of the accounts part keeps the rows of everyone it
-  keeps. Each row also records what else opened the file (the exporter's recovery code by issue time, their
-  passkeys by credential id) and `seal_digest`, the key it is under. `backup_id` names the file's
+  keeps. Each row also records what else of that member's opens the file (their recovery code by issue
+  time, their passkeys by credential id) and `seal_digest`, the key it is under. `backup_id` names the file's
   `backup_history` row, and `withdrawn_at` is set while that row is in the trash; every reader skips a
   withdrawn row. The reset dialog lists the newest
   backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup

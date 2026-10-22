@@ -715,7 +715,7 @@ class PassphraseCurrencyTests(unittest.TestCase):
     def test_a_passphrase_failing_the_current_rule_still_unlocks_but_is_flagged(self):
         # A passphrase written under an earlier, laxer rule. Refusing the unlock would stop this member's
         # syncing over a passphrase nobody has shown to be exposed; what changes is that they are asked to
-        # replace it, no data source can be connected, and they cannot take a backup that would carry it.
+        # replace it, no data source can be connected, and an unencrypted backup leaves it out.
         from unittest import mock
 
         with mock.patch.object(cs, "passphrase_shortfall", return_value=None):
@@ -724,33 +724,33 @@ class PassphraseCurrencyTests(unittest.TestCase):
             conn.execute("UPDATE vault_slot SET strength_basis = NULL")
         cs.lock_all()
         self.assertTrue(cs.ready_for_production(), "an earlier rule's verdict stands until the passphrase is typed")
-        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+        self.assertEqual(cs.passphrase_export_shortfall(self.alice), "passphrase_unchecked")
 
         cs.unlock(self.alice, self.WEAK)
 
         self.assertTrue(cs.is_unlocked(self.alice))
         self.assertTrue(cs.passphrase_needs_change(self.alice))
         self.assertFalse(cs.ready_for_production())
-        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "weak_passphrase")
+        self.assertEqual(cs.passphrase_export_shortfall(self.alice), "weak_passphrase")
 
         cs.change_passphrase(self.alice, self.WEAK, self.PASSPHRASE)
         self.assertFalse(cs.passphrase_needs_change(self.alice))
         self.assertTrue(cs.ready_for_production())
-        self.assertIsNone(cs.credentials_export_refusal(self.alice))
+        self.assertIsNone(cs.passphrase_export_shortfall(self.alice))
 
     def test_a_passing_passphrase_judged_under_an_earlier_rule_is_cleared_by_one_unlock(self):
         cs.set_passphrase(self.alice, self.PASSPHRASE)
         with cdb.get_control_db() as conn:
             conn.execute("UPDATE vault_slot SET strength_basis = NULL")
         cs.lock_all()
-        self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+        self.assertEqual(cs.passphrase_export_shortfall(self.alice), "passphrase_unchecked")
         cs.unlock(self.alice, self.PASSPHRASE)
-        self.assertIsNone(cs.credentials_export_refusal(self.alice))
+        self.assertIsNone(cs.passphrase_export_shortfall(self.alice))
 
     def test_a_new_estimator_release_asks_for_the_passphrase_to_be_typed_again(self):
         # A new release can move a score as surely as a new threshold can, so a verdict is current only
         # for the release that took it. Until the passphrase is typed nothing is known to be wrong, so it
-        # is a request, not a block — except for the backup that would carry it.
+        # is a request, not a block, except that an unencrypted backup leaves it out.
         cs.set_passphrase(self.alice, self.PASSPHRASE)
         self.assertFalse(cs.passphrase_needs_check(self.alice))
         cs.lock_all()
@@ -760,12 +760,12 @@ class PassphraseCurrencyTests(unittest.TestCase):
             self.assertTrue(cs.passphrase_needs_check(self.alice))
             self.assertFalse(cs.passphrase_needs_change(self.alice))
             self.assertTrue(cs.ready_for_production())
-            self.assertEqual(cs.credentials_export_refusal(self.alice)["code"], "passphrase_unchecked")
+            self.assertEqual(cs.passphrase_export_shortfall(self.alice), "passphrase_unchecked")
 
             cs.unlock(self.alice, self.PASSPHRASE)
 
             self.assertFalse(cs.passphrase_needs_check(self.alice))
-            self.assertIsNone(cs.credentials_export_refusal(self.alice))
+            self.assertIsNone(cs.passphrase_export_shortfall(self.alice))
 
     def test_the_basis_names_the_installed_estimator_release(self):
         # Read from the distribution, so a dependency refresh changes it without anyone remembering to.

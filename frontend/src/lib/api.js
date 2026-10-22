@@ -1256,7 +1256,7 @@ export const api = {
   generateBackupKeypair: (data) => request('/import-export/backup/keypair', { method: 'POST', body: JSON.stringify(data) }),
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
-  // Whether a backup taken now would leave the data provider credentials out, and why.
+  // What a backup taken now would leave out, unencrypted and encrypted, and why.
   getBackupStatus: () => request('/import-export/backup/status'),
   getBackupHistory: () => request('/import-export/backup/history'),
   setBackupHistoryRetention: (days) =>
@@ -1305,6 +1305,7 @@ export const api = {
     if (force) fd.append('force', 'true')
     fd.append('include_data', parts.includeData === false ? 'false' : 'true')
     if (parts.includeAccounts) fd.append('include_accounts', 'true')
+    if (parts.includeCredentials === false) fd.append('include_credentials', 'false')
     if (parts.adminUsername) fd.append('admin_username', parts.adminUsername)
     if (parts.adminPassword) fd.append('admin_password', parts.adminPassword)
     const res = await trackedFetch('/api/import-export/restore-file', { method: 'POST', body: fd })

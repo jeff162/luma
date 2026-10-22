@@ -353,9 +353,10 @@ accounts part, and the restore puts back either or both. The financial data alon
 database, so restored over an existing install it keeps sign-in protection exactly as it was, and onto
 fresh databases it comes up at first run with sign-in off. The accounts part also replaces the identities,
 the sign-in setting, the backup keys and the vault, so the same file gives the same system whether it
-lands on an empty install, the one it came from, or another. Restoring the accounts signs everyone out,
-and a file that turns sign-in on is restored only with the password of an administrator in it, so the
-operator keeps a way in: the administrator they then sign in as.
+lands on an empty install, the one it came from, or another. The credentials and vault can be declined
+within it, which keeps the ones here while someone restored can still open them. Restoring the accounts
+signs everyone out, and a file that turns sign-in on is restored only with the password of an
+administrator in it, so the operator keeps a way in: the administrator they then sign in as.
 
 **A restore makes a new system.** Restoring the financial data gives the install a new backup identifier,
 so every backup made before it, the restored file included, reads afterwards as another system's and

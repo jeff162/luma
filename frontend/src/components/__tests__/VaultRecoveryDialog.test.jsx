@@ -136,7 +136,7 @@ describe('the ladder', () => {
     vaultResetPreview.mockResolvedValue({
       connections: 2, other_members_can_unlock: [], own_passkeys: [], has_recovery_code: false,
       credentials_backups: [{
-        exported_at: '2026-06-01T00:00:00', made_by: 'Robin', passphrase_current: false, recovery: 'current',
+        exported_at: '2026-06-01T00:00:00', user_name: 'Robin', passphrase_current: false, recovery: 'current',
         passkeys: ['Laptop'],
       }],
       confirm_phrase: 'RESET VAULT',
@@ -145,7 +145,7 @@ describe('the ladder', () => {
     expect(await screen.findByText('A backup holding the vault is on file')).toBeTruthy()
     // The non-obvious half: a backup opens with the passphrase it was MADE under, so an older one the
     // user still remembers is a complete recovery rather than another dead end.
-    expect(screen.getByText(/the passphrase in use at the time of the backup, or the current recovery code, or the current passkey “Laptop”/)).toBeTruthy()
+    expect(screen.getByText(/Robin can open it with the passphrase in use at the time of the backup, or the current recovery code, or the current passkey “Laptop”/)).toBeTruthy()
   })
 })
 

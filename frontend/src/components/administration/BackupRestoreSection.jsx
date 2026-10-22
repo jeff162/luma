@@ -6,13 +6,15 @@
 // backup is sealed to. All of it is admin-or-local on the server, which is why
 // it is here rather than beside the importer.
 //
-// A backup is always everything: the financial data and the accounts & secrets
+// A backup is always everything: the financial data and the user sign-in
 // (sign-in accounts and settings, backup keys, and the data provider credentials
 // with the vault that opens them). What to put back is chosen at restore, from
-// what the file holds. The one thing a backup can lack is the credentials, left
-// out when the vault passphrase has not cleared the current rule or the person
-// taking it cannot open the vault; the page says so before the file is made, and
-// offers the check or the change where those would clear it.
+// what the file holds; the credentials are a choice within the user sign-in,
+// since the vault they come with belongs to the people restored beside them.
+// An unencrypted backup leaves out any vault passphrase not validated against
+// the current strength rule, and the credentials too when that leaves no way
+// into the vault. The page says so before the file is made, and offers this
+// user the check or the change where those would clear their own passphrase.
 //
 // Restore is ONE picker for every kind of backup. The file says what it holds
 // (the server reads that without decrypting, so an encrypted archive is
@@ -44,6 +46,29 @@ import { formatDate, formatTimestamp, parseTimestamp } from '../../lib/utils.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
+
+const PASSPHRASE_LEFT_OUT_REASONS = {
+  passphrase_unchecked: 'not validated against the current strength rule',
+  weak_passphrase: 'too easy to guess',
+}
+
+// The backup surface's one notice about what a backup taken now would leave out. Credentials missing from
+// every backup outranks credentials missing from an unencrypted one, which outranks passphrases missing
+// from an unencrypted one. `ownCode` is set when this user's passphrase is among those left out.
+function describeBackupStatus(status) {
+  if (!status) return null
+  const own = (status.passphrases_left_out || []).find(p => p.own)
+  const ownCode = own ? own.code : null
+  const leftOut = status.encrypted_credentials_left_out || status.credentials_left_out
+  if (leftOut) return { message: leftOut.message, ownCode: status.encrypted_credentials_left_out ? null : ownCode }
+  const passphrases = status.passphrases_left_out || []
+  if (passphrases.length === 0) return null
+  const names = passphrases.map(p => `${p.name} (${PASSPHRASE_LEFT_OUT_REASONS[p.code] || p.code})`).join(', ')
+  return {
+    message: `Unencrypted backups leave out these vault passphrases: ${names}. Encrypted backups include them.`,
+    ownCode,
+  }
+}
 
 const RESTORE_KIND_TITLES = {
   data: 'financial data backup',
@@ -100,6 +125,7 @@ export default function BackupRestoreSection() {
   // What to put back from a backup holding both parts. Both by default: that restores the system.
   const [restoreData, setRestoreData] = useState(true)
   const [restoreAccounts, setRestoreAccounts] = useState(true)
+  const [restoreProviderCredentials, setRestoreProviderCredentials] = useState(true)
   // Set once the server says the file turns sign-in on: the restore then needs an administrator of the
   // backup, so it cannot leave this system with no one able to sign in.
   const [adminPrompt, setAdminPrompt] = useState(null)
@@ -110,8 +136,8 @@ export default function BackupRestoreSection() {
   const [downloading, setDownloading] = useState(false)
   // Non-null while the recipient picker is open, holding the ids currently ticked.
   const [recipientChoice, setRecipientChoice] = useState(null)
-  // Why a backup taken now would leave the data provider credentials out, or null.
-  const [credentialsLeftOut, setCredentialsLeftOut] = useState(null)
+  // What a backup taken now would leave out (`accounts_backup.backup_status`), or null until asked.
+  const [backupStatus, setBackupStatus] = useState(null)
   // A secret of the member who made a credentials backup — asked for only once the server says the
   // file's credentials are not valid here as they stand, so the ordinary "my own backup, this machine"
   // restore never sees a prompt at all. `unlockOptions` is the server's answer to which of that member's
@@ -124,6 +150,7 @@ export default function BackupRestoreSection() {
   // here is the session's unlock and every other surface sees the vault open.
   const { vault, ensureVault, openVault, changePassphrase } = useVaultGateContext()
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
+  const backupNotice = describeBackupStatus(backupStatus)
   // What the chosen file turned out to be. Everything below the picker — which inputs appear, what the
   // button says and how alarming it looks, which endpoint runs — follows from this rather than from
   // which control the file was dropped on.
@@ -132,6 +159,10 @@ export default function BackupRestoreSection() {
   const restoreHoldsBoth = restoreKind === 'full'
   const restoreReplacesData = restoreKind === 'data' || (restoreHoldsBoth && restoreData)
   const restoreReplacesAccounts = restoreHoldsBoth && restoreAccounts
+  const restoreFileHasCredentials = restoreInspection?.credentials_included !== false
+  const restoreReplacesCredentials = restoreReplacesAccounts && restoreFileHasCredentials && restoreProviderCredentials
+  const restoreReplacesEverything = restoreReplacesData && restoreReplacesAccounts
+    && (restoreReplacesCredentials || !restoreFileHasCredentials)
   // No restore of any kind while demo data is loaded, matching the server. Both kinds bring data in —
   // a credentials restore creates a live data source, which is precisely the state the demo tenant is
   // not allowed to reach — and the demo clear is only safe to erase everything because nothing
@@ -146,14 +177,15 @@ export default function BackupRestoreSection() {
     || (restoreIsCredentials && !!unlockOptions && !backupPassphrase && !backupRecoveryCode.trim())
 
   // Re-asked whenever the session's vault state changes, because that is what moves the answer: checking
-  // the passphrase settles 'passphrase_unchecked' (or turns it into 'weak_passphrase'), and changing it
-  // settles 'weak_passphrase'. Both are done from this page, and either can also happen on another.
+  // a passphrase settles 'passphrase_unchecked' (or turns it into 'weak_passphrase'), and changing it
+  // settles 'weak_passphrase'. This user's own can be done from this page, and either can also happen on
+  // another.
   // Recipients are not fetched here: the section below owns that list and reports it up, so fetching
   // it again would be a second request for an answer already on the page.
   useEffect(() => {
     let alive = true
     api.getBackupStatus()
-      .then(backup => { if (alive) setCredentialsLeftOut(backup?.credentials_left_out || null) })
+      .then(status => { if (alive) setBackupStatus(status || null) })
       .catch(() => {})
     return () => { alive = false }
   }, [vault])
@@ -252,6 +284,7 @@ export default function BackupRestoreSection() {
     setBackupRecoveryCode('')
     setRestoreData(true)
     setRestoreAccounts(true)
+    setRestoreProviderCredentials(true)
     setAdminPrompt(null)
     setAdminUsername('')
     setAdminPassword('')
@@ -347,6 +380,7 @@ export default function BackupRestoreSection() {
       const result = await api.restoreBackupFile(file, privateKeyFile, privateKeyPassphrase, force, {
         includeData: restoreReplacesData,
         includeAccounts: restoreReplacesAccounts,
+        includeCredentials: restoreReplacesCredentials,
         adminUsername: adminPrompt ? adminUsername.trim() : '',
         adminPassword: adminPrompt ? adminPassword : '',
       })
@@ -404,8 +438,9 @@ export default function BackupRestoreSection() {
   }
 
   const restoreButtonLabel = restoreIsCredentials ? 'Restore credentials'
-    : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore everything' : 'Restore accounts & secrets')
-      : 'Restore data'
+    : restoreReplacesEverything ? 'Restore everything'
+    : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore data & user sign-in' : 'Restore user sign-in')
+    : 'Restore data'
 
   function requestRestore() {
     if (restoreBlocked) return
@@ -426,16 +461,15 @@ export default function BackupRestoreSection() {
       // Only where the file's date is known to precede the reset: a backup taken since holds the
       // reconnected credentials itself.
       const resetAt = relinkedSinceReset && parseTimestamp(relinkedSinceReset.reset_at)
-      const relinkLost = resetAt && restoreInspection?.credentials_included !== false && restoreInspection?.exported_at
+      const relinkLost = resetAt && restoreReplacesCredentials && restoreInspection?.exported_at
         && parseTimestamp(restoreInspection.exported_at) < resetAt
         ? ` The vault was reset after this backup was taken, so ${relinkedSinceReset.connections.join(', ')} lose${relinkedSinceReset.connections.length === 1 ? 's' : ''} the credentials reconnected since.`
         : ''
-      const replaced = restoreReplacesData
-        ? 'all financial data, the sign-in accounts and settings, backup keys and data provider credentials'
-        : 'the sign-in accounts and settings, backup keys and data provider credentials'
+      const replaced = `${restoreReplacesData ? 'all financial data, ' : ''}the sign-in accounts and settings${restoreReplacesCredentials ? ', backup keys and data provider credentials' : ' and backup keys'}`
       setPendingConfirm({
         type: 'data',
-        title: restoreReplacesData ? 'Replace everything with this backup?' : 'Replace accounts & secrets with this backup?',
+        title: restoreReplacesEverything ? 'Replace everything with this backup?'
+          : restoreReplacesData ? 'Replace data & user sign-in with this backup?' : 'Replace user sign-in with this backup?',
         message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}${taken}${relinkLost}`,
         confirmLabel: restoreButtonLabel,
         variant: 'danger',
@@ -462,23 +496,21 @@ export default function BackupRestoreSection() {
     <div style={{ display: 'grid', gap: 18 }}>
       <Subsection title="Backup">
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {credentialsLeftOut ? (
+          {backupNotice ? (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
               fontSize: 13, lineHeight: 1.5, borderRadius: 8, padding: '8px 12px',
               background: 'color-mix(in srgb, var(--warning, #d97706) 12%, var(--surface2))',
               border: '1px solid color-mix(in srgb, var(--warning, #d97706) 35%, var(--border))',
             }}>
-              {/* The server's sentence says both why and what the backup will lack. */}
-              <span>{credentialsLeftOut.message}</span>
-              {/* The two reasons this user can clear, cleared here rather than on the Connections tab. The
-                  check takes a typed passphrase only: a passkey opens the vault but cannot judge one. The
-                  third reason, no vault access, is another member's to grant. */}
-              {credentialsLeftOut.code === 'passphrase_unchecked' ? (
+              <span>{backupNotice.message}</span>
+              {/* This user's own passphrase is cleared here rather than on the Connections tab. The check
+                  takes a typed passphrase only: a passkey opens the vault but cannot judge one. */}
+              {backupNotice.ownCode === 'passphrase_unchecked' ? (
                 <Button small onClick={() => openVault('check')} style={{ marginLeft: 'auto', flexShrink: 0 }}>
                   Validate passphrase
                 </Button>
-              ) : credentialsLeftOut.code === 'weak_passphrase' ? (
+              ) : backupNotice.ownCode === 'weak_passphrase' ? (
                 <Button small onClick={changePassphrase} style={{ marginLeft: 'auto', flexShrink: 0 }}>
                   Change passphrase
                 </Button>
@@ -671,20 +703,30 @@ export default function BackupRestoreSection() {
                   <div role="group" aria-label="What to restore" style={{ display: 'grid', gap: 8 }}>
                     {[
                       ['restore-data', 'Financial data', restoreData, setRestoreData,
-                        'Replaces the accounts, categories, rules, transactions, documents and preferences here.'],
-                      ['restore-accounts', 'Accounts & secrets', restoreAccounts, value => { setRestoreAccounts(value); if (!value) setAdminPrompt(null) },
-                        restoreInspection.credentials_included === false
-                          ? 'Replaces the sign-in accounts and settings and the backup keys, and signs everyone out.'
-                          : 'Replaces the sign-in accounts and settings, backup keys and data provider credentials, and signs everyone out. Afterwards the vault opens for the user who made the backup, with the passphrase, recovery code or passkey in force then; other members ask for vault access again.'],
-                    ].map(([name, label, checked, setChecked, detail]) => (
-                      <label key={name} style={{ display: 'flex', gap: 10, alignItems: 'baseline', cursor: 'pointer' }}>
-                        <input type="checkbox" name={name} checked={checked} onChange={e => setChecked(e.target.checked)} />
-                        <span style={{ display: 'grid', gap: 2 }}>
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
-                          <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{detail}</span>
-                        </span>
-                      </label>
-                    ))}
+                        'Accounts, categories, rules, transactions, documents and preferences replaced.'],
+                      ['restore-accounts', 'User sign-in', restoreAccounts, value => { setRestoreAccounts(value); if (!value) setAdminPrompt(null) },
+                        'Sign-in accounts, settings and backup keys replaced. Everyone is signed out.'],
+                      // Nested under the sign-in because the vault it brings opens for the people restored with it.
+                      ...(restoreFileHasCredentials ? [['restore-credentials', 'Data provider credentials', restoreProviderCredentials, setRestoreProviderCredentials,
+                        restoreProviderCredentials
+                          ? 'Vault replaced with the one in the backup. Users with a passphrase, recovery code or passkey in the backup have vault access afterwards, using the ones in force at the time. Other users request vault access again.'
+                          : 'Existing vault contents preserved. The vault is indexed by user information so only users in the backup retain current vault access. The vault will be reset if after restoring the backup none of the users have access.',
+                        true]] : []),
+                    ].map(([name, label, checked, setChecked, detail, nested]) => {
+                      const disabled = nested && !restoreAccounts
+                      return (
+                        <label key={name} style={{
+                          display: 'flex', gap: 10, alignItems: 'baseline', marginLeft: nested ? 24 : 0,
+                          cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
+                        }}>
+                          <input type="checkbox" name={name} checked={checked} disabled={disabled} onChange={e => setChecked(e.target.checked)} />
+                          <span style={{ display: 'grid', gap: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+                            <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{detail}</span>
+                          </span>
+                        </label>
+                      )
+                    })}
                   </div>
                 )}
                 {restoreInspection.encrypted && Array.isArray(restoreInspection.recipients) && restoreInspection.recipients.length > 0 && (

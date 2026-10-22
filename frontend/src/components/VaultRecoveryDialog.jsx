@@ -54,8 +54,9 @@ const OUTCOME_NOTE = {
   unreadable: 'Its stored credential could not be read, so nothing could be sent. Revoke it yourself.',
 }
 
-// What opens one backup, as it compares with now (`crypto_service.credentials_backups_by_passphrase`).
-// A secret in use when the backup was taken is named that way only when it is not the current one.
+// What of one member's opens one backup, as it compares with now
+// (`crypto_service.credentials_backups_by_passphrase`). A secret in use when the backup was taken is named
+// that way only when it is not the current one.
 function backupOpensWith(backup) {
   const then = 'in use at the time of the backup'
   const recovery = backup.recovery
@@ -74,7 +75,7 @@ function backupOpensWith(backup) {
   const passkeys = (backup.passkeys || []).map(label => `“${label}”`)
   const passkey = passkeys.length === 0 ? ''
     : `, or the current passkey ${passkeys.length === 1 ? passkeys[0] : `${passkeys.slice(0, -1).join(', ')} or ${passkeys.at(-1)}`}`
-  return `Requires ${secrets}${passkey}, to open.`
+  return `${backup.user_name ? `${backup.user_name} can open it` : 'Opens'} with ${secrets}${passkey}.`
 }
 
 // The shown-once panel. Shared by this dialog and Vault settings because both mint a code and both owe
@@ -284,7 +285,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {/* After a compromise the backups' credentials are not restored, so they are no way back. */}
           {backups.length > 0 && outcome.reason === 'lost' ? (
             <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-              A backup holding the vault is on file. Restoring its accounts &amp; secrets puts the vault back
+              A backup holding the vault is on file. Restoring its data provider credentials puts the vault back
               as it was when it was taken, opened by the passphrase or recovery code in force then, and the connections it
               holds work again without reconnecting anything.
             </p>
@@ -450,14 +451,14 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {backups.length > 0 ? (
             <Rung title={backups.length === 1 ? 'A backup holding the vault is on file' : 'Backups holding the vault are on file'}>
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                Restoring the accounts &amp; secrets of a backup on Administration → Backup / Restore puts the
-                vault back as it was when the backup was taken, and recovers everything without reconnecting
-                anything. It also puts back the sign-in accounts as they were and signs everyone out.
+                Restoring the user sign-in and data provider credentials of a backup on Administration →
+                Backup / Restore puts the vault back as it was when the backup was taken, and recovers
+                everything without reconnecting anything. It also puts back the sign-in accounts as they were
+                and signs everyone out.
               </p>
               {backups.map(backup => (
-                <p key={`${backup.exported_at}-${backup.made_by}`} style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                  Taken {formatDate(String(backup.exported_at).slice(0, 10))}
-                  {backup.made_by ? ` by ${backup.made_by}` : ''}. {backupOpensWith(backup)}
+                <p key={`${backup.exported_at}-${backup.user_name}`} style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
+                  Taken {formatDate(String(backup.exported_at).slice(0, 10))}. {backupOpensWith(backup)}
                 </p>
               ))}
             </Rung>

@@ -27,7 +27,8 @@ const changeVaultPassphrase = vi.fn()
 let recipients = []
 // What the chosen file turns out to be, per test.
 let inspection = { kind: 'credentials', container: 'zip', encrypted: false }
-let backupStatus = { credentials_left_out: null }
+const NOTHING_LEFT_OUT = { credentials_left_out: null, encrypted_credentials_left_out: null, passphrases_left_out: [] }
+let backupStatus = NOTHING_LEFT_OUT
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
@@ -85,7 +86,7 @@ afterEach(() => {
   restoreBackupFile.mockReset(); unlockVault.mockReset(); changeVaultPassphrase.mockReset()
   recipients = []
   inspection = { kind: 'credentials', container: 'zip', encrypted: false }
-  backupStatus = { credentials_left_out: null }
+  backupStatus = NOTHING_LEFT_OUT
 })
 
 const KEYS = [
@@ -109,9 +110,24 @@ describe('the backup', () => {
   })
 
   it('says beforehand when the credentials will be left out, and why', async () => {
-    backupStatus = { credentials_left_out: { code: 'passphrase_unchecked', message: 'Until then the backup will not contain the credentials.' } }
+    backupStatus = { ...NOTHING_LEFT_OUT, credentials_left_out: { code: 'no_strong_unlock', message: 'Unencrypted backups will not contain the credentials.' } }
     renderSection()
-    expect(await screen.findByText('Until then the backup will not contain the credentials.')).toBeTruthy()
+    expect(await screen.findByText('Unencrypted backups will not contain the credentials.')).toBeTruthy()
+  })
+
+  it('names the passphrases an unencrypted backup leaves out', async () => {
+    backupStatus = {
+      ...NOTHING_LEFT_OUT,
+      passphrases_left_out: [
+        { user_id: 'u1', name: 'Robin', code: 'passphrase_unchecked', own: false },
+        { user_id: 'u2', name: 'Sam', code: 'weak_passphrase', own: false },
+      ],
+    }
+    renderSection()
+    expect(await screen.findByText(
+      'Unencrypted backups leave out these vault passphrases: Robin (not validated against the current strength rule), Sam (too easy to guess). Encrypted backups include them.',
+    )).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Validate passphrase' })).toBeNull()
   })
 
   // The whole journey a user with a passkey makes, because each step depends on the last crossing a
@@ -119,14 +135,15 @@ describe('the backup', () => {
   // session user, and that is what makes the page ask the server again.
   it('lets an unchecked passphrase be checked and then changed without leaving the page', async () => {
     const user = { ...VAULT_USER, vault_passphrase_needs_check: true, vault_passkeys: [{ id: 'pk1' }] }
-    backupStatus = { credentials_left_out: { code: 'passphrase_unchecked', message: 'Type it once.' } }
+    const ownLeftOut = code => ({ ...NOTHING_LEFT_OUT, passphrases_left_out: [{ user_id: 'u1', name: 'Avery', code, own: true }] })
+    backupStatus = ownLeftOut('passphrase_unchecked')
     // Typing it shows the passphrase fails the rule.
     unlockVault.mockImplementation(async () => {
-      backupStatus = { credentials_left_out: { code: 'weak_passphrase', message: 'Change it.' } }
+      backupStatus = ownLeftOut('weak_passphrase')
       return { user: { ...user, vault_passphrase_needs_check: false, vault_passphrase_needs_change: true } }
     })
     changeVaultPassphrase.mockImplementation(async () => {
-      backupStatus = { credentials_left_out: null }
+      backupStatus = NOTHING_LEFT_OUT
       return { user: { ...user, vault_passphrase_needs_check: false, vault_passphrase_needs_change: false } }
     })
     renderSection(user)
@@ -150,7 +167,7 @@ describe('the backup', () => {
     await userEvent.click(screen.getAllByRole('button', { name: 'Change passphrase' }).at(-1))
     expect(changeVaultPassphrase).toHaveBeenCalledWith('the old passphrase', next)
 
-    await waitFor(() => expect(screen.queryByText('Change it.')).toBeNull())
+    await waitFor(() => expect(screen.queryByText(/Avery \(too easy to guess\)/)).toBeNull())
   })
 
   it('reports a failed download in the page instead of navigating away', async () => {
@@ -323,8 +340,8 @@ describe('restoring a backup that holds both parts', () => {
     await user.click(buttons[buttons.length - 1])
   }
 
-  const parts = (includeData, includeAccounts, adminUsername = '', adminPassword = '') => (
-    { includeData, includeAccounts, adminUsername, adminPassword }
+  const parts = (includeData, includeAccounts, adminUsername = '', adminPassword = '', includeCredentials = includeAccounts) => (
+    { includeData, includeAccounts, includeCredentials, adminUsername, adminPassword }
   )
 
   it('restores everything by default, and says everyone was signed out', async () => {
@@ -345,10 +362,10 @@ describe('restoring a backup that holds both parts', () => {
     await choose(user)
 
     await user.click(screen.getByRole('checkbox', { name: /Financial data/ }))
-    await restore(user, 'Restore accounts & secrets')
+    await restore(user, 'Restore user sign-in')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(false, true)))
 
-    await user.click(screen.getByRole('checkbox', { name: /Accounts & secrets/ }))
+    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
     expect(screen.getByRole('button', { name: 'Restore data' }).disabled).toBe(true)
   })
 
@@ -358,9 +375,29 @@ describe('restoring a backup that holds both parts', () => {
     renderSection()
     await choose(user)
 
-    await user.click(screen.getByRole('checkbox', { name: /Accounts & secrets/ }))
+    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
     await restore(user, 'Restore data', 'Restore data backup')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(true, false)))
+  })
+
+  it('restores the user sign-in without the credentials when they are not ticked', async () => {
+    const user = userEvent.setup()
+    restoreBackupFile.mockResolvedValue({ restored_counts: {}, accounts: { users: 1 }, signed_out: true })
+    renderSection()
+    await choose(user)
+
+    await user.click(screen.getByRole('checkbox', { name: /Data provider credentials/ }))
+    await restore(user, 'Restore data & user sign-in')
+    await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(true, true, '', '', false)))
+  })
+
+  it('offers the credentials only with the user sign-in', async () => {
+    const user = userEvent.setup()
+    renderSection()
+    await choose(user)
+
+    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
+    expect(screen.getByRole('checkbox', { name: /Data provider credentials/ }).disabled).toBe(true)
   })
 
   it('says when the file holds no data provider credentials', async () => {
@@ -368,6 +405,7 @@ describe('restoring a backup that holds both parts', () => {
     renderSection()
     await choose(user, { credentials_included: false })
     expect(screen.getByText(/This backup does not contain data provider credentials/)).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: /Data provider credentials/ })).toBeNull()
   })
 
   it('asks for an administrator of the backup when the server says so, and sends what is typed', async () => {

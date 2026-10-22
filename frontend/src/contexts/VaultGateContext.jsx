@@ -138,7 +138,7 @@ export function VaultGateProvider({ children }) {
     setNotice({
       title: 'Vault passphrase changed',
       description: 'Your connections are unaffected. A backup taken before now puts the previous '
-        + 'passphrase back when its accounts & secrets are restored.',
+        + 'passphrase back when its data provider credentials are restored.',
     })
   }, [setCurrentUser])
 

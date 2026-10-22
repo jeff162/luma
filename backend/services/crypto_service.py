@@ -121,7 +121,7 @@ PASSPHRASE_RULE_VERSION = 2
 #
 # A passphrase can only be judged while it is in hand, so a slot judged under an earlier basis keeps that
 # verdict until its owner next types the passphrase. Meanwhile its owner is asked to (the
-# `vault_passphrase_check` task) and a credentials backup waits (`credentials_export_refusal`).
+# `vault_passphrase_check` task) and an unencrypted backup leaves it out (`passphrase_export_shortfall`).
 STRENGTH_BASIS = f"rule-{PASSPHRASE_RULE_VERSION}+zxcvbn-{_distribution_version('zxcvbn')}"
 
 # zxcvbn refuses longer input, because its matching cost grows with length, so a longer passphrase is
@@ -899,17 +899,16 @@ def _upgrade_slot_to_keypair(slot: dict, secret: str, dek: bytes, *, user_id: st
 
 # --- The slots a credentials backup carries -------------------------------------------------------
 #
-# A credentials backup copies the encrypted credentials and, beside them, the exporting member's own
-# slots: every way that member can open the vault — passphrase, recovery code, passkeys. That is what
-# lets the file be restored on another install, where none of this install's slots exist: whichever of
-# those secrets the member still holds reopens the workspace key the credentials are sealed under.
+# A credentials backup copies the encrypted credentials and, beside them, the members' slots: their
+# passphrases, recovery codes and passkeys. That is what lets the file be restored on another install,
+# where none of this install's slots exist: any of those secrets still held reopens the workspace key the
+# credentials are sealed under.
 #
-# **Only the exporter's own slots, never another member's.** Each slot is an independent way to the same
-# key, so the file is as hard to break as its weakest slot. A recovery code is 160 random bits and a
-# passkey's secret never leaves its authenticator, so neither weakens the file; another member's
-# passphrase would make it only as strong as theirs, which the exporter cannot see or vouch for. The
-# exporter's own passphrase is held to the current rule before a file is written
-# (`credentials_export_refusal`).
+# **Each slot is a separate way to the same key, so a file is as hard to break as its weakest slot.** A
+# recovery code is 160 random bits and a passkey's secret never leaves its authenticator, so neither
+# weakens it. A passphrase can, so an unencrypted backup carries one only once it has been validated
+# against the current rule and passes (`passphrase_export_shortfall`). Which slots go in is decided in
+# `accounts_backup._carried_slots`.
 #
 # **A passkey answers only at the host name it was registered under**, so each passkey slot carries a
 # salted digest of that name (`site`), and a restore offers a passkey only where the page's own name
@@ -991,7 +990,7 @@ def credentials_backups_by_passphrase() -> list[dict]:
         carried = set(export["passkey_credential_ids"])
         entries.append({
             "exported_at": export["exported_at"],
-            "made_by": export["made_by"],
+            "user_name": export["user_name"],
             "passphrase_current": export["wrapped_dek_fingerprint"] == current_wrapped_dek_fingerprint(user_id),
             "recovery": recovery,
             "passkeys": [
@@ -1151,28 +1150,18 @@ def deks_from_exported_slot(exported: dict, secret: str) -> list[bytes]:
     return deks
 
 
-def credentials_export_refusal(user_id: str) -> dict | None:
-    """Why a backup this member takes cannot carry the credentials right now, or None when it can.
-
-    The file carries their passphrase slot, open to offline guessing by whoever holds it, so the
-    passphrase has to clear the rule in force. A verdict from an earlier basis is not enough: the rule or
-    the estimator may have tightened since, and only typing the passphrase again can say."""
+def passphrase_export_shortfall(user_id: str) -> str | None:
+    """Why an unencrypted backup leaves this member's passphrase out, or None when it carries it:
+    `passphrase_unchecked` when it has not been judged under the current rule, `weak_passphrase` when it
+    failed. A verdict from an earlier basis is not enough, since the rule or the estimator may have tightened
+    since, and only typing the passphrase again can say."""
     slot = _own_passphrase_slot(user_id)
     if not slot:
         return None
     if slot["strength_basis"] != STRENGTH_BASIS:
-        return {
-            "code": "passphrase_unchecked",
-            "message": "The vault needs to be unlocked with this user's passphrase so it can be validated "
-                       "against the current strength rule. Until then the backup will not contain the data "
-                       "provider credentials.",
-        }
+        return "passphrase_unchecked"
     if not slot["meets_production_min"]:
-        return {
-            "code": "weak_passphrase",
-            "message": "This user's vault passphrase does not meet the current strength rule and needs to be "
-                       "changed. Until then the backup will not contain the data provider credentials.",
-        }
+        return "weak_passphrase"
     return None
 
 

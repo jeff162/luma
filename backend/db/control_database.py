@@ -268,9 +268,10 @@ def init_control_db():
                 last_used_at  TEXT
             );
 
-            -- One row per credentials backup taken, recording *which wrapping* went into the file.
+            -- One row per credentials backup taken and per member whose passphrase went into it
+            -- (`user_id`), recording *which wrapping* that was.
             --
-            -- A credentials backup carries the DEK wrapped under the passphrase in force when it was
+            -- A credentials backup carries the DEK wrapped under each passphrase in force when it was
             -- written. Changing the passphrase rewraps the same DEK under a new salt, so the stored
             -- ciphertext is untouched but every previously exported file is thereafter restorable only
             -- with the *old* passphrase — permanently, and with nothing on screen to say so. This table is
@@ -286,7 +287,7 @@ def init_control_db():
             -- still opens.
             --
             -- Beside the wrapping, what else opened the file when it was written, so the reset dialog can
-            -- say which secrets a backup needs: `recovery_issued_at` (the exporter's recovery code, by
+            -- say which secrets a backup needs: `recovery_issued_at` (the member's recovery code, by
             -- issue time, NULL when they had none) and `passkey_credential_ids` (a JSON list), plus
             -- `seal_digest`, the workspace key the file's credentials are under, which a retired key is
             -- matched against (`retired_vault_key`). All three are NULL on rows written before they
@@ -1446,7 +1447,8 @@ def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str,
                               passkey_credential_ids: list[str] | None = None,
                               seal_digest: str | None = None,
                               backup_id: str | None = None) -> None:
-    """Note that a credentials backup was written against this wrapping of the DEK, and what else opened it.
+    """Note that a credentials backup carries this member's wrapping of the DEK, and what else of theirs
+    opens it.
 
     Append-only and unbounded in principle, but bounded in practice by how often a person exports
     credentials by hand; pruning would cost the exact history the change warning reads."""
@@ -1492,12 +1494,12 @@ def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
 
 
 def credentials_exports_detail() -> list[dict]:
-    """Every recorded export with what opened it and who took it, newest first. `passkey_credential_ids`
-    is decoded to a list."""
+    """Every recorded export with what opens it and whose secrets those are (`user_name`), newest first.
+    `passkey_credential_ids` is decoded to a list."""
     with get_control_db() as conn:
         rows = conn.execute(
             """
-            SELECT e.*, COALESCE(u.display_name, u.username) AS made_by
+            SELECT e.*, COALESCE(u.display_name, u.username) AS user_name
             FROM   credentials_export e LEFT JOIN user_account u ON u.id = e.user_id
             WHERE  e.withdrawn_at IS NULL
             ORDER  BY e.exported_at DESC, e.rowid DESC

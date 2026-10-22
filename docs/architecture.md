@@ -824,9 +824,10 @@ custody*; this section is the mechanism.
   outdated KDF is rewrapped under the current one, keeping its keypair and carrying its
   `credentials_export` rows across. A failing verdict leaves the unlock working and sets
   `vault_passphrase_needs_change`, which raises the `vault_passphrase_change` task; `ready_for_production`
-  then refuses a connect, and `credentials_export_refusal` an export, until the owner changes it. A
-  verdict under an older basis sets `vault_passphrase_needs_check` instead, which raises the dismissable
-  `vault_passphrase_check` task and a note on the locked strip; only the export waits on it. The backup
+  then refuses a connect, and an unencrypted backup leaves the passphrase out
+  (`passphrase_export_shortfall`), until the owner changes it. A verdict under an older basis sets
+  `vault_passphrase_needs_check` instead, which raises the dismissable `vault_passphrase_check` task and a
+  note on the locked strip; only an unencrypted backup waits on it. The backup
   surface offers whichever of the two would clear its warning: a passphrase-only check (gate mode
   `check`, an unlock that offers no passkey, since a passkey cannot judge a passphrase) or the change.
   Developer options can put every passphrase in the unchecked state and lock every session
@@ -868,8 +869,8 @@ custody*; this section is the mechanism.
      sign-in recovery codes, because a slot's wrap can be attacked offline. `POST /auth/vault/recover`
      takes `{code, new_passphrase}` as one operation: the replacement slot is written before the
      recovery slot is deleted, so a failure leaves the code usable, and a fresh code is issued.
-  3. A backup holding the vault: restoring its accounts part puts the vault back as it was, opened by the
-     passphrase or recovery code in force when it was taken.
+  3. A backup holding the vault: restoring its accounts part puts the vault back as it was, opened by
+     each member's passphrase, recovery code or passkey the file carries, as they were when it was taken.
   4. `POST /auth/vault/reset` (admin-gated): every slot deleted, every `ENCRYPTED_COLUMNS` value cleared,
      `reauth_required` set on every connection. Connections, accounts, transactions, mappings and
      coverage survive. It asks *lost or compromised*: a compromised passphrase still opens the vault, so

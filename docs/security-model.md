@@ -449,22 +449,30 @@ data backup reveals which institutions are linked, which its transactions alread
   whoever holds a full backup already holds the ledger the perimeter guards. The database on disk holds it
   in the same form. So it is protected the way the ledger is: by encrypting the backup, which is the
   owner's choice.
-- **The credentials.** Their protection has to stand on its own in every copy. A backup is one more copy,
-  kept somewhere the app cannot see and open to offline guessing without limit, and backup encryption is
-  optional, with a key of its own that can be lost or leaked — so it cannot be what the credentials rest
-  on. This is the reason a vault passphrase is held to a strength rule at all, and why a file carries a
-  passphrase slot only while that passphrase clears the rule in force.
+- **The credentials.** Protected by the vault slots that travel with them. A backup is kept somewhere the
+  app cannot see, and anyone holding it can guess at its slots offline without limit. The file is as hard
+  to break as its weakest slot.
 
-**When the credentials cannot travel, they are left out and the backup is written.** The ledger cannot be
-got back once lost, and a credential can be re-linked, so a backup of the ledger never waits on the vault.
-The file says it holds no credentials, and so does the backup surface before it is made.
+**A backup carries every member's slots that hold up.** Recovery codes and passkeys always go in. A
+recovery code is generated at full key strength and a passkey's secret never leaves its authenticator, so
+neither weakens the file. Passphrases depend on whether the backup is encrypted:
 
-**A backup carries the exporter's slots and no one else's** — their passphrase, recovery code and
-passkeys. The file is as hard to break as its weakest slot. A recovery code is generated to full key
-strength and a passkey's secret never leaves its authenticator, so neither weakens it; another member's
-passphrase would make it only as strong as theirs, which the exporter can neither see nor vouch for. The
-cost is that after a restore the vault opens only for the member who took the backup. The others ask for
-access again, and someone who leaves takes with them the only secrets that open their files.
+- **Unencrypted:** a passphrase goes in only when it has been validated against the current strength rule
+  and passes. Nothing else stands between the file and offline guessing, so each passphrase has to hold up
+  on its own. A passphrase is judged when its owner types it, so one not typed since the rule or the
+  estimator changed is left out until it is.
+- **Encrypted:** every passphrase goes in. Guessing at one first needs the backup's private key, which is
+  stored apart from the backup. Protecting that key is the owner's job, as protecting a passphrase is.
+
+After a restore, every member with a slot in the file opens the vault as before. Members without one ask
+for access again. Any member's passphrase, recovery code or passkey in the file opens it, so recovery from
+a backup does not depend on the one person who took it.
+
+**When the credentials cannot travel, they are left out and the backup is written.** That happens when
+the file would carry no way into the vault: nobody can open the vault, or every way in is a passphrase an
+unencrypted backup leaves out. The ledger cannot be got back once lost, and a credential can be re-linked,
+so a backup of the ledger never waits on the vault. The file says it holds no credentials, and the backup
+surface says so before it is made, along with any passphrase an unencrypted backup would leave out.
 
 **A passkey answers only at the host name it was registered under**, so each passkey slot in a file
 carries a salted digest of that name. The slots are readable without any key, so a digest rather than the

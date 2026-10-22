@@ -2780,10 +2780,10 @@ export const HELP_TOPICS = [
                   it, changes, the strip and a <strong>Confirm your vault passphrase</strong> task ask for
                   it to be typed once rather than a passkey used, since a passkey cannot be used to check
                   it: the locked strip by unlocking, and the unlocked strip and the task with{' '}
-                  <strong>Validate passphrase</strong>; backups leave the data provider credentials out until
+                  <strong>Validate passphrase</strong>; unencrypted backups leave the passphrase out until
                   then. It still opens the vault, but until it is changed, in Vault settings, from its task or
-                  from the backup page, data providers cannot be connected and backups leave the credentials
-                  out. Only the person whose passphrase it is can change it.</td>
+                  from the backup page, data providers cannot be connected and unencrypted backups leave
+                  it out. Only the person whose passphrase it is can change it.</td>
               </tr>
               <tr>
                 <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
@@ -4476,29 +4476,34 @@ export const HELP_TOPICS = [
             far it had synced.
           </li>
           <li>
-            <strong>Accounts &amp; secrets</strong> &mdash; the sign-in accounts and settings, password
-            hashes and two-factor secrets included, the backup keys, and the stored credential for each
-            connection and the provider secrets entered with <strong>Configure</strong>, encrypted as
-            they are in the <HelpLink to="/help/credential-vault">vault</HelpLink>. To open the
-            credentials it carries the unlock methods of the user who made the backup: their vault
-            passphrase, their recovery code and their passkeys. Other users' unlock methods are not in
-            it.
+            <strong>User sign-in</strong> &mdash; the sign-in accounts and settings, password hashes and
+            two-factor secrets included, and the backup keys.
+          </li>
+          <li>
+            <strong>Data provider credentials</strong> &mdash; part of the user sign-in: the stored
+            credential for each connection and the provider secrets entered
+            with <strong>Configure</strong>, encrypted as they are in
+            the <HelpLink to="/help/credential-vault">vault</HelpLink>. To open them it carries every
+            user's vault unlock methods: passphrases, recovery codes and passkeys. Any of them opens the
+            backup.
           </li>
         </ul>
         <p>
-          The file is only as hard to break into as the weakest unlock method in it. So the credentials
-          are left out while that user's passphrase fails the current strength rule, or has not been
-          checked against it since the rule changed, and when that user cannot open the vault. The rest
-          of the backup is still made, and the page says beforehand that the credentials will be missing.
-          Where the passphrase is the reason, that warning carries <strong>Validate passphrase</strong> or{' '}
-          <strong>Change passphrase</strong>. Validating takes the typed passphrase only, since a passkey
+          The file is only as hard to break into as the weakest unlock method in it. Recovery codes and
+          passkeys can't be guessed, so they always go in. A backup that isn't encrypted leaves out any
+          vault passphrase that fails the current strength rule or hasn't been validated against it since
+          the rule changed. If that leaves no way to open the vault, the credentials are left out too. The
+          rest of the backup is still made, and the page says beforehand what will be missing. When the
+          passphrase left out is the current user's, the warning carries <strong>Validate passphrase</strong>{' '}
+          or <strong>Change passphrase</strong>. Validating takes the typed passphrase only, since a passkey
           opens the vault without validating it.
         </p>
         <p>
           A backup can be encrypted to a backup key, and {APP_NAME} can generate the key pairs. That
           protects what the file holds in plain text: the transactions, the password hashes and the
-          two-factor secrets. The data provider credentials are protected by the vault whether or not
-          the file is encrypted.
+          two-factor secrets. An encrypted backup also carries every vault passphrase, since guessing at
+          one first needs the private key. The private key needs to be kept somewhere safe, apart from the
+          backups.
         </p>
         <p>
           <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
@@ -4512,9 +4517,11 @@ export const HELP_TOPICS = [
         </p>
 
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
+        <p>*needs review*</p>
         <p>
-          The restore offers each part the file holds, both ticked. Each part replaces what is there,
-          whichever installation it lands on.
+          The restore offers each part the file holds, all ticked. The data provider credentials can
+          only be restored with the user sign-in, since the vault they come with opens for the users
+          restored beside them. Each part replaces what is there, whichever installation it lands on.
         </p>
         <ul>
           <li>
@@ -4527,16 +4534,20 @@ export const HELP_TOPICS = [
             list. <strong>Refresh accounts</strong> in the connection's menu fetches the list again.
           </li>
           <li>
-            Restoring the accounts &amp; secrets replaces the sign-in accounts, the sign-in setting, the
-            backup keys, the vault and the credentials, and signs everyone out. The vault then opens for
-            the user who made the backup, with the passphrase, recovery code or passkey in force when it
-            was taken. Other users ask for vault access again. A credential added since the backup was
-            made is cleared, and its connection has to be reconnected.
+            Restoring the user sign-in replaces the sign-in accounts, settings and backup keys. Everyone
+            is signed out.
           </li>
           <li>
-            A backup made without the credentials keeps the vault and credentials already on the
-            installation, as long as someone among the restored accounts can open the vault. Otherwise
-            the credentials are cleared and every connection has to be reconnected.
+            Restoring the data provider credentials replaces the vault with the one in the backup. Users
+            with a passphrase, recovery code or passkey in the backup have vault access afterwards, using
+            the ones in force at the time. Other users request vault access again. A credential added
+            since the backup was made is cleared and its connection has to be reconnected.
+          </li>
+          <li>
+            Without the credentials, whether not ticked or because the backup was made without them, the
+            existing vault contents are preserved. The vault is indexed by user information so only users
+            in the backup retain current vault access. The vault is reset if after restoring the backup
+            none of the users have access.
           </li>
           <li>
             When the backup turns sign-in on, the restore first asks for the username and password of an
@@ -4546,7 +4557,7 @@ export const HELP_TOPICS = [
             A backup made before <strong>Replace vault key</strong>, or before the vault was rebuilt for
             a compromised passphrase, restores everything except the data provider credentials, which
             are under a key that is no longer trusted. After a vault rebuilt for a forgotten passphrase,
-            restoring an older backup's accounts &amp; secrets replaces the credentials of connections
+            restoring an older backup's data provider credentials replaces the credentials of connections
             reconnected since, and the confirmation names them.
           </li>
         </ul>

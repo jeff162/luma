@@ -9,10 +9,10 @@ What these defend:
     out. A credential linked since is cleared rather than left under a key nothing here opens.
   * **No lockout.** A file that turns sign-in on is restored only with an administrator's password from it,
     checked before anything is touched.
-  * **The export gate holds without holding the backup.** A file carries the vault only when the
-    exporter's passphrase clears the current rule and the exporter can open the vault; otherwise it is
-    written without the credentials, and restoring it leaves the vault and credentials on the target alone
-    unless nobody who could open them is left.
+  * **Every way in that holds up goes in.** A file carries every member's recovery code and passkeys, and
+    each passphrase that passes the current rule, or every passphrase when the file is encrypted. With no
+    way in left the file is written without the credentials, and restoring it leaves the vault and
+    credentials on the target alone unless nobody who could open them is left.
   * **Coverage.** Every table of the control database is either carried or left out for a stated reason.
 """
 
@@ -32,6 +32,7 @@ from backend.services import crypto_service as cs
 from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
 
 PASSPHRASE = STRONG_PASSPHRASE
+OTHER_PASSPHRASE = "robin keeps a different long vault passphrase"
 ADMIN_PASSWORD = "admin-password-123"
 TOKEN = "access-sandbox-TEST-TOKEN"
 APP_SECRET = "app-secret-value"
@@ -223,40 +224,74 @@ class AccountsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/unlock", json={"passphrase": "passwordpassword1234"})
             status = client.get("/api/import-export/backup/status").json()
             members = _members(self._export(client))
-        self.assertEqual(status["credentials_left_out"]["code"], "weak_passphrase")
+        self.assertEqual([p["code"] for p in status["passphrases_left_out"]], ["weak_passphrase"])
         self.assertFalse(json.loads(members["meta.json"])["credentials_included"])
         self.assertNotIn("accounts/credentials.json", members)
         self.assertNotIn(b"passwordpassword1234", b"".join(members.values()))
         self.assertIn("sections/transactions.ndjson", members)
 
-    def test_someone_who_cannot_open_the_vault_backs_up_everything_but_the_credentials(self):
-        with api_client(base_url=SITE) as (client, _):
-            self._seed_vault(client)
-            sam = client.post("/api/auth/identities", json={"name": "Sam"}).json()["identity"]
-            client.post("/api/auth/select-identity", json={"user_id": sam["id"]})
-            status = client.get("/api/import-export/backup/status").json()
-            members = _members(self._export(client))
-        self.assertEqual(status["credentials_left_out"]["code"], "vault_access_required")
-        self.assertNotIn("accounts/credentials.json", members)
-
-    # ---- a backup without the credentials -------------------------------
-
-    def test_without_credentials_a_restore_keeps_the_vault_here(self):
-        # Sam's backup carries everyone, and the owner of the vault among them, so the vault and the
-        # credential stay as they are.
+    def test_someone_who_cannot_open_the_vault_still_backs_up_the_credentials(self):
+        # The file carries the slots of those who can, so Sam's backup restores the vault for them.
         with api_client(base_url=SITE) as (client, _):
             owner = self._seed_vault(client)
             sam = client.post("/api/auth/identities", json={"name": "Sam"}).json()["identity"]
             client.post("/api/auth/select-identity", json={"user_id": sam["id"]})
+            status = client.get("/api/import-export/backup/status").json()
+            members = _members(self._export(client))
+        self.assertIsNone(status["credentials_left_out"])
+        slots = json.loads(members["accounts/credentials.json"])["vault_slots"]
+        self.assertEqual({s["user_id"] for s in slots}, {owner})
+
+    # ---- which ways into the vault a backup carries ---------------------
+
+    def _add_member(self, client, name: str, passphrase: str) -> str:
+        """A second member with vault access, granted by the first, who must be unlocked."""
+        member = client.post("/api/auth/identities", json={"name": name}).json()["identity"]
+        cs.set_passphrase(member["id"], passphrase)
+        with in_browser_session(client):
+            cs.grant_access(self._me(client)["id"], cs.pending_access_requests()[0]["slot_id"])
+        return member["id"]
+
+    def test_every_members_validated_passphrase_goes_in_and_opens_the_vault_after_a_restore(self):
+        with api_client(base_url=SITE) as (client, _):
+            owner = self._seed_vault(client)
+            robin = self._add_member(client, "Robin", OTHER_PASSPHRASE)
             content = self._export(client)
-            slots = cs.export_vault_slots(owner)
+            slots = json.loads(_members(content)["accounts/credentials.json"])["vault_slots"]
+            self.assertIn((robin, "passphrase"), {(s["user_id"], s["method"]) for s in slots})
 
             r = self._restore_accounts(client, content)
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._without_site(cs.export_vault_slots(owner)), self._without_site(slots))
-            client.post("/api/auth/select-identity", json={"user_id": owner})
-            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
-            self.assertEqual(self._stored_token(client, owner), TOKEN)
+            client.post("/api/auth/select-identity", json={"user_id": robin})
+            r = client.post("/api/auth/vault/unlock", json={"passphrase": OTHER_PASSPHRASE})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_token(client, robin), TOKEN)
+        self.assertIn(owner, {s["user_id"] for s in slots})
+
+    def test_an_unencrypted_backup_leaves_out_an_unvalidated_passphrase_and_an_encrypted_one_keeps_it(self):
+        with api_client(base_url=SITE) as (client, _):
+            owner = self._seed_vault(client)
+            with cdb.get_control_db() as conn:
+                conn.execute("UPDATE vault_slot SET strength_basis = 'rule-1' WHERE method = 'passphrase'")
+            status = client.get("/api/import-export/backup/status").json()
+            plain = json.loads(_members(self._export(client))["accounts/credentials.json"])["vault_slots"]
+            keypair = client.post("/api/import-export/backup/keypair", json={"key_size": 2048}).json()
+            client.post("/api/import-export/backup/recipients", json={
+                "label": "Offsite", "public_key": keypair["public_key"],
+            })
+            encrypted = client.get("/api/import-export/backup", params={"encrypted": "true"})
+            self.assertEqual(encrypted.status_code, 200, encrypted.text)
+            exports = cdb.credentials_exports_detail()
+        # The recovery code and passkey still carry the credentials.
+        self.assertIsNone(status["credentials_left_out"])
+        self.assertEqual(status["passphrases_left_out"], [
+            {"user_id": owner, "name": "Tester", "code": "passphrase_unchecked", "own": True},
+        ])
+        self.assertEqual(sorted(s["method"] for s in plain), ["passkey", "recovery"])
+        # Only the encrypted file carries the passphrase, so only it is recorded against it.
+        self.assertEqual(len(exports), 1)
+
+    # ---- a backup without the credentials -------------------------------
 
     def test_without_credentials_a_restore_that_removes_every_vault_member_clears_them(self):
         # Onto another install whose vault belongs to someone the file does not name: nothing could open
@@ -269,7 +304,7 @@ class AccountsBackupTests(unittest.TestCase):
 
         with api_client(base_url=SITE) as (client, _):
             self._seed_vault(client)
-            r = self._restore_accounts(client, content)
+            r = self._restore_accounts(client, content, include_credentials=False)
             self.assertEqual(r.status_code, 200, r.text)
             self.assertFalse(cs.vault_configured())
             with get_db() as conn:
@@ -398,6 +433,26 @@ class AccountsBackupTests(unittest.TestCase):
                 later = conn.execute("SELECT * FROM connection WHERE id = 'conn-2'").fetchone()
         self.assertIsNone(later["credential_enc"])
         self.assertEqual(later["reauth_required"], 1)
+
+    def test_declining_the_credentials_keeps_the_vault_and_credentials_here(self):
+        # The file carries credentials; asked not to restore them, it restores as a file without them.
+        with api_client(base_url=SITE) as (client, _):
+            user_id = self._seed_vault(client)
+            content = self._export(client)
+            self.assertIn("accounts/credentials.json", _members(content))
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            with in_browser_session(client):
+                credential, credential_enc = cs.encrypt_connection_credential({"id": user_id}, "plaid", "ext-1", "later")
+            with get_db() as conn:
+                conn.execute("UPDATE connection SET credential = ?, credential_enc = ? WHERE id = 'conn-1'",
+                             (credential, credential_enc))
+
+            r = self._restore_accounts(client, content, include_credentials=False)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["accounts"]["credentials"], 0)
+            client.post("/api/auth/select-identity", json={"user_id": user_id})
+            client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
+            self.assertEqual(self._stored_token(client, user_id), "later")
 
     def test_a_backup_can_restore_only_its_financial_data(self):
         with api_client(base_url=SITE) as (client, _):

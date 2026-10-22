@@ -197,7 +197,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
         : confirming
           ? 'Changing how this vault is opened needs the passphrase or a passkey, even though the vault is already open. Otherwise anyone who reached an unlocked screen could add their own way in.'
           : checking
-          ? 'Enter your passphrase so it can be validated against the current strength rule. Until then backups will not contain the data provider credentials.'
+          ? 'Enter your passphrase so it can be validated against the current strength rule. Until then unencrypted backups leave it out.'
           : requesting
           ? 'This workspace already has a credential vault. Choose the passphrase that will open it for you — it starts working once a member who can already open the vault approves the request.'
           : setting

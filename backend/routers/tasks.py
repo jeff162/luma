@@ -136,7 +136,7 @@ def _vault_passphrase_task(request: Request | None) -> dict | None:
     over whatever page is showing (`VaultGateContext`), so there is nowhere to send the user.
 
     Required rather than dismissible: while it stands no data source can be connected
-    (`crypto_service.ready_for_production`) and this member cannot take a credentials backup, and the only
+    (`crypto_service.ready_for_production`) and an unencrypted backup leaves it out, and the only
     person who can clear it is the one it is shown to — a passphrase can be changed by its owner alone.
     """
     user = getattr(request, "state", None) and getattr(request.state, "user", None)
@@ -146,8 +146,8 @@ def _vault_passphrase_task(request: Request | None) -> dict | None:
         "id":          "vault_passphrase_change",
         "title":       "Change your vault passphrase",
         "description": "Your vault passphrase is considered too easy to guess. It still opens the vault, but "
-                       "until it is changed data providers cannot be connected and backups will not contain "
-                       "the data provider credentials.",
+                       "until it is changed data providers cannot be connected and unencrypted backups leave "
+                       "it out.",
         "count":       1,
         "action":      "vault_passphrase_change",
         "action_label": "Change passphrase",
@@ -160,9 +160,9 @@ def _vault_passphrase_check_task(request: Request | None) -> dict | None:
     """This member's vault passphrase has not been judged under the current strength rule and estimator.
 
     Dismissable, unlike the change task: nothing is known to be wrong, and usually nothing is — an
-    estimator release seldom moves a strong passphrase. What does wait is a credentials backup, which
-    refuses until the passphrase has been typed (`credentials_export_refusal`) whether or not this is
-    dismissed. Raised for every member at once when the rule or the estimator changes, and the one way it
+    estimator release seldom moves a strong passphrase. What does change is that an unencrypted backup
+    leaves the passphrase out until it has been typed (`crypto_service.passphrase_export_shortfall`),
+    whether or not this is dismissed. Raised for every member at once when the rule or the estimator changes, and the one way it
     reaches a member who unlocks only with a passkey, which cannot judge a passphrase.
     """
     user = getattr(request, "state", None) and getattr(request.state, "user", None)
@@ -172,8 +172,8 @@ def _vault_passphrase_check_task(request: Request | None) -> dict | None:
         "id":          "vault_passphrase_check",
         "title":       "Confirm your vault passphrase",
         "description": "The vault needs to be unlocked with your passphrase, not a passkey, so it can be "
-                       "validated against the current strength rule. Until then backups will not contain the "
-                       "data provider credentials.",
+                       "validated against the current strength rule. Until then unencrypted backups leave it "
+                       "out.",
         "count":       1,
         "action":      "vault_passphrase_check",
         "action_label": "Validate passphrase",

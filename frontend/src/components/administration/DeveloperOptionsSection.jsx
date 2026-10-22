@@ -266,7 +266,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
             <div style={{ fontSize: 14, fontWeight: 600 }}>Mark vault passphrases as unchecked</div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
               As after a strength-rule change and restart: every passphrase reads as unchecked and the vault is
-            locked. Backups leave the credentials out until each is typed again.
+            locked. Unencrypted backups leave each passphrase out until it is typed again.
             </div>
           </div>
           <Button

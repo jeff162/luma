@@ -495,12 +495,15 @@ class CredentialsBackupTests(unittest.TestCase):
     # ---- the passphrase a file carries -----------------------------------
 
     def _left_out(self, client):
-        return client.get("/api/import-export/backup/status").json()["credentials_left_out"]
+        """Why an unencrypted backup leaves this user's passphrase out, or None."""
+        status = client.get("/api/import-export/backup/status").json()
+        own = next((p for p in status["passphrases_left_out"] if p["own"]), None)
+        return own and own["code"]
 
     def test_no_backup_carries_a_passphrase_that_fails_the_current_rule(self):
-        # The file carries the passphrase slot to wherever it is kept, open to offline guessing, so it is
-        # held to the rule in force — judged at the last unlock, the only moment it can be. The backup is
-        # still written, without the credentials.
+        # An unencrypted file is open to offline guessing wherever it is kept, so a passphrase in it is
+        # held to the rule in force, judged at the last unlock, the only moment it can be. With no other
+        # way in, the backup is still written, without the credentials.
         from unittest import mock
 
         with api_client() as (client, _):
@@ -509,7 +512,7 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/lock")
             client.post("/api/auth/vault/unlock", json={"passphrase": "passwordpassword1234"})
 
-            self.assertEqual(self._left_out(client)["code"], "weak_passphrase")
+            self.assertEqual(self._left_out(client), "weak_passphrase")
             r = client.get("/api/import-export/backup")
             self.assertEqual(r.status_code, 200, r.text)
             with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
@@ -518,8 +521,8 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertIn("vault_passphrase_change", [t["id"] for t in tasks["tasks"]])
 
     def test_a_passphrase_not_yet_checked_under_the_current_rule_is_asked_for_by_a_dismissable_task(self):
-        # Nothing is known to be wrong, so the reminder can be put away; a backup still leaves the
-        # credentials out until the passphrase is typed, whether or not it is.
+        # Nothing is known to be wrong, so the reminder can be put away; an unencrypted backup still leaves
+        # the passphrase out until it is typed, whether or not it is.
         from backend.db import control_database as cdb
 
         with api_client() as (client, _):
@@ -530,7 +533,7 @@ class CredentialsBackupTests(unittest.TestCase):
             task = next(t for t in client.get("/api/tasks").json()["tasks"] if t["id"] == "vault_passphrase_check")
             self.assertEqual(client.post(f"/api/tasks/dismiss/{task['dismiss_key']}").status_code, 200)
             self.assertNotIn("vault_passphrase_check", [t["id"] for t in client.get("/api/tasks").json()["tasks"]])
-            self.assertEqual(self._left_out(client)["code"], "passphrase_unchecked")
+            self.assertEqual(self._left_out(client), "passphrase_unchecked")
 
             client.post("/api/auth/vault/lock")
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
@@ -557,7 +560,7 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertTrue(r.json()["user"]["vault_passphrase_needs_check"])
             # As the restart that brings a rule change does.
             self.assertFalse(r.json()["user"]["vault_unlocked"])
-            self.assertEqual(self._left_out(client)["code"], "passphrase_unchecked")
+            self.assertEqual(self._left_out(client), "passphrase_unchecked")
 
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
             self.assertIsNone(self._left_out(client))

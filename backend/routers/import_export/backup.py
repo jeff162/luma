@@ -1059,10 +1059,10 @@ def _recipients_for_export(conn, requested_ids: Optional[str]) -> list[dict]:
 
 @router.get("/backup/status", dependencies=[Depends(require_admin_or_local)])
 def backup_status(request: Request):
-    """Whether a backup taken now would leave the data-source credentials out, and why — said on the
-    backup surface before the file is made rather than discovered at restore."""
+    """What a backup taken now would leave out, and why: said on the backup surface before the file is made
+    rather than discovered at restore."""
     with get_db() as conn:
-        return {"credentials_left_out": accounts_backup.credentials_left_out(conn, getattr(request.state, "user", None))}
+        return accounts_backup.backup_status(conn, getattr(request.state, "user", None))
 
 
 @router.get("/backup/history", dependencies=[Depends(require_admin_or_local)])
@@ -1152,10 +1152,10 @@ def export_backup(
     """Write a backup: the financial data and the accounts (`services/accounts_backup.py`), always both.
     What to put back is chosen at restore.
 
-    Encrypting to backup keys is optional and protects what the file holds in the clear — the ledger,
-    password hashes and two-factor secrets. It is not what protects the data-source credentials: they are
-    sealed under the vault, whose every way in that the file carries has to hold up on its own. When the
-    exporter's passphrase has not cleared the current rule, or the exporter cannot open the vault, the
+    Encrypting to backup keys is optional. It protects what the file holds in the clear (the ledger,
+    password hashes and two-factor secrets) and adds a layer in front of the vault slots, so an encrypted
+    backup carries every passphrase while an unencrypted one carries only those that pass the current
+    strength rule (`accounts_backup._carried_slots`). When the file would carry no way into the vault, the
     credentials are left out and the file says so; the rest of the backup is never held back for them.
     """
     user = getattr(request.state, "user", None)
@@ -1165,7 +1165,7 @@ def export_backup(
             selected = _recipients_for_export(conn, recipients)
             if not selected:
                 raise HTTPException(status_code=400, detail="No enabled backup keys are configured")
-        accounts_part = accounts_backup.collect(conn, user)
+        accounts_part = accounts_backup.collect(conn, encrypted)
 
     made_by = (user or {}).get("display_name") or (user or {}).get("username")
     artifact = backup_temp_file()
@@ -1194,7 +1194,7 @@ def export_backup(
     # One id for the two records of this file, so trashing its history row can withdraw the other.
     backup_id = str(uuid.uuid4())
     try:
-        accounts_backup.record_export(user, accounts_part, backup_id)
+        accounts_backup.record_export(accounts_part, backup_id)
     except Exception as exc:                                        # pragma: no cover - defensive
         log_error(f"[backup] could not record the backup: {exc}", exc_info=exc)
     try:
@@ -2093,6 +2093,7 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
 
 def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None, *,
                          include_data: bool = True, include_accounts: bool = False,
+                         include_credentials: bool = True,
                          admin_username: Optional[str] = None, admin_password: Optional[str] = None,
                          source: Optional[dict] = None) -> dict:
     """Destructive restore straight from an opened version-10-or-later archive, one member at a time.
@@ -2104,7 +2105,8 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     `source` describes the uploaded file (`_restore_backup_history`); the sizes are read here.
 
     `include_data` and `include_accounts` choose which of the parts the file holds to apply; a part the file
-    does not hold is not applied whatever is asked. Everything that can refuse — the digests, the
+    does not hold is not applied whatever is asked. `include_credentials` false restores the accounts part
+    as a file without credentials restores (`accounts_backup.apply`). Everything that can refuse — the digests, the
     compatibility guard and the restoring administrator's password — runs before anything is touched.
     The financial data then commits and the accounts part follows (`accounts_backup.apply`).
     """
@@ -2125,6 +2127,8 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         _check_restoring_admin(accounts_part, admin_username, admin_password)
         # Credentials under a key retired after an exposure or a replacement are not put back; the rest of
         # the part restores as a file without credentials does (`crypto_service.UNTRUSTED_RETIREMENTS`).
+        if not include_credentials:
+            accounts_part["credentials"] = None
         if accounts_part["credentials"] is not None:
             withheld = crypto_service.exported_slots_retired(accounts_part["credentials"].get("vault_slots"))
             if withheld:
@@ -2812,6 +2816,8 @@ async def restore_backup_file(
     # older file holds; a part the file does not hold is ignored.
     include_data: bool = Form(True),
     include_accounts: bool = Form(False),
+    # Within the accounts part: false leaves the vault and the credentials here as they are.
+    include_credentials: bool = Form(True),
     # An administrator of the backup, when it turns sign-in on (`accounts_backup.check_restoring_admin`).
     admin_username: str | None = Form(None),
     admin_password: str | None = Form(None),
@@ -2819,6 +2825,7 @@ async def restore_backup_file(
     private_key_bytes = await private_key_file.read() if private_key_file else None
     accounts_options = {
         "include_data": include_data, "include_accounts": include_accounts,
+        "include_credentials": include_credentials,
         "admin_username": admin_username, "admin_password": admin_password,
     }
     # Named, unlike every other staging file here, because the documents phase may need to read it again

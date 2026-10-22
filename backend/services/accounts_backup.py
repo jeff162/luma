@@ -13,18 +13,22 @@ travel as one part and are restored as one.
 
 **Restore replaces, it never merges.** Whatever install it lands on — an empty one, the one it came from,
 or another — what was there is gone afterwards, so the ciphertext and the slots go back exactly as they
-were exported, with no secret asked for and nothing re-encrypted. The slots are the exporter's own, the only
-ones the export gate can vouch for (`crypto_service.credentials_export_refusal`); another member comes back
-without vault access and asks for it again. A credential linked after the backup was taken is under a key
-the restored vault does not hold, so it is cleared and its connection flagged for reconnection, as a vault
-reset leaves one.
+were exported, with no secret asked for and nothing re-encrypted. A credential linked after the backup was
+taken is under a key the restored vault does not hold, so it is cleared and its connection flagged for
+reconnection, as a vault reset leaves one.
 
-**The credentials are left out rather than the backup refused** when they could not travel safely or
-usefully: the exporter's passphrase has not cleared the current rule, or the exporter cannot open the
-vault. Every way into the vault a file carries has to resist offline guessing on its own, whatever else
-protects the file, but a backup of the ledger must not wait on the vault — the ledger cannot be got back,
-and a credential can be re-linked. A file without them restores the people and leaves the vault and the
-credentials on the target alone.
+**Which ways into the vault a backup carries** (`_carried_slots`). Every user's recovery code and passkeys,
+since neither can be guessed. Every user's passphrase too, unless the backup is unencrypted and that
+passphrase has not been validated against the current strength rule or fails it. An unencrypted file can be
+guessed at offline by anyone holding it, so each passphrase in it has to hold up on its own. In an encrypted
+file guessing first needs the backup's private key, and protecting that key is the owner's job. After a
+restore, every user with a way in the file carries opens the vault as before.
+
+**The credentials are left out rather than the backup refused** when the file would carry no way into the
+vault: nobody can open it, or every way in is a passphrase an unencrypted backup leaves out. A backup of
+the ledger must not wait on the vault, since the ledger cannot be got back and a credential can be
+re-linked. A file without them restores the people and leaves the vault and the credentials on the target
+alone.
 
 The one thing a restore must not do is leave nobody able to sign in, so a file that turns sign-in on is
 restored only by someone who can show the password of an administrator in it (`check_restoring_admin`).
@@ -65,22 +69,41 @@ def _holds_ciphertext(conn) -> bool:
     )
 
 
-def _credentials(conn, user: dict | None) -> tuple[dict | None, dict | None]:
-    """`(credentials, why_left_out)`. Both None when there is nothing to carry: no vault access and no
-    stored credential."""
-    user_id = (user or {}).get("id")
-    slots = crypto_service.export_vault_slots(user_id) if user_id else []
+def _carried_slots(encrypted: bool) -> tuple[list[dict], list[dict]]:
+    """`(slots, passphrases_left_out)`: the vault slots a backup carries, and the passphrases an unencrypted
+    one leaves out, each as `{user_id, name, code}`."""
+    slots, left_out = [], []
+    for member in crypto_service.vault_members():
+        user_id = member["user_id"]
+        shortfall = None if encrypted else crypto_service.passphrase_export_shortfall(user_id)
+        for slot in crypto_service.export_vault_slots(user_id):
+            if shortfall and slot["method"] == "passphrase":
+                left_out.append({"user_id": user_id, "name": member["display_name"], "code": shortfall})
+            else:
+                slots.append(slot)
+    return slots, left_out
+
+
+_NO_VAULT_ACCESS = {
+    "code": "vault_access_required",
+    "message": "Nobody can open the vault, so backups will not contain the data provider credentials.",
+}
+_NO_STRONG_UNLOCK = {
+    "code": "no_strong_unlock",
+    "message": "Unencrypted backups will not contain the data provider credentials. No user has a recovery "
+               "code, a passkey or a vault passphrase validated against the current strength rule. Encrypted "
+               "backups will contain them.",
+}
+
+
+def _credentials(conn, encrypted: bool) -> tuple[dict | None, dict | None, list[dict]]:
+    """`(credentials, why_left_out, passphrases_left_out)`. The first two are None when there is nothing to
+    carry: no vault access and no stored credential."""
+    slots, passphrases_left_out = _carried_slots(encrypted)
     if not slots:
         if not _holds_ciphertext(conn):
-            return None, None
-        return None, {
-            "code": "vault_access_required",
-            "message": "This user cannot open the vault, so the backup will not contain the data provider "
-                       "credentials. Someone who can open it can grant access.",
-        }
-    refusal = crypto_service.credentials_export_refusal(user_id)
-    if refusal:
-        return None, refusal
+            return None, None, passphrases_left_out
+        return None, (_NO_STRONG_UNLOCK if passphrases_left_out else _NO_VAULT_ACCESS), passphrases_left_out
     return {
         "connections": [dict(r) for r in conn.execute(
             "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
@@ -90,20 +113,29 @@ def _credentials(conn, user: dict | None) -> tuple[dict | None, dict | None]:
             "SELECT provider, client_id, secret, secret_enc, env FROM provider_config ORDER BY rowid"
         )],
         "vault_slots": slots,
-    }, None
+    }, None, passphrases_left_out
 
 
-def credentials_left_out(conn, user: dict | None) -> dict | None:
-    """Why a backup `user` takes now would leave the credentials out, or None. `conn` is the data
-    database. For the backup surface to say before the file is made."""
-    return _credentials(conn, user)[1]
+def backup_status(conn, user: dict | None) -> dict:
+    """What a backup taken now would leave out, unencrypted and encrypted, for the backup surface to say
+    before the file is made. `conn` is the data database. Each passphrase left out is marked `own` when it
+    is `user`'s, who can validate or change it from there."""
+    _, left_out, passphrases = _credentials(conn, encrypted=False)
+    _, encrypted_left_out, _ = _credentials(conn, encrypted=True)
+    user_id = (user or {}).get("id")
+    return {
+        "credentials_left_out": left_out,
+        "encrypted_credentials_left_out": encrypted_left_out,
+        "passphrases_left_out": [{**p, "own": p["user_id"] == user_id} for p in passphrases],
+    }
 
 
-def collect(conn, user: dict | None) -> dict:
-    """The accounts part as it stands now, for `user` to export. `conn` is the data database.
+def collect(conn, encrypted: bool) -> dict:
+    """The accounts part as it stands now, for a backup that is or is not `encrypted`. `conn` is the data
+    database.
 
     `credentials` is None when they are left out, and `credentials_left_out` then says why."""
-    credentials, left_out = _credentials(conn, user)
+    credentials, left_out, _ = _credentials(conn, encrypted)
     part = control_database.export_identities()
     part["backup_keys"] = [dict(r) for r in conn.execute("SELECT * FROM backup_recipient ORDER BY rowid")]
     part["credentials"] = credentials
@@ -111,17 +143,22 @@ def collect(conn, user: dict | None) -> dict:
     return part
 
 
-def record_export(user: dict | None, part: dict, backup_id: str | None = None) -> None:
-    """Note which passphrase wrapping went into the file, so a later passphrase change can name the
-    backups it is about to strand, and what else opens it, for the reset dialog to say
-    (`control_database.record_credentials_export`). `backup_id` names the file's backup history row."""
+def record_export(part: dict, backup_id: str | None = None) -> None:
+    """Note, for each user whose passphrase went into the file, which wrapping it was and what else of
+    theirs opens the file (`control_database.record_credentials_export`). A later passphrase change can then
+    name the backups it is about to strand, and the reset dialog say what opens each. `backup_id` names the
+    file's backup history row."""
     if part["credentials"] is None:
         return
-    slots = part["credentials"]["vault_slots"]
-    fingerprint = crypto_service.exported_slots_fingerprint(slots)
-    if user and user.get("id") and fingerprint:
+    by_user: dict[str, list[dict]] = {}
+    for slot in part["credentials"]["vault_slots"]:
+        by_user.setdefault(slot["user_id"], []).append(slot)
+    for user_id, slots in by_user.items():
+        fingerprint = crypto_service.exported_slots_fingerprint(slots)
+        if not fingerprint:
+            continue
         control_database.record_credentials_export(
-            user["id"], fingerprint,
+            user_id, fingerprint,
             recovery_issued_at=next((s.get("issued_at") for s in slots if s.get("method") == "recovery"), None),
             passkey_credential_ids=[s["credential_id"] for s in slots if s.get("method") == "passkey"],
             seal_digest=crypto_service.exported_slots_seal_digest(slots),
