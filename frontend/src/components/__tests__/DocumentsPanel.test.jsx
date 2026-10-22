@@ -202,13 +202,11 @@ describe('DocumentsPanel', () => {
     pasteInto(box, RICH_RECEIPT)
 
     const preview = await screen.findByTitle('Preview of the pasted receipt')
-    // No tokens at all: a token-less sandbox is what withholds scripts and this app's origin.
-    expect(preview.getAttribute('sandbox')).toBe('')
+    // Same origin so edits can be read back, and nothing else: with scripts it could reach the app.
+    expect(preview.getAttribute('sandbox')).toBe('allow-same-origin')
     expect(preview.getAttribute('srcdoc')).toContain('<td>$350.00</td>')
     expect(preview.getAttribute('srcdoc')).toContain('Content-Security-Policy')
     expect(screen.queryByLabelText('Drop or paste a document')).toBeNull()
-    // Attached as shown or not at all: the formatting is the point, and it is not editable.
-    expect(screen.queryByRole('button', { name: /edit/i })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 
@@ -217,6 +215,68 @@ describe('DocumentsPanel', () => {
     expect(sent.type).toBe('text/html')
     expect(sent.name).toBe('documentation.html')
     // The stored copy is the paste itself, not the preview's rewritten document.
+    expect(await sent.text()).toBe(RICH_RECEIPT['text/html'])
+  })
+
+  it('attaches a formatted paste as edited in place', async () => {
+    // Cutting an email's signature in the preview keeps its table; what is stored is the edit, without the
+    // policy the preview added.
+    const user = userEvent.setup()
+    render(<DocumentsPanel txnId="t1" />)
+    pasteInto(await findBox(), RICH_RECEIPT)
+    const preview = await screen.findByTitle('Preview of the pasted receipt')
+    const doc = preview.contentDocument
+    doc.body.innerHTML = '<table><tr><td>Professional Tune Up</td><td>$350.00</td></tr></table>'
+    doc.dispatchEvent(new Event('input'))
+
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+
+    await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
+    const sent = api.attachTransactionDocument.mock.calls[0][1]
+    expect(sent.type).toBe('text/html')
+    const stored = await sent.text()
+    expect(stored).toContain('<td>Professional Tune Up</td><td>$350.00</td>')
+    expect(stored).not.toContain('<td>1</td>')
+    expect(stored).not.toContain('Content-Security-Policy')
+  })
+
+  it('converts a formatted paste to plain text so it can be trimmed', async () => {
+    // Trimming as text costs the layout, and what is attached is the trimmed text.
+    const user = userEvent.setup()
+    render(<DocumentsPanel txnId="t1" />)
+    pasteInto(await findBox(), RICH_RECEIPT)
+    await screen.findByTitle('Preview of the pasted receipt')
+
+    await user.click(screen.getByRole('button', { name: 'Convert to plain text' }))
+
+    expect(screen.queryByTitle('Preview of the pasted receipt')).toBeNull()
+    const box = screen.getByLabelText('Drop or paste a document')
+    expect(box.value).toBe(RICH_RECEIPT['text/plain'])
+    await user.clear(box)
+    await user.type(box, 'Professional Tune Up $350.00')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+
+    await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
+    const sent = api.attachTransactionDocument.mock.calls[0][1]
+    expect(sent.type).toBe('text/plain')
+    expect(await sent.text()).toBe('Professional Tune Up $350.00')
+  })
+
+  it('returns from plain text to the formatted paste, discarding the text edits', async () => {
+    const user = userEvent.setup()
+    render(<DocumentsPanel txnId="t1" />)
+    pasteInto(await findBox(), RICH_RECEIPT)
+    await screen.findByTitle('Preview of the pasted receipt')
+    await user.click(screen.getByRole('button', { name: 'Convert to plain text' }))
+    await user.clear(screen.getByLabelText('Drop or paste a document'))
+
+    await user.click(screen.getByRole('button', { name: 'Discard and return to HTML' }))
+
+    await screen.findByTitle('Preview of the pasted receipt')
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
+    await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
+    const sent = api.attachTransactionDocument.mock.calls[0][1]
+    expect(sent.type).toBe('text/html')
     expect(await sent.text()).toBe(RICH_RECEIPT['text/html'])
   })
 

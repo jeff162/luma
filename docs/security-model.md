@@ -20,6 +20,7 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 
 - [What is defended, and what is deliberately not](#what-is-defended-and-what-is-deliberately-not)
 - [Reading and deleting outside the data directory](#reading-and-deleting-outside-the-data-directory)
+- [Rendering documents a user supplied](#rendering-documents-a-user-supplied)
 - [Why provider credentials are the only things encrypted](#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](#revocation-in-both-directions)
   - [Responding to an exposure](#responding-to-an-exposure)
@@ -90,6 +91,20 @@ administrator nor trusted operator — a guest, a read-only sharer, an API token
 "admin-or-local" stops describing who can point the server at a directory. The delete needs re-grading
 before that class exists, and the picker is the first thing to withhold from it, being the sharpest tool
 here for someone who should not be reading the filesystem at all.
+
+## Rendering documents a user supplied
+
+Stored and pasted HTML usually comes from an email, which is content written by a third party, so it is
+rendered as untrusted:
+
+- **A stored document is served with `Content-Security-Policy: sandbox; default-src 'none'`**: no script,
+  no subresource, no origin (`backend/routers/documents.py`).
+- **A paste being reviewed has no URL to carry that header**, so its preview rebuilds the same policy as a
+  `<meta>` and strips whatever could navigate the frame (`frontend/src/lib/pastedHtmlPreview.js`).
+- **The preview frame is sandboxed with `allow-same-origin` and nothing else.** Same origin is what lets
+  the app read back edits made in place, and it is safe only because no script runs in the frame. Adding
+  `allow-scripts` alongside it would hand the pasted markup the app's origin, including the ability to lift
+  its own sandbox — the two tokens are never combined.
 
 ## Why provider credentials are the only things encrypted
 

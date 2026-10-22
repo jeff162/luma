@@ -13,8 +13,11 @@
  *   would otherwise fire the moment the preview drew — and it blocks inline styles too, exactly as the
  *   stored document's header does. That is deliberate: the preview's promise is that what is shown is what
  *   will be attached, so it must not look better than the stored copy will.
- * - **Scripts and origin are the iframe's `sandbox` attribute's job** (the host renders it with no tokens),
- *   since a `<meta>` policy cannot carry the `sandbox` directive.
+ * - **Scripts are the iframe's `sandbox` attribute's job**, since a `<meta>` policy cannot carry the
+ *   `sandbox` directive. The host grants it `allow-same-origin` and nothing else, so the preview can be
+ *   edited in place and the edits read back. Same origin is safe only *because* no script runs there: it
+ *   must never be combined with `allow-scripts`, which would let the markup reach the app — or remove its
+ *   own sandbox.
  * - **Navigation is the one thing neither covers.** A sandboxed frame may still navigate *itself*, so a
  *   `<meta http-equiv="refresh">` or a clicked link would load a remote page inside the panel. Pasted
  *   `<meta>` elements and every `href` are removed for that reason, and `<link>` too, which some browsers
@@ -39,4 +42,12 @@ export function buildPastedHtmlPreview(html) {
   policy.setAttribute('content', PREVIEW_CONTENT_SECURITY_POLICY)
   doc.head.prepend(policy)
   return `<!doctype html>${doc.documentElement.outerHTML}`
+}
+
+// An edited preview as it is to be stored: the policy `buildPastedHtmlPreview` added is taken out again, since
+// the stored copy is served under the server's own header and the next preview adds its own.
+export function serializeEditedPreview(doc) {
+  const root = doc.documentElement.cloneNode(true)
+  root.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').forEach(element => element.remove())
+  return `<!doctype html>${root.outerHTML}`
 }

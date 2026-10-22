@@ -1210,7 +1210,7 @@ export const HELP_TOPICS = [
     summary: 'Receipts and invoices can be attached to a transaction, or stored until the transaction arrives. Text in parsable documents is searchable from the Transactions search box.',
     body: () => (
       <>
-        <p>*needs review* (starting at stored documents. waiting to resolve editing of pasted text)</p>
+        <p>*needs review* (starting at stored documents)</p>
         <p>
           Paperwork can be attached to a transaction. This could be to
           provide additional detail for a large or complex expense or it could be used to store receipts where they
@@ -1249,8 +1249,11 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Using copy/paste with an email usually brings its HTML formatting along, so an itemized table keeps
-          each price beside its item. What the preview shows is what gets attached. A careful text selection
-          keeps anything extraneous out of the attachment.
+          each price beside its item. The formatted preview can be edited in place -- click into it to cut a
+          signature, quoted replies or blank space -- and what it shows is what gets attached.
+          <strong>Convert to plain text</strong> turns it into plain text instead, at the cost of the table
+          layout; <strong>Discard and return to HTML</strong> undoes that. A careful text selection keeps
+          anything extraneous out of the attachment.
         </p>
 
         <h4>Stored documents</h4>

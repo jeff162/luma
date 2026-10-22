@@ -66,6 +66,7 @@ index in [`backlog/README.md`](backlog/README.md).
 
 - [What is defended, and what is deliberately not](security-model.md#what-is-defended-and-what-is-deliberately-not)
 - [Reading and deleting outside the data directory](security-model.md#reading-and-deleting-outside-the-data-directory)
+- [Rendering documents a user supplied](security-model.md#rendering-documents-a-user-supplied)
 - [Why provider credentials are the only things encrypted](security-model.md#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](security-model.md#revocation-in-both-directions)
 - [Identity and the network perimeter](security-model.md#identity-and-the-network-perimeter)

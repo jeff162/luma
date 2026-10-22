@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { buildPastedHtmlPreview } from '../lib/pastedHtmlPreview.js'
+import { buildPastedHtmlPreview, serializeEditedPreview } from '../lib/pastedHtmlPreview.js'
 import { namePastedFile, pastedTextFile } from '../lib/pastedDocuments.js'
 import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
 
@@ -21,7 +21,9 @@ import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
  * all end at `upload(file)`. A pasted image has nothing to review, so it goes straight up like a dropped
  * file. Text lands in the box first — a receipt pasted out of an email arrives wrapped in signature and
  * quoting — and a paste carrying real markup is shown as formatted, in a sandboxed preview, because that is
- * what will be stored. Every paste is named `documentation.<ext>` (see `lib/pastedDocuments.js`).
+ * what will be stored. The preview is editable in place, so an email's signature and quoting can be cut without
+ * losing its table; Convert to plain text trades the layout for text in the box, and Discard and return to
+ * HTML takes that back. Every paste is named `documentation.<ext>` (see `lib/pastedDocuments.js`).
  *
  * **Uploads are shown per file, not as one busy flag.** Several files can be dropped at once and each
  * settles on its own; a failure names its file, since "that didn't work" is not actionable when three
@@ -35,6 +37,11 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
   const [uploads, setUploads] = useState([])
   const [pastedText, setPastedText] = useState('')
   const [richPaste, setRichPaste] = useState(null)
+  // Set while a formatted paste is being edited as plain text; `richPaste` is kept so it can be returned to.
+  const [plainMode, setPlainMode] = useState(false)
+  const frameRef = useRef(null)
+  // Whether the preview has been edited in place. Unedited, the paste itself is what is stored.
+  const frameEdited = useRef(false)
   const [dragOver, setDragOver] = useState(false)
 
   async function uploadFiles(files) {
@@ -70,9 +77,26 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
     // Only when the rich flavour actually carries markup — a `text/html` flavour that is the same words
     // again would render as a web page while preserving no layout. And only into an empty box: pasting into
     // text already being edited is an insertion into that text, left to the browser.
-    if (pastedText.trim() || !plain || !/<[a-z!/]/i.test(html)) return
+    if (plainMode || pastedText.trim() || !plain || !/<[a-z!/]/i.test(html)) return
     event.preventDefault()
-    setRichPaste({ html, preview: buildPastedHtmlPreview(html) })
+    frameEdited.current = false
+    setRichPaste({ html, plain, preview: buildPastedHtmlPreview(html) })
+  }
+
+  // `designMode` makes the whole preview editable. The frame is same-origin so its edits can be read back;
+  // it still runs no script, which is what keeps that safe (`lib/pastedHtmlPreview.js`).
+  function enableFrameEditing() {
+    const doc = frameRef.current?.contentDocument
+    if (!doc) return
+    doc.designMode = 'on'
+    doc.addEventListener('input', () => { frameEdited.current = true })
+  }
+
+  // The edited preview, less the policy the preview added — the stored copy is served under its own.
+  function currentHtml() {
+    const doc = frameRef.current?.contentDocument
+    if (!frameEdited.current || !doc) return richPaste.html
+    return serializeEditedPreview(doc)
   }
 
   // Only a drag carrying files is claimed. A dragged text selection is left to the textarea, which inserts
@@ -81,15 +105,37 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
     return Array.from(event.dataTransfer?.types || []).includes('Files')
   }
 
+  // Edits to plain text have no counterpart in the markup, so this is one-way; returning discards them.
+  // Edits already made in place carry over, both into the text and into the version returned to.
+  function convertToPlainText() {
+    const doc = frameRef.current?.contentDocument
+    if (frameEdited.current && doc) {
+      const html = currentHtml()
+      setPastedText(doc.body.innerText ?? doc.body.textContent)
+      setRichPaste({ ...richPaste, html, preview: buildPastedHtmlPreview(html) })
+      frameEdited.current = false
+    } else {
+      setPastedText(richPaste.plain)
+    }
+    setPlainMode(true)
+  }
+
+  function returnToFormatted() {
+    setPastedText('')
+    setPlainMode(false)
+  }
+
   function discardPaste() {
     setPastedText('')
     setRichPaste(null)
+    setPlainMode(false)
+    frameEdited.current = false
   }
 
   async function attachPaste() {
     let file
-    if (richPaste) {
-      file = pastedTextFile(richPaste.html, 'text/html')
+    if (richPaste && !plainMode) {
+      file = pastedTextFile(currentHtml(), 'text/html')
     } else {
       const body = pastedText.trim()
       if (!body) return
@@ -109,14 +155,17 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
         </div>
       ))}
 
-      {richPaste ? (
-        // `sandbox` with no tokens: no scripts, and an origin that is not this app's. The document it is
-        // given carries the rest of the protection — see `lib/pastedHtmlPreview.js`. The white ground is the
-        // page an email is written against; the frame is otherwise transparent, and unstyled black text on
-        // a dark theme's panel would be unreadable.
+      {richPaste && !plainMode ? (
+        // `sandbox` with only `allow-same-origin`: no scripts, so the same origin that lets its edits be read
+        // back gives the pasted markup nothing to act with. The document it is given carries the rest of the
+        // protection — see `lib/pastedHtmlPreview.js`. The white ground is the page an email is written
+        // against; the frame is otherwise transparent, and unstyled black text on a dark theme's panel would
+        // be unreadable.
         <iframe
-          sandbox=""
+          ref={frameRef}
+          sandbox="allow-same-origin"
           srcDoc={richPaste.preview}
+          onLoad={enableFrameEditing}
           title="Preview of the pasted receipt"
           style={{
             width: '100%', height: 260, boxSizing: 'border-box',
@@ -158,6 +207,16 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
         {reviewing ? (
           <>
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={discardPaste}>Discard</Button>
+            {richPaste && !plainMode && (
+              <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={convertToPlainText}>
+                Convert to plain text
+              </Button>
+            )}
+            {plainMode && (
+              <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={returnToFormatted}>
+                Discard and return to HTML
+              </Button>
+            )}
             <Button small style={COMPACT_ACTION_BTN_STYLE} onClick={attachPaste}>{commitLabel}</Button>
           </>
         ) : (

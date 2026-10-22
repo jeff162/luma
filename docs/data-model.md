@@ -2443,7 +2443,8 @@ Content:
   converted at ingest to its HTML or plain part with the subject as the filename. `message/rfc822` is
   never a stored type.
 - **A formatted paste is stored as `text/html`** when it contains markup, so a receipt's table layout
-  is kept.
+  is kept, including any edits made in the preview — unless it is converted to plain text, which stores
+  `text/plain`. An edited paste is stored as the preview's sanitized markup, not the clipboard's.
 - **Every document is served with `Content-Security-Policy: sandbox; default-src 'none'`**, so stored
   HTML runs no script and fetches nothing. The attach preview rebuilds the same policy on the client
   (`lib/pastedHtmlPreview.js`).
