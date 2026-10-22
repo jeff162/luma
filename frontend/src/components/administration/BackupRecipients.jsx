@@ -124,7 +124,7 @@ export function BackupRecipients({ onRecipientsChange }) {
       {pendingDeleteRecipient ? (
         <AppConfirmDialog
           title="Delete backup key?"
-          description={`Delete backup key "${pendingDeleteRecipient.label}"? Backups already encrypted to it stay readable with its private key.`}
+          description={`Delete backup key "${pendingDeleteRecipient.label}"?`}
           confirmLabel="Delete"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
