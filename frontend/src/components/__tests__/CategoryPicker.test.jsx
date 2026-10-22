@@ -48,4 +48,36 @@ describe('CategoryPicker search + selection', () => {
     fireEvent.mouseDown(document.querySelectorAll('[data-picker-row-active]')[0])
     expect(onChange).toHaveBeenCalledWith('c1')
   })
+
+  it('starts a search from a key typed on the closed picker', async () => {
+    // Tabbing in lands on the closed picker's button; typing there has to reach the search, every
+    // character of it, rather than needing a click or Space first.
+    const user = userEvent.setup()
+    render(<CategoryPicker categories={categories} value={null} onChange={() => {}} />)
+
+    await user.tab()
+    await user.keyboard('pro')
+
+    expect(screen.getByPlaceholderText(/type to search/i).value).toBe('pro')
+    expect(rowTexts()).toHaveLength(3)
+  })
+
+  it('accepts the highlighted match when tabbed out of, and focus carries on to the next field', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(
+      <>
+        <CategoryPicker categories={categories} value={null} onChange={onChange} />
+        <input aria-label="Next field" />
+      </>,
+    )
+
+    await user.tab()
+    await user.keyboard('pro')
+    await user.tab()
+
+    expect(onChange).toHaveBeenCalledWith('c1')
+    expect(rowTexts()).toHaveLength(0)
+    expect(document.activeElement).toBe(screen.getByLabelText('Next field'))
+  })
 })

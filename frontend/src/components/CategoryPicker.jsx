@@ -291,6 +291,10 @@ export default function CategoryPicker({
   const triggerButtonRef = useRef(null)
   const toggleButtonRef = useRef(null)
   const querySnapshotRef = useRef(initialQuery || '')
+  // Whether the user has steered the highlight since opening — typed a search or moved it with the
+  // arrows. Only then does tabbing out accept it: a picker opened and tabbed straight through must not
+  // pick whatever happens to sit at the top.
+  const steeredRef = useRef(false)
   const hasReportedInitialOpenStateRef = useRef(false)
   const groups = categories.filter(c => !c.parent_id)
   const leaves = categories.filter(c => c.parent_id)
@@ -415,15 +419,23 @@ export default function CategoryPicker({
 
   function openPicker(nextQuery = query) {
     querySnapshotRef.current = query
+    steeredRef.current = nextQuery !== query
     setCreating(null)
     setOpen(true)
     if (nextQuery !== query) {
       setQuery(nextQuery)
     }
-    setTimeout(() => inputRef.current?.focus(), 0)
+    setTimeout(() => {
+      const input = inputRef.current
+      if (!input) return
+      input.focus()
+      // Caret at the end, so a search begun from a typed key continues after it rather than before.
+      input.setSelectionRange(input.value.length, input.value.length)
+    }, 0)
   }
 
   function closePicker({ restoreQuery = true, focusTarget = 'trigger' } = {}) {
+    steeredRef.current = false
     // Half-typed searches are transient; closing without a pick should restore the last committed label/query.
     if (restoreQuery) {
       setQuery(querySnapshotRef.current)
@@ -505,6 +517,7 @@ export default function CategoryPicker({
   }
 
   function pick(cat) {
+    steeredRef.current = false
     onChange(cat.id)
     setQuery(showSelectedBadge ? '' : cat.name)
     setOpen(false)
@@ -539,14 +552,31 @@ export default function CategoryPicker({
     if (displayedCategories.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
+      steeredRef.current = true
       setCursor(c => Math.min(c + 1, displayedCategories.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
+      steeredRef.current = true
       setCursor(c => Math.max(c - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
       pick(displayedCategories[cursor])
     }
+  }
+
+  // Tabbing out of an open search accepts the highlighted entry, as Enter does, and focus carries on to
+  // wherever Tab sent it. Judged on blur rather than on the Tab key, so the browser keeps choosing the
+  // next field in both directions. Clicking away is not this path: the outside mousedown closes the
+  // picker first (clearing the steer), so an abandoned search still cancels. A blur with no destination
+  // (the window losing focus, the field unmounting) is not leaving the picker, and one into the picker's
+  // own panel or controls is still inside it.
+  function handleSearchBlur(e) {
+    const next = e.relatedTarget
+    if (!next || ref.current?.contains(next) || panelRef.current?.contains(next)) return
+    if (creating) return
+    const highlighted = steeredRef.current ? displayedCategories[cursor] : null
+    if (highlighted) pick(highlighted)
+    else closePicker({ focusTarget: null })
   }
 
   const closedAsBadge = showSelectedBadge && !open
@@ -604,8 +634,9 @@ export default function CategoryPicker({
             onFocus={() => {
               if (!open) openPicker()
             }}
-            onChange={e => { setQuery(e.target.value); setOpen(true); setCreating(null) }}
+            onChange={e => { steeredRef.current = true; setQuery(e.target.value); setOpen(true); setCreating(null) }}
             onKeyDown={handleKeyDown}
+            onBlur={handleSearchBlur}
             onMouseDown={e => e.stopPropagation()}
             placeholder={selected ? selected.name : placeholder}
             style={{ flex: 1, background: 'none', color: 'var(--text)', border: 'none', outline: 'none', fontSize: 13, minWidth: 0, lineHeight: 1.2, padding: 0 }}
@@ -616,6 +647,15 @@ export default function CategoryPicker({
             type="button"
             onClick={() => {
               openPicker()
+            }}
+            // Tabbing in lands here, on a button, which ignores typed characters; so a printable key
+            // opens the search with that character as its start, and typing carries on in the field.
+            // Modified keys are left to their shortcuts, and named keys (Tab, Escape, arrows) to their
+            // usual jobs.
+            onKeyDown={e => {
+              if (e.key.length !== 1 || e.key === ' ' || e.ctrlKey || e.metaKey || e.altKey) return
+              e.preventDefault()
+              openPicker(e.key)
             }}
             style={{
               flex: 1,
@@ -651,6 +691,10 @@ export default function CategoryPicker({
         <button
           ref={toggleButtonRef}
           type="button"
+          // Out of the Tab order: a mouse convenience, since the keyboard opens the picker from the
+          // trigger and closes it with Escape. As a stop it would cost a Tab per picker and catch the
+          // Tab that leaves the search.
+          tabIndex={-1}
           onClick={() => {
             if (open) closePicker({ focusTarget: 'toggle' })
             else openPicker()
