@@ -763,12 +763,15 @@ def watch_status():
             ORDER  BY name
             """
         ).fetchall()
+        # By name, not by `resolved_at`: a parked file is re-stamped on every retry, so that column
+        # only replays the last scan's directory order, which is whatever the filesystem returned.
         files = conn.execute(
             """
-            SELECT id, profile_id, filename, state, reason, batch_id, resolved_at
-            FROM   import_watch_file
-            WHERE  state != ?
-            ORDER  BY resolved_at DESC, filename
+            SELECT f.id, f.profile_id, f.filename, f.state, f.reason, f.batch_id, f.resolved_at
+            FROM   import_watch_file f
+            JOIN   csv_import_profile p ON p.id = f.profile_id
+            WHERE  f.state != ?
+            ORDER  BY p.name, f.filename
             """,
             (WATCH_STATE_WATCHING,),
         ).fetchall()
