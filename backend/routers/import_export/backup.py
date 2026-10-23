@@ -1148,6 +1148,9 @@ def export_backup(
     recipients: Optional[str] = Query(
         None, description="Comma-separated recipient ids; omitted means every enabled recipient."
     ),
+    saved_as: Optional[str] = Query(
+        None, description="The name the file is being saved under, when the browser chose it before asking."
+    ),
 ):
     """Write a backup: the financial data and the accounts (`services/accounts_backup.py`), always both.
     What to put back is chosen at restore.
@@ -1157,8 +1160,17 @@ def export_backup(
     backup carries every passphrase while an unencrypted one carries only those that pass the current
     strength rule (`accounts_backup._carried_slots`). When the file would carry no way into the vault, the
     credentials are left out and the file says so; the rest of the backup is never held back for them.
+
+    A browser with a save picker has the file named before it asks (`saved_as`), so the history records that
+    name rather than the suggested one. The response names the history row (`X-Backup-Id`), so a save that
+    fails after the row is written can move it to the trash.
     """
     user = getattr(request.state, "user", None)
+    if saved_as is not None:
+        try:
+            saved_as = backup_history.clean_filename(saved_as)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     selected = []
     with get_db() as conn:
         if encrypted:
@@ -1200,7 +1212,8 @@ def export_backup(
     try:
         with get_db() as conn:
             backup_history.record(
-                conn, backup_id=backup_id, made_at=written["exported_at"], made_by=made_by, filename=filename,
+                conn, backup_id=backup_id, made_at=written["exported_at"], made_by=made_by,
+                filename=saved_as or filename,
                 encrypted=encrypted, key_labels=[r["label"] for r in selected] if encrypted else None,
                 credentials_included=accounts_part["credentials"] is not None,
                 credentials_left_out=(accounts_part.get("credentials_left_out") or {}).get("code"),
@@ -1218,6 +1231,7 @@ def export_backup(
             # Known because the artifact is complete before the first byte is sent, which is what lets a
             # download show progress instead of an indeterminate spinner.
             "Content-Length": str(size),
+            "X-Backup-Id": backup_id,
         },
     )
 

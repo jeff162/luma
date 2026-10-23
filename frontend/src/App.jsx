@@ -9,6 +9,8 @@ import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api, SESSION_LOST_EVENT } from './lib/api.js'
+import SoleVaultMemberWarning from './components/SoleVaultMemberWarning.jsx'
+import { useSoleVaultMember } from './lib/useSoleVaultMember.js'
 import {
   BACKEND_RETURNED_EVENT,
   BACKEND_STOPPED_EVENT,
@@ -490,6 +492,7 @@ function LocalPreferenceProfileScreen({
   // The chooser owns its own delete confirmation so the dialog is mounted while the chooser is up
   // (it renders as a full-screen route, so a dialog rendered by the parent app tree would be hidden).
   const [pendingDelete, setPendingDelete] = useState(null)
+  const deletingSoleVaultMember = useSoleVaultMember(pendingDelete?.id, () => api.getIdentities().then(r => r.identities))
   const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
@@ -988,7 +991,11 @@ function LocalPreferenceProfileScreen({
           onConfirm={() => { onDelete(pendingDelete); setPendingDelete(null) }}
           onCancel={() => setPendingDelete(null)}
           width="min(480px, 100%)"
-        />
+        >
+          {deletingSoleVaultMember ? (
+            <SoleVaultMemberWarning name={pendingDelete.name} />
+          ) : null}
+        </AppConfirmDialog>
       ) : null}
     </div>
   )

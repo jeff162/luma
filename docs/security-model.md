@@ -360,6 +360,13 @@ unlocked. The response is **remove access, then rotate**, in that order, because
 slots present when it runs. Rotation cannot undo past access, so a hostile departure also implies
 re-linking the affected sources.
 
+**Removing the last member resets the vault.** Deleting the only user who can open it, or revoking their
+access, leaves ciphertext nobody can read and a vault that a new passphrase can only join pending, with
+nobody to approve it. The removal is therefore followed by a reset (`crypto_service.remove_vault_member`),
+which retires the key as `lost`: nobody here holds it, so the backups carrying it stay the way back. The
+deletion is warned about and never refused; the confirmation names the consequence and the way to keep the
+credentials, which is to have that user approve someone else first.
+
 **Rotation crosses two databases, so it cannot be a transaction.** Slots live in the control DB and the
 ciphertext in the data DB. The three-phase order leaves every row readable under one of two keys at every
 instant (*Obstacles*).

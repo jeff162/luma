@@ -358,6 +358,63 @@ class EnrollmentTests(unittest.TestCase):
             cs.unlock(self.bob, "bob's long vault passphrase")
 
 
+class LastMemberRemovalTests(unittest.TestCase):
+    """Removing the last person who can open the vault resets it: nothing could read the credentials any
+    more, and a passphrase set afterwards would wait forever for an approval nobody can give."""
+
+    def setUp(self):
+        self._stack = _isolated_stack()
+        self._stack.__enter__()
+        cs.lock_all()
+        self.alice = cdb.create_local_identity("alice")["id"]
+        self.bob = cdb.create_local_identity("bob")["id"]
+        cs.set_passphrase(self.alice, "alice's long vault passphrase")
+        self.seals = cs._slot_seal_digests(cdb.list_vault_slots())
+        with database.get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, credential, credential_enc)"
+                " VALUES ('c1','plaid','item-1',?,?)",
+                cs.encrypt_connection_credential({"id": self.alice}, "plaid", "item-1", "access-token-abc"),
+            )
+        cs.set_passphrase(self.bob, "bob's long vault passphrase")  # pending, with nobody but Alice to approve
+
+    def tearDown(self):
+        cs.lock_all()
+        self._stack.__exit__(None, None, None)
+
+    def _connection(self):
+        with database.get_db() as conn:
+            return dict(conn.execute("SELECT credential_enc, reauth_required FROM connection").fetchone())
+
+    def test_deleting_the_only_member_resets_the_vault(self):
+        self.assertEqual(cs.sole_vault_member_id(), self.alice)
+        relink = cs.remove_vault_member(self.alice, lambda: cdb.delete_user(self.alice))
+        self.assertEqual(relink, 1)
+        self.assertEqual(self._connection(), {"credential_enc": None, "reauth_required": 1})
+        self.assertFalse(cs.vault_configured(), "the stranded request goes too, so the next passphrase starts a vault")
+        self.assertEqual(cdb.retired_vault_seal_reasons(self.seals), {"lost"})
+
+    def test_revoking_the_only_member_resets_the_vault(self):
+        cs.revoke_access(self.alice)
+        self.assertFalse(cs.vault_configured())
+        self.assertIsNone(self._connection()["credential_enc"])
+
+    def test_removing_someone_while_a_member_remains_changes_nothing(self):
+        cs.grant_access(self.alice, cs.pending_access_requests()[0]["slot_id"])
+        self.assertIsNone(cs.sole_vault_member_id())
+        self.assertIsNone(cs.remove_vault_member(self.alice, lambda: cdb.delete_user(self.alice)))
+        self.assertIsNotNone(self._connection()["credential_enc"])
+        self.assertEqual(cs.unlock(self.bob, "bob's long vault passphrase"), cs.require_dek(self.bob))
+
+    def test_a_refused_removal_leaves_the_vault_alone(self):
+        def refuse():
+            raise ValueError("at least one active admin is required")
+        with self.assertRaises(ValueError):
+            cs.remove_vault_member(self.alice, refuse)
+        self.assertIsNotNone(self._connection()["credential_enc"])
+        self.assertEqual(cs.sole_vault_member_id(), self.alice)
+
+
 class RotationTests(unittest.TestCase):
     """Phase 5: re-keying, and specifically that it cannot brick credentials halfway through."""
 

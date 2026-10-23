@@ -28,6 +28,8 @@ import {
 } from '../ui.jsx'
 import { useTransientTextEdit } from '../../lib/uiInteractions.js'
 import TransientTextInput from '../TransientTextInput.jsx'
+import FileInput from '../FileInput.jsx'
+import { PICKER_IDS } from '../../lib/filePicker.js'
 import { BACKUP_KEY_PASSWORD_MANAGER_USERNAME, NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
 import { APP_NAME } from '../../lib/appConfig.js'
 
@@ -319,9 +321,9 @@ function AddRecipientDialog({ existingNames, onAdded, onClose }) {
             A backup key named &ldquo;{label.trim()}&rdquo; already exists.
           </div>
         ) : null}
-        <input
+        <FileInput
           ref={fileInputRef}
-          type="file"
+          pickerId={PICKER_IDS.backupPublicKey}
           accept=".pub,.pem,.txt,.key"
           onChange={e => loadPublicKeyFile(e.target.files?.[0])}
           style={{ display: 'none' }}

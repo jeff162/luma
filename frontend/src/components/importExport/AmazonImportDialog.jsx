@@ -12,6 +12,8 @@ import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { isMarketplaceAccountType } from '../../lib/accountTypes.js'
 import { AMAZON_IMPORT_ACCOUNT_PREF_KEY, DEMO_IMPORT_DISABLED_MESSAGE } from '../../lib/importExport/constants.js'
 import { skippedFileNoticeTitle, skippedFileReason } from '../../lib/importExport/importOutcome.js'
+import FileInput from '../FileInput.jsx'
+import { PICKER_IDS } from '../../lib/filePicker.js'
 
 // Sentinel Select value for the explicit "untracked" state (a card that isn't one of the user's
 // accounts). Distinct from '' (not yet decided) and from any real account id.
@@ -488,7 +490,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
 
       {error ? <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>{error}</div> : null}
 
-      <input ref={fileInputRef} type="file" accept=".csv" multiple hidden
+      <FileInput ref={fileInputRef} pickerId={PICKER_IDS.amazonImport} accept=".csv" multiple hidden
         onChange={e => { addFiles(e.target.files || []); e.target.value = '' }} />
 
       {skippedFilesAlert ? (

@@ -851,7 +851,7 @@ class BackupRestoreTests(BackupFixtureTestCase):
     def test_an_export_records_how_its_size_divides(self):
         self._seed_complete()
         with self._use_db_path():
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=False, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as=None))
         row = self._history()[-1]
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             documents = [i for i in zf.infolist() if i.filename.startswith("documents/")]
@@ -860,6 +860,19 @@ class BackupRestoreTests(BackupFixtureTestCase):
         self.assertEqual(row["documents_bytes"], sum(i.compress_size for i in documents))
         self.assertGreater(row["ledger_bytes"], 0)
         self.assertGreater(row["accounts_bytes"], 0)
+
+    def test_an_export_records_the_name_it_is_saved_under(self):
+        """A browser with a save picker names the file before asking, so the history holds that name, and the
+        response names the row so a save that then fails can trash it."""
+        with self._use_db_path():
+            response = export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as="  mine.zip ")
+            self._drain(response)
+            with self.assertRaises(HTTPException) as ctx:
+                export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as="x" * 256)
+        row = self._history()[-1]
+        self.assertEqual((row["filename"], row["id"]), ("mine.zip", response.headers["X-Backup-Id"]))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(len(self._history()), 1)
 
     def test_history_retention_never_purges_the_newest_row(self):
         with self._use_db_path():
@@ -958,7 +971,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
     def test_export_endpoint_streams_a_complete_archive(self):
         self._seed_complete()
         with self._use_db_path():
-            response = export_backup(NO_USER_REQUEST, encrypted=False, recipients=None)
+            response = export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as=None)
         body = self._drain(response)
 
         # Declared length must match what is actually sent, or a download shows a progress bar that
@@ -1354,7 +1367,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._seed_complete()
         private_key, _pem = self._add_recipient()
         with self._use_db_path():
-            response = export_backup(NO_USER_REQUEST, encrypted=True, recipients=None)
+            response = export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None)
         body = self._drain(response)
 
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
@@ -1375,7 +1388,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         _key, private_pem = self._add_recipient()
         tables = self._user_data_tables()
         with self._use_db_path():
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None))
         before = self._counts(tables)
 
         with self._use_db_path():
@@ -1399,7 +1412,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 target = conn.execute(
                     "SELECT id FROM backup_recipient WHERE label = 'Offsite drive'"
                 ).fetchone()["id"]
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=target))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=target, saved_as=None))
 
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             manifest = json.loads(zf.read("manifest.json"))
@@ -1412,7 +1425,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._add_recipient("Home NAS")
         self._add_recipient("Offsite drive")
         with self._use_db_path():
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None))
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
             manifest = json.loads(zf.read("manifest.json"))
         self.assertEqual(len(manifest["wrapped_keys"]), 2)
@@ -1424,7 +1437,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._add_recipient("Home NAS")
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
-                export_backup(NO_USER_REQUEST, encrypted=True, recipients="not-a-real-id")
+                export_backup(NO_USER_REQUEST, encrypted=True, recipients="not-a-real-id", saved_as=None)
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_a_disabled_recipient_cannot_be_selected(self):
@@ -1436,7 +1449,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 rid = conn.execute("SELECT id FROM backup_recipient").fetchone()["id"]
                 conn.execute("UPDATE backup_recipient SET enabled = 0")
             with self.assertRaises(HTTPException) as ctx:
-                export_backup(NO_USER_REQUEST, encrypted=True, recipients=rid)
+                export_backup(NO_USER_REQUEST, encrypted=True, recipients=rid, saved_as=None)
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_encrypted_restore_refuses_a_tampered_payload(self):
@@ -1444,7 +1457,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         _key, private_pem = self._add_recipient()
         tables = self._user_data_tables()
         with self._use_db_path():
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None))
         before = self._counts(tables)
         sealed = bytearray(zipfile.ZipFile(io.BytesIO(body)).read("payload.bin"))
         sealed[len(sealed) // 2] ^= 0xFF
@@ -1505,7 +1518,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         self._add_recipient()
         with self._use_db_path():
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None))
             encrypted = asyncio.new_event_loop().run_until_complete(
                 inspect_backup_file(file=self._upload(body, "luma_backup.encrypted.zip")))
         self.assertTrue(encrypted["encrypted"])
@@ -1792,7 +1805,7 @@ class BackupKeypairTests(BackupFixtureTestCase):
         generated = self._generate(key_size=2048, passphrase="a passphrase")
         with self._use_db_path():
             create_backup_recipient(BackupRecipientCreate(label="Generated", public_key=generated["public_key"]))
-            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None))
+            body = self._drain(export_backup(NO_USER_REQUEST, encrypted=True, recipients=None, saved_as=None))
         before = self._counts(tables)
 
         with self._use_db_path():

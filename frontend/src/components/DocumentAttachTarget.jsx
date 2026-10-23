@@ -5,6 +5,8 @@ import { useRef, useState } from 'react'
 import { buildPastedHtmlPreview, serializeEditedPreview } from '../lib/pastedHtmlPreview.js'
 import { namePastedFile, pastedTextFile } from '../lib/pastedDocuments.js'
 import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
+import FileInput from './FileInput.jsx'
+import { PICKER_IDS } from '../lib/filePicker.js'
 
 /*
  * Where a document is added: one box that takes a drop or a paste, with Browse… beside it.
@@ -228,9 +230,9 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
           </>
         )}
       </div>
-      <input
+      <FileInput
         ref={inputRef}
-        type="file"
+        pickerId={PICKER_IDS.documents}
         accept="application/pdf,image/*,text/plain,text/html,message/rfc822,.eml"
         multiple
         hidden

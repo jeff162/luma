@@ -2052,7 +2052,7 @@ caches, which a restore therefore starts afresh.
 
 `backup_history` (`services/backup_history.py`) holds a row per backup made, written when the file is
 complete on the server: when, by whom (a name, since the row can outlive the people of the system it came
-from), the suggested filename, the keys an encrypted file was sealed to, whether the credentials were
+from), the filename (the one chosen in the browser's save picker where it has one, else the suggested one), the keys an encrypted file was sealed to, whether the credentials were
 included, and the archive's size divided into ledger, accounts part and documents. The documents share is
 the signal that documents are becoming the bulk of a backup
 ([`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)).
@@ -2064,8 +2064,10 @@ the signal that documents are becoming the bulk of a backup
   read from the archive and its maker from `meta.json`'s `made_by`.
 - **Retention is by age**, a ledger setting in the shared preference scope, and the newest row outside the
   trash is never purged.
-- **A row can be wrong, so it can be corrected or trashed.** It is written before the browser saves the
-  file, and nothing reports whether the save happened or what name it used. `filename` is editable, and
+- **A row can be wrong, so it can be corrected or trashed.** It is written before the file is saved. With a
+  save picker (Chromium, in a secure context) the file is chosen first and the page writes it, so a cancel
+  makes no backup and a failed write trashes the row (`X-Backup-Id` names it); otherwise the backup is a
+  download and nothing reports whether the save happened or what name it used. `filename` is editable, and
   `deleted_at` is the history's trash (Settings → Trash, for an administrator). Trashing a row withdraws the
   `credentials_export` row made with the same file (*The accounts part* below), which shares its id
   as `backup_id`, and restoring it puts that row back.
@@ -2162,7 +2164,8 @@ which also records `accounts_version`.
   backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup
   tasks compare the newest with the vault now (`routers/tasks.py` → `_backup_due_tasks`).
 - **`retired_vault_key`** (control database) records each seal of a key a reset or a rotation retired,
-  with the reason. Credentials under a key retired as `compromised` or `replaced` are not restored, from
+  with the reason. Removing the last member resets the vault and retires its key as `lost`
+  (`crypto_service.remove_vault_member`). Credentials under a key retired as `compromised` or `replaced` are not restored, from
   an archive's accounts part (`credentials_withheld`) or a standalone credentials file
   (`credentials_retired`); the rest of the part restores as a file without credentials does. A key
   retired as `lost` is one nobody else has, so its backups stay the way back. It survives an accounts

@@ -86,6 +86,8 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
 | `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions. | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
+| `SoleVaultMemberWarning` (+ `useSoleVaultMember`) | A confirmation that deletes a user, which resets the vault when they are its last member. | `components/SoleVaultMemberWarning.jsx`, `lib/useSoleVaultMember.js` |
+| `FileInput` (+ `PICKER_IDS`) | Every `<input type="file">`, so each purpose's picker reopens in the folder it last used. A save goes through `chooseSaveFile` and `saveUrlToFile`. | `components/FileInput.jsx`, `lib/filePicker.js`, `lib/api.js` |
 
 ## Form fields and editing in place
 

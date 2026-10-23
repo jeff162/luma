@@ -32,6 +32,8 @@ import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHe
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import FileInput from './FileInput.jsx'
+import { PICKER_IDS } from '../lib/filePicker.js'
 import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
 import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -441,9 +443,9 @@ function ProfileForm({
         borderRadius: 8,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <input
+          <FileInput
             ref={sampleFileInputRef}
-            type="file"
+            pickerId={PICKER_IDS.importProfileSample}
             accept=".csv,text/csv"
             onChange={e => {
               const file = e.target.files?.[0]

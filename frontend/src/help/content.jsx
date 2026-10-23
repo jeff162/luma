@@ -2793,7 +2793,10 @@ export const HELP_TOPICS = [
           shared. A request marked <strong>lost their passphrase</strong> comes from someone who
           already had access and is asking for it back under a new passphrase; it is worth checking
           with that person before approving. <strong>Remove access</strong> is available to an
-          administrator.
+          administrator. Removing the last person with access, or deleting their user, resets the vault:
+          the stored credentials are cleared and any data sources need reconnecting. Deleting that user
+          warns first; to keep the credentials, set a vault passphrase and have them approve it before
+          deleting them.
         </p>
 
         <div className="help-box">
@@ -4425,7 +4428,8 @@ export const HELP_TOPICS = [
           passkeys can't be guessed, so they always go in. A backup that isn't encrypted leaves out any
           vault passphrase that fails the current strength rule or hasn't been validated against it since
           the rule changed. If that leaves no way to open the vault, the credentials are left out too. The
-          rest of the backup is still made, and the page says beforehand what will be missing. When the
+          rest of the backup is still made. The page says beforehand what will be missing, and{' '}
+          <strong>Generate backup</strong> asks for confirmation first. When the
           passphrase left out is the current user's, the warning carries <strong>Validate passphrase</strong>{' '}
           or <strong>Change passphrase</strong>. Validating takes the typed passphrase only, since a passkey
           opens the vault without validating it.
@@ -4439,10 +4443,13 @@ export const HELP_TOPICS = [
         </p>
         <p>
           <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
-          name {APP_NAME} gave it, its size, and how much of that is attached documents. {APP_NAME}
-          records a backup before the browser saves it, so a backup that was not kept, or was saved
-          under another name, is not reflected there. An entry's menu corrects its filename or moves
-          it to Settings → Trash. Entries older than the number of days set below the list are
+          name, its size, how much of that is attached documents, and the backup keys an encrypted
+          file was sealed to. <strong>credentials omitted</strong> marks a backup that left out the data
+          provider credentials stored here. In Chrome and Edge, opened on the
+          computer running {APP_NAME} or over HTTPS, the backup is saved through a save dialog, which opens in the folder last used for backups: the history
+          records the name chosen there, and the page says when the file is saved. Other browsers
+          download it, so a backup that was not kept, or was saved under another name, is not reflected
+          there. An entry's menu corrects its filename or moves it to Settings → Trash. Entries older than the number of days set below the list are
           removed, except the most recent one. The
           history is part of the financial data, so restoring a backup from another system brings that
           system's history with it, plus an entry for the restored file.

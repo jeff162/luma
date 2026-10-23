@@ -230,6 +230,26 @@ class AccountsBackupTests(unittest.TestCase):
         self.assertNotIn(b"passwordpassword1234", b"".join(members.values()))
         self.assertIn("sections/transactions.ndjson", members)
 
+    def test_credentials_left_out_are_recorded_in_the_history(self):
+        from unittest import mock
+
+        with api_client() as (client, _):
+            with mock.patch.object(cs, "passphrase_shortfall", return_value=None):
+                client.post("/api/auth/vault/set-passphrase", json={"passphrase": "passwordpassword1234"})
+            client.post("/api/auth/vault/lock")
+            client.post("/api/auth/vault/unlock", json={"passphrase": "passwordpassword1234"})
+            with in_browser_session(client):
+                credential, credential_enc = cs.encrypt_connection_credential(self._me(client), "plaid", "ext-1", TOKEN)
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO connection (id, provider, external_id, credential, credential_enc)"
+                    " VALUES ('conn-1', 'plaid', 'ext-1', ?, ?)",
+                    (credential, credential_enc),
+                )
+            self._export(client)
+            history = client.get("/api/import-export/backup/history").json()["backups"]
+        self.assertEqual(history[0]["credentials_left_out"], "no_strong_unlock")
+
     def test_someone_who_cannot_open_the_vault_still_backs_up_the_credentials(self):
         # The file carries the slots of those who can, so Sam's backup restores the vault for them.
         with api_client(base_url=SITE) as (client, _):

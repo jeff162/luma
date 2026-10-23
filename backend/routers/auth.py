@@ -443,12 +443,12 @@ def clear_auth_preferences(request: Request):
     return {"ok": True}
 
 
-def _identity_view(user: dict) -> dict:
+def _identity_view(user: dict, sole_vault_member: str | None) -> dict:
     # `username` is what the identity signs in with once sign-in protection is on, which the page that turns
     # it on has to be able to say — and hand a password manager, which files the new password under it.
     # Local mode only, where it is no secret: anyone reaching this can already select the identity.
     return {"id": user["id"], "display_name": user.get("display_name") or user["username"],
-            "username": user["username"]}
+            "username": user["username"], "sole_vault_member": user["id"] == sole_vault_member}
 
 
 @router.get("/identities")
@@ -457,7 +457,8 @@ def list_identities():
     # secrets to protect while sign-in is off). In auth mode identities are managed through the admin
     # user endpoints instead, so this is local-mode only.
     _require_local_mode()
-    return {"identities": [_identity_view(u) for u in list_users()]}
+    sole = crypto_service.sole_vault_member_id()
+    return {"identities": [_identity_view(u, sole) for u in list_users()]}
 
 
 @router.post("/identities")
@@ -467,7 +468,7 @@ def create_identity(body: IdentityCreateRequest):
         user = create_local_identity(body.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"identity": _identity_view(user)}
+    return {"identity": _identity_view(user, crypto_service.sole_vault_member_id())}
 
 
 @router.post("/select-identity")
@@ -490,14 +491,15 @@ def rename_identity(user_id: str, body: IdentityCreateRequest):
     except ValueError as exc:
         detail = str(exc)
         raise HTTPException(status_code=404 if detail == "user not found" else 400, detail=detail)
-    return {"identity": _identity_view(user)}
+    return {"identity": _identity_view(user, crypto_service.sole_vault_member_id())}
 
 
 @router.delete("/identities/{user_id}")
 def delete_identity(user_id: str):
     _require_local_mode()
     try:
-        delete_user(user_id)
+        # Deleting the last vault member resets the vault (`crypto_service.remove_vault_member`).
+        crypto_service.remove_vault_member(user_id, lambda: delete_user(user_id))
     except ValueError as exc:
         detail = str(exc)
         raise HTTPException(status_code=404 if detail == "user not found" else 400, detail=detail)
@@ -1655,7 +1657,8 @@ def vault_discard_recovery_code(request: Request):
 @router.get("/users")
 def users(request: Request):
     require_admin(request)
-    return {"users": list_users()}
+    sole = crypto_service.sole_vault_member_id()
+    return {"users": [{**u, "sole_vault_member": u["id"] == sole} for u in list_users()]}
 
 
 @router.post("/users")
@@ -1714,7 +1717,8 @@ def remove_user(user_id: str, request: Request):
     if admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete the account you are currently signed into")
     try:
-        delete_user(user_id)
+        # Deleting the last vault member resets the vault (`crypto_service.remove_vault_member`).
+        crypto_service.remove_vault_member(user_id, lambda: delete_user(user_id))
     except ValueError as exc:
         detail = str(exc)
         if detail == "user not found":

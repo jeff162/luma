@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
+import FileInput from './FileInput.jsx'
 
 /*
  * The shared click-or-drop file target.
@@ -18,10 +19,12 @@ import { useRef, useState } from 'react'
  * stays as the target the next plain file drop should use.
  *
  * `children` is the label, so a caller can say what it wants dropped rather than being handed generic
- * copy — the one thing these zones genuinely disagree about.
+ * copy — the one thing these zones genuinely disagree about. `pickerId` names what the files are for, so
+ * the picker reopens where the last ones came from (`FileInput`).
  */
 export default function DropZone({
   onFiles,
+  pickerId,
   accept,
   multiple = false,
   disabled = false,
@@ -74,9 +77,9 @@ export default function DropZone({
       }}
     >
       {children}
-      <input
+      <FileInput
         ref={inputRef}
-        type="file"
+        pickerId={pickerId}
         accept={accept}
         multiple={multiple}
         hidden

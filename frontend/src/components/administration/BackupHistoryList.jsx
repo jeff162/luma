@@ -10,9 +10,9 @@
  * becoming the bulk of a backup. A filename too long for the card is cut short with the whole of it on
  * hover; the details after it wrap rather than push it out.
  *
- * The server records a backup before the browser saves it and cannot see the save, so an entry can name
- * a file that was never kept, or kept under another name (a second backup on one day is usually saved as
- * `… (1).zip`). The `⋯` menu corrects the one and trashes the other.
+ * Where the backup was a plain download, the server recorded it before the browser saved it and cannot see
+ * the save, so an entry can name a file that was never kept, or kept under another name (a second backup on
+ * one day is usually saved as `… (1).zip`). The `⋯` menu corrects the one and trashes the other.
  */
 
 import { useState } from 'react'
@@ -31,7 +31,9 @@ function entryDetails(row) {
     row.document_count == null ? null
       : row.document_count === 0 ? 'no documents'
         : `documents ${formatBytes(row.documents_bytes)}${share ? ` (${share})` : ''}`,
-    row.encrypted ? `encrypted${row.key_labels?.length ? ` to ${row.key_labels.join(', ')}` : ''}` : null,
+    row.encrypted == null ? null
+      : !row.encrypted ? 'unencrypted'
+        : row.key_labels?.length ? `encryption keys: ${row.key_labels.join(', ')}` : 'encrypted',
     row.restored_at ? `this system was restored from it ${formatTimestamp(row.restored_at)}` : null,
   ].filter(Boolean)
 }
@@ -57,9 +59,10 @@ export function BackupHistoryEntry({ row, first = false, filename, actions }) {
             </span>
           ) : null)}
           {entryDetails(row).map(detail => <span key={detail}>· {detail}</span>)}
-          {row.credentials_included == null ? null : row.credentials_included
-            ? <span>· credentials included</span>
-            : <span style={{ color: 'var(--warning, #d97706)' }}>· credentials left out</span>}
+          {/* Only when there were credentials to carry and they were held back. */}
+          {row.credentials_left_out
+            ? <span style={{ color: 'var(--warning, #d97706)' }}>· credentials omitted</span>
+            : null}
         </div>
       </div>
       {actions ?? <span />}

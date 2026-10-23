@@ -11,6 +11,7 @@
  */
 
 import { noteRequestFailure } from './backendLiveness'
+import { discardSaveFile } from './filePicker.js'
 
 const BASE = '/api'
 
@@ -1277,10 +1278,13 @@ export const api = {
   // A backup is always the financial data and the accounts; what to put back is chosen at restore.
   // `recipientIds` narrows an encrypted backup to a chosen subset; omitted means every enabled recipient,
   // which is what a single-recipient install always wants.
-  exportBackup: (encrypted = false, recipientIds = null) => {
-    if (!encrypted) return '/api/import-export/backup'
-    const scope = recipientIds?.length ? `&recipients=${encodeURIComponent(recipientIds.join(','))}` : ''
-    return `/api/import-export/backup?encrypted=true${scope}`
+  // `savedAs` is the name a save picker chose before the backup was asked for, which the history records.
+  exportBackup: (encrypted = false, recipientIds = null, savedAs = null) => {
+    const params = []
+    if (encrypted) params.push('encrypted=true')
+    if (encrypted && recipientIds?.length) params.push(`recipients=${encodeURIComponent(recipientIds.join(','))}`)
+    if (savedAs) params.push(`saved_as=${encodeURIComponent(savedAs)}`)
+    return `/api/import-export/backup${params.length ? `?${params.join('&')}` : ''}`
   },
   inspectBackupFile: async (file) => {
     const fd = new FormData()
@@ -1355,6 +1359,25 @@ export async function downloadUrl(url) {
   const disposition = res.headers.get('Content-Disposition') || ''
   const match = /filename="?([^"';]+)"?/i.exec(disposition)
   saveBlob(blob, match ? match[1] : 'download')
+}
+
+// `downloadUrl` for a file already chosen with the save picker (`lib/filePicker.js`): the response is
+// written into it, and the promise resolves once the bytes are on disk, so the caller knows the save
+// happened. A failed request or write discards the file the picker left. A
+// failed write's error carries `headers` too, because by then the server has done what was asked.
+export async function saveUrlToFile(url, handle) {
+  const res = await trackedFetch(url)
+  if (!res.ok) {
+    await discardSaveFile(handle)
+    throw buildResponseError(await res.json().catch(() => ({ detail: res.statusText })), res.status)
+  }
+  try {
+    await res.body.pipeTo(await handle.createWritable())
+  } catch (error) {
+    await discardSaveFile(handle)
+    error.headers = res.headers
+    throw error
+  }
 }
 
 // Hand a blob to the browser as a download. Shared rather than inlined because the revoke timing below

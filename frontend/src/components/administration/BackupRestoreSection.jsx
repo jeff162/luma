@@ -33,9 +33,9 @@
 // lost session (`holdSessionLost`) until its reload.
 
 import { useEffect, useState } from 'react'
-import { api, downloadUrl, holdSessionLost } from '../../lib/api.js'
+import { api, downloadUrl, holdSessionLost, saveUrlToFile } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
-import { AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Card, Input, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { Subsection } from '../SectionListPage.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
 import { BackupHistoryList } from './BackupHistoryList.jsx'
@@ -43,9 +43,18 @@ import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
 import { formatDate, formatTimestamp, parseTimestamp } from '../../lib/utils.js'
+import FileInput from '../FileInput.jsx'
+import { PICKER_IDS, chooseSaveFile } from '../../lib/filePicker.js'
+import { todayIsoDate } from '../../lib/manualTransaction.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
+
+// The name the server suggests (`_dated_backup_filename`), made here as well because the save picker opens
+// before the server is asked for anything. The local date, so an evening backup is not dated tomorrow.
+function suggestedBackupName(encrypted) {
+  return `luma_backup-${todayIsoDate()}${encrypted ? '.encrypted.zip' : '.zip'}`
+}
 
 const PASSPHRASE_LEFT_OUT_REASONS = {
   passphrase_unchecked: 'not validated against the current strength rule',
@@ -133,6 +142,10 @@ export default function BackupRestoreSection() {
   const [adminPassword, setAdminPassword] = useState('')
   const [pendingConfirm, setPendingConfirm] = useState(null)
   const [backupMsg, setBackupMsg] = useState(null)
+  // The name the last backup was saved under, where the save picker could report it.
+  const [backupSavedAs, setBackupSavedAs] = useState(null)
+  // Open while an unencrypted backup waits on the person confirming what it will leave out.
+  const [confirmingPlainBackup, setConfirmingPlainBackup] = useState(false)
   const [downloading, setDownloading] = useState(false)
   // Non-null while the recipient picker is open, holding the ids currently ticked.
   const [recipientChoice, setRecipientChoice] = useState(null)
@@ -242,8 +255,28 @@ export default function BackupRestoreSection() {
   // open it. Deliberately conditional — a dialog that shows the same single entry every time and is always
   // accepted trains the user to dismiss it, which is worse than no dialog, since it looks like
   // verification while being a click-through.
+  // A notice above the buttons is easy to read past, so an unencrypted backup that would leave out a
+  // passphrase (and with it, perhaps, the credentials) asks first. Only then: a panel shown on every backup
+  // would be clicked through. An encrypted backup carries every passphrase, so it never asks.
   function generatePlainBackup() {
-    startDownload(api.exportBackup(false))
+    if (backupStatus?.passphrases_left_out?.length) {
+      setConfirmingPlainBackup(true)
+      return
+    }
+    startBackup(false)
+  }
+
+  // This user's own passphrase is cleared here rather than on the Connections tab. The check takes a typed
+  // passphrase only: a passkey opens the vault but cannot judge one. `before` closes a panel the vault
+  // dialog would otherwise open on top of.
+  function ownPassphraseAction(before = () => {}) {
+    if (backupNotice?.ownCode === 'passphrase_unchecked') {
+      return <Button small onClick={() => { before(); openVault('check') }}>Validate passphrase</Button>
+    }
+    if (backupNotice?.ownCode === 'weak_passphrase') {
+      return <Button small onClick={() => { before(); changePassphrase() }}>Change passphrase</Button>
+    }
+    return null
   }
 
   function generateEncryptedBackup() {
@@ -251,24 +284,48 @@ export default function BackupRestoreSection() {
       setRecipientChoice(enabledRecipients.map(r => r.id))
       return
     }
-    startDownload(api.exportBackup(true))
+    startBackup(true)
   }
 
   function confirmRecipientChoice() {
     const chosen = recipientChoice
     setRecipientChoice(null)
-    startDownload(api.exportBackup(true, chosen))
+    startBackup(true, chosen)
   }
 
-  async function startDownload(url) {
+  // Where the browser has a save picker the file is chosen first, while the click still counts as one: a
+  // cancel then makes no backup at all, the history records the name it was saved under, and the page can
+  // say it was saved. Elsewhere, or if the picker refuses, the backup is a download and nothing reports
+  // what became of it.
+  async function startBackup(encrypted, recipientIds = null) {
     setBackupMsg(null)
+    setBackupSavedAs(null)
+    let handle = null
+    try {
+      handle = await chooseSaveFile({
+        id: PICKER_IDS.backupSave, suggestedName: suggestedBackupName(encrypted), accept: '.zip',
+      })
+    } catch {
+      handle = null
+    }
+    if (handle === undefined) return
     setDownloading(true)
     try {
-      await downloadUrl(url)
-      loadHistory()
+      if (handle) {
+        await saveUrlToFile(api.exportBackup(encrypted, recipientIds, handle.name), handle)
+        setBackupSavedAs(handle.name)
+      } else {
+        await downloadUrl(api.exportBackup(encrypted, recipientIds))
+      }
     } catch (e) {
-      setBackupMsg(`❌ ${e.message || 'Could not generate the backup'}`)
+      // Made but not saved, so its history entry names a file that does not exist.
+      const backupId = e.headers?.get('X-Backup-Id')
+      if (backupId) await api.trashBackupHistoryEntry(backupId).catch(() => {})
+      setBackupMsg(backupId
+        ? `❌ The backup could not be saved: ${e.message || 'the file could not be written'}`
+        : `❌ ${e.message || 'Could not generate the backup'}`)
     }
+    loadHistory()
     setDownloading(false)
   }
 
@@ -504,17 +561,7 @@ export default function BackupRestoreSection() {
               border: '1px solid color-mix(in srgb, var(--warning, #d97706) 35%, var(--border))',
             }}>
               <span>{backupNotice.message}</span>
-              {/* This user's own passphrase is cleared here rather than on the Connections tab. The check
-                  takes a typed passphrase only: a passkey opens the vault but cannot judge one. */}
-              {backupNotice.ownCode === 'passphrase_unchecked' ? (
-                <Button small onClick={() => openVault('check')} style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                  Validate passphrase
-                </Button>
-              ) : backupNotice.ownCode === 'weak_passphrase' ? (
-                <Button small onClick={changePassphrase} style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                  Change passphrase
-                </Button>
-              ) : null}
+              <span style={{ marginLeft: 'auto', flexShrink: 0 }}>{ownPassphraseAction()}</span>
             </div>
           ) :
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Generate a backup</div>
@@ -527,6 +574,9 @@ export default function BackupRestoreSection() {
           </div>
           {enabledRecipients.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>Add a backup key below to encrypt backups.</div>
+          ) : null}
+          {backupSavedAs ? (
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Saved as {backupSavedAs}</div>
           ) : null}
           {backupMsg ? (
             <div style={{
@@ -577,6 +627,18 @@ export default function BackupRestoreSection() {
         </Card>
       </Subsection>
 
+      {confirmingPlainBackup ? (
+        <AppConfirmDialog
+          title="Generate an unencrypted backup?"
+          description={backupNotice?.message}
+          confirmLabel="Continue"
+          onConfirm={() => { setConfirmingPlainBackup(false); startBackup(false) }}
+          onCancel={() => setConfirmingPlainBackup(false)}
+          width="min(520px, 100%)"
+        >
+          {ownPassphraseAction(() => setConfirmingPlainBackup(false))}
+        </AppConfirmDialog>
+      ) : null}
       {recipientChoice ? (
         <AppDialog
           title="Who should be able to read this backup?"
@@ -640,8 +702,8 @@ export default function BackupRestoreSection() {
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from backup</div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="file"
+              <FileInput
+                pickerId={PICKER_IDS.backupRestore}
                 name="restore-backup-file"
                 aria-label="Choose backup file to restore"
                 accept=".json,.zip,application/json,application/zip"
@@ -741,8 +803,8 @@ export default function BackupRestoreSection() {
                 )}
                 {restoreInspection.encrypted && (
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input
-                      type="file"
+                    <FileInput
+                      pickerId={PICKER_IDS.backupPrivateKey}
                       name="restore-private-key-file"
                       aria-label="Choose private key file for encrypted backup"
                       onChange={e => setPrivateKeyFile(e.target.files[0])}

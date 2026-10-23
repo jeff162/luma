@@ -1374,9 +1374,42 @@ def revoke_access(user_id: str) -> None:
     Enough on its own for an amicable departure. It cannot un-see a DEK the person already held while
     unlocked, so a hostile one is this *followed by* `rotate_dek` — which is exactly the order the two
     functions have to be called in, since rotation deliberately re-seals for whatever slots remain.
+    Revoking the last member resets the vault (`remove_vault_member`).
     """
-    cdb.delete_vault_slots(user_id)
-    lock_everywhere(user_id)
+    def remove():
+        cdb.delete_vault_slots(user_id)
+        lock_everywhere(user_id)
+    remove_vault_member(user_id, remove)
+
+
+def sole_vault_member_id() -> str | None:
+    """The one person who can open the vault, when there is exactly one: removing them resets it, which
+    the removal's confirmation says beforehand."""
+    members = cdb.list_vault_members()
+    return members[0]["user_id"] if len(members) == 1 else None
+
+
+def remove_vault_member(user_id: str, remove: Callable[[], None]) -> int | None:
+    """Run `remove`, which takes away this user's slots (deleting the user, or revoking their access), and
+    reset the vault when it took away the last way into it. Returns how many connections need re-linking
+    after such a reset, or None when there was none.
+
+    With no slot left that can produce the key, the stored credentials are unreadable for good and a
+    passphrase set afterwards only lands pending, with nobody to approve it. Resetting turns that dead end
+    into the ordinary state of no vault, so the next passphrase starts a new one, as a restore that leaves
+    nobody with access already does (`accounts_backup.apply`). The key is retired as `lost`: nobody here
+    holds it any more, so the backups carrying it stay the way back, which is what that reason means
+    everywhere it is read.
+
+    `remove` runs first because it can refuse (the last administrator), and a refused removal must leave the
+    vault alone. An interruption between the two leaves an unopenable vault, which a manual reset clears."""
+    slots = cdb.list_vault_slots()
+    removed = [s for s in slots if s["user_id"] == user_id and slot_holds_dek(s)]
+    others_remain = any(s["user_id"] != user_id and slot_holds_dek(s) for s in slots)
+    remove()
+    if not removed or others_remain:
+        return None
+    return _retire_vault(_slot_seal_digests(removed), "lost")
 
 
 @dataclass(frozen=True)
@@ -1864,7 +1897,12 @@ def reset_vault(user_id: str, *, reason: str) -> dict:
     """
     if reason not in ("lost", "compromised"):
         raise ValueError("a vault reset must state whether the passphrase was lost or compromised")
+    return {"connections_needing_relink": _retire_vault([], reason), "reason": reason}
 
+
+def _retire_vault(removed_seals: list[str], reason: str) -> int:
+    """Clear the stored secrets and every slot, retiring the key for `reason`. `removed_seals` are seals of
+    slots already gone, which only the caller saw. Returns how many connections need re-linking."""
     with get_db() as conn:
         connections = clear_stored_secrets(conn)
 
@@ -1872,7 +1910,7 @@ def reset_vault(user_id: str, *, reason: str) -> dict:
     # unopenable rows behind a vault that still looked configured — a state with no way out but a second
     # reset, and no screen that would say so. The key is recorded as retired before its slots go, since
     # they are the only record of which seals held it.
-    cdb.record_retired_vault_seals(_slot_seal_digests(cdb.list_vault_slots()), reason)
+    cdb.record_retired_vault_seals(removed_seals + _slot_seal_digests(cdb.list_vault_slots()), reason)
     cdb.delete_all_vault_slots()
     lock_all()
-    return {"connections_needing_relink": connections, "reason": reason}
+    return connections

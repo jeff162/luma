@@ -3,9 +3,10 @@
 
 """The backup history: the backups this system has made, and the file its data was last restored from.
 
-A row is written when a backup file is complete on the server, before it is downloaded, so it says the
-file was made rather than that it arrived anywhere; the filename is the one the server suggested, which
-the browser may change. Each row splits the file's size into the ledger, the accounts part and the attached
+A row is written when a backup file is complete on the server, before it is saved, so it says the file was
+made rather than that it arrived anywhere. Where the browser has a save picker the file was named before the
+backup was asked for and the row has that name; otherwise it has the one the server suggested, which the
+browser may change. Each row splits the file's size into the ledger, the accounts part and the attached
 documents, which is what shows whether documents are becoming the bulk of a backup.
 
 **The history rides the data backup, and a restore decides whose history survives.** Restoring a backup
@@ -19,8 +20,9 @@ whose only backup had aged out would read as "no backup was ever made". "Newest"
 trash, since a trashed row is not one the history is showing.
 
 **A row can be wrong, and the person who made the backup is the only one who can tell.** The server cannot
-see whether the browser's save went through or what name it was saved under, so a row can be moved to the
-trash (`deleted_at`) and its filename corrected. Trashing a row withdraws the credentials-export record made
+see whether the browser's save went through or what name it was saved under (the page trashes the row
+itself when its own write fails, but a plain download reports nothing), so a row can be moved to the trash
+(`deleted_at`) and its filename corrected. Trashing a row withdraws the credentials-export record made
 with it (`control_database.set_credentials_exports_withdrawn`), so the vault's recovery and passphrase-change
 lists stop naming a file that was never kept; restoring the row restores that record.
 """
@@ -124,13 +126,19 @@ def list_rows(conn: sqlite3.Connection, *, trashed: bool = False) -> list[dict]:
     return rows
 
 
-def rename(conn: sqlite3.Connection, backup_id: str, filename: str) -> bool:
-    """Correct a row's filename to the one the file was saved under. False if there is no such row."""
+def clean_filename(filename: str | None) -> str:
+    """A filename as a row stores it, or ValueError saying why it cannot be one."""
     name = (filename or "").strip()
     if not name:
         raise ValueError("A filename is required.")
     if len(name) > MAX_FILENAME_LENGTH:
         raise ValueError(f"A filename can be at most {MAX_FILENAME_LENGTH} characters.")
+    return name
+
+
+def rename(conn: sqlite3.Connection, backup_id: str, filename: str) -> bool:
+    """Correct a row's filename to the one the file was saved under. False if there is no such row."""
+    name = clean_filename(filename)
     return conn.execute("UPDATE backup_history SET filename = ? WHERE id = ?", (name, backup_id)).rowcount > 0
 
 

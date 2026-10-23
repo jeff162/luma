@@ -9,6 +9,8 @@
 
 import TransientTextInput from '../TransientTextInput.jsx'
 import { Spinner } from '../ui.jsx'
+import FileInput from '../FileInput.jsx'
+import { PICKER_IDS } from '../../lib/filePicker.js'
 import { DataSourcePill } from './importPresentational.jsx'
 import { DEMO_IMPORT_DISABLED_MESSAGE, MANUAL_DATA_SOURCE_VALUE } from '../../lib/importExport/constants.js'
 import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
@@ -305,10 +307,10 @@ export function ImportUploadStage({
                 </button>
               </div>
             ) : null}
-            <input
+            <FileInput
               ref={fileInputRef}
+              pickerId={PICKER_IDS.statementImport}
               id="csv-file-input"
-              type="file"
               accept=".csv,.pdf,.zip"
               multiple
               style={{ display: 'none' }}

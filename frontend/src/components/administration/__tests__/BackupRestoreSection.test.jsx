@@ -4,6 +4,9 @@
 //
 //   * One backup, always everything, plain or encrypted from its own button; the page says beforehand when the
 //     credentials will be left out of it.
+//   * Where the browser has a save picker, the file is chosen before the backup is made: a cancel makes
+//     nothing, the history is told the name chosen, and a backup that could not be written leaves the
+//     history (it would name a file that does not exist).
 //   * A failed download reports itself. It used to be a browser navigation, so a refused export replaced
 //     the app with a raw JSON error page; nothing in the section could say anything about it.
 //   * Restoring follows from what the file is: a backup holding both parts offers each, and restoring
@@ -17,6 +20,8 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const downloadUrl = vi.fn()
+const saveUrlToFile = vi.fn()
+const trashBackupHistoryEntry = vi.fn()
 const restoreCredentialsFile = vi.fn()
 const restoreBackupFile = vi.fn()
 const runBackupPasskeyCeremony = vi.fn()
@@ -32,17 +37,19 @@ let backupStatus = NOTHING_LEFT_OUT
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
+  saveUrlToFile: (...args) => saveUrlToFile(...args),
   holdSessionLost: () => { },
   api: {
     getBackupRecipients: async () => recipients,
     getAuthStatus: async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
     getBackupStatus: async () => backupStatus,
     getBackupHistory: async () => ({ backups: [], retention_days: 365 }),
-    exportBackup: (encrypted, ids) => (
+    exportBackup: (encrypted, ids, savedAs) => (
       encrypted
         ? `/api/import-export/backup?encrypted=true${ids?.length ? `&recipients=${ids.join(',')}` : ''}`
-        : '/api/import-export/backup'
+        : `/api/import-export/backup${savedAs ? `?saved_as=${savedAs}` : ''}`
     ),
+    trashBackupHistoryEntry: (...args) => trashBackupHistoryEntry(...args),
     inspectBackupFile: async () => inspection,
     getRestoreTargetStatus: async () => ({ has_data: true }),
     restoreCredentialsFile: (...args) => restoreCredentialsFile(...args),
@@ -83,6 +90,7 @@ const renderSection = (user = VAULT_USER) => render(<Harness user={user} />)
 
 afterEach(() => {
   cleanup(); downloadUrl.mockReset(); restoreCredentialsFile.mockReset(); runBackupPasskeyCeremony.mockReset()
+  saveUrlToFile.mockReset(); trashBackupHistoryEntry.mockReset(); delete window.showSaveFilePicker
   restoreBackupFile.mockReset(); unlockVault.mockReset(); changeVaultPassphrase.mockReset()
   recipients = []
   inspection = { kind: 'credentials', container: 'zip', encrypted: false }
@@ -170,6 +178,19 @@ describe('the backup', () => {
     await waitFor(() => expect(screen.queryByText(/Avery \(too easy to guess\)/)).toBeNull())
   })
 
+  it('asks before an unencrypted backup that would leave out a passphrase, and makes nothing on cancel', async () => {
+    backupStatus = { ...NOTHING_LEFT_OUT, passphrases_left_out: [{ user_id: 'u2', name: 'Robin', code: 'weak_passphrase', own: false }] }
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+    await screen.findByText('Generate an unencrypted backup?')
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(downloadUrl).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Generate backup' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(downloadUrl).toHaveBeenCalledWith('/api/import-export/backup'))
+  })
+
   it('reports a failed download in the page instead of navigating away', async () => {
     downloadUrl.mockRejectedValueOnce(Object.assign(new Error('No enabled backup keys are configured'), { status: 400 }))
 
@@ -186,6 +207,44 @@ describe('the backup', () => {
     const button = await screen.findByRole('button', { name: 'Generate backup' })
     // A <a href> wrapper is what made every error a raw JSON page; the button must not sit inside one.
     expect(button.closest('a')).toBeNull()
+  })
+})
+
+describe('the backup with a save picker', () => {
+  const pickFile = name => { window.showSaveFilePicker = vi.fn().mockResolvedValue({ name }) }
+
+  it('makes nothing when the picker is cancelled', async () => {
+    window.showSaveFilePicker = vi.fn().mockRejectedValue(new DOMException('cancelled', 'AbortError'))
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+
+    await waitFor(() => expect(window.showSaveFilePicker).toHaveBeenCalled())
+    expect(saveUrlToFile).not.toHaveBeenCalled()
+    expect(downloadUrl).not.toHaveBeenCalled()
+  })
+
+  it('tells the history the name chosen and says where it was saved', async () => {
+    pickFile('renamed.zip')
+    saveUrlToFile.mockResolvedValue(undefined)
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+
+    await screen.findByText('Saved as renamed.zip')
+    expect(saveUrlToFile.mock.calls[0][0]).toBe('/api/import-export/backup?saved_as=renamed.zip')
+    expect(downloadUrl).not.toHaveBeenCalled()
+  })
+
+  it('takes a backup that could not be written out of the history', async () => {
+    pickFile('full-disk.zip')
+    saveUrlToFile.mockRejectedValue(Object.assign(new DOMException('No space left', 'InvalidStateError'), {
+      headers: new Headers({ 'X-Backup-Id': 'b1' }),
+    }))
+    trashBackupHistoryEntry.mockResolvedValue({ backups: [] })
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+
+    await waitFor(() => expect(trashBackupHistoryEntry).toHaveBeenCalledWith('b1'))
+    expect(screen.queryByText(/Saved as/)).toBeNull()
   })
 })
 

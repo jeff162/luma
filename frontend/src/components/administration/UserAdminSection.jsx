@@ -4,6 +4,8 @@
 import { useState, useEffect, useRef, useId } from 'react'
 import { api } from '../../lib/api.js'
 import { NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
+import SoleVaultMemberWarning from '../SoleVaultMemberWarning.jsx'
+import { useSoleVaultMember } from '../../lib/useSoleVaultMember.js'
 import { Card, Button, Spinner, FieldIssue, FormLabel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Tooltip } from '../ui.jsx'
 import { passwordIssue, passwordPolicyHelpText, passwordShortfall } from '../../lib/passwordPolicy.js'
 
@@ -17,6 +19,7 @@ export default function UserAdminSection({ passwordPolicy }) {
   const [deletingUserId, setDeletingUserId] = useState(null)
   const [editingUserId, setEditingUserId] = useState(null)
   const [pendingDeleteUser, setPendingDeleteUser] = useState(null)
+  const deletingSoleVaultMember = useSoleVaultMember(pendingDeleteUser?.id, () => api.listUsers().then(r => r.users))
   const [error, setError] = useState('')
   const [form, setForm] = useState({
     username: '',
@@ -179,7 +182,11 @@ export default function UserAdminSection({ passwordPolicy }) {
           onConfirm={() => handleDeleteUser(pendingDeleteUser)}
           onCancel={() => setPendingDeleteUser(null)}
           width="min(520px, 100%)"
-        />
+        >
+          {deletingSoleVaultMember ? (
+            <SoleVaultMemberWarning name={pendingDeleteUser.display_name || pendingDeleteUser.username} />
+          ) : null}
+        </AppConfirmDialog>
       ) : null}
 
       <Card style={{ padding: 0, overflow: 'hidden' }}>
