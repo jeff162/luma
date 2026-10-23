@@ -26,6 +26,39 @@ export function guessNewAccountTypeFromName(name) {
   return ''
 }
 
+// A mapping row nobody has decided yet: the state `AccountMappingGrid` renders, keyed by the source's
+// value. A new account defaults to the source's own name.
+export function defaultAccountMapEntry(sourceLabel) {
+  return {
+    accountId: '',
+    createNew: false,
+    newName: sourceLabel,
+    newType: '',
+    groupWithAccountId: '',
+    skip: false,
+  }
+}
+
+// What still stands between one mapping row and a decision, or null when it has one: skipped, mapped to an
+// existing account, or a new account with a name and type that no account already has. One rule for the
+// import screen's Import and the data-source editor's Save, which word it in their own places.
+//   'unmapped'        — no account and not skipped
+//   'new_name'        — a new account with no name
+//   'new_type'        — a new account with no type
+//   'new_name_taken'  — a new account named like one that exists
+export function accountMappingProblem(entry, accounts) {
+  if (!entry) return 'unmapped'
+  if (entry.skip) return null
+  if (entry.createNew) {
+    const name = String(entry.newName || '').trim()
+    if (!name) return 'new_name'
+    if (!entry.newType) return 'new_type'
+    if ((accounts || []).some(a => a.name.toLowerCase() === name.toLowerCase())) return 'new_name_taken'
+    return null
+  }
+  return entry.accountId ? null : 'unmapped'
+}
+
 export function findExactAccountNameMatch(accounts, value) {
   const normalized = String(value || '').trim().toLowerCase()
   if (!normalized) return null
@@ -286,5 +319,75 @@ export function buildAccountImportStateSnapshot(accountMap) {
     account_map: accountAssignments,
     skip_accounts: skipAccounts,
     account_new: accountNew,
+  }
+}
+
+// A data source's saved per-value account map (`column_map.account_assignments` / `account_skips` /
+// `account_new`, written back by each hand import) as `AccountMappingGrid` rows, for the data-source
+// editor. Read in the import screen's order, so a value stored under two keys resolves the same way in
+// both places.
+//
+// Two stored states are carried rather than resolved, because the editor opening and saving without a
+// change must write back what it read:
+// - an assignment to an account that no longer exists keeps its id in `missingAccountId` and shows as
+//   undecided. Re-pointing it by name would be a guess made with nobody asked, and the watcher parks
+//   such a file either way.
+// - a pending `account_new` stays pending, unless an account of that name now exists: once it does, the
+//   source means it, as `single_account_new` does in the same editor.
+export function sourceAccountMapToEntries(columnMap, accounts) {
+  const cm = columnMap || {}
+  const liveIds = new Set((accounts || []).map(account => account.id))
+  const entries = {}
+  for (const [value, accountId] of Object.entries(cm.account_assignments || {})) {
+    entries[value] = liveIds.has(accountId)
+      ? { ...defaultAccountMapEntry(value), accountId }
+      : { ...defaultAccountMapEntry(value), missingAccountId: accountId }
+  }
+  for (const value of cm.account_skips || []) {
+    entries[value] = { ...defaultAccountMapEntry(value), skip: true }
+  }
+  for (const [value, info] of Object.entries(cm.account_new || {})) {
+    const existing = findExactAccountNameMatch(accounts || [], info?.name)
+    entries[value] = existing
+      ? { ...defaultAccountMapEntry(value), accountId: existing.id }
+      : { ...defaultAccountMapEntry(value), createNew: true, newName: info?.name || value, newType: info?.type || '' }
+  }
+  return entries
+}
+
+// The editor's `+New` rows, as the source save creates them (`new_mapped_accounts`): the shape the import's
+// `new_accounts` takes. A skipped row creates nothing.
+export function newMappedAccountsFromEntries(entries) {
+  return Object.entries(entries || {})
+    .filter(([, entry]) => entry?.createNew && !entry?.skip && entry?.newName?.trim())
+    .map(([value, entry]) => ({
+      csv_value: value,
+      name: entry.newName.trim(),
+      type: entry.newType || 'depository',
+      ...(entry.groupWithAccountId ? { group_with_account_id: entry.groupWithAccountId } : {}),
+      ...(entry.distinctFromAccountIds?.length ? { distinct_from_account_ids: entry.distinctFromAccountIds } : {}),
+    }))
+}
+
+// The inverse: grid rows back to the three `column_map` keys, each present only when it holds something,
+// as the import screen writes them. A row with no decision writes nothing; the editor does not save
+// with one while it shows the grid, and keeps what it read when it does not.
+export function entriesToSourceAccountMap(entries) {
+  const assignments = {}
+  const skips = []
+  const pendingNew = {}
+  for (const [value, entry] of Object.entries(entries || {})) {
+    if (entry?.skip) skips.push(value)
+    else if (entry?.createNew && entry?.newName?.trim()) {
+      pendingNew[value] = { name: entry.newName.trim(), type: entry.newType || '' }
+    } else if (entry?.accountId) assignments[value] = entry.accountId
+    else if (entry?.missingAccountId) assignments[value] = entry.missingAccountId
+  }
+  return {
+    ...(Object.keys(assignments).length ? { account_assignments: assignments } : {}),
+    ...(skips.length
+      ? { account_skips: skips.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })) }
+      : {}),
+    ...(Object.keys(pendingNew).length ? { account_new: pendingNew } : {}),
   }
 }

@@ -16,6 +16,10 @@ import {
   findLikelyAccountMatch,
   selectableAccountOptions,
   buildAccountImportStateSnapshot,
+  sourceAccountMapToEntries,
+  entriesToSourceAccountMap,
+  accountMappingProblem,
+  newMappedAccountsFromEntries,
 } from '../importAccountMatching.js'
 
 const acc = name => ({ name })
@@ -334,5 +338,75 @@ describe('buildAccountImportStateSnapshot', () => {
 
   it('returns a blank snapshot for empty/missing input', () => {
     expect(buildAccountImportStateSnapshot(undefined)).toEqual({ account_map: {}, skip_accounts: [], account_new: {} })
+  })
+})
+
+describe('a data source\'s saved account map in the editor', () => {
+  const accounts = [{ id: 'a1', name: 'Everyday Checking' }, { id: 'a2', name: 'Harborline Card' }]
+  const saved = {
+    account_assignments: { 'CHK': 'a1', 'Old Card': 'gone' },
+    account_skips: ['Brokerage', 'Annex'],
+    account_new: { 'NEW-1': { name: 'Tidewater Savings', type: 'savings' } },
+  }
+
+  it('writes back exactly what it read when nothing changes', () => {
+    // An assignment to a removed account and a pending new account are both carried, not resolved:
+    // opening the editor and saving must not restate the map.
+    const roundTrip = entriesToSourceAccountMap(sourceAccountMapToEntries(saved, accounts))
+    expect(roundTrip).toEqual({ ...saved, account_skips: ['Annex', 'Brokerage'] })
+  })
+
+  it('reads a pending new account as the account once one of that name exists', () => {
+    const entries = sourceAccountMapToEntries(
+      { account_new: { 'CARD': { name: 'Harborline Card', type: 'credit' } } },
+      accounts,
+    )
+    expect(entriesToSourceAccountMap(entries)).toEqual({ account_assignments: { CARD: 'a2' } })
+  })
+
+  it('writes a re-pointed, skipped or forgotten value', () => {
+    const entries = sourceAccountMapToEntries(saved, accounts)
+    entries.CHK = { ...entries.CHK, accountId: 'a2' }
+    entries['NEW-1'] = { ...entries['NEW-1'], skip: true }
+    delete entries['Old Card']
+    delete entries.Brokerage
+    delete entries.Annex
+    expect(entriesToSourceAccountMap(entries)).toEqual({
+      account_assignments: { CHK: 'a2' },
+      account_skips: ['NEW-1'],
+    })
+  })
+})
+
+describe('accountMappingProblem', () => {
+  const accounts = [{ id: 'a1', name: 'Everyday Checking' }]
+
+  it('accepts a skip, an existing account, or a complete new account', () => {
+    expect(accountMappingProblem({ skip: true }, accounts)).toBeNull()
+    expect(accountMappingProblem({ accountId: 'a1' }, accounts)).toBeNull()
+    expect(accountMappingProblem({ createNew: true, newName: 'Tidewater', newType: 'savings' }, accounts)).toBeNull()
+  })
+
+  it('names what a row still lacks', () => {
+    expect(accountMappingProblem(undefined, accounts)).toBe('unmapped')
+    expect(accountMappingProblem({ accountId: '', missingAccountId: 'gone' }, accounts)).toBe('unmapped')
+    expect(accountMappingProblem({ createNew: true, newName: ' ', newType: 'savings' }, accounts)).toBe('new_name')
+    expect(accountMappingProblem({ createNew: true, newName: 'Tidewater', newType: '' }, accounts)).toBe('new_type')
+    expect(accountMappingProblem({ createNew: true, newName: 'everyday checking', newType: 'depository' }, accounts))
+      .toBe('new_name_taken')
+  })
+})
+
+describe('newMappedAccountsFromEntries', () => {
+  it('sends each unskipped new account with what the chooser decided about it', () => {
+    expect(newMappedAccountsFromEntries({
+      SAV: { createNew: true, newName: ' Tidewater ', newType: 'savings', groupWithAccountId: 'a1' },
+      CARD: { createNew: true, newName: 'Corner Card', newType: 'credit', distinctFromAccountIds: ['a2'] },
+      OLD: { createNew: true, newName: 'Old', newType: 'credit', skip: true },
+      CHK: { accountId: 'a1' },
+    })).toEqual([
+      { csv_value: 'SAV', name: 'Tidewater', type: 'savings', group_with_account_id: 'a1' },
+      { csv_value: 'CARD', name: 'Corner Card', type: 'credit', distinct_from_account_ids: ['a2'] },
+    ])
   })
 })

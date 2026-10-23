@@ -30,13 +30,12 @@ import {
   ImportedCategoryUsageInline,
 } from '../components/importExport/importPresentational.jsx'
 import { ImportErrorBoundary } from '../components/importExport/ImportErrorBoundary.jsx'
-import AccountMatchSelect from '../components/importExport/AccountMatchSelect.jsx'
+import AccountMappingGrid from '../components/importExport/AccountMappingGrid.jsx'
 import {
   DataSourceMismatchDialog,
   MultipleSourceMatchDialog,
   MultiFileSourceChooserDialog,
   CompatibleBatchAttachDialog,
-  PossibleAccountMatchChooserDialog,
 } from '../components/importExport/importConfirmDialogs.jsx'
 import { ImportedCategorySettingsDialog } from '../components/importExport/ImportedCategorySettingsDialog.jsx'
 import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
@@ -94,7 +93,6 @@ import ImportEvidenceColumnsSection from '../components/ImportEvidenceColumnsSec
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { GENERIC_IMPORT_ACCOUNT_TYPES, isMarketplaceAccountType } from '../lib/accountTypes.js'
 import {
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
   IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE,
@@ -123,9 +121,9 @@ import { mergePreviewAmounts, usePreviewAmounts } from '../lib/importExport/prev
 import { runImportWithProgress } from '../lib/importExport/importRunProgress.js'
 import { sessionStore } from '../lib/browserStorage.js'
 import {
-  guessNewAccountTypeFromName,
+  accountMappingProblem,
+  defaultAccountMapEntry,
   findExactAccountNameMatch,
-  getAccountMatchLabel,
   findAccountMatchCandidates,
   findLikelyAccountMatch,
   buildAccountImportStateSnapshot,
@@ -270,7 +268,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [mappingSuggestions, setMappingSuggestions] = useState(getBlankMappingSuggestions())
   const [singleAccountNew, setSingleAccountNew] = useState({ enabled: false, name: '', type: 'depository' })
   const [accountMap, setAccountMap] = useState({})
-  const [pendingAccountMatchChooser, setPendingAccountMatchChooser] = useState(null)
   const [categoryAssignments, setCategoryAssignments] = useState({})
   const [importResult, setImportResult] = useState(null)
   // Post-import categorization nudge: shown on the done screen when an import brought no categories and
@@ -886,102 +883,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       return next
     })
   }, [distinctAccountValues, accounts])
-
-  useEffect(() => {
-    if (!pendingAccountMatchChooser) return
-    const stillExists = distinctAccountValues.includes(pendingAccountMatchChooser.csvValue)
-    // At least one candidate must survive. `some`, not `every`: an account deleted underneath the dialog
-    // should drop out of the question, not cancel a question the remaining candidates can still answer.
-    const targetStillExists = pendingAccountMatchChooser.candidates
-      .some(candidate => accounts.some(account => account.id === candidate.id))
-    if (!stillExists || !targetStillExists) {
-      setPendingAccountMatchChooser(null)
-    }
-  }, [pendingAccountMatchChooser, distinctAccountValues, accounts])
-
-  // Opened with the whole candidate set, not one account: the dialog is where those are shown, and
-  // "Keep separate" asserts distinctness from all of them. A caller re-entering to revisit an existing
-  // grouping passes the single account it is about, which arrives as a one-entry list and pre-selects.
-  function openAccountMatchChooser(csvValue, targets) {
-    const candidates = (Array.isArray(targets) ? targets : [targets]).filter(Boolean)
-    if (!csvValue || !candidates.length) return
-    setPendingAccountMatchChooser({
-      csvValue,
-      candidates: candidates.map(target => ({
-        id: target.id,
-        label: getAccountMatchLabel(target) || target.name || csvValue,
-        institution: target.institution || '',
-      })),
-    })
-  }
-
-  // `selectedId` is which candidate the two relationship answers act on; `keep_separate` ignores it and
-  // reads the whole list instead, because declining is an answer about all of them.
-  function applyAccountMatchChoice(choice, selectedId) {
-    const pending = pendingAccountMatchChooser
-    if (!pending?.csvValue) return
-    const csvValue = pending.csvValue
-    const ruledOut = pending.candidates.map(c => c.id)
-    const targetAccount = accounts.find(account => account.id === selectedId)
-    setPendingAccountMatchChooser(null)
-    if (choice !== 'keep_separate' && !targetAccount) return
-    setAccountMap(prev => {
-      const defaultEntry = {
-        accountId: '',
-        createNew: false,
-        newName: csvValue,
-        newType: targetAccount?.type || guessNewAccountTypeFromName(csvValue),
-        groupWithAccountId: '',
-        skip: false,
-      }
-      const current = { ...defaultEntry, ...(prev[csvValue] || {}) }
-      if (choice === 'map_existing' && targetAccount) {
-        return {
-          ...prev,
-          [csvValue]: {
-            ...current,
-            accountId: targetAccount.id,
-            createNew: false,
-            newName: targetAccount.name || csvValue,
-            newType: targetAccount.type || current.newType || 'depository',
-            groupWithAccountId: '',
-            skip: false,
-          },
-        }
-      }
-      if (choice === 'group_with_existing' && targetAccount) {
-        return {
-          ...prev,
-          [csvValue]: {
-            ...current,
-            accountId: '',
-            createNew: true,
-            newName: current.newName || csvValue,
-            newType: current.newType || targetAccount.type || 'depository',
-            groupWithAccountId: targetAccount.id,
-            skip: false,
-          },
-        }
-      }
-      // keep_separate. The one branch that records an *answer* rather than a relationship: the user has
-      // looked at both account names and said they are different accounts, which is exactly the
-      // assertion the cross-account duplicate sweep needs. Discarding it meant the same question came
-      // back one flagged transaction at a time as soon as the rows landed.
-      return {
-        ...prev,
-        [csvValue]: {
-          ...current,
-          accountId: '',
-          createNew: true,
-          newName: current.newName || csvValue,
-          newType: current.newType || guessNewAccountTypeFromName(csvValue),
-          groupWithAccountId: '',
-          skip: false,
-          distinctFromAccountIds: ruledOut,
-        },
-      }
-    })
-  }
 
   const hasImportWorkToSave = !!(
     colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending || colCurrency || colTransactionId ||
@@ -2026,35 +1927,15 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       let unresolvedCount = 0
       let singleMessage = ''
       for (const value of remainingAccountValues) {
-        const mapping = accountMap[value]
-        if (!mapping) {
-          unresolvedCount += 1
-          singleMessage = `Choose an account for "${value}".`
-          continue
-        }
-        if (mapping.skip) continue
-        if (mapping.createNew) {
-          const name = mapping.newName.trim()
-          if (!name) {
-            unresolvedCount += 1
-            singleMessage = `Enter a new account name for "${value}".`
-            continue
-          }
-          if (!mapping.newType) {
-            unresolvedCount += 1
-            singleMessage = `Choose an account type for "${value}".`
-            continue
-          }
-          if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) {
-            unresolvedCount += 1
-            singleMessage = `Select the existing account "${name}" instead of creating a duplicate.`
-          }
-          continue
-        }
-        if (!mapping.accountId) {
-          unresolvedCount += 1
-          singleMessage = `Choose an account for "${value}".`
-        }
+        const problem = accountMappingProblem(accountMap[value], accounts)
+        if (!problem) continue
+        unresolvedCount += 1
+        singleMessage = {
+          unmapped: `Choose an account for "${value}".`,
+          new_name: `Enter a new account name for "${value}".`,
+          new_type: `Choose an account type for "${value}".`,
+          new_name_taken: `Select the existing account "${accountMap[value]?.newName?.trim()}" instead of creating a duplicate.`,
+        }[problem]
       }
       if (unresolvedCount === 1) issues.push(singleMessage)
       else if (unresolvedCount > 1) issues.push('Resolve unmapped accounts.')
@@ -3705,253 +3586,36 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
 
           {colAccount && distinctAccountValues.length > 0 && (
             <Card style={{ padding: 0, overflow: 'hidden', width: IMPORT_CONFIG_MAX_WIDTH }}>
-              <div style={{
-                display: 'grid', gridTemplateColumns: '1fr 16px 240px 52px',
-                padding: '6px 14px', gap: 12,
-                fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-                borderBottom: '1px solid var(--border)',
-                background: 'var(--surface2)',
-              }}>
-                <span>Account from file</span>
-                <span></span>
-                <span>Maps To</span>
-                <span style={{ textAlign: 'center' }}>Skip</span>
-              </div>
-              {distinctAccountValues.map(csvVal => {
-                const DEFAULT_ENTRY = {
-                  accountId: '',
-                  createNew: false,
-                  newName: csvVal,
-                  newType: '',
-                  groupWithAccountId: '',
-                  skip: false,
-                }
-                const m = { ...DEFAULT_ENTRY, ...(accountMap[csvVal] || {}) }
-                const update = patch => setAccountMap(prev => ({
+              <AccountMappingGrid
+                sourceHeading="Account from file"
+                namePrefix="account-map"
+                accounts={accounts}
+                onUpdate={(csvVal, patch) => setAccountMap(prev => ({
                   ...prev,
-                  [csvVal]: { ...DEFAULT_ENTRY, ...(prev[csvVal] || {}), ...patch }
-                }))
-                const alreadyImported = previousImportAccountsByValue.get(csvVal)
-                const candidates = accountMatchesByValue[csvVal]?.candidates || []
-                const likelyMatch = accountMatchesByValue[csvVal]?.likely || null
-                const likelyMatchLabel = getAccountMatchLabel(likelyMatch) || likelyMatch?.name || ''
-                const relationshipTargetId = m.groupWithAccountId || ''
-                const relationshipTarget = relationshipTargetId
-                  ? accounts.find(account => account.id === relationshipTargetId)
-                  : null
-                const relationshipLabel = getAccountMatchLabel(relationshipTarget) || relationshipTarget?.name || ''
-                return (
-                  <div key={csvVal} style={{
-                    display: 'grid', gridTemplateColumns: '1fr 16px 240px 52px',
-                    gap: 12, padding: '7px 14px', alignItems: 'center',
-                    borderBottom: '1px solid var(--border)',
-                    opacity: alreadyImported ? 0.5 : (m.skip ? 0.45 : 1),
-                  }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={csvVal}>{csvVal}</div>
-                      {alreadyImported ? (
-                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
-                          Already imported · {alreadyImported.row_count} rows
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <span style={{ color: 'var(--muted)', textAlign: 'center', fontSize: 11 }}>→</span>
-
-                    {alreadyImported ? (
-                      <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
-                        already imported
-                      </span>
-                    ) : m.skip ? (
-                      <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
-                        skipping {Number(accountValueCounts[csvVal] || 0)} transaction{Number(accountValueCounts[csvVal] || 0) === 1 ? '' : 's'}
-                      </span>
-                    ) : !m.createNew ? (
-                      <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                          <AccountMatchSelect
-                            name={`account-map-target-${csvVal}`}
-                            value={m.accountId}
-                            // Marketplace accounts (Amazon, …) are filled by their own importer, not
-                            // by mapping a CSV onto them, so they are not offered here.
-                            options={accounts.filter(a => !isMarketplaceAccountType(a.type))}
-                            candidates={candidates}
-                            inFlightOptions={inFlightNewAccounts.map(n => ({
-                              value: n.name, label: `${n.name} (new)`, type: n.type,
-                            }))}
-                            // Sharing a new account another label is creating in this import. We don't
-                            // reference that label — we independently declare the same name, which the
-                            // importer merges by name (so changing the other label later can't dangle
-                            // this one).
-                            onSelectInFlight={option => update({
-                              accountId: '',
-                              createNew: true,
-                              newName: option.value,
-                              newType: option.type || guessNewAccountTypeFromName(csvVal),
-                              groupWithAccountId: '',
-                            })}
-                            // Picking from the list maps to it. That is the whole interaction — the
-                            // relationship question belongs to `+New`, which is the path where a
-                            // second question genuinely remains.
-                            onSelectAccount={a => update({
-                              accountId: a.id,
-                              createNew: false,
-                              groupWithAccountId: '',
-                            })}
-                            onClear={() => update({
-                              accountId: '',
-                              createNew: false,
-                              newName: csvVal,
-                              groupWithAccountId: '',
-                            })}
-                          />
-                          {m.accountId ? (
-                            <button
-                              onClick={() => update({
-                                accountId: '',
-                                createNew: false,
-                                newName: csvVal,
-                                groupWithAccountId: '',
-                              })}
-                              style={{
-                                flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                                borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
-                                fontSize: 13, width: 28, height: 28, lineHeight: 1, padding: 0,
-                              }}
-                              aria-label="Clear account mapping"
-                            >
-                              ×
-                            </button>
-                          ) : (
-                            <button
-                              // With possible matches, ask before creating: the dialog is where they
-                              // are shown, which is what lets "Keep separate" record an assertion about
-                              // them. With none there is nothing to show and nothing to assert, so this
-                              // stays a one-press create.
-                              onClick={() => {
-                                if (candidates.length) {
-                                  openAccountMatchChooser(csvVal, candidates)
-                                  return
-                                }
-                                update({
-                                  createNew: true,
-                                  newName: csvVal,
-                                  newType: guessNewAccountTypeFromName(csvVal),
-                                  groupWithAccountId: '',
-                                })
-                              }}
-                              style={{
-                                flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                                borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                                fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
-                              }}
-                            >+New</button>
-                          )}
-                        </div>
-                        {!m.accountId && likelyMatchLabel ? (
-                          <button
-                            type="button"
-                            onClick={() => update({
-                              accountId: likelyMatch.id,
-                              createNew: false,
-                              newName: likelyMatch.name || csvVal,
-                              newType: likelyMatch.type || m.newType || 'depository',
-                              groupWithAccountId: '',
-                              skip: false,
-                            })}
-                            style={{
-                              justifySelf: 'end',
-                              maxWidth: '100%',
-                              border: '1px solid color-mix(in srgb, var(--accent2) 28%, var(--border))',
-                              background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-                              color: 'var(--accent2)',
-                              borderRadius: 999,
-                              padding: '4px 9px',
-                              fontSize: 11,
-                              cursor: 'pointer',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                            title={`Map to ${likelyMatchLabel}`}
-                          >
-                            Possible match: {likelyMatchLabel}
-                          </button>
-                        ) : null}
+                  [csvVal]: { ...defaultAccountMapEntry(csvVal), ...(prev[csvVal] || {}), ...patch },
+                }))}
+                inFlightOptions={inFlightNewAccounts.map(n => ({
+                  value: n.name, label: `${n.name} (new)`, type: n.type,
+                }))}
+                rows={distinctAccountValues.map(csvVal => {
+                  const alreadyImported = previousImportAccountsByValue.get(csvVal)
+                  const skippedCount = Number(accountValueCounts[csvVal] || 0)
+                  return {
+                    key: csvVal,
+                    label: csvVal,
+                    entry: { ...defaultAccountMapEntry(csvVal), ...(accountMap[csvVal] || {}) },
+                    candidates: accountMatchesByValue[csvVal]?.candidates || [],
+                    suggestion: accountMatchesByValue[csvVal]?.likely || null,
+                    details: alreadyImported ? (
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                        Already imported · {alreadyImported.row_count} rows
                       </div>
-                    ) : (
-                      <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}>
-                          <div style={{ width: 132, maxWidth: '100%' }}>
-                            <input name={`account-new-name-${csvVal}`} value={m.newName} onChange={e => update({ newName: e.target.value })}
-                              placeholder="Name" style={{
-                                width: '100%', background: 'var(--surface2)', color: 'var(--text)',
-                                border: `1px solid ${accounts.some(a => a.name.toLowerCase() === m.newName.trim().toLowerCase()) ? 'var(--danger)' : 'var(--accent)'}`,
-                                borderRadius: 6, padding: '4px 6px', fontSize: 12, outline: 'none',
-                              }} />
-                            {accounts.some(a => a.name.toLowerCase() === m.newName.trim().toLowerCase()) && (
-                              <div style={{ fontSize: 10, color: 'var(--danger)', marginTop: 2 }}>
-                                Name already exists — select it instead
-                              </div>
-                            )}
-                          </div>
-                          <select name={`account-new-type-${csvVal}`} value={m.newType} onChange={e => update({ newType: e.target.value })}
-                            style={{ width: 88, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
-                            <option value="">— Type —</option>
-                            {GENERIC_IMPORT_ACCOUNT_TYPES.map(option => (
-                              <option key={option.value} value={option.value}>{option.shortLabel}</option>
-                            ))}
-                          </select>
-                          <button onClick={() => update({
-                            createNew: false,
-                            accountId: '',
-                            groupWithAccountId: '',
-                          })}
-                            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '2px', flexShrink: 0 }}>✕</button>
-                        </div>
-                        {relationshipTarget && relationshipLabel ? (
-                          <button
-                            type="button"
-                            onClick={() => openAccountMatchChooser(csvVal, [relationshipTarget])}
-                            style={{
-                              justifySelf: 'start',
-                              maxWidth: '100%',
-                              border: '1px solid color-mix(in srgb, var(--accent2) 26%, var(--border))',
-                              background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-                              color: 'var(--accent2)',
-                              borderRadius: 999,
-                              padding: '4px 9px',
-                              fontSize: 11,
-                              cursor: 'pointer',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                            title={m.groupWithAccountId ? `Change grouping target for ${relationshipLabel}` : `Change duplicate comparison target for ${relationshipLabel}`}
-                          >
-                            {m.groupWithAccountId ? 'Will group with: ' : 'Checking duplicates against: '}
-                            {relationshipLabel}
-                          </button>
-                        ) : null}
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'center' }}>
-                      {alreadyImported ? (
-                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>—</span>
-                      ) : (
-                        <input
-                          name={`account-skip-${csvVal}`}
-                          type="checkbox"
-                          checked={!!m.skip}
-                          onChange={e => update({ skip: e.target.checked })}
-                          style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--accent)' }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
+                    ) : null,
+                    lockedNote: alreadyImported ? 'already imported' : null,
+                    skipNote: `skipping ${skippedCount} transaction${skippedCount === 1 ? '' : 's'}`,
+                  }
+                })}
+              />
             </Card>
           )}
 
@@ -4266,14 +3930,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           accountIds={moneyMovementReview.accountIds || []}
           categories={categories}
           onClose={() => setMoneyMovementReport(null)}
-        />
-      ) : null}
-
-      {pendingAccountMatchChooser ? (
-        <PossibleAccountMatchChooserDialog
-          pending={pendingAccountMatchChooser}
-          onSelect={applyAccountMatchChoice}
-          onCancel={() => setPendingAccountMatchChooser(null)}
         />
       ) : null}
 

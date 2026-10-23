@@ -15,7 +15,16 @@ import {
 } from '../lib/importColumnInference.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatTimestamp } from '../lib/utils.js'
-import { findExactAccountNameMatch } from '../lib/importExport/importAccountMatching.js'
+import {
+  accountMappingProblem,
+  defaultAccountMapEntry,
+  entriesToSourceAccountMap,
+  findAccountMatchCandidates,
+  findExactAccountNameMatch,
+  findLikelyAccountMatch,
+  newMappedAccountsFromEntries,
+  sourceAccountMapToEntries,
+} from '../lib/importExport/importAccountMatching.js'
 import { splitHeaderFingerprint } from '../lib/importExport/importDraft.js'
 import {
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
@@ -31,6 +40,7 @@ import {
 import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
+import AccountMappingGrid from './importExport/AccountMappingGrid.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import FileInput from './FileInput.jsx'
 import { PICKER_IDS } from '../lib/filePicker.js'
@@ -71,14 +81,16 @@ function clampSourceLagDays(value) {
 
 const ADD_PANEL_WIDTH = 900
 
-// The column_map keys this form edits. Everything else in a saved column_map — the per-value account
-// map an import writes back (`account_assignments` / `account_skips` / `account_new`), category
-// assignments, imported-category settings — belongs to other flows and must survive an edit here.
+// The column_map keys this form edits. Everything else in a saved column_map — category assignments,
+// imported-category settings — belongs to other flows and must survive an edit here.
 // `single_account_new` is listed because the form resolves it: to the existing account of that name,
-// or to an account created on save.
+// or to an account created on save. The per-value account map an import writes back
+// (`account_assignments` / `account_skips` / `account_new`) is listed because the form edits it: it is
+// how a watched folder's imports are re-pointed, since those never pass through the import screen.
 const FORM_OWNED_COLUMN_MAP_KEYS = [
   'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency', 'transaction_id',
   'category', 'notes', 'account', 'evidence_columns', 'single_account_new',
+  'account_assignments', 'account_skips', 'account_new',
 ]
 
 const NO_NEW_ACCOUNT = { enabled: false, name: '', type: 'depository' }
@@ -188,6 +200,7 @@ function ProfileForm({
   const [colCurrency, setColCurrency] = useState(cm.currency || '')
   const [colTransactionId, setColTransactionId] = useState(cm.transaction_id || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
+  const [sourceAccountMap, setSourceAccountMap] = useState(() => sourceAccountMapToEntries(cm, accounts))
   // Capture picks (headers), or null = derive the default set. Seeded from the saved profile.
   const [evidenceColumns, setEvidenceColumns] = useState(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
   const [mappingSuggestions, setMappingSuggestions] = useState(getBlankSuggestedColumns())
@@ -223,6 +236,49 @@ function ProfileForm({
     const base = evidenceColumns == null ? defaultEvidenceColumns(evidenceColumnOptions) : evidenceColumns
     return base.filter(header => optionHeaders.has(header))
   }, [evidenceColumns, evidenceColumnOptions])
+  const accountMapRows = useMemo(
+    () => Object.keys(sourceAccountMap)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+      .map(value => {
+        const entry = sourceAccountMap[value]
+        const problem = accountMappingProblem(entry, accounts)
+        // The grid itself says when a new account's name is taken, beside the name.
+        const note = problem === 'unmapped'
+          ? (entry.missingAccountId ? 'Its account no longer exists' : 'Choose an account or Skip')
+          : problem === 'new_type' ? 'Choose a type for the new account'
+            : problem === 'new_name' ? 'Name the new account'
+              : null
+        return {
+          key: value,
+          label: value,
+          entry,
+          candidates: findAccountMatchCandidates(accounts, value),
+          suggestion: findLikelyAccountMatch(accounts, value),
+          details: note ? (
+            <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 1 }}>{note}</div>
+          ) : null,
+        }
+      }),
+    [sourceAccountMap, accounts],
+  )
+  // Every row needs a decision before the source saves, as every row does before an import runs: a
+  // value left without one is a file a watched folder would stop on. Only while the grid is shown —
+  // a source with no account column keeps the map it has untouched.
+  const accountMapComplete = !colAccount ||
+    Object.values(sourceAccountMap).every(entry => !accountMappingProblem(entry, accounts))
+  // New accounts other rows are creating in this save, offered in every row's picker so several values
+  // can share one; the save creates a shared name once.
+  const inFlightMapAccounts = useMemo(() => {
+    const byName = new Map()
+    for (const entry of Object.values(sourceAccountMap)) {
+      if (!entry?.createNew || entry?.skip) continue
+      const name = String(entry.newName || '').trim()
+      if (name && !byName.has(name.toLowerCase())) {
+        byName.set(name.toLowerCase(), { value: name, label: `${name} (new)`, type: entry.newType || '' })
+      }
+    }
+    return [...byName.values()]
+  }, [sourceAccountMap])
   const newAccountReady = newAccount.enabled && !!newAccount.name.trim() &&
     !findExactAccountNameMatch(accounts, newAccount.name)
   const canSave = !!(
@@ -230,7 +286,8 @@ function ProfileForm({
     colDate.trim() &&
     colDesc.trim() &&
     (amtConv === 'two_column' ? colDebit.trim() && colCredit.trim() : colAmount.trim()) &&
-    (colAccount.trim() || accountId || newAccountReady)
+    (colAccount.trim() || accountId || newAccountReady) &&
+    accountMapComplete
   )
   const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !newAccount.enabled
     ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
@@ -349,6 +406,11 @@ function ProfileForm({
       ...(samplePreview
         ? { evidence_columns: resolvedEvidenceColumns }
         : (Array.isArray(cm.evidence_columns) ? { evidence_columns: cm.evidence_columns } : {})),
+      // With the grid shown, its `+New` rows are created by the save and come back as assignments, so
+      // none is stored as pending. Without it, the map is written back as it was read.
+      ...entriesToSourceAccountMap(colAccount
+        ? Object.fromEntries(Object.entries(sourceAccountMap).filter(([, entry]) => entry.skip || !entry.createNew))
+        : sourceAccountMap),
     }
     const creatingAccount = !colAccount && newAccount.enabled
     onSave(
@@ -361,6 +423,7 @@ function ProfileForm({
         column_map,
         account_id: creatingAccount ? null : (accountId || null),
         new_account: creatingAccount ? { name: newAccount.name.trim(), type: newAccount.type } : null,
+        new_mapped_accounts: colAccount ? newMappedAccountsFromEntries(sourceAccountMap) : null,
         date_format: dateFormat, amount_convention: amtConv,
         skip_rows: parseInt(skipRows) || 0,
         apply_categorization: applyCat,
@@ -825,6 +888,30 @@ function ProfileForm({
           onNewAccountChange: setNewAccount,
         }}
       />
+
+      {colAccount && accountMapRows.length > 0 ? (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Account mappings</div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, maxWidth: 560 }}>
+            Where each value in the {colAccount} column imports, as earlier imports left it. A value not
+            listed is asked about at its next import, and a watched folder holds its file until then.
+          </div>
+          <div style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', maxWidth: 640 }}>
+            <AccountMappingGrid
+              sourceHeading="Account from file"
+              namePrefix="source-account-map"
+              accounts={accounts}
+              rows={accountMapRows}
+              inFlightOptions={inFlightMapAccounts}
+              // Any change answers the row, so a dead account it named is no longer carried.
+              onUpdate={(value, patch) => setSourceAccountMap(prev => ({
+                ...prev,
+                [value]: { ...defaultAccountMapEntry(value), ...(prev[value] || {}), ...patch, missingAccountId: '' },
+              }))}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <ImportEvidenceColumnsSection
         options={evidenceColumnOptions}

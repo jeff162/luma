@@ -14,22 +14,17 @@
 // a spurious restatement is not free.
 
 import {
+  defaultAccountMapEntry,
   findAccountMatchCandidates,
   findLikelyAccountMatch,
   guessNewAccountTypeFromName,
 } from './importExport/importAccountMatching.js'
 
-// The row state is the CSV grid's, field for field, so the two stay comparable and a shared row could be
-// extracted mechanically. The backend's mapping mode is
+// The row state is `AccountMappingGrid`'s, which the CSV import shares. The backend's mapping mode is
 // *derived* from this at save time rather than being what the user picks.
 export function defaultConnectionMapEntry(sourceLabel) {
   return {
-    accountId: '',
-    createNew: false,
-    newName: sourceLabel,
-    newType: '',
-    groupWithAccountId: '',
-    skip: false,
+    ...defaultAccountMapEntry(sourceLabel),
     // The account this mapping has ALREADY produced, if it has run before. Nothing the CSV grid needs
     // — a file's mapping is applied once — but a connection's is revisited, and a name/type editor for
     // an account that already exists would offer edits the mapping call ignores.
@@ -55,9 +50,8 @@ export function defaultConnectionMapEntry(sourceLabel) {
 // nobody has ruled on is left alone rather than defaulted into existence.
 export function entryToMapping(entry) {
   if (!entry) return null
-  // Checked first and unconditionally: the checkbox clears the other fields on toggle, but the
-  // derivation must not depend on that having happened. A stale field must never turn a skip into an
-  // import.
+  // Checked first and unconditionally: the checkbox keeps the rest of the row so unticking it restores
+  // the choice, and a kept field must never turn a skip into an import.
   if (entry.skip) return { mode: 'skip', target_account_id: null }
   if (entry.createNew) {
     const shared = {

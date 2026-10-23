@@ -1570,7 +1570,12 @@ through `services/ledger_currency.py`.
   its kind and is excluded, since it serves two file shapes.
 - The value is `ParsedFile.fingerprint`, with blank header cells dropped, for every caller.
 - `column_map` also stores the per-value account map (`account_assignments`, `account_skips`,
-  `account_new`), written by `autoSaveProfile` after each import.
+  `account_new`), written by `autoSaveProfile` after each import and edited in the data-source editor.
+  While the source has an account column, the editor saves only when every listed value is skipped or
+  has an account; it never adds a value. A `+New` row's account is created by the save
+  (`new_mapped_accounts`, through the import's `create_mapped_new_accounts`) and stored as an
+  assignment, so an editor save leaves no pending `account_new`. A name that already exists is
+  refused. Without an account column the map is written back as it was read.
 - A per-user preference seeds whether new imports use file categories (`all`, `none`, `per_source`). It
   does not override a source's or a batch's setting.
 

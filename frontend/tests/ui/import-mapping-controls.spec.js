@@ -475,6 +475,74 @@ test('the data source editor can create its account, and saving keeps what impor
   }
 })
 
+test('the data source editor re-points, skips and creates the accounts imports remembered', async ({ page, request }) => {
+  // A watched folder's files never reach the import screen, so the editor is the only place the map an
+  // earlier hand import left behind can be changed.
+  const profileName = uniqueDataSourceName('PW account map source')
+  const newAccountName = uniqueDataSourceName('PW Tidewater')
+  const checking = await (await request.post('/api/accounts', {
+    data: { name: uniqueDataSourceName('PW Everyday'), type: 'depository' },
+  })).json()
+  const card = await (await request.post('/api/accounts', {
+    data: { name: uniqueDataSourceName('PW Harborline'), type: 'credit' },
+  })).json()
+  const profileId = await createImportProfile(request, {
+    name: profileName,
+    columnMap: {
+      date: 'Date',
+      amount: 'Amount',
+      description: 'Description',
+      notes: 'Notes',
+      account: 'Account',
+      account_assignments: { CHK: checking.id, CARD: checking.id, OLD: card.id },
+      account_skips: ['BROKERAGE'],
+    },
+  })
+
+  try {
+    await page.goto('/import-export?tab=sources')
+    await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
+    await expect(page.getByText('Account mappings')).toBeVisible()
+    const saveButton = page.getByRole('button', { name: 'Save changes' })
+
+    await page.locator('#source-account-map-target-CARD').click()
+    await page.getByRole('option', { name: card.name }).click()
+    await page.locator('input[name="source-account-map-skip-CHK"]').check()
+
+    // A row left with no account holds the save back until it is mapped or skipped.
+    await page.getByRole('button', { name: 'Clear the mapping for OLD' }).click()
+    await expect(page.getByText('Choose an account or Skip')).toBeVisible()
+    await expect(saveButton).toBeDisabled()
+    await page.locator('input[name="source-account-map-skip-OLD"]').check()
+
+    // A new account is created by the save and stored as an ordinary assignment.
+    await page.locator('input[name="source-account-map-skip-BROKERAGE"]').uncheck()
+    await expect(saveButton).toBeDisabled()
+    await page.getByRole('button', { name: '+New' }).click()
+    await page.locator('input[name="source-account-map-name-BROKERAGE"]').fill(newAccountName)
+    await page.locator('select[name="source-account-map-type-BROKERAGE"]').selectOption('investment')
+    await expect(saveButton).toBeEnabled()
+    await saveButton.click()
+    await expect(page.getByText(`Edit: ${profileName}`)).toHaveCount(0)
+
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    const created = accounts.find(account => account.name === newAccountName)
+    expect(created, 'saving the source creates the mapped account').toBeTruthy()
+    const profiles = await (await request.get('/api/import-export/profiles')).json()
+    const saved = profiles.find(profile => profile.id === profileId)
+    expect(saved.column_map.account_assignments).toEqual({ CARD: card.id, BROKERAGE: created.id })
+    expect(saved.column_map.account_skips).toEqual(['CHK', 'OLD'])
+    expect(saved.column_map.account_new).toBeUndefined()
+  } finally {
+    await deleteImportProfile(request, profileId)
+    // The last spec here relies on the tenant holding no accounts.
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    for (const account of accounts.filter(a => [checking.id, card.id].includes(a.id) || a.name === newAccountName)) {
+      await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    }
+  }
+})
+
 test('deleting a data source removes it from the import page immediately', async ({ page, request }) => {
   const profileName = uniqueDataSourceName('PW delete source')
   const profileId = await createImportProfile(request, { name: profileName })
@@ -512,7 +580,7 @@ test('creating a new mapped account keeps import disabled until the user chooses
   await page.getByRole('button', { name: '+New' }).click()
 
   const importButton = page.getByRole('button', { name: /Import \d+ rows/ })
-  const typeSelect = page.locator(`select[name="account-new-type-${NEW_ACCOUNT_LABEL}"]`)
+  const typeSelect = page.locator(`select[name="account-map-type-${NEW_ACCOUNT_LABEL}"]`)
 
   await expect(importButton).toBeDisabled()
   await expect(typeSelect).toHaveValue('')
@@ -530,7 +598,7 @@ test('a finished import lands on its card in the import history and frees the im
     await page.getByText(suggestion).click()
   }
   await page.getByRole('button', { name: '+New' }).click()
-  await page.locator(`select[name="account-new-type-${NEW_ACCOUNT_LABEL}"]`).selectOption('depository')
+  await page.locator(`select[name="account-map-type-${NEW_ACCOUNT_LABEL}"]`).selectOption('depository')
   await page.getByRole('button', { name: /Import \d+ rows/ }).click()
 
   try {

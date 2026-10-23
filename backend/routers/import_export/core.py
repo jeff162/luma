@@ -852,6 +852,56 @@ def _attach_import_created_account_to_group(conn, account_id: str, target_accoun
     return target["id"]
 
 
+def create_mapped_new_accounts(conn, new_accounts: list, owner_id: Optional[str]) -> tuple[dict, dict]:
+    """Create the accounts a mapping grid's `+New` rows ask for, and return `({source value: account id},
+    {source value: group root id})`.
+
+    Shared by the import (`run_import_parsed`) and the data-source editor's save, so a new account means
+    the same thing from either. Each entry is `{csv_value, name, type, group_with_account_id?,
+    distinct_from_account_ids?}`.
+
+    An account of the requested name that already exists is used rather than duplicated. That is how two
+    values naming one new account share it, and how a later file in a multi-file import finds the account
+    an earlier one created. Nothing about it is re-asserted: a grouping persists on the account itself
+    (`parent_account_id`).
+
+    What the user ruled out by giving a value its own account — every existing account the row offered as
+    a possible match — is recorded as one `account_pair_distinct` row per pair, after every account named
+    exists. The user compared the names and said they are different accounts; that is the assertion the
+    cross-account sweep needs, and discarding it meant the same question returned as a flagged transaction
+    for every coincidence between the pair. A set per account rather than one id, because "is this any of
+    these?" is a question about a set.
+    """
+    created: dict[str, str] = {}
+    group_roots: dict[str, str] = {}
+    declined_matches: list[tuple[str, str]] = []
+    for na in new_accounts or []:
+        csv_val = na.get("csv_value", "")
+        acc_name = str(na.get("name", csv_val) or "").strip()
+        acc_type = na.get("type") or "depository"
+        requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
+        declined_match_ids = {
+            str(d).strip() for d in (na.get("distinct_from_account_ids") or []) if str(d or "").strip()
+        }
+        if not acc_name:
+            continue
+        existing = conn.execute(
+            "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (acc_name,)
+        ).fetchone()
+        account_id = existing["id"] if existing else insert_csv_account(conn, acc_name, acc_type, owner_id)
+        created[csv_val] = account_id
+        declined_matches.extend(
+            (account_id, declined) for declined in declined_match_ids if declined != account_id
+        )
+        if not existing and requested_group_target_id:
+            group_root_id = _attach_import_created_account_to_group(conn, account_id, requested_group_target_id) or ""
+            if group_root_id:
+                group_roots[csv_val] = group_root_id
+    for created_id, declined_id in declined_matches:
+        record_account_pair_distinct(conn, created_id, declined_id)
+    return created, group_roots
+
+
 def _insert_imported_transaction(conn, batch_id: str, payload: dict, *, flag_for_review: bool) -> str:
     txn_id = str(uuid.uuid4())
     evidence = held_payload_evidence(payload)
@@ -3133,54 +3183,9 @@ def run_import_parsed(
                     existing["id"] if existing
                     else insert_csv_account(conn, single_name, single_type, default_owner_id)
                 )
-        # What the user ruled out by giving a CSV account value its own new account: every existing
-        # account the mapping row offered as a possible match. Recorded after the loop so every account
-        # named in them exists. The user compared the account names and said they are different accounts;
-        # that is the assertion the cross-account sweep needs, and discarding it meant the same question
-        # returned as a flagged transaction for every coincidence between the pair.
-        #
-        # A set per new account rather than one id: "is this any of these?" is a question about a set, and
-        # answering it recorded only one arbitrarily-chosen pair — or, when the candidates tied and no
-        # suggestion was offered at all, nothing.
-        declined_matches: list[tuple[str, str]] = []
-        for na in new_accounts_cfg:
-            csv_val  = na.get("csv_value", "")
-            acc_name = na.get("name", csv_val).strip()
-            acc_type = na.get("type", "depository")
-            requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
-            declined_match_ids = {
-                str(d).strip() for d in (na.get("distinct_from_account_ids") or []) if str(d or "").strip()
-            }
-            if not acc_name:
-                continue
-            # Check if an account with this name already exists — use it rather
-            # than creating a duplicate. Case-insensitive match.
-            existing = conn.execute(
-                "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (acc_name,)
-            ).fetchone()
-            if existing:
-                # A later file in a multi-file import (or a re-import into the same account) finds the
-                # account already created and reuses it by name. Nothing to re-assert: a *grouping*
-                # relationship persists on the account itself (`parent_account_id`), so its dedupe scope
-                # is restored automatically. (The per-import compare alias used to need re-asserting
-                # here; it no longer exists.)
-                created_account_ids[csv_val] = existing["id"]
-                declined_matches.extend(
-                    (existing["id"], declined) for declined in declined_match_ids if declined != existing["id"]
-                )
-                continue
-            new_acc_id = insert_csv_account(conn, acc_name, acc_type, default_owner_id)
-            created_account_ids[csv_val] = new_acc_id
-            declined_matches.extend(
-                (new_acc_id, declined) for declined in declined_match_ids if declined != new_acc_id
-            )
-            if requested_group_target_id:
-                group_root_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
-                if group_root_id:
-                    account_duplicate_compare_targets[csv_val] = group_root_id
-
-        for created_id, declined_id in declined_matches:
-            record_account_pair_distinct(conn, created_id, declined_id)
+        created_from_values, group_roots = create_mapped_new_accounts(conn, new_accounts_cfg, default_owner_id)
+        created_account_ids.update(created_from_values)
+        account_duplicate_compare_targets.update(group_roots)
 
         created_account_owner_map = {}
         if created_account_ids:

@@ -1,17 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The account-mapping step for a data-source connection — the counterpart to the CSV import's
-// "Account from file → Maps To → Skip" grid, and deliberately the *same interaction model*, not merely
-// a similar-looking one.
-//
-// That means the primary question is "which account?" — one select of existing accounts, a `+New`
-// beside it, and a Skip checkbox — with *grouping* treated as a refinement behind
-// `PossibleAccountMatchChooserDialog`, surfaced as a chip. An earlier version asked for the
-// relationship FIRST, in a dropdown of the backend's mapping modes. That exposed the data model
-// rather than the decision: grouping is a subtlety most mappings never need, so putting it in the
-// primary control made every row look like a decision, and it asked the user to classify a
-// relationship before naming the account it was with.
+// The account-mapping step for a data-source connection. The grid itself is `AccountMappingGrid`, the
+// same one the CSV import and the data-source editor use, so the three ask the question identically.
 //
 // It is a required step after Link rather than a nicety. Connecting records what the bank offers but
 // creates nothing, so an unmapped provider account has nowhere to sync into; and the mapping is what
@@ -19,30 +10,17 @@
 // already imported from a CSV arrives as an unrelated new account. It reopens from the connection
 // card because a decision made once at connect time is exactly the kind a user revisits — and for a
 // metered provider, re-linking to "start over" may not be available.
-//
-// The suggestion + relationship machinery is the CSV flow's, reused rather than reimplemented:
-// `findLikelyAccountMatch` / `getAccountMatchLabel` / `guessNewAccountTypeFromName` from
-// `lib/importExport/importAccountMatching.js` and the chooser dialog itself, so both surfaces suggest
-// and classify identically from one implementation.
 
 import { useEffect, useMemo, useState } from 'react'
-import { AppDialog, Button, DialogActions, Select, Spinner } from '../ui.jsx'
-import { PossibleAccountMatchChooserDialog } from '../importExport/importConfirmDialogs.jsx'
-import AccountMatchSelect from '../importExport/AccountMatchSelect.jsx'
-import {
-  getAccountMatchLabel,
-  guessNewAccountTypeFromName,
-  selectableAccountOptions,
-} from '../../lib/importExport/importAccountMatching.js'
-import { GENERIC_IMPORT_ACCOUNT_TYPES, isMarketplaceAccountType } from '../../lib/accountTypes.js'
+import { AppDialog, Button, DialogActions, Spinner } from '../ui.jsx'
+import AccountMappingGrid from '../importExport/AccountMappingGrid.jsx'
+import { isMarketplaceAccountType } from '../../lib/accountTypes.js'
 import { MONEY_DISPLAY_CONFIG } from '../../lib/moneyDisplay.js'
 import {
   defaultConnectionMapEntry,
   entryFromProviderAccount,
   entryToMapping,
 } from '../../lib/connectionAccountMapping.js'
-
-const GRID = '1fr 16px 240px 52px'
 
 export default function ConnectionAccountMapDialog({
   connection,
@@ -60,7 +38,6 @@ export default function ConnectionAccountMapDialog({
   requireAll = false,
 }) {
   const [entries, setEntries] = useState({})
-  const [chooser, setChooser] = useState(null)
 
   const selectableAccounts = useMemo(
     // Marketplace accounts are filled by their own importer, never by pointing a data source at them —
@@ -68,7 +45,6 @@ export default function ConnectionAccountMapDialog({
     () => (accounts || []).filter(a => !isMarketplaceAccountType(a.type)),
     [accounts],
   )
-  const accountsById = useMemo(() => new Map((accounts || []).map(a => [a.id, a])), [accounts])
 
   useEffect(() => {
     const next = {}
@@ -85,66 +61,6 @@ export default function ConnectionAccountMapDialog({
     }))
   }
 
-  // Opened with the whole candidate set, not one account: the dialog is where those are shown, and
-  // "Keep separate" asserts distinctness from all of them. A caller re-entering to revisit an existing
-  // grouping passes the single account it is about, which arrives as a one-entry list and pre-selects.
-  function openChooser(pa, targets) {
-    const candidates = (Array.isArray(targets) ? targets : [targets]).filter(Boolean)
-    if (!candidates.length) return
-    setChooser({
-      externalId: pa.external_account_id,
-      csvValue: pa.source_label,
-      candidates: candidates.map(target => ({
-        id: target.id,
-        label: getAccountMatchLabel(target) || target.name || '',
-        institution: target.institution || '',
-      })),
-    })
-  }
-
-  // The three chooser outcomes, resolved onto the same fields the CSV flow sets
-  // (`applyAccountMatchChoice`). Keeping the shapes identical is what will make the two grids
-  // extractable later without reconciling two vocabularies first.
-  //
-  // `selectedId` is which candidate the two relationship answers act on; `keep_separate` ignores it and
-  // reads the whole list instead, because declining is an answer about all of them.
-  function applyChoice(choice, selectedId) {
-    const pending = chooser
-    setChooser(null)
-    if (!pending) return
-    const base = {
-      accountId: '',
-      createNew: true,
-      groupWithAccountId: '',
-      skip: false,
-      distinctFromAccountIds: [],
-    }
-    if (choice === 'keep_separate') {
-      // A plain new account, and the one branch that carries an answer rather than a relationship.
-      // "These are not the same account" is exactly the assertion the duplicate sweep needs; discarding
-      // it was why a user who had just said so, looking at the names, was asked again per flagged
-      // transaction once the data arrived.
-      update(pending.externalId, {
-        ...base,
-        distinctFromAccountIds: pending.candidates.map(c => c.id),
-      })
-      return
-    }
-    const target = accountsById.get(selectedId)
-    if (!target) return
-    if (choice === 'map_existing') {
-      update(pending.externalId, {
-        ...base,
-        createNew: false,
-        accountId: target.id,
-        newName: target.name || pending.csvValue,
-        newType: target.type || 'depository',
-      })
-    } else if (choice === 'group_with_existing') {
-      update(pending.externalId, { ...base, groupWithAccountId: target.id })
-    }
-  }
-
   const rows = providerAccounts || []
   const undecided = rows.filter(pa => !entryToMapping(entries[pa.external_account_id]))
   const blocked = requireAll && undecided.length > 0
@@ -156,22 +72,6 @@ export default function ConnectionAccountMapDialog({
       if (mapping) mappings[pa.external_account_id] = mapping
     }
     onSave?.(mappings)
-  }
-
-  const inputStyle = {
-    width: '100%', background: 'var(--surface2)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6, padding: '4px 6px', fontSize: 12, outline: 'none',
-  }
-  const iconButtonStyle = {
-    flexShrink: 0, background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-    color: 'var(--muted)', cursor: 'pointer', fontSize: 13, width: 28, height: 28, lineHeight: 1, padding: 0,
-  }
-  const chipStyle = {
-    justifySelf: 'start', maxWidth: '100%',
-    border: '1px solid color-mix(in srgb, var(--accent2) 28%, var(--border))',
-    background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-    color: 'var(--accent2)', borderRadius: 999, padding: '4px 9px',
-    fontSize: 11, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   }
 
   return (
@@ -224,270 +124,34 @@ export default function ConnectionAccountMapDialog({
           </p>
         ) : (
           <div style={{ display: 'grid', gap: 0 }}>
-            {/* Sticky, and opaque so rows cannot show through it — both because the dialog body scrolls
-                now (see `AppDialog`). With thirteen provider accounts the column labels would otherwise
-                scroll away and leave a bare checkbox column with nothing naming it. The background also
-                closes a cosmetic gap with the CSV grid's header, which has had one all along. */}
-            <div style={{
-              display: 'grid', gridTemplateColumns: GRID,
-              gap: 12, padding: '6px 4px', fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-              borderBottom: '1px solid var(--border)',
-              position: 'sticky', top: 0, zIndex: 1, background: 'var(--surface)',
-            }}>
-              <span>Account from provider</span>
-              <span />
-              <span>Maps To</span>
-              <span style={{ textAlign: 'center' }}>Skip</span>
-            </div>
-
-            {rows.map(pa => {
-              const externalId = pa.external_account_id
-              const entry = { ...defaultConnectionMapEntry(pa.source_label), ...(entries[externalId] || {}) }
-              const candidates = entry.candidates || []
-              // Not re-derived from the list: the chip's rule lives in `findLikelyAccountMatch` and is
-              // stricter than "the list has one entry" — a lone mask look-alike is worth showing and is
-              // never worth a single press.
-              const suggestion = entry.suggestion
-              const suggestionLabel = getAccountMatchLabel(suggestion) || suggestion?.name || ''
-              const relationshipTargetId = entry.groupWithAccountId || ''
-              const relationshipTarget = relationshipTargetId ? accountsById.get(relationshipTargetId) : null
-              const relationshipLabel = getAccountMatchLabel(relationshipTarget) || relationshipTarget?.name || ''
-              const materialized = entry.materializedAccountId
-                ? accountsById.get(entry.materializedAccountId)
-                : null
-
-              return (
-                // Vertical padding matches the CSV grid's row; the horizontal 4 deliberately does not
-                // (that grid uses 14). This one sits inside the dialog's own 20px body padding, so 4
-                // here reads at 24 against the panel edge — copying the 14 would indent it further from
-                // the surface than the CSV grid is from its card, not align the two.
-                <div key={externalId} style={{
-                  display: 'grid', gridTemplateColumns: GRID,
-                  gap: 12, padding: '7px 4px', alignItems: 'center',
-                  borderBottom: '1px solid var(--border)',
-                  opacity: entry.skip ? 0.45 : 1,
-                }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={pa.provider_official_name || pa.source_label}
-                    >
-                      {pa.source_label}
-                    </div>
-                    {pa.provider_official_name && pa.provider_official_name !== pa.provider_name ? (
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {pa.provider_official_name}
-                      </div>
-                    ) : null}
-                    {/* Said here, where the account is being given a destination, because mapping it is
-                        the decision this changes: its transactions are discarded, so the account would
-                        otherwise be created, sync cleanly, and stay permanently empty. The backend
-                        decides which currencies qualify (`currency_is_supported`) — this only renders
-                        the verdict. */}
-                    {pa.currency_supported === false ? (
-                      <div
-                        style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={`This ledger is in ${MONEY_DISPLAY_CONFIG.currencyCode} and holds one currency at a time, so amounts in ${pa.provider_currency} cannot be stored alongside it. Transactions from this account are not imported — skipping it keeps it out of the way. The ledger's currency is set in Settings.`}
-                      >
-                        Held in {pa.provider_currency} — transactions not imported
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <span style={{ color: 'var(--muted)', textAlign: 'center', fontSize: 11 }}>→</span>
-
-                  {entry.skip ? (
-                    <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
-                      not imported
-                    </span>
-                  ) : !entry.createNew ? (
-                    <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                        <AccountMatchSelect
-                          name={`connection-map-target-${externalId}`}
-                          value={entry.accountId}
-                          // Per row, not once for the grid: the merged child each list carries is the
-                          // one THIS row's mapping is on, so two rows can offer different lists.
-                          options={selectableAccountOptions(selectableAccounts, entry.accountId)}
-                          candidates={candidates}
-                          accountsById={accountsById}
-                          // Picking from the list maps to it. That is the whole interaction — the
-                          // relationship question belongs to `+New`, which is the path where a second
-                          // question genuinely remains.
-                          onSelectAccount={a => update(externalId, {
-                            accountId: a.id,
-                            createNew: false,
-                            groupWithAccountId: '',
-                          })}
-                          onClear={() => update(externalId, {
-                            accountId: '',
-                            createNew: false,
-                            newName: pa.provider_name || pa.source_label,
-                            groupWithAccountId: '',
-                          })}
-                        />
-                        {entry.accountId ? (
-                          <button
-                            type="button"
-                            onClick={() => update(externalId, {
-                              accountId: '',
-                              createNew: false,
-                              newName: pa.provider_name || pa.source_label,
-                              groupWithAccountId: '',
-                            })}
-                            style={iconButtonStyle}
-                            aria-label="Clear account mapping"
-                          >
-                            ×
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            // With possible matches, ask before creating: the dialog is where they are
-                            // shown, which is what lets "Keep separate" record an assertion about them.
-                            // With none there is nothing to show and nothing to assert, so this stays a
-                            // one-press create — the common case when connecting a genuinely new bank.
-                            onClick={() => {
-                              if (candidates.length) { openChooser(pa, candidates); return }
-                              update(externalId, {
-                                createNew: true,
-                                newName: pa.provider_name || pa.source_label,
-                                newType: entry.newType || guessNewAccountTypeFromName(pa.source_label),
-                                groupWithAccountId: '',
-                              })
-                            }}
-                            style={{
-                              flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                              borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                              fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
-                            }}
-                          >+New</button>
-                        )}
-                      </div>
-                      {!entry.accountId && suggestionLabel ? (
-                        <button
-                          type="button"
-                          // The chip maps; it does not ask. Accepting a suggestion is the one-click
-                          // path in the CSV grid, and the relationship question belongs to `+New`,
-                          // where creating a second account for something Luma may already hold is
-                          // what deserves the second look. Opening the chooser from here made
-                          // agreeing with the suggestion the *longer* of the two routes.
-                          onClick={() => update(externalId, {
-                            accountId: suggestion.id,
-                            createNew: false,
-                            newName: suggestion.name || pa.source_label,
-                            newType: suggestion.type || entry.newType || 'depository',
-                            groupWithAccountId: '',
-                            skip: false,
-                          })}
-                          style={{ ...chipStyle, justifySelf: 'end' }}
-                          title={`Map to ${suggestionLabel}`}
-                        >
-                          Possible match: {suggestionLabel}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
-                      {materialized ? (
-                        // Already created by an earlier save. Name/type editors here would offer edits
-                        // the mapping call ignores (it only names an account it is creating), so the
-                        // row states what exists and keeps the relationship editable.
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                          <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {materialized.name}{materialized.mask ? ` ···${materialized.mask}` : ''}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => update(externalId, {
-                              createNew: false,
-                              accountId: '',
-                              groupWithAccountId: '',
-                            })}
-                            style={iconButtonStyle}
-                            aria-label="Map to a different account instead"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}>
-                          <div style={{ width: 132, maxWidth: '100%' }}>
-                            <input
-                              name={`connection-map-name-${externalId}`}
-                              value={entry.newName}
-                              onChange={e => update(externalId, { newName: e.target.value })}
-                              placeholder="Name"
-                              style={{
-                                ...inputStyle,
-                                border: `1px solid ${
-                                  selectableAccounts.some(a => a.name.toLowerCase() === (entry.newName || '').trim().toLowerCase())
-                                    ? 'var(--danger)' : 'var(--accent)'
-                                }`,
-                              }}
-                            />
-                            {selectableAccounts.some(a => a.name.toLowerCase() === (entry.newName || '').trim().toLowerCase()) ? (
-                              <div style={{ fontSize: 10, color: 'var(--danger)', marginTop: 2 }}>
-                                Name already exists — select it instead
-                              </div>
-                            ) : null}
-                          </div>
-                          <Select
-                            name={`connection-map-type-${externalId}`}
-                            value={entry.newType}
-                            onChange={v => update(externalId, { newType: v })}
-                            options={[
-                              { value: '', label: '— Type —' },
-                              ...GENERIC_IMPORT_ACCOUNT_TYPES.map(o => ({ value: o.value, label: o.shortLabel })),
-                            ]}
-                            style={{ width: 88, fontSize: 11, padding: '4px 5px' }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => update(externalId, {
-                              createNew: false,
-                              accountId: '',
-                              groupWithAccountId: '',
-                            })}
-                            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: 2, flexShrink: 0 }}
-                            aria-label="Cancel creating a new account"
-                          >✕</button>
-                        </div>
-                      )}
-                      {relationshipTarget && relationshipLabel ? (
-                        <button
-                          type="button"
-                          onClick={() => openChooser(pa, [relationshipTarget])}
-                          style={chipStyle}
-                          title={`Change how this relates to ${relationshipLabel}`}
-                        >
-                          Grouped with {relationshipLabel}
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <input
-                      name={`connection-map-skip-${externalId}`}
-                      type="checkbox"
-                      checked={entry.skip}
-                      onChange={e => update(externalId, {
-                        skip: e.target.checked,
-                        ...(e.target.checked
-                          ? { accountId: '', createNew: false, groupWithAccountId: '' }
-                          : {}),
-                      })}
-                      aria-label={`Don't import ${pa.source_label}`}
-                      // Unlike a CSV's per-import skip, this one is remembered: it stops "Refresh
-                      // accounts" recreating an account that was deliberately rejected.
-                      title="Don't bring this account into Luma. Remembered, so refreshing the connection won't recreate it."
-                      style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--accent)' }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
+            <AccountMappingGrid
+              sourceHeading="Account from provider"
+              namePrefix="connection-map"
+              accounts={accounts}
+              onUpdate={update}
+              // This dialog's body already carries 20px of padding, so 4 here reads at 24 against the
+              // panel edge; the card grid's 14 would indent it further than that grid sits in its card.
+              padX={4}
+              // The dialog body scrolls; with a dozen provider accounts the column labels would otherwise
+              // scroll away and leave a bare checkbox column with nothing naming it.
+              stickyHeader
+              // Unlike a CSV's per-import skip, this one is remembered: it stops "Refresh accounts"
+              // recreating an account that was deliberately rejected.
+              skipTitle="Don't bring this account into Luma. Remembered, so refreshing the connection won't recreate it."
+              rows={rows.map(pa => {
+                const entry = { ...defaultConnectionMapEntry(pa.source_label), ...(entries[pa.external_account_id] || {}) }
+                return {
+                  key: pa.external_account_id,
+                  label: pa.source_label,
+                  title: pa.provider_official_name || pa.source_label,
+                  entry,
+                  candidates: entry.candidates || [],
+                  suggestion: entry.suggestion,
+                  newNameDefault: pa.provider_name || pa.source_label,
+                  details: <ProviderAccountDetails providerAccount={pa} />,
+                }
+              })}
+            />
           </div>
         )}
         {captureFields.length > 0 ? (
@@ -521,13 +185,30 @@ export default function ConnectionAccountMapDialog({
           </div>
         ) : null}
       </AppDialog>
+    </>
+  )
+}
 
-      {chooser ? (
-        <PossibleAccountMatchChooserDialog
-          pending={chooser}
-          onSelect={applyChoice}
-          onCancel={() => setChooser(null)}
-        />
+// What the provider says about an account beyond its label: its official name, and a currency the ledger
+// cannot hold. The currency is said here, where the account is being given a destination, because
+// mapping it is the decision this changes: its transactions are discarded, so the account would otherwise
+// be created, sync cleanly, and stay permanently empty. The backend decides which currencies qualify
+// (`currency_is_supported`) — this only renders the verdict.
+function ProviderAccountDetails({ providerAccount: pa }) {
+  return (
+    <>
+      {pa.provider_official_name && pa.provider_official_name !== pa.provider_name ? (
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {pa.provider_official_name}
+        </div>
+      ) : null}
+      {pa.currency_supported === false ? (
+        <div
+          style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={`This ledger is in ${MONEY_DISPLAY_CONFIG.currencyCode} and holds one currency at a time, so amounts in ${pa.provider_currency} cannot be stored alongside it. Transactions from this account are not imported — skipping it keeps it out of the way. The ledger's currency is set in Settings.`}
+        >
+          Held in {pa.provider_currency} — transactions not imported
+        </div>
       ) : null}
     </>
   )

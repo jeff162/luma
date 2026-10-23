@@ -2920,6 +2920,18 @@ export const HELP_TOPICS = [
           the drop area. <strong>Folder</strong> on the data source&apos;s row sets it up &mdash;
           see <HelpLink to="/help/watched-folders">importing from a watched folder</HelpLink>.
         </p>
+        <h4>Account mappings</h4>
+        <p>*needs review*</p>
+        <p>
+          For a data source whose files name the account on each row, each import remembers which
+          account every value in that column goes to, or that it is skipped. Editing the data source
+          lists those under <strong>Account mappings</strong>, where a value can be pointed at another
+          account, given a new account with <strong>+New</strong>, or skipped. Files from a watched
+          folder never pass through the mapping screen, so this is where their mappings are changed. A new
+          account is created when the data source is saved, and every value needs an account or Skip
+          before it can be. A value not listed is asked about at its next import, and a watched folder
+          holds that file for review.
+        </p>
         <h4>Transaction IDs</h4>
         <p>*needs review*</p>
         <p>
@@ -3010,13 +3022,15 @@ export const HELP_TOPICS = [
           <li>an account value the data source has never been shown, or one whose account has since been
             deleted or moved to the trash. A watched folder never creates an account and never matches one
             by name: a wrong guess splits an account's history without saying so</li>
-          <li>a data source set up to create a new account as part of importing</li>
+          <li>a data source set up to create a new account as part of importing. Saving the data source
+            from its editor creates the account</li>
           <li>a file whose columns are not the ones the data source expects, which usually means a file
             from somewhere else landed in the folder</li>
         </ul>
         <p>
-          The fix is made wherever it belongs &mdash; mapping the missing account from the data
-          source&apos;s row on the <strong>File Sources</strong> tab, for instance. The next check picks the file up on its own and the task
+          The fix is made wherever it belongs &mdash; pointing a value whose account was deleted at
+          another one under <strong>Account mappings</strong> when editing the data source on the{' '}
+          <strong>File Sources</strong> tab, for instance. The next check picks the file up on its own and the task
           clears itself; the file does not need touching.
         </p>
         <h4>What happens to the files</h4>

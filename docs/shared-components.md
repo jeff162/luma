@@ -149,6 +149,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
+| `AccountMappingGrid` | Mapping each of a source's accounts onto Luma's: the CSV import, a connection's mapping dialog and the data-source editor. A surface passes what differs (row notes, new accounts other rows are creating) as props. | `components/importExport/AccountMappingGrid.jsx` |
 | `AccountMatchSelect` | Choosing which existing account a source account maps to. | `components/importExport/AccountMatchSelect.jsx` |
 | `AmazonAccountPicker` | Choosing which Amazon account order files import into, with inline create. | `components/importExport/AmazonAccountPicker.jsx` |
 | `WatchPausedPill` | Marking a watched folder that is switched off, on any surface that lists one. | `components/importExport/WatchPausedPill.jsx` |

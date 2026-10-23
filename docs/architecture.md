@@ -511,9 +511,10 @@ precondition; its docstring has the ladder. What each state and field means is i
 
 #### Mapping-time distinctness
 
-Both account-mapping grids (CSV import, connection setup) ask what a source account becomes. Giving it
-its own account also asserts it is none of the accounts it might have been, recorded as
-`account_pair_distinct` rows so the cross-account sweep does not re-ask per transaction.
+The account-mapping grid (`AccountMappingGrid`: CSV import, connection setup, data-source editor) asks
+what a source account becomes. Giving it its own account also asserts it is none of the accounts it
+might have been, recorded as `account_pair_distinct` rows so the cross-account sweep does not re-ask
+per transaction.
 
 - `findAccountMatchCandidates` returns every plausible account. `findLikelyAccountMatch` collapses that
   to one for the one-click accept chip only, and requires exactly one possibility **and** name evidence,

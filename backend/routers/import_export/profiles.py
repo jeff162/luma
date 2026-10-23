@@ -33,6 +33,7 @@ from .core import (
     _annotate_imported_category_settings,
     _get_imported_category_settings,
     _store_imported_category_settings,
+    create_mapped_new_accounts,
     insert_csv_account,
     save_batch_snapshot,
 )
@@ -45,6 +46,16 @@ class ProfileNewAccount(BaseModel):
     type: str = "depository"
 
 
+# A `+New` row of the editor's account-mapping grid: the account a value in the file's account column
+# should import into, created when the source is saved. The shape the import's `new_accounts` takes.
+class ProfileMappedNewAccount(BaseModel):
+    csv_value: str
+    name: str
+    type: str = "depository"
+    group_with_account_id: Optional[str] = None
+    distinct_from_account_ids: list[str] = []
+
+
 class ProfileCreate(BaseModel):
     name:                 str
     filename_pattern:     Optional[str] = None
@@ -54,6 +65,7 @@ class ProfileCreate(BaseModel):
     column_map:           dict
     account_id:           Optional[str] = None
     new_account:          Optional[ProfileNewAccount] = None
+    new_mapped_accounts:  Optional[list[ProfileMappedNewAccount]] = None
     date_format:          str = "%m/%d/%Y"
     amount_convention:    str = "single_signed"
     skip_rows:            int = 0
@@ -75,6 +87,7 @@ class ProfileUpdate(BaseModel):
     column_map:           Optional[dict] = None
     account_id:           Optional[str] = None
     new_account:          Optional[ProfileNewAccount] = None
+    new_mapped_accounts:  Optional[list[ProfileMappedNewAccount]] = None
     date_format:          Optional[str] = None
     amount_convention:    Optional[str] = None
     skip_rows:            Optional[int] = None
@@ -304,20 +317,53 @@ def list_profiles():
     return result
 
 
-def _create_profile_account(conn, new_account: ProfileNewAccount) -> str:
-    # The data source editor's "Create new account…": the account is made with the source, in the same
-    # transaction, so the source names a real account from the start (a watched folder cannot act on
-    # one that only says "create this at the next import"). Unlike the import path's find-or-create,
-    # an existing name is refused — the editor asks the user to pick that account instead.
-    name = new_account.name.strip()
+# The data source editor creates an account with the source, in the same transaction, so the source
+# names a real account from the start: a watched folder cannot act on one that only says "create this at
+# the next import". Unlike the import path's find-or-create, a name that already exists is refused — the
+# editor asks the user to pick that account instead.
+def _assert_new_account_name_available(conn, name: str) -> str:
+    name = str(name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Enter a name for the new account.")
     if conn.execute(
         "SELECT 1 FROM account WHERE LOWER(name) = LOWER(?) AND trashed_at IS NULL", (name,)
     ).fetchone():
         raise HTTPException(status_code=400, detail=f'An account named "{name}" already exists. Select it instead.')
+    return name
+
+
+def _create_profile_account(conn, new_account: ProfileNewAccount) -> str:
+    """The editor's "Create new account…" for a source that imports into one account."""
+    name = _assert_new_account_name_available(conn, new_account.name)
     account_type = (new_account.type or "depository").strip() or "depository"
     return insert_csv_account(conn, name, account_type, resolve_default_owner_id(conn, None))
+
+
+def _create_mapped_profile_accounts(conn, column_map: dict, new_accounts: list[ProfileMappedNewAccount]) -> dict:
+    """The editor's `+New` rows: create each account and return `column_map` with the values assigned to
+    them, so nothing is left as a pending `account_new` for a watched folder to stop on.
+
+    Every name is checked before anything is created. Rows naming the same new account share it, through
+    the find-or-create in `create_mapped_new_accounts`.
+    """
+    for name in {na.name.strip().lower(): na.name for na in new_accounts}.values():
+        _assert_new_account_name_available(conn, name)
+    created, _ = create_mapped_new_accounts(
+        conn, [na.model_dump() for na in new_accounts], resolve_default_owner_id(conn, None),
+    )
+    next_map = dict(column_map or {})
+    assignments = dict(safe_json_dict(next_map.get("account_assignments")))
+    pending = dict(safe_json_dict(next_map.get("account_new")))
+    skips = [value for value in (next_map.get("account_skips") or []) if value not in created]
+    for value, account_id in created.items():
+        assignments[value] = account_id
+        pending.pop(value, None)
+    for key, value in (("account_assignments", assignments), ("account_new", pending), ("account_skips", skips)):
+        if value:
+            next_map[key] = value
+        else:
+            next_map.pop(key, None)
+    return next_map
 
 
 @router.post("/profiles")
@@ -327,7 +373,8 @@ def create_profile(body: ProfileCreate):
         normalized_name = _assert_profile_name_available(conn, body.name)
         account_id = _create_profile_account(conn, body.new_account) if body.new_account else body.account_id
         column_map = _store_imported_category_settings(
-            body.column_map,
+            _create_mapped_profile_accounts(conn, body.column_map, body.new_mapped_accounts)
+            if body.new_mapped_accounts else body.column_map,
             {
                 "scope_mode": body.imported_category_scope_mode,
                 "owner_ids": body.imported_category_owner_ids,
@@ -362,6 +409,10 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Profile not found")
+        if body.new_mapped_accounts:
+            if body.column_map is None:
+                raise HTTPException(status_code=400, detail="New mapped accounts need the column map they belong to.")
+            body.column_map = _create_mapped_profile_accounts(conn, body.column_map, body.new_mapped_accounts)
         fields, params = [], []
         if body.name                 is not None: fields.append("name = ?");                 params.append(_assert_profile_name_available(conn, body.name, profile_id))
         if body.filename_pattern     is not None: fields.append("filename_pattern = ?");     params.append(body.filename_pattern)

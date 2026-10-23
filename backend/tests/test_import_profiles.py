@@ -27,7 +27,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers.import_export import ProfileCreate, ProfileUpdate, create_profile, list_profiles, update_profile
 from backend.routers.import_export.core import run_import_core
 from backend.routers.import_export.profiles import get_profile_compatible_batches
-from backend.routers.import_export.profiles import MAX_TERMINAL_WINDOW_DAYS, ProfileNewAccount
+from backend.routers.import_export.profiles import MAX_TERMINAL_WINDOW_DAYS, ProfileMappedNewAccount, ProfileNewAccount
 from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS
 
 
@@ -366,6 +366,54 @@ class NewAccountOnSaveTests(unittest.TestCase):
         with get_db(str(self.db_path)) as conn:
             landed = conn.execute("SELECT account_id FROM txn").fetchall()
         self.assertEqual([row["account_id"] for row in landed], [account["id"]])
+
+
+    def _profile_column_map(self, profile_id: str) -> dict:
+        with self._use_db_path():
+            return {p["id"]: p for p in list_profiles()}[profile_id]["column_map"]
+
+    def test_an_edit_creates_the_accounts_its_mapping_rows_ask_for(self):
+        # A value waiting on "create this at the next import" is one a watched folder stops on, so the
+        # editor creates it and stores a plain assignment. Two values naming one account share it.
+        with self._use_db_path():
+            pid = create_profile(ProfileCreate(name="Tidewater", column_map={
+                "account": "Account",
+                "account_new": {"SAV": {"name": "Tidewater Savings", "type": "savings"}},
+                "account_skips": ["SAV-2"],
+            }))["id"]
+            update_profile(pid, ProfileUpdate(
+                column_map={"account": "Account"},
+                new_mapped_accounts=[
+                    ProfileMappedNewAccount(csv_value="SAV", name="Tidewater Savings", type="savings"),
+                    ProfileMappedNewAccount(csv_value="SAV-2", name="Tidewater Savings", type="savings"),
+                ],
+            ))
+        [account] = self._accounts_named("Tidewater Savings")
+        self.assertEqual(account["type"], "savings")
+        column_map = self._profile_column_map(pid)
+        column_map.pop("imported_category_settings", None)
+        self.assertEqual(column_map, {
+            "account": "Account",
+            "account_assignments": {"SAV": account["id"], "SAV-2": account["id"]},
+        })
+
+    def test_a_mapping_row_naming_an_existing_account_is_refused_and_nothing_is_saved(self):
+        with self._use_db_path():
+            pid = create_profile(ProfileCreate(
+                name="Seed", column_map={}, new_account=ProfileNewAccount(name="Harborline Checking"),
+            ))["id"]
+            with self.assertRaises(HTTPException):
+                update_profile(pid, ProfileUpdate(
+                    name="Renamed",
+                    column_map={"account": "Account"},
+                    new_mapped_accounts=[
+                        ProfileMappedNewAccount(csv_value="NEW", name="Corner Wallet"),
+                        ProfileMappedNewAccount(csv_value="CHK", name="harborline checking"),
+                    ],
+                ))
+            names = [p["name"] for p in list_profiles()]
+        self.assertEqual(names, ["Seed"])
+        self.assertEqual(self._accounts_named("Corner Wallet"), [])
 
 
 class ImportSourceLearnsItsLayoutTests(unittest.TestCase):

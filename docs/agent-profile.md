@@ -71,9 +71,9 @@ instruction and fix the drift.
 - When a defect is found, grep for the other call sites and for other code with the same shape before
   closing it, because the reasoning that produced one instance usually produced others.
 
-- Several surfaces are built to behave identically on purpose (the CSV import account grid, the
-  connection mapping dialog and the data-source editor's account picker; the CSV and connection dedupe
-  paths), so a bug in one is checked in every sibling and fixed together.
+- Several surfaces are built to behave identically on purpose (`AccountMappingGrid` and the
+  data-source editor's single-account picker; the CSV and connection dedupe paths), so a bug in one is
+  checked in every sibling and fixed together.
 
 - A correctness reading misses structural defects, so also ask of a diff: is everything between BEGIN
   and COMMIT part of what the transaction is for; is a durable state being used as an event; is a
