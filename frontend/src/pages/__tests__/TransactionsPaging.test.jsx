@@ -36,6 +36,7 @@ vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () 
 const preference = [null, () => {}]
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => preference }))
 vi.mock('../../lib/useStoredDocuments.js', () => ({ useStoredDocuments: () => ({ documents: [], refresh: vi.fn() }) }))
+vi.mock('../../lib/useReimbursementCount.js', () => ({ useReimbursementCount: () => ({ count: 0, reload: vi.fn() }) }))
 
 // The cells are stood in: what is under test is which rows are fetched and placed, and the real cells
 // need the app's providers.

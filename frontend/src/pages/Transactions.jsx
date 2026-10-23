@@ -36,6 +36,7 @@ import StoredDocumentsDialog from '../components/StoredDocumentsDialog.jsx'
 import TagsDialog from '../components/TagsDialog.jsx'
 import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx'
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
+import { useReimbursementCount } from '../lib/useReimbursementCount.js'
 import { sessionStore } from '../lib/browserStorage.js'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
@@ -215,6 +216,7 @@ export default function Transactions() {
   const [tagsOpen, setTagsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const storedDocuments = useStoredDocuments()
+  const reimbursements = useReimbursementCount()
   // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
   // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
   // rather than being applied here: the report owns what its filters mean.
@@ -858,8 +860,12 @@ export default function Transactions() {
         >
 
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
-              live; it lists only what is still open, so it empties as things are completed. */}
-          <Button small variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
+              live; it lists only what is still open, so it empties as things are completed. The count is
+              what keeps money in that nothing claims from going unseen, since only money owed raises a
+              reminder. */}
+          <Button small variant="ghost" onClick={() => setReimbursementsOpen(true)}>
+            {reimbursements.count ? `Reimbursements (${reimbursements.count})` : 'Reimbursements'}
+          </Button>
           {/* Paperwork that arrived before its transaction. Here because this is where transactions arrive;
               the count is what keeps a kept invoice from being forgotten once its charge does. */}
           <Button small variant="ghost" onClick={() => setStoredDocumentsOpen(true)}>

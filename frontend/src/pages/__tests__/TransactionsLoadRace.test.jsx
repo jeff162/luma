@@ -40,6 +40,7 @@ vi.mock('../../lib/FilterContext.jsx', () => ({
 vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => [null, vi.fn()] }))
 vi.mock('../../lib/useStoredDocuments.js', () => ({ useStoredDocuments: () => ({ documents: [], refresh: vi.fn() }) }))
+vi.mock('../../lib/useReimbursementCount.js', () => ({ useReimbursementCount: () => ({ count: 0, reload: vi.fn() }) }))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 

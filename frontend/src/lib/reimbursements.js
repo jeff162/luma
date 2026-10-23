@@ -317,6 +317,13 @@ export function reimbursementBoard(report, { ownerId = null, dueOnly = false, to
   }
 }
 
+// How many entries the report dialog lists, both columns, unfiltered. Counted off the board rather than
+// the raw report so the figure on the button is the number of rows the dialog opens to.
+export function reimbursementListedCount(report) {
+  const board = reimbursementBoard(report)
+  return board.expenses.length + board.income.length
+}
+
 /*
  * An untracked expense as the record that saving it in the editor would create, so the editor can
  * show a loose row with the same layout as a tracked one before anything is written.

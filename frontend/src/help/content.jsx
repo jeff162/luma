@@ -638,7 +638,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           The <strong>Reimbursements</strong> button at the top of the page brings up a list of the
-          un-resolved reimbursable transactions so expenses and payments can be paired.
+          un-resolved reimbursable transactions so expenses and payments can be paired. The count on the
+          button is how many entries that list holds.
         </p>
         <p>
           <strong>Tags</strong> opens the list of tags, where a tag is added, renamed, recolored or
@@ -1073,8 +1074,9 @@ export const HELP_TOPICS = [
           on the Transactions page (and in the transaction detail report on the Categories page for a
           reimbursable category). This displays unpaired spending and income transactions from the <strong>Reimbursable</strong> category
           so they can be linked to form a reimbursement pair. Dragging a repayment to an expense pairs them. Multiple income
-          transactions can be paired with a single expense. An alert is generated if a transaction remains
-          unpaired for longer than the specified time frame.
+          transactions can be paired with a single expense. An alert is generated if spending remains
+          unpaid for longer than the specified time frame; a payment received with nothing to pair it
+          with raises no alert, and shows only in the count on the button.
         </p>
         <h4>Viewing outstanding reimbursements</h4>
         <p>
