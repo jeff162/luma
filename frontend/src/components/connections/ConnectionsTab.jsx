@@ -7,7 +7,7 @@ import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
 import { rosterCardIds } from '../../lib/syncRoster.js'
 import { Card, Button, Spinner, Select, Input, PasswordInput, Tooltip, AppDialog, AppConfirmDialog, AppNoticeDialog, OverlayBackdrop } from '../ui.jsx'
 import SectionCard from '../SectionCard.jsx'
-import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
+import { HoverLines, LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
 import { useBatchDetailPanels } from '../importExport/useBatchDetailPanels.jsx'
 import { useAccountDetailPanels } from '../accounts/useAccountDetailPanels.jsx'
@@ -24,6 +24,7 @@ import {
 import ConnectionAccountMapDialog from '../accounts/ConnectionAccountMapDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { formatTimestamp } from '../../lib/utils.js'
+import { connectionsAllowanceLines } from '../../lib/requestAllowance.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
@@ -1204,6 +1205,17 @@ export default function ConnectionsTab({ onShowHistory }) {
               : ''
         const s = providerSummary(p)
         const lastSyncedLabel = formatTimestamp(s.lastSynced)
+        // Same syncing expression the button below uses, deliberately: `ss.syncing` is this component's
+        // memory of a pull it started and turns over immediately on click, while `serverSyncing` is the
+        // connection's own marker and survives a navigation. Reading only one of them would let the button
+        // and the line beside it disagree, which is the class of bug this line already had once. The
+        // precedence itself lives in `providerSummaryLine`.
+        const summaryLine = providerSummaryLine({
+          connectionCount: connections.length,
+          syncing: ss.syncing || serverSyncing,
+          lastSyncedLabel,
+        })
+        const allowanceLines = connectionsAllowanceLines(connections)
         const expanded = expandedProviders[p.provider] !== undefined
           ? expandedProviders[p.provider]
           // Default: open while there is nothing to sync yet (the card is a setup step, and collapsing
@@ -1213,16 +1225,12 @@ export default function ConnectionsTab({ onShowHistory }) {
           <SectionCard
             key={p.provider}
             title={providerLabel(p.provider)}
-            // Same syncing expression the button below uses, deliberately: `ss.syncing` is this
-            // component's memory of a pull it started and turns over immediately on click, while
-            // `serverSyncing` is the connection's own marker and survives a navigation. Reading only
-            // one of them would let the button and the line beside it disagree, which is the class of
-            // bug this line already had once. The precedence itself lives in `providerSummaryLine`.
-            summary={providerSummaryLine({
-              connectionCount: connections.length,
-              syncing: ss.syncing || serverSyncing,
-              lastSyncedLabel,
-            })}
+            summary={(
+              // A metered provider's requests left ride on the hover, so they are there while collapsed.
+              <HoverLines lines={allowanceLines}>
+                <span aria-label={[summaryLine, ...allowanceLines].join('. ')}>{summaryLine}</span>
+              </HoverLines>
+            )}
             collapsible
             expanded={expanded}
             onExpandedChange={(next) => setExpandedProviders({ ...expandedProviders, [p.provider]: next })}
@@ -1369,7 +1377,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                               was. Without it "Success" cannot be told apart from a check made thirty
                               seconds ago and one from last week — which is exactly the question the Sync
                               button beside it creates. */}
-                          <LastSyncedLine lastSyncedAt={c.last_synced_at} />
+                          <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />
                           {syncSummary?.suspects > 0 ? (
                             <button
                               type="button"

@@ -1016,25 +1016,22 @@ class SimpleFinWalkTests(unittest.TestCase):
         self.assertFalse(result["backfill_complete"])
         self.assertFalse(result["has_more"], "the client must stop polling a provider that just cut it off")
 
-    def test_a_paused_walk_reports_the_allowance_it_left_behind(self):
-        # The gap this closes: the buckets live on `connection`, which the next sync overwrites, so a row
-        # that omits them names a cause ("paused on the limit") the reader has no way to check, and cannot
-        # say when the pull could resume.
+    def test_the_allowance_reads_the_level_a_paused_walk_left_and_refills_with_time(self):
+        # What the connection card shows: read from the spend record, as of the moment it is asked.
         server = self._busy()
-        result = self._drain(server, self._targets("simplefin:2930002"))
-        allowance = result["request_allowance"]
-        self.assertEqual(allowance["capacity"], REQUEST_BUDGET_CAPACITY)
-        self.assertEqual(allowance["refill_per_hour"], REQUEST_BUDGET_REFILL_PER_HOUR)
-        spent = [t for t in allowance["pools"].values() if t < 1]
-        self.assertTrue(spent, "a pull that paused on the allowance must show a bucket with nothing in it")
+        self._drain(server, self._targets("simplefin:2930002"))
 
-    def test_the_allowance_is_reported_even_when_nothing_ran_out(self):
-        # Otherwise a pull that finished comfortably and one that stopped a single request short look
-        # identical, and which of the two happened is what says whether the next sync will complete.
-        server = self._busy(count=1)
-        result = self._drain(server, self._targets("simplefin:2930002"))
-        self.assertFalse(result["resume_later"])
-        self.assertIsNotNone(result["request_allowance"])
+        def allowance_at(hour):
+            with mock.patch("backend.services.providers.simplefin._utcnow_epoch",
+                            lambda: self._moment(hour=hour)):
+                return self.adapter.request_allowance(self.budget)
+
+        now = allowance_at(12)
+        self.assertEqual(now["capacity"], REQUEST_BUDGET_CAPACITY)
+        self.assertEqual(now["refill_per_hour"], REQUEST_BUDGET_REFILL_PER_HOUR)
+        self.assertTrue([t for t in now["pools"].values() if t < 1],
+                        "a walk that paused on the allowance must leave a bucket with nothing in it")
+        self.assertGreater(min(allowance_at(15)["pools"].values()), min(now["pools"].values()))
 
     def test_the_pause_names_which_of_the_two_limits_stopped_it(self):
         # A refusal by the server and an empty local bucket are opposite failures: the first means our

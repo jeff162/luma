@@ -22,7 +22,7 @@ import { api } from '../../lib/api.js'
 import { AppDialog, Button, RefreshButton } from '../ui.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
-  allowanceSummary, cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
+  cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
   historyDepthSummary, requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
 } from '../../lib/syncLogSummary.js'
 import { connectionProviderLabel } from '../../lib/connectionSummary.js'
@@ -147,10 +147,6 @@ function SyncRow({ entry, when }) {
   // target reads as complete, and a target with no span reads as achieved.
   const coverage = [windowSummary(entry.requested_windows),
   historyDepthSummary(entry.days_requested, entry.requested_windows)].filter(Boolean).join(' · ')
-  // The consumable this pull spent. Always visible rather than filed under Details, because for a metered
-  // provider it is the reason the row looks the way it does — a pull that stopped early and a pull that had
-  // nothing left to fetch are indistinguishable without it.
-  const allowance = allowanceSummary(entry.request_allowance)
   const pools = requestPoolSummary(entry.requested_windows)
   // How far back each account got on THIS call. `connection_account` holds only where each one stands now,
   // overwritten every sync, so this is the only place a past pull's reach survives — and on a walk that
@@ -212,11 +208,6 @@ function SyncRow({ entry, when }) {
       ) : null}
       {coverage ? (
         <div style={{ color: 'var(--muted)' }}>{coverage}</div>
-      ) : null}
-      {allowance ? (
-        <div style={{ color: 'var(--muted)' }}>
-          allowance: <span style={{ color: 'var(--text)' }}>{allowance}</span>
-        </div>
       ) : null}
       {/* Where the rows went. A sync files each row under its own transaction month, so one pull lands on
           as many cards as it spans — and the Import page shows one card at a time, which makes an
@@ -302,7 +293,9 @@ function syncLogAsText(entries, scopeLabel) {
       lines.push('')
       continue
     }
-    lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
+    // A routine top-up is unlabelled, as on the rendered row: it is what almost every row is.
+    const mode = syncModeLabel(e)
+    lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}]${mode ? ` ${mode}` : ''}`)
     const requests = e.requested_windows?.length
     // Raw throughout, including the day count the rendered row states as a duration: this is the artifact
     // someone debugs from, and a derived figure is a worse starting point than the value it came from.
@@ -312,7 +305,9 @@ function syncLogAsText(entries, scopeLabel) {
     const skips = Object.entries(e.skipped_breakdown || {}).map(([k, v]) => `${k} ${v}`).join(', ')
     lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped}`
       + (skips ? ` (${skips})` : '')
-      + ` · ${requests ? `${requests} request(s)` : `pages ${e.pages}`} · asked for ${e.days_requested ?? '—'} days`)
+      + ` · ${requests ? `${requests} request${requests === 1 ? '' : 's'} used` : `pages ${e.pages}`}`
+      // Absent on a cursor provider's routine top-up, which asks for what changed rather than for a depth.
+      + (e.days_requested != null ? ` · asked for ${e.days_requested} days` : ''))
     const cards = cardSummary(e.card_counts, e.institution)
     if (cards) lines.push(`  rows filed on ${cards}`)
     // The *full* per-page sequence, unlike the rendered row, which shows only where the call ended up. This
@@ -330,13 +325,8 @@ function syncLogAsText(entries, scopeLabel) {
     const checkpoint = [windowSummary(e.requested_windows), checkpointSummary(e.cursor_before, e.cursor_after)]
       .filter(Boolean).join(' · ')
     if (checkpoint) lines.push(`  ${checkpoint}`)
-    // Raw pool levels, not the interpreted line: whoever reads this is checking our accounting against the
-    // provider's, and the fractional token counts are the thing being checked.
-    if (e.request_allowance?.pools) {
-      const pools = Object.entries(e.request_allowance.pools).map(([k, v]) => `${k}=${v}`).join(', ')
-      lines.push(`  allowance: capacity ${e.request_allowance.capacity}`
-        + ` · +${e.request_allowance.refill_per_hour}/hr · pools {${pools}}`)
-    }
+    const pools = requestPoolSummary(e.requested_windows)
+    if (pools) lines.push(`  requests charged: ${pools}`)
     for (const [account, c] of Object.entries(e.account_counts || {})) {
       if (!c?.reached) continue
       lines.push(`  reached ${account} → ${c.reached}${c.history_complete ? ' (complete)' : ''}`)

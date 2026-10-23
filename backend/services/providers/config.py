@@ -224,11 +224,14 @@ def list_connections(provider: str) -> list[dict]:
     debugging view. The two cannot drift apart despite living in different tables, because both are written
     from the same recorded facts in the same call (`_record_connection_last_sync` in `routers/sync.py`).
     """
+    from backend.services.providers import get_adapter
+    adapter = get_adapter(provider)
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
             "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at, "
-            "sync_progress, last_sync_outcome, last_sync_summary, credential, credential_enc "
+            "sync_progress, last_sync_outcome, last_sync_summary, credential, credential_enc, "
+            "provider_request_budget "
             "FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
@@ -270,6 +273,8 @@ def list_connections(provider: str) -> list[dict]:
             "sync_progress": (
                 _json_or_none(r["sync_progress"]) if sync_marker_is_live(r["sync_started_at"]) else None
             ),
+            # A metered provider's requests left as of this read, or None for one with no metering.
+            "request_allowance": adapter.request_allowance(_json_or_none(r["provider_request_budget"]) or {}),
         })
     return out
 

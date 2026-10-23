@@ -2608,7 +2608,7 @@ export const HELP_TOPICS = [
           reports <strong>more history to fetch</strong> and more will be fetched when the
           limit refreshes. The initial sync stops before exhausting the provider's limit to
           allow for subsequent fetches of the most recent data while waiting for the limits to
-          refresh.
+          refresh. Hovering a connection's last-synced time shows the requests left.
         </p>
 
         <h4>When a connection needs attention</h4>

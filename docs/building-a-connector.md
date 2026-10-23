@@ -524,15 +524,12 @@ a bug in the log — a pull that spends dozens of per-account requests while rep
 full. State the trade, or the log's own numbers will be read as evidence against it. SimpleFIN's rule and
 its reasoning are in the pool comments of `services/providers/simplefin.py`.
 
-Then report the allowance itself, via the optional `request_allowance` field on the page dict
-(`{capacity, refill_per_hour, pools:{pool key: tokens left}}`). This is easy to skip and the omission is
-invisible until someone has to diagnose a stuck connection: the budget lives in a column the next sync
-overwrites, so without a per-call snapshot the log names a cause nobody can check and cannot say when the
-pull could resume. **A resource that empties and refills has to have its level recorded wherever its
-effects are recorded** — the same reasoning applies to any per-account position, which is why the sync log
-also keeps each account's reach per call rather than trusting the live coverage columns. For the same
-reason, charge attribution belongs on each requested window (`pool`): a bare request count cannot be
-reconciled against any one allowance when a walk spends several.
+Then report the allowance itself, by overriding `request_allowance(request_budget)` to return
+`{capacity, refill_per_hour, pools:{pool key: requests left}}` as of now. The connection card shows it on
+hover; the sync log records what each call spent rather than what was left. Charge attribution belongs on
+each requested window (`pool`), because a bare request count cannot be reconciled against any one
+allowance when a walk spends several — and for the same reason the sync log keeps each account's reach per
+call rather than trusting the live coverage columns, which the next sync overwrites.
 
 **Check whether the limit is one allowance or several.** SimpleFIN grants an unfiltered `/accounts` call
 and each `?account=` call their own, which changes what an account-filtered request is *for*: not a

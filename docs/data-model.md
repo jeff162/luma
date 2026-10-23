@@ -1411,15 +1411,20 @@ provider's answer, not the app's own pre-flight refusals.
 
 - `connection_id` is nullable with no foreign key, because a failed connect has no connection and a
   disconnect's row must outlive the connection it removed.
-- A row snapshots the level of anything the next sync overwrites (`request_allowance`, the `pool` each
+- A row records what the call did, snapshotting anything the next sync overwrites (the `pool` each
   requested window was charged to, each account's `reached` / `history_complete`), since the live
-  columns no longer hold it.
+  columns no longer hold it. What a metered provider has left is not a fact about one call: the
+  connection listing reports it (`request_allowance`), read from `provider_request_budget` as of the read.
+  The log's `request_allowance` column, which older rows filled, is vestigial.
+- `days_requested` is the depth a pull fetched to, so it is null on a cursor provider's routine top-up:
+  that pull asks for what changed since the cursor, and the depth it sends sets the window the provider
+  maintains.
 - `update_status` distinguishes `BUDGET_PAUSED` (this client declined to ask) from `RATE_LIMITED` (the
   server refused).
 - `warnings` are problems the user can act on and mirror the connection card; `advisories`
   (`{message, count, context}`) are remarks nobody can act on. The message is the aggregation key.
-- The cursor is stored as a fingerprint, never whole: a length and prefix for an opaque token, the short
-  scalars for a JSON checkpoint.
+- The cursor is stored as a fingerprint, never whole: a length, a prefix and a short digest for an opaque
+  token (the digest because Plaid's tokens share a long prefix), the short scalars for a JSON checkpoint.
 - The columns `skipped_no_account` / `skipped_already_held` are vestigial; the buckets live in
   `account_counts` and are summed on read (`_skipped_breakdown`).
 

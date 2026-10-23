@@ -121,61 +121,6 @@ export function historyDepthSummary(daysRequested, windows) {
   return reached ? `asked for ${asked}, reached ${reached}` : `asked for ${asked}`
 }
 
-// The metered allowance the pull left behind, in words: what is available now and, when that is nothing,
-// how long until it is not.
-//
-// This is the line the log most needed and did not have. A row could say a sync "paused on the request
-// limit" while the level of that limit lived only in a column the next sync overwrote — so the record named
-// a cause the reader could not check, and "resumes on the next sync" was advice nobody could act on,
-// because a bucket refilling at one token an hour does not care that a sync ran ten minutes later.
-//
-// The shared bucket and the per-account ones are reported apart because they fail differently: an empty
-// shared bucket stops the whole connection, while one empty account bucket stops that account and leaves
-// its siblings walking — which is exactly the state that fills a log with pause markers on a pull that was
-// making progress throughout.
-export function allowanceSummary(allowance) {
-  const pools = allowance?.pools
-  if (!pools || typeof pools !== 'object') return null
-  const capacity = Number(allowance.capacity) || 0
-  const refill = Number(allowance.refill_per_hour) || 0
-  // An absent pool is a full one — the adapter drops a bucket once it refills completely, since a full
-  // bucket and one that never existed grant exactly the same thing.
-  const shared = pools.shared
-  const accounts = Object.entries(pools).filter(([key]) => key !== 'shared')
-  const parts = []
-  if (shared != null) {
-    parts.push(`${formatTokens(shared)} of ${capacity} shared requests left`)
-  }
-  const drained = accounts.filter(([, tokens]) => Number(tokens) < 1)
-  if (drained.length) {
-    parts.push(`${drained.length} account${drained.length === 1 ? '' : 's'} out of allowance`)
-  } else if (accounts.length) {
-    const lowest = Math.min(...accounts.map(([, t]) => Number(t)))
-    parts.push(`${formatTokens(lowest)} left on the thinnest account`)
-  }
-  if (!parts.length) return null
-  // Only worth saying when something is actually empty; while requests remain, when the next one arrives
-  // is not a question anyone is asking.
-  const emptiest = Math.min(...Object.values(pools).map(Number))
-  if (emptiest < 1 && refill > 0) {
-    parts.push(`next request in ~${formatHours((1 - emptiest) / refill)}`)
-  }
-  return parts.join(' · ')
-}
-
-function formatTokens(tokens) {
-  const n = Math.max(0, Number(tokens) || 0)
-  // Floored, never rounded up: this is a spendable count, and claiming a request that is not yet granted
-  // is the error that costs a disabled token on a provider that meters strictly.
-  return String(Math.floor(n))
-}
-
-function formatHours(hours) {
-  if (!(hours > 0)) return 'moments'
-  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`
-  return `${Math.round(hours)} hr`
-}
-
 // How the pull's requests were charged. A bare total cannot be reconciled against any single allowance,
 // because a walk narrow enough to filter spends each account's own bucket while a wide one spends the
 // shared bucket — and the two are the difference between one account being stuck and the connection being

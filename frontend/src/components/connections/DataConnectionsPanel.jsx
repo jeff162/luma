@@ -195,7 +195,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
                         title={c.last_sync_error || 'The provider no longer accepts this connection — reconnect it on the Connections tab.'}>
                         ⚠ reconnect needed
                       </StatusPill>
-                    ) : <LastSyncedLine lastSyncedAt={c.last_synced_at} />}
+                    ) : <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />}
                     {suspects > 0 ? (
                       <StatusPill tone="warning" onClick={() => onShowHistory?.({ connectionIds: [c.id] })}
                         title={`${suspects} synced transaction${suspects === 1 ? '' : 's'} may duplicate an existing row — show this connection's sync cards to review`}>

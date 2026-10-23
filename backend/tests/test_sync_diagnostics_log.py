@@ -441,11 +441,18 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
 
     # ---- the resume-token marker -----------------------------------------
 
-    def test_an_opaque_cursor_is_fingerprinted_by_length_and_prefix(self):
+    def test_an_opaque_cursor_is_fingerprinted_by_length_prefix_and_digest(self):
         # Plaid's shape: nothing about the token is readable, so length plus a leading slice is the only
         # marker available — and it must stay a slice, never the whole token.
         marker = sync_module._cursor_fingerprint("Y3Vyc29yLXZhbHVlLXRoYXQtaXMtb3BhcXVl")
-        self.assertEqual(marker, "len=36·Y3Vyc29y")
+        self.assertRegex(marker, r"^len=36·Y3Vyc29y·#[0-9a-f]{8}$")
+
+    def test_tokens_sharing_a_prefix_get_different_fingerprints(self):
+        # Plaid's tokens share a long constant prefix, so without the digest an advanced cursor printed
+        # exactly like one that had not moved.
+        before = sync_module._cursor_fingerprint("CAESJWFFxxxxxxxxxxxxxxxxA")
+        after = sync_module._cursor_fingerprint("CAESJWFFxxxxxxxxxxxxxxxxB")
+        self.assertNotEqual(before, after)
 
     def test_a_json_checkpoint_is_summarized_rather_than_sliced(self):
         # A provider with no change feed stores its own checkpoint in that column. Slicing it produced

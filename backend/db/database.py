@@ -3014,12 +3014,9 @@ def init_db(db_path: str | None = None):
                 -- nor the resume checkpoint can reconstruct what was looked at. Empty for a cursor
                 -- provider, which asks for "everything since this token" and names no window.
                 requested_windows TEXT,
-                -- {capacity, refill_per_hour, pools:{pool key: tokens left}} — the metered allowance the
-                -- pull left behind, for a provider that has one. The buckets themselves live on
-                -- `connection.provider_request_budget`, which the *next* sync overwrites, so without a
-                -- per-call copy a paused row records that it paused and never how close to the limit it
-                -- was, which bucket ran dry, or when it could resume. NULL for an unmetered provider,
-                -- which is not the same as a measured zero.
+                -- Vestigial: the metered allowance a pull left behind, written by older builds. What is
+                -- left is now reported on the connection listing, read from
+                -- `connection.provider_request_budget`; the log records what a call spent.
                 request_allowance TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started

@@ -555,18 +555,12 @@ def _take_request(budget: dict, key: str, now: float, checkpoint=None) -> bool:
 
 
 def _allowance_snapshot(budget: dict, now: float) -> dict:
-    """What the allowance looks like at the end of a pull, in the neutral shape the page contract defines.
+    """The allowance as of `now`, in the neutral shape `ProviderAdapter.request_allowance` defines.
 
-    This is the one piece of a metered pull that no other record keeps. The buckets live in
-    `connection.provider_request_budget`, which the *next* sync overwrites, so a log row that omits them can
-    say a pull paused and never how close it was to the limit, which bucket ran dry, or when it could
-    resume. That is the difference between a record of what happened and a record someone can diagnose
-    from — and for a resource that empties and refills, the level is the whole story.
-
-    Reported after `_prune_full_pools`, so an absent pool means a full one rather than an unknown one; the
+    Each pool is refilled on a copy, so reading the level never moves the record's `as_of`. A pool the
+    record no longer holds was pruned full (`_prune_full_pools`), so an absent pool means a full one; the
     capacity and refill rate travel alongside so a reader never has to know this module's constants to
-    interpret the numbers. Called once per page, and the caller keeps the last, which is the state the pull
-    actually left behind.
+    interpret the numbers.
     """
     return {
         "capacity": REQUEST_BUDGET_CAPACITY,
@@ -676,6 +670,9 @@ class SimpleFinAdapter(ProviderAdapter):
         # Long, opaque, and single-use, so it is worth saying up front that a fresh one is needed per try.
         "hint": "A setup token can only be used once. Generate a new one if this connection fails.",
     }
+
+    def request_allowance(self, request_budget: dict) -> dict:
+        return _allowance_snapshot(request_budget or {}, _utcnow_epoch())
 
     # ---- connect ---------------------------------------------------------
 
@@ -1351,10 +1348,6 @@ class SimpleFinAdapter(ProviderAdapter):
             "has_more":      more_to_walk,
             # Which of the two stops this was, not merely that one happened — see the constants.
             "update_status": (RATE_LIMITED if rate_limited else BUDGET_PAUSED) if resume_later else None,
-            # The allowance this pull left behind. Reported on every page rather than only a paused one: a
-            # pull that finished comfortably and one that stopped a single request short look identical
-            # without it, and which of the two happened is what says whether the next sync will complete.
-            "request_allowance": _allowance_snapshot(budget, now),
             "backfill_complete": bool(backfill_complete),
             "resume_later":  resume_later,
             # Per account, and only what this pull actually reached — never what it set out to reach.

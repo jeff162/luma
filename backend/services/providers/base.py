@@ -239,18 +239,6 @@ class ProviderAdapter(ABC):
           sync resumes it. Marking such a connection complete strands the un-fetched history permanently
           behind a short routine look-back.
 
-        `request_allowance` is the optional companion to `resume_later`, and the reason it exists is that
-        the flag alone is not diagnosable. A metered adapter spends a resource that empties and refills,
-        and that resource lives outside the log — so a paused pull records *that* it paused and never how
-        close to the limit it was, which bucket ran dry, or when it could resume. Shape:
-
-            {capacity: int, refill_per_hour: float, pools: {pool key: tokens remaining}}
-
-        `pools` is whatever the adapter meters separately (one shared bucket, one per account, or both);
-        an absent pool is a full one. A provider with no metering omits the key entirely. Nothing decides
-        anything from this — it is recorded for the sync log, which is the only place the level of a
-        consumable is visible after the pull that spent it.
-
         `next_cursor` is an **opaque provider resume token**, not necessarily a cursor: a provider with no
         change feed stores whatever checkpoint its own resume needs (see the SimpleFIN adapter). `cursor=None`
         starts an initial pull; `days_requested` bounds how far back to fetch.
@@ -407,6 +395,16 @@ class ProviderAdapter(ABC):
         simply omits it rather than showing a control that does nothing.
         """
         return []
+
+    def request_allowance(self, request_budget: dict) -> dict | None:
+        """What a metered provider's allowance holds right now, read from the spend record the caller keeps
+        (`request_budget` above), for the connection card. Shape:
+
+            {capacity: int, refill_per_hour: float, pools: {pool key: requests left}}
+
+        `pools` is whatever the adapter meters separately (one shared bucket, one per account, or both); an
+        absent pool is a full one. None for a provider with no metering."""
+        return None
 
     def reissue_credential(self, app_config: dict, credential: str) -> str:
         """Exchange `credential` for a new one naming the same connection, invalidating the old one at the

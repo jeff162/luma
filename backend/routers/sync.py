@@ -24,6 +24,7 @@ CSV's are. Each adapter therefore declares
 as a rejected row, never dropped silently.
 """
 
+import hashlib
 import json
 import uuid
 from collections import Counter
@@ -270,6 +271,10 @@ def _cursor_fingerprint(cursor: str | None) -> str | None:
     Values longer than `_FINGERPRINT_VALUE_CHARS` are elided rather than printed: a JSON token is not
     automatically non-secret just because it parses, so the "never store the whole token" rule holds for
     both shapes.
+
+    An opaque token also carries a short digest of the whole value (`#…`), because a length and leading
+    slice cannot say whether it advanced: Plaid's tokens share a long constant prefix, so two different
+    tokens routinely print the same slice.
     """
     if not cursor:
         return None
@@ -277,15 +282,16 @@ def _cursor_fingerprint(cursor: str | None) -> str | None:
         parsed = json.loads(cursor)
     except (TypeError, ValueError):
         parsed = None
+    digest = hashlib.sha256(cursor.encode()).hexdigest()[:8]
     if not isinstance(parsed, dict):
-        return f"len={len(cursor)}·{cursor[:8]}"
+        return f"len={len(cursor)}·{cursor[:8]}·#{digest}"
     parts = []
     for key, value in parsed.items():
         if not isinstance(value, (str, int, float, bool)):
             continue  # a nested structure has nothing short to say about itself
         text = str(value)
         parts.append(f"{key}={text}" if len(text) <= _FINGERPRINT_VALUE_CHARS else f"{key}=…")
-    return ", ".join(parts) if parts else f"len={len(cursor)}"
+    return ", ".join(parts) if parts else f"len={len(cursor)}·#{digest}"
 
 
 def _card_counts(conn, card_added: dict, baseline: dict) -> list[dict]:
@@ -342,8 +348,8 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                  days_requested, cursor_before, cursor_after, pages, added, updated, removed, skipped,
                  status_sequence, final_status, became_complete, error, warnings, advisories,
                  skipped_no_account, skipped_already_held, account_counts, card_counts, requested_windows,
-                 request_allowance, detail)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 detail)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], connection_log.SYNC,
@@ -367,7 +373,6 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 json.dumps(r["account_counts"]) if r.get("account_counts") else None,
                 json.dumps(r["card_counts"]) if r.get("card_counts") else None,
                 json.dumps(r["requested_windows"]) if r.get("requested_windows") else None,
-                json.dumps(r["request_allowance"]) if r.get("request_allowance") else None,
                 json.dumps(r["detail"]) if r.get("detail") else None,
             ),
         )
@@ -1381,11 +1386,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             cursor_before = connection["transactions_cursor"]
             status_sequence: list = []
             requested_windows: list = []
-            # The metered allowance the pull left behind, from whichever page reported last — see
-            # `request_allowance` in the adapter contract. The buckets themselves live on `connection` and
-            # are overwritten by the next sync, so without this snapshot a paused row can never say how
-            # close to the limit it was or when it could resume.
-            request_allowance: dict | None = None
+            # The depth the log records: None until the adapter has bounded a fetch with it — see where it
+            # is set.
+            logged_depth = None
             # How far back each account actually reached on THIS call, accumulated across pages. The same
             # figures go to `connection_account`, but that row holds only the current position: it is
             # overwritten every sync, so it can answer "where is this account now" and never "what did that
@@ -1408,7 +1411,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "started_at":     started_at,
                     "finished_at":    _utcnow_iso(),
                     "mode":           "initial" if initial else "routine",
-                    "days_requested": days_requested,
+                    "days_requested": logged_depth,
                     "cursor_before":  _cursor_fingerprint(cursor_before),
                     "cursor_after":   _cursor_fingerprint(cursor),
                     "pages":          pages,
@@ -1441,8 +1444,6 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                         a: {**dict(account_tally.get(a) or {}), **(account_reach.get(a) or {})}
                         for a in {*account_tally, *account_reach}
                     },
-                    # See the declaration: the level of a consumable, which nothing else retains.
-                    "request_allowance": request_allowance,
                     # Where the rows went, and what was asked for to get them — the two facts a reader needs
                     # to reconcile this row against the history page and against the provider's own limits.
                     "card_counts":      _card_counts(conn, card_added, card_added0),
@@ -1486,6 +1487,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # connections against the currency the ledger had when the run started.
                 ledger_currency = get_ledger_currency(conn)
                 days_requested = _resolve_fetch_depth(adapter, days=days, is_range_pull=is_range_pull)
+                # A cursor provider's routine top-up asks for what changed since the cursor; the depth it
+                # sends sets the window the provider maintains, not how far this pull looked, so the log
+                # leaves it out rather than state a depth nothing was fetched to.
+                if is_range_pull or not adapter.has_cursor:
+                    logged_depth = days_requested
                 dedupe = build_connection_dedupe(conn, connection, adapter)
                 # Every provider account's label and mapping decision, including the ones `dedupe` drops.
                 # Read alongside it because both are per-connection and both describe source accounts;
@@ -1584,12 +1590,6 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # requested depth for a walking provider whenever its accounts had all finished, since
                     # a pull with no history left to fetch reports exactly `{}`.
                     account_coverage = page.get("account_coverage")
-                    # Last page wins: the allowance is cumulative state, so the final page's reading is
-                    # what the pull actually left. An adapter that meters nothing omits the key, and the
-                    # row then stores nothing rather than an empty structure that would read as "measured,
-                    # and the answer is none".
-                    if page.get("request_allowance"):
-                        request_allowance = page["request_allowance"]
                     # Merged rather than replaced, because coverage describes only the accounts the page in
                     # hand touched — a walk that spends its last page on one account would otherwise erase
                     # what the earlier pages recorded for its siblings.
@@ -2047,12 +2047,12 @@ def sync_diagnostics(limit: int = 200,
         d["advisories"] = _json_list(d.get("advisories"))
         d["card_counts"] = _json_list(d.get("card_counts"))
         d["requested_windows"] = _json_list(d.get("requested_windows"))
-        # Objects rather than lists, and parsed here so the browser is never handed a JSON string to
-        # re-parse. A row predating either column, or one from an adapter that reports neither, reads as
-        # `None`, which is a different fact from an empty structure: `None` is "nothing was recorded",
-        # `{}` is "measured, and the answer is none". Collapsing them renders an unmetered provider as a
-        # connection with no allowance left, which is the opposite of what it means.
-        d["request_allowance"] = _json_obj(d.get("request_allowance"))
+        # Vestigial: the allowance level older rows recorded. The log records what a sync spent; what is
+        # left is the connection card's (`request_allowance` in the providers listing).
+        d.pop("request_allowance", None)
+        # Parsed here so the browser is never handed a JSON string to re-parse. A row predating the column
+        # reads as `None`, which is a different fact from `{}`: "nothing was recorded" against "measured,
+        # and the answer is none".
         d["account_counts"] = _json_obj(d.get("account_counts"))
         d["became_complete"] = bool(r["became_complete"])
         d["skipped_breakdown"] = _skipped_breakdown(d["account_counts"], d)

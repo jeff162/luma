@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  allowanceSummary, cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
+  cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
   historyDepthSummary, parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, windowSummary,
 } from '../syncLogSummary.js'
 
@@ -95,43 +95,6 @@ describe('historyDepthSummary', () => {
   it('is null when no depth was requested', () => {
     expect(historyDepthSummary(null, [])).toBeNull()
     expect(historyDepthSummary(0, [])).toBeNull()
-  })
-})
-
-describe('allowanceSummary', () => {
-  const METER = { capacity: 22, refill_per_hour: 1 }
-
-  it('says what is left on the shared bucket', () => {
-    expect(allowanceSummary({ ...METER, pools: { shared: 6.4 } }))
-      .toBe('6 of 22 shared requests left')
-  })
-
-  it('floors rather than rounds, since this is a spendable count', () => {
-    // Claiming a request the server has not granted is the error that costs a disabled token.
-    expect(allowanceSummary({ ...METER, pools: { shared: 5.9 } })).toBe('5 of 22 shared requests left')
-  })
-
-  it('names how long until the next request when everything is spent', () => {
-    const text = allowanceSummary({ ...METER, pools: { shared: 0.25 } })
-    expect(text).toBe('0 of 22 shared requests left · next request in ~45 min')
-  })
-
-  it('counts the accounts that ran dry, which a shared figure cannot show', () => {
-    // The state that fills a log with pause markers on a pull that was making progress throughout: one
-    // account is out while its siblings keep walking.
-    const text = allowanceSummary({ ...METER, pools: { shared: 9, 'p:a': 0, 'p:b': 0, 'p:c': 4 } })
-    expect(text).toBe('9 of 22 shared requests left · 2 accounts out of allowance · next request in ~1 hr')
-  })
-
-  it('reports the thinnest account while all of them still have room', () => {
-    const text = allowanceSummary({ ...METER, pools: { shared: 20, 'p:a': 3.2 } })
-    expect(text).toBe('20 of 22 shared requests left · 3 left on the thinnest account')
-  })
-
-  it('is null for a provider that meters nothing, and for a row that recorded no allowance', () => {
-    // Distinct from a measured zero, which is why the column carries no default.
-    expect(allowanceSummary(null)).toBeNull()
-    expect(allowanceSummary({ ...METER, pools: {} })).toBeNull()
   })
 })
 

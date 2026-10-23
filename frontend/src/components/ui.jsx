@@ -41,6 +41,9 @@ import { suggestPassphrase } from '../lib/passphraseGenerator.js'
 // number.
 export const ROW_HOVER_OPEN_DELAY_MS = 300
 
+// The dwell for a status hint a pointer often crosses on the way somewhere else, so it does not flash.
+export const HOVER_OPEN_DELAY_MS = 300
+
 // The border-box width that fits a wrapped hint to its widest line, or null where nothing would shrink.
 // CSS cannot do this on its own: a `max-content` box whose text overflows `maxWidth` grows to exactly
 // `maxWidth`, and wrapping then leaves the unused remainder of the longest line as a blank strip down

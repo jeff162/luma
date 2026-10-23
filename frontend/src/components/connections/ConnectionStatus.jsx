@@ -9,19 +9,40 @@
 // Nothing here fetches or acts. These are pure renderers over what the providers listing already says.
 
 import { OutcomeChip, SourceAccountChip } from '../importExport/SourceAccountChip.jsx'
+import { allowanceSummary } from '../../lib/requestAllowance.js'
+import { HOVER_OPEN_DELAY_MS, Tooltip } from '../ui.jsx'
 import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
 
 // When a connection last succeeded, as an age to read at a glance with the exact moment on hover. The
 // pairing is the rule, not a nicety: a relative label is computed at render and would otherwise drift on
 // a page left open, so the absolute value has to stay one hover away (see `useRelativeTimestamp`).
-export function LastSyncedLine({ lastSyncedAt, style }) {
+//
+// A metered provider's requests left (`request_allowance` on the connection) share the hover: they say
+// whether the next sync can run, which is the question the last-synced age raises.
+export function LastSyncedLine({ lastSyncedAt, requestAllowance, style }) {
   const { label, absolute } = useRelativeTimestamp(lastSyncedAt)
-  if (!label) return <span style={{ fontSize: 12, color: 'var(--muted)', ...style }}>never synced</span>
+  const allowance = allowanceSummary(requestAllowance)
+  const text = label ? `synced ${label}` : 'never synced'
+  const lines = [absolute ? `Last synced ${absolute}` : null, allowance ? `Requests: ${allowance}` : null]
+    .filter(Boolean)
   return (
-    <span style={{ fontSize: 12, color: 'var(--muted)', ...style }}
-      title={absolute ? `Last synced ${absolute}` : undefined}>
-      synced {label}
-    </span>
+    <HoverLines lines={lines}>
+      <span style={{ fontSize: 12, color: 'var(--muted)', ...style }}
+        aria-label={[text, ...lines].join('. ')}>
+        {text}
+      </span>
+    </HoverLines>
+  )
+}
+
+// Plain-text hover lines, one per row, on the shared `Tooltip` with a short dwell so a pointer passing
+// over does not flash it. Renders the trigger alone when there is nothing to say.
+export function HoverLines({ lines, children }) {
+  return (
+    <Tooltip openDelay={HOVER_OPEN_DELAY_MS}
+      content={lines?.length ? lines.map(line => <div key={line}>{line}</div>) : null}>
+      {children}
+    </Tooltip>
   )
 }
 
