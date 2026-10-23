@@ -5,9 +5,8 @@
 matcher setup. Both linter passes ran on 2026-09-05 and are recorded below for the measurements rather
 than as work outstanding; **only the jest-dom item is still to do**, and none of it is blocking.
 
-The **posture** these follow — narrow by design, enable one rule as a warning, measure before deciding,
-promote to error only once the existing hits are cleared, and count before conviction — is in
-[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) → *Lint posture*. What stays here is the specific work
+The **posture** these follow (enable one rule as a warning, measure before deciding, promote to error
+only once the existing hits are cleared) is in `docs/collaboration-notes.md` → *Working on the Code*. What stays here is the specific work
 each project needs.
 
 ## Raise lint strictness to a reasonable baseline  ✅ *pass run 2026-09-05*
@@ -98,8 +97,8 @@ is the point of the line, now `_`-prefixed so the name still documents what was 
 guard. `DTZ003`/`DTZ005` — the two calls the bespoke guard actually bans — measured **zero** hits,
 because the guard has been keeping them out; they are a free gate. The other 67 `DTZ` hits are a
 different subject: `DTZ011` (`date.today()`) alone is 56 of them, and a local calendar date is usually
-correct in a ledger. Both guards are kept, for reasons now recorded in `CONTRIBUTING.md` → *The
-timestamp guard*.
+correct in a ledger. Both guards are kept, for reasons recorded beside the ruff selection in
+`backend/pyproject.toml`.
 
 **Deliberately not done:** ruff is not in `scripts/pre-commit.sh`. It is the only check with an install
 prerequisite, and it is whole-tree rather than staged-file scoped — the wrong shape for that hook. CI

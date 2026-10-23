@@ -63,6 +63,10 @@ target-version = "py312"
 # is deliberately excluded — 56 of its remaining hits are `date.today()`, and a local calendar date
 # is usually the right thing in a ledger.
 #
+# The timestamp guard is kept alongside these on purpose. It runs in the pre-commit hook with nothing to
+# install, and its `# local-time: <reason>` exemption requires a reason; here each such line would need a
+# `# noqa`, which does not.
+#
 # Not selected, both measured and rejected: `E`/`W`, because 140 of their 144 hits are the deliberate
 # column-aligned one-liners in routers/categories.py and enforcing them would mean reformatting
 # correct code; and `I`, which is autofixable but rewrites imports across ~119 files to catch nothing.

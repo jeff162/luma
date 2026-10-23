@@ -122,8 +122,8 @@ scale — rather than by feature.
   itemization pre-filling a split), the **sizing assumption** and the signal that would falsify it, and
   the space-reclamation view — plus why originals are never sunset on a timer.
 - [refactor-audits.md](refactor-audits.md) — **two recurring audit processes.** (1) Duplication /
-  shotgun-surgery smells — the method moved 2026-09-02 to `CONTRIBUTING.md` → *Auditing for
-  duplication*; the file records the first run's shipped items (`getFormControlStyle` in Dashboard,
+  shotgun-surgery smells — the method is in the file, and its deciding caveats in `collaboration-notes.md` →
+  *Code Structure Preferences*; the file records the first run's shipped items (`getFormControlStyle` in Dashboard,
   `TransactionListToolbar`, `useTags()`), the deferred candidates (row-patch util, the four drill
   panels) and the next scope (**backend audit**). (2) **Doc conformance** — does the code do what
   `data-model.md` says it does, claim by claim, with a five-way verdict per claim. The first run
@@ -222,7 +222,7 @@ scale — rather than by feature.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
-- [lint-and-tooling.md](lint-and-tooling.md) — **deferred; the posture moved 2026-09-02** to `CONTRIBUTING.md` → *Lint posture*. Two "enable → measure → triage → gate"
+- [lint-and-tooling.md](lint-and-tooling.md) — **deferred; the posture is in** `collaboration-notes.md` → *Working on the Code*. Two "enable → measure → triage → gate"
   linter passes: raise eslint strictness beyond the narrow baseline, and make the aspirational **ruff**
   config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision

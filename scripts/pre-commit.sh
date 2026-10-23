@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# ruff is not run here, only by `npm run lint`: it is the one check that needs something installed (an
+# optional dev dependency), and it checks the whole tree rather than the staged files.
+
 echo "Running project lint (staged files only)..."
 
 # Get staged files

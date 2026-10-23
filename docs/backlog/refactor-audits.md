@@ -22,12 +22,14 @@ retiring those patterns before they spread.
 
 ## How to run an audit
 
-The method — the two detection lenses, why historical co-change is useless in this repo, and the
-rule-of-three / divergence-risk caveats that decide most candidates — is in
-[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) → *Auditing for duplication*. Concretely here: `jscpd`
-over `frontend/src` / `backend` for copy-paste blocks, and `semgrep` (or `ripgrep` on a structural
-signature) to enumerate a fan-out and confirm a refactor's blast radius. An agent reading pass works
-well for the judgment half; its output is "do it / leave it", not raw hits.
+Detection is structural: `jscpd` over `frontend/src` / `backend` for copy-paste blocks, and `semgrep`
+(or `ripgrep` on a structural signature) to find every copy and confirm how far a refactor reaches.
+Historical co-change is not useful here, because commits are batched, so "changed together" is noise.
+
+Then a reading pass ranks the candidates by how often they occur and how safe they are to change. The
+rule of three and divergence risk decide most cases (`docs/collaboration-notes.md` → *Code Structure
+Preferences*). An agent reading pass works well for this half. The output is "do it" or "leave it" for
+each candidate, not raw hits, and a deliberate "leave it" is worth recording.
 
 ## Carried candidates from the first run (frontend)
 

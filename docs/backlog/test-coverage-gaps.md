@@ -189,8 +189,7 @@ disagree about *yet*". That has not been true for a long time — `CURRENT_VERSI
 is well past v1 with dozens of registered migrations, and no parity test exists.
 The guard was meant to be built alongside the **first** new migration precisely so
 it would not be built after a drift bug; it is now the most consequential open gap
-in this file. The durable *why* is in `CONTRIBUTING.md` → *Migration and
-fresh-schema parity*.
+in this file. The durable *why* is in `docs/data-model.md` → *Schema evolution*.
 
 **Why it's worth a test (once migrations exist).** Nothing asserts the two paths
 converge, so they can silently drift: add a column to the `init_db` CREATE block

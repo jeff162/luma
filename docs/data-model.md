@@ -2231,6 +2231,10 @@ existing one is advanced by `run_migrations`, which applies each registered `@mi
 than `db_meta.version`, in order. `backend/db/database.py` is the record of what each migration does. A
 database from before the rebrand has no upgrade path; it comes across by backup and restore.
 
+**The two paths share no code, and nothing checks that they produce the same schema.** A column added to
+`init_db` without a migration, or the reverse, leaves new and upgraded databases with different schemas,
+and only users with older databases hit the bug.
+
 **A migration has two halves, schema and data-init.** A migration that derives a field from existing
 rows puts the derivation in a named function, calls it, and registers it in `POST_RESTORE_DATA_INIT`
 keyed by version. A restore loads rows into the current schema, so it runs the registered steps in
@@ -2633,5 +2637,7 @@ and owed decisions*.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
 - **`clean_name` / merchant rename: keep or drop.**
   → [`backlog/merchant-rename-fate.md`](backlog/merchant-rename-fate.md)
+- **A check that fresh and migrated databases get the same schema** (*Schema evolution*).
+  → [`backlog/test-coverage-gaps.md`](backlog/test-coverage-gaps.md)
 - **The invariants a semantic database checker would assert.**
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

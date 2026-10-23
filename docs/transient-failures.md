@@ -25,6 +25,21 @@ about the change in hand. One entry can also wear several different masks: the s
 was filed three times under three spec names before it turned out to be one thing, so **grep the
 preserved log for the symptom rather than trusting the failing test's name**.
 
+**Opening an entry.** When a failure matches no entry and will not reproduce on demand:
+
+1. Save the evidence before re-running anything.
+2. Write down the leading theory and the alternatives it has to beat.
+3. Add diagnostics that tell them apart: an assertion that dumps state, or a log line that names which
+   path was taken. Then the next occurrence confirms or rules out the theory instead of just repeating
+   the symptom.
+4. Record the symptom, the theory, what was ruled out and why, and what each possible reading of the new
+   diagnostics would mean.
+
+When it fires again, update the entry with what the diagnostics showed and bump the last-seen date. If
+the theory was wrong, replace it and add new diagnostics, rather than adding retries or lowering
+parallelism: those make the failure rarer without explaining it. Without the diagnostics the same failure
+gets filed again under another spec name and investigated from scratch.
+
 ---
 
 ## 1. Two documents on one transaction list in the wrong order

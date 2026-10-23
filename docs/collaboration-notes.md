@@ -66,6 +66,11 @@ the import side is a saved data source.
 - **Do not bend a shared component to fix one page.** A new prop, overflow tweak or style override that
   exists only so one caller looks right means the approach is wrong. Extend the component deliberately
   with a clear contract, or solve it at the page level.
+- **Add a lint rule by measuring it first.** Enable it as a warning, read the hits, fix the real ones
+  that are cheap, and tune its options for false positives rather than restructuring correct code. Make
+  it an error only once the existing hits are cleared, so it becomes a regression gate. Leave a noisy or
+  low-value rule off, with a one-line comment saying why. A raw count can mislead: read what the hits
+  are before judging the rule.
 
 ## Code Structure Preferences
 
@@ -73,6 +78,8 @@ the import side is a saved data source.
   interaction-heavy UI. Page-specific state stays on the page.
 - **Do not refactor purely for abstraction.** Shared code earns its place by reducing drift, repeated
   fixes or inconsistent behavior.
+- **Merge duplicated code at the third copy, and weigh divergence risk.** Two copies may still need to
+  diverge, and a forced abstraction that leaks is worse than the duplication it replaced.
 - **Build efficiency in where it is also the simpler design**, because the version that avoids
   redundant work usually has fewer moving parts. When efficiency would add complexity for a payoff that
   cannot yet be measured, defer it and note it. Measure before restructuring for performance.
@@ -95,6 +102,15 @@ the import side is a saved data source.
   references.
 - **Add a guard that fails on omission wherever one is possible**, such as deriving the table list from
   `sqlite_master` and asserting every table is in the backup payload.
+- **Some properties are out of a unit runner's reach, so a green run says nothing about them.** jsdom
+  does no layout, so chart geometry produces nothing to assert: two of the worst chart bugs here had
+  every tooltip figure correct. A virtualized list renders only with stubbed geometry, keyed by row
+  index so no row reports the viewport's height. An adapter's window cap, sign convention, pacing and
+  budget are properties of the request, so the test inspects what was sent (`building-a-connector.md`).
+- **Console warnings and how a component fits into the live app are only visible in a browser.** Keep
+  the console clean so a new error stands out; React warnings usually mark a real bug. A first pass
+  against the real app has repeatedly found several placement and wiring bugs in an hour, so it is
+  required work, not a formality.
 
 ## Naming And Brand Hygiene
 
