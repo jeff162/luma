@@ -42,10 +42,9 @@ import { BackupHistoryList } from './BackupHistoryList.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
-import { formatDate, formatTimestamp, parseTimestamp } from '../../lib/utils.js'
+import { formatDate, formatTimestamp, localIsoDate, parseTimestamp } from '../../lib/utils.js'
 import FileInput from '../FileInput.jsx'
 import { PICKER_IDS, chooseSaveFile } from '../../lib/filePicker.js'
-import { todayIsoDate } from '../../lib/manualTransaction.js'
 import {
   BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
 } from '../../lib/sensitiveFields.js'
@@ -53,7 +52,7 @@ import {
 // The name the server suggests (`_dated_backup_filename`), made here as well because the save picker opens
 // before the server is asked for anything. The local date, so an evening backup is not dated tomorrow.
 function suggestedBackupName(encrypted) {
-  return `luma_backup-${todayIsoDate()}${encrypted ? '.encrypted.zip' : '.zip'}`
+  return `luma_backup-${localIsoDate()}${encrypted ? '.encrypted.zip' : '.zip'}`
 }
 
 const PASSPHRASE_LEFT_OUT_REASONS = {

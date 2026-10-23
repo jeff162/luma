@@ -88,6 +88,12 @@ export function formatRelativeTimestamp(value, now = Date.now()) {
   return parsed.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+// A date as the ledger writes one, from its local parts, so it is the user's calendar day. Not toISOString,
+// which converts to UTC and hands back yesterday for anyone west of Greenwich after their afternoon.
+export function localIsoDate(date = new Date()) {
+  return format(date, 'yyyy-MM-dd')
+}
+
 export function currentMonth() {
   return format(new Date(), 'yyyy-MM')
 }

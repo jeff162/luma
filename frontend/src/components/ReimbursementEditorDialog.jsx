@@ -26,8 +26,8 @@ import {
   reminderMode,
   reminderSummary,
   residualSummary,
-  todayIso,
 } from '../lib/reimbursements.js'
+import { localIsoDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
 
@@ -672,8 +672,8 @@ export default function ReimbursementEditorDialog({
 function ReminderField({ form, reimbursement, reminderDays, onChange }) {
   const mode = form.reminderMode
   const dueOn = recordDueDate(reimbursement, reminderDays)
-  const due = !!dueOn && dueOn <= todayIso()
-  const pushedTo = addDays(todayIso(), reminderDays || 30)
+  const due = !!dueOn && dueOn <= localIsoDate()
+  const pushedTo = addDays(localIsoDate(), reminderDays || 30)
   return (
     <div style={{ display: 'grid', gap: 4, maxWidth: 420 }}>
       <label style={fieldLabelStyle} htmlFor="reimbursement-reminder-mode">Reminder</label>
@@ -686,7 +686,7 @@ function ReminderField({ form, reimbursement, reminderDays, onChange }) {
             // Seeded so switching to a date does not open on an empty field the user has to fill in
             // before the control means anything.
             remindOn: e.target.value === 'date'
-              ? (form.remindOn || dueOn || pushedTo || todayIso())
+              ? (form.remindOn || dueOn || pushedTo || localIsoDate())
               : form.remindOn,
           })}
           style={selectStyle}

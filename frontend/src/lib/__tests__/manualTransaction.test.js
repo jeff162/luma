@@ -4,7 +4,6 @@ import {
   buildTransactionPayload,
   isIsoDate,
   signedAmount,
-  todayIsoDate,
 } from '../manualTransaction.js'
 
 const form = {
@@ -42,18 +41,6 @@ describe('signedAmount', () => {
     expect(signedAmount('abc', 'out')).toBeNull()
     expect(signedAmount('0', 'out')).toBeNull()
     expect(signedAmount('0.00', 'in')).toBeNull()
-  })
-})
-
-describe('todayIsoDate', () => {
-  it('uses local parts, so the default is not yesterday west of Greenwich', () => {
-    // toISOString converts to UTC; an afternoon in a negative-offset zone lands on the previous day.
-    const evening = new Date(2026, 7, 14, 21, 30)
-    expect(todayIsoDate(evening)).toBe('2026-08-14')
-  })
-
-  it('pads single-digit months and days', () => {
-    expect(todayIsoDate(new Date(2026, 0, 5, 12))).toBe('2026-01-05')
   })
 })
 

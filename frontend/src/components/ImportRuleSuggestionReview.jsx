@@ -17,6 +17,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Link } from 'react-router-dom'
 import { txnMutations } from '../lib/txnMutations.js'
 import { api } from '../lib/api.js'
+import { localIsoDate } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
@@ -244,7 +245,7 @@ export default function ImportRuleSuggestionReview({
     if (!lookbackYears) return null
     const cutoff = new Date()
     cutoff.setFullYear(cutoff.getFullYear() - lookbackYears)
-    return cutoff.toISOString().slice(0, 10)
+    return localIsoDate(cutoff)
   }, [lookbackYears])
   const hasLens = lookbackCutoff != null
   const lensRelevant = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'

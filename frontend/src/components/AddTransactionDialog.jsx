@@ -10,8 +10,8 @@ import {
   DIRECTIONS,
   buildTransactionPayload,
   signedAmount,
-  todayIsoDate,
 } from '../lib/manualTransaction.js'
+import { localIsoDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
 import { AppDialog, Button, Input, SegmentedToggle, Spinner } from './ui.jsx'
@@ -56,7 +56,7 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
   const [form, setForm] = useState(() => ({
     payee: '',
     accountId: '',
-    date: todayIsoDate(),
+    date: localIsoDate(),
     amount: '',
     direction: 'out',
     categoryId: null,

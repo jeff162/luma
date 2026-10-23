@@ -29,6 +29,7 @@
  */
 
 import { formatMoneyMagnitude, formatTransactionAmount } from './moneyDisplay.js'
+import { localIsoDate } from './utils.js'
 
 // What a reimbursement with no counterparty is called. Naming is optional on purpose: an expense is
 // worth tracking as reimbursable before it is worth saying who owes it.
@@ -658,13 +659,6 @@ export function addDays(isoDate, days) {
   return parsed.toISOString().slice(0, 10)
 }
 
-export function todayIso() {
-  const now = new Date()
-  // Local rather than UTC: "is this due today?" is a question about the user's calendar, and a UTC day
-  // boundary would fire a reminder the evening before west of Greenwich.
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
 /*
  * When a record starts nagging, or null where it never does.
  *
@@ -701,7 +695,7 @@ export function entryDueDate(entry, reminderDays) {
   return null
 }
 
-export function isDue(dueOn, today = todayIso()) {
+export function isDue(dueOn, today = localIsoDate()) {
   return !!dueOn && dueOn <= today
 }
 
@@ -712,7 +706,7 @@ export function isDue(dueOn, today = todayIso()) {
  * household default" is a fact about configuration, and what the reader wants to know is when they will
  * next be asked about this money.
  */
-export function reminderSummary(reimbursement, reminderDays, today = todayIso()) {
+export function reminderSummary(reimbursement, reminderDays, today = localIsoDate()) {
   const mode = reminderMode(reimbursement)
   if (mode === REMINDER_OFF) return 'No reminder'
   const dueOn = recordDueDate(reimbursement, reminderDays)

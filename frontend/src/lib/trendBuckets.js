@@ -7,6 +7,8 @@
  * single-period trend's section at the end also deals in inclusive ISO days.
  */
 
+import { localIsoDate } from './utils.js'
+
 // Every month code from `startYM` to `endYM`, both inclusive. Callers use it to run an axis
 // continuously across a window: a month with no rows is a real answer, and closing the gap would imply
 // the months either side of it were adjacent.
@@ -166,10 +168,6 @@ const GRAIN_NOUNS = { 1: 'month', 3: 'quarter', 12: 'year' }
 // (`RANGE_TREND_MAX_RANGES` in backend/routers/transactions.py).
 export const SAME_SPAN_MAX_BUCKETS = 64
 
-function localISODate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 function isBoundedDate(date) {
   return !!date?.start && !!date?.end
 }
@@ -324,7 +322,7 @@ export function sameSpanLabels(rangeStart, rangeEnd, stepMonths) {
  * new selection and the chart does not move. Capped at SAME_SPAN_MAX_BUCKETS, keeping the newest unless
  * that would drop the selection.
  */
-export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, today = localISODate(new Date()) }) {
+export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, today = localIsoDate() }) {
   const step = sameSpanStepMonths(date)
   if (!step) return []
   const at = k => {

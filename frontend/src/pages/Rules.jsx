@@ -21,7 +21,7 @@ import RuleFindingsDialog from '../components/RuleFindingsDialog.jsx'
 import { RuleMatcherText } from '../components/RuleSummary.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../components/detailShared.jsx'
 import { formatRuleMatcher } from '../lib/ruleMatcher.js'
-import { formatDate } from '../lib/utils.js'
+import { formatDate, localIsoDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
@@ -585,7 +585,7 @@ export default function Rules() {
     const d = new Date()
     if (unit === 'years') d.setFullYear(d.getFullYear() - Number(n))
     else d.setMonth(d.getMonth() - Number(n))
-    return d.toISOString().slice(0, 10)
+    return localIsoDate(d)
   }, [cleanupWindow])
 
   // How many rules the current timeframe would sweep — shown on the cleanup button. null = counting (or no

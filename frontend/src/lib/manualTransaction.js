@@ -48,14 +48,6 @@ export function signedAmount(raw, direction) {
   return round2(direction === 'in' ? -Math.abs(value) : Math.abs(value))
 }
 
-// Today in the ledger's date format, for the date box's default. Built from local parts rather than
-// toISOString, which converts to UTC and hands back yesterday for anyone west of Greenwich after
-// their afternoon.
-export function todayIsoDate(now = new Date()) {
-  const pad = value => String(value).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-}
-
 export function isIsoDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
 }
