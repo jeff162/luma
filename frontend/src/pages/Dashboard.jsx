@@ -36,6 +36,7 @@ import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_ITEM_STYLE,
   CHART_TOOLTIP_LABEL_STYLE,
+  formatMoneyMagnitude,
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
@@ -1221,8 +1222,10 @@ function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onS
         <YAxis orientation={pans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
         <Tooltip
           {...(pans ? { content: <PanningChartTooltip />, isAnimationActive: false } : {})}
+          // The series names carry the direction, so the two bars read as magnitudes; only the net is signed.
           formatter={(value, name, item) => {
-            if (name === 'Money out') return [formatSignedMoneyAmount(-(item?.payload?.outflowMagnitude ?? 0)), name]
+            if (name === 'Money in') return [formatMoneyMagnitude(value), name]
+            if (name === 'Money out') return [formatMoneyMagnitude(item?.payload?.outflowMagnitude ?? 0), name]
             return [formatSignedMoneyAmount(value), name]
           }}
           contentStyle={CHART_TOOLTIP_CONTENT_STYLE}

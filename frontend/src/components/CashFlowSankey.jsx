@@ -12,6 +12,7 @@ import {
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_LABEL_STYLE,
+  formatMoneyMagnitude,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
 import { EmptyState } from './ui.jsx'
@@ -25,9 +26,10 @@ import { EmptyState } from './ui.jsx'
  * Recharts ships `<Sankey>` but its stock node and link are bare rectangles and paths with no labels,
  * so both are rendered here. Two rules from the frame's design shape what they draw:
  *
- * - **Magnitude draws, the label tells the truth.** A link's width is the magnitude, because no link can
- *   be drawn with a negative width; the text beside each node carries the true signed value on the cash
- *   axis (positive = money in). This is the same split the pie wedges and stacked bands already use.
+ * - **The side tells the direction.** A link's width is the magnitude, because no link can be drawn
+ *   with a negative width, and the amount beside each node is the same magnitude: left is money in and
+ *   right is money out, so the column already says which way the money went. The hub, on neither side,
+ *   shows the signed net.
  * - **Every node bottoms out in transactions.** A node that cannot be opened is a defect in this
  *   diagram, not a documented limitation — so the buckets drill to their transactions, the collapsed
  *   `Other` node pages one level further into its own tail, and the balancing terminal, which stands for
@@ -54,6 +56,10 @@ function isOpenable(node) {
   return !!node && !node.isBalance && !node.isHub
 }
 
+function amountText(node) {
+  return node.isHub ? formatSignedMoneyAmount(node.cashValue) : formatMoneyMagnitude(node.total)
+}
+
 function CashFlowNode({ x, y, width, height, payload, onNodeClick }) {
   const node = payload || {}
   const openable = isOpenable(node)
@@ -69,7 +75,7 @@ function CashFlowNode({ x, y, width, height, payload, onNodeClick }) {
     height,
     padding: NODE_PADDING,
     name: node.name,
-    amount: formatSignedMoneyAmount(node.cashValue),
+    amount: amountText(node),
   })
 
   return (
@@ -78,7 +84,7 @@ function CashFlowNode({ x, y, width, height, payload, onNodeClick }) {
       onClick={openable ? () => onNodeClick(node) : undefined}
     >
       <rect x={x} y={y} width={width} height={Math.max(height, 1)} fill={node.color} rx={2} />
-      <title>{`${node.name} · ${formatSignedMoneyAmount(node.cashValue)}`}</title>
+      <title>{`${node.name} · ${amountText(node)}`}</title>
       {isHub ? (
         // The hub spans nearly the full height, so its label goes above the column rather than beside it.
         <text x={x + width / 2} y={Math.max(y - 8, 12)} textAnchor="middle"
@@ -129,7 +135,7 @@ function CashFlowTooltip({ payload }) {
     <div style={CHART_TOOLTIP_CONTENT_STYLE}>
       <div style={CHART_TOOLTIP_LABEL_STYLE}>{node.name}</div>
       <div style={{ color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
-        {formatSignedMoneyAmount(node.cashValue)}
+        {amountText(node)}
       </div>
       {node.isOther && (
         <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Click to see what is in here</div>

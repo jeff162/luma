@@ -18,12 +18,14 @@ import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from './longTai
  *
  * - **Cash sign, not scope sign.** Summary rows arrive signed for *their own* scope: the backend
  *   negates income-type buckets so received income reads positive. This frame has a single axis
- *   instead — positive is money in, whatever the bucket is — so `cashValueOf` converts, and every
- *   number the diagram shows is on that axis. It matches `/summary/monthly-trend?view=cash_flow` and
+ *   instead — positive is money in, whatever the bucket is — so `cashValueOf` converts, and the side
+ *   and the net are decided on that axis. It matches `/summary/monthly-trend?view=cash_flow` and
  *   `/summary/monthly-cash-flow`, so the frame's two forms report the same net.
  *
- * - **Magnitude draws, the signed value labels.** A link's width is the magnitude; the node label and
- *   tooltip carry the true signed figure. Same split the pie wedges and stacked bands already use.
+ * - **The side carries the direction, so a bucket's figure is its magnitude.** A link's width is the
+ *   magnitude, and so is the amount beside the node: a node on the outflow side already says the money
+ *   went out, and a minus sign on it would say so twice — on `Net saved`, it reads as a negative saving.
+ *   The hub sits on neither side, so its figure is the signed net.
  *
  * - **Colour and order ignore which side a bucket landed on.** A bucket can change sides between
  *   periods, so colours are assigned over the combined magnitude-sorted list *before* the split. Were
