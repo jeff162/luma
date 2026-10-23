@@ -244,8 +244,9 @@ starting at boot are left to the operator.
 server mode, and Caddy in front of it. **Both use the host's network, and everything else follows from
 that.** The application listens on the host's loopback, where the proxy reaches it; a browser on the host
 is a loopback client; the name is advertised at the host's own address; and the proxy's root certificate
-is fetched from its admin API on `localhost`. Nothing in the application knows it is in a container, so
-the *LAN server* section describes this shape too.
+is fetched from its admin API on `localhost`. The application behaves exactly as it does outside a
+container, so the *LAN server* section describes this shape too; the image's `RUNNING_IN_CONTAINER`
+is read only to say so in Settings → About → **Copy details**.
 
 - **A third service runs first and exits**, writing the proxy's site file with `--caddyfile`, so the
   name the proxy certifies is the name the application advertises without either being typed twice.
@@ -381,7 +382,7 @@ perimeter*.
 | `GET /api/health` | is a server listening and answering on this port |
 | Settings → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
-| Settings → About | the version, and for a packaged build the commit it was built from |
+| Settings → About | the version, and for a packaged build the commit it was built from. **Copy details** copies those with how the copy runs, the platform and the browser, for a bug report, leaving out paths, host names and data |
 | The connection sync log (**Sync log** on Import → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |

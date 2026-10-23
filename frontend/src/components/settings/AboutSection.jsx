@@ -1,10 +1,51 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { APP_NAME, APP_VERSION, CC_BY_4_URL, EFF_WORDLIST_URL, LICENSE_CANONICAL_URL, PROJECT_URL } from '../../lib/appConfig.js'
-import { Card } from '../ui.jsx'
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../../lib/api.js'
+import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../../lib/appConfig.js'
+import { describeBrowser, installationDetailsAsText } from '../../lib/installationDetails.js'
+import { Button, Card } from '../ui.jsx'
 import { useUpdateCheck } from '../../lib/useUpdateCheck.js'
 import { UpdateCheckControls, UpdateCheckStatus } from '../UpdateCheck.jsx'
+
+const COPY_MESSAGE_MS = 2000
+
+// Copies the installation's version, platform and setup, for a bug report. Asked of the server on the
+// click rather than when the panel opens, since only the click needs it.
+function CopyDetailsButton() {
+  const [message, setMessage] = useState(null)
+  const timerRef = useRef(null)
+  useEffect(() => () => clearTimeout(timerRef.current), [])
+
+  async function copy() {
+    clearTimeout(timerRef.current)
+    const text = Promise.all([api.getInstallationDetails(), describeBrowser()])
+      .then(([details, browser]) => installationDetailsAsText(details, { appName: APP_NAME, browser }))
+    try {
+      // Safari allows a clipboard write only within the click itself, and the text is not ready until
+      // two lookups finish. A ClipboardItem accepts the text as a promise, so the write starts inside the
+      // click; a browser without one gets a plain write once the text is ready.
+      if (typeof window.ClipboardItem === 'function') {
+        const blob = text.then(value => new Blob([value], { type: 'text/plain' }))
+        await navigator.clipboard.write([new window.ClipboardItem({ 'text/plain': blob })])
+      } else {
+        await navigator.clipboard.writeText(await text)
+      }
+      setMessage('Copied')
+    } catch {
+      setMessage('Could not copy')
+    }
+    timerRef.current = setTimeout(() => setMessage(null), COPY_MESSAGE_MS)
+  }
+
+  return (
+    <Button small variant="ghost" onClick={copy}
+      title="Copy the version, platform and setup as text, to paste into a bug report. Contains no file paths, host names or financial data.">
+      {message || 'Copy details'}
+    </Button>
+  )
+}
 
 function AboutRow({ label, value, help = '' }) {
   return (
@@ -41,11 +82,14 @@ export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, bu
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>{APP_NAME}</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6 }}>
-            Self-hosted personal finance tracker.
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{APP_NAME}</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6 }}>
+              Self-hosted personal finance tracker.
+            </div>
           </div>
+          <CopyDetailsButton />
         </div>
 
         {/* alignItems:start keeps each column top-aligned; without it a short cell (Version — no help
@@ -119,25 +163,6 @@ export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, bu
                 : 'License text for the packages in the web interface. A packaged build also lists the server\u2019s software; in a checkout those dependencies are installed separately, each with its own license.'}
             />
           ) : null}
-          {/* The attribution CC BY 4.0 asks for wherever the list is conveyed: creator, license with a link,
-              where the material came from, and that it was modified. The same notice heads the file itself
-              (lib/effLargeWordlist.txt), which is what travels in the source and the built bundle, and it
-              is reproduced in the list above. */}
-          <AboutRow
-            label="Passphrase word list"
-            value={(
-              <a href={EFF_WORDLIST_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
-                EFF Large Wordlist for Passphrases
-              </a>
-            )}
-            help={(
-              <>
-                By the Electronic Frontier Foundation, licensed under{' '}
-                <a href={CC_BY_4_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>CC BY 4.0</a>.
-                Used for suggested passphrases, with the dice-roll numbers removed.
-              </>
-            )}
-          />
         </div>
 
         {canManageEnvironment ? <UpdateCheckControls check={updateCheck} /> : null}

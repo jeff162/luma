@@ -10,8 +10,9 @@
 # https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt, sha256
 # addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e.
 #
-# Credited in Settings > About. Read by lib/passphraseGenerator.js, which skips these comment lines and
-# refuses a list that is not exactly 7776 unique words, since the suggestion's strength rests on that count.
+# Credited in the generated third-party licenses file. Read by lib/passphraseGenerator.js, which skips
+# these comment lines and refuses a list that is not exactly 7776 unique words, since the suggestion's
+# strength rests on that count.
 abacus
 abdomen
 abdominal

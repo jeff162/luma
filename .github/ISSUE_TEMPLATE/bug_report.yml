@@ -33,17 +33,15 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: deployment
+  - type: textarea
+    id: installation
     attributes:
-      label: How is Luma running?
-      description: Exposure and behavior differ meaningfully between these.
-      options:
-        - Desktop / single user on one machine
-        - LAN server reached from other devices
-        - Docker
-        - Development mode (npm run dev + uvicorn)
-        - Standalone build (macOS or Windows artifact)
+      label: Installation details
+      description: |
+        In Luma, **Settings → About → Copy details**, then paste here. It holds the version, how Luma is
+        running and on what system, and nothing identifying. If Luma does not start, give the version, how
+        it was installed and the operating system instead.
+      render: text
     validations:
       required: true
 
@@ -58,22 +56,6 @@ body:
         - A marketplace importer (Amazon / PayPal)
         - Demo data
         - Not data-specific
-    validations:
-      required: true
-
-  - type: input
-    id: version
-    attributes:
-      label: Version or commit
-      description: A release tag, or the commit hash from `git rev-parse --short HEAD`.
-    validations:
-      required: true
-
-  - type: input
-    id: os
-    attributes:
-      label: Operating system and browser
-      placeholder: "e.g. Windows 11, Firefox 141"
     validations:
       required: true
 

@@ -16,6 +16,7 @@ case, and the values that must persist across restarts are stored in the control
 
 import os
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 
@@ -193,6 +194,36 @@ def build_stamp() -> str | None:
     except OSError:
         return None
     return stamped or None
+
+
+def checkout_commit() -> str | None:
+    """Which commit a checkout is on, asked of git when the question comes up — the checkout's answer to
+    `build_stamp`, in the same `git describe` shape.
+
+    Asked live rather than written down, which is why it does not contradict the reason a checkout
+    carries no stamp: nothing is left in the working copy to go stale. `None` for anything that is not a
+    checkout, and for a checkout git cannot describe (no git, or a tree exported without its history)."""
+    if distribution_form() != DIST_FORM_CHECKOUT or runs_in_container():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=install_root(), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
+# Set by the Dockerfile, so the published image says what it is. Nothing at runtime tells a container
+# apart reliably — `/.dockerenv` is Docker's alone, and other runtimes leave other traces or none — so
+# the image declares itself, as a packaged build does with `distribution-form`. Read only to describe
+# the installation: a container otherwise runs exactly as a checkout does.
+CONTAINER_ENV = "RUNNING_IN_CONTAINER"
+
+
+def runs_in_container() -> bool:
+    return truthy(os.getenv(CONTAINER_ENV))
 
 
 def install_root() -> Path:

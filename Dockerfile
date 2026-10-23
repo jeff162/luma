@@ -15,5 +15,8 @@ COPY backend /app/backend
 # Where the launcher looks for the interface it serves (`backend/spa.py`).
 COPY --from=interface /app/frontend/dist /app/frontend/dist
 
+# Declares the image, so the installation details in Settings -> About can say it runs in a container.
+ENV RUNNING_IN_CONTAINER=1
+
 # The launcher in server mode: the one process serves the interface and the API, as a downloaded build does.
 CMD ["python", "-m", "backend.desktop", "--server"]

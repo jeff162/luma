@@ -17,15 +17,21 @@ supervised, and stopping it from a browser is either futile (systemd restarts it
 signed-in user to take the service away from everyone else.
 """
 
+import platform
 from typing import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
+from backend import transport
 from backend.authorization import is_admin_or_local, require_admin_or_local
+from backend.db.control_database import auth_required
 from backend.db.database import get_db
-from backend.runtime_config import bundled_license_path, third_party_notices
+from backend.runtime_config import (
+    APP_VERSION, build_stamp, bundled_license_path, checkout_commit, distribution_form, runs_in_container,
+    third_party_notices,
+)
 from backend.services import proxy_certificate, update_check
 from backend.services.storage_summary import storage_summary
 
@@ -146,6 +152,39 @@ def read_bundled_license():
     if path is None:
         raise HTTPException(status_code=404, detail="This build does not carry a bundled license file.")
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
+
+
+def _server_platform() -> str:
+    if platform.system() == "Darwin":
+        system, release = "macOS", platform.mac_ver()[0]
+    else:
+        system, release = platform.system(), platform.release()
+    return f"{system} {release} ({platform.machine()})"
+
+
+@router.get("/installation-details")
+def installation_details(request: Request):
+    """What a bug report needs to know about this installation, for Settings -> About -> Copy details.
+
+    Open to every signed-in user, because it is what anyone filing a report is asked for, and it holds
+    nothing that is not safe to paste into a public issue: no file paths (they carry user names), no host
+    names or addresses, no instance id, and of the data only which kinds of connection exist. Built on
+    request rather than carried in the status payload, since asking git for a checkout's commit is not
+    something every page load should pay for."""
+    with get_db() as conn:
+        providers = sorted(row[0] for row in conn.execute("SELECT DISTINCT provider FROM connection") if row[0])
+    return {
+        "version": APP_VERSION,
+        "build": build_stamp() or checkout_commit(),
+        "form": "container" if runs_in_container() else distribution_form(),
+        "reachable_from_network": transport.reachable_from_network(),
+        "request_is_loopback": transport.request_is_loopback(request),
+        "request_is_https": transport.request_is_https(request),
+        "sign_in_required": auth_required(),
+        "server_platform": _server_platform(),
+        "python_version": platform.python_version(),
+        "connection_providers": providers,
+    }
 
 
 class UpdateCheckSettings(BaseModel):

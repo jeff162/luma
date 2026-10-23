@@ -4093,6 +4093,10 @@ export const HELP_TOPICS = [
           new release and adds a task when one is available.
           The task can be dismissed, and returns with the next release.
         </p>
+        <p>
+          <strong>Copy details</strong> copies the version, how {APP_NAME} is running, the system it runs on and the
+          browser, ready to paste into a bug report. File paths, host names and financial data are left out.
+        </p>
       </>
     ),
   },
