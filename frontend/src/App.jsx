@@ -247,9 +247,6 @@ const s = {
 
 const activeStyle = { ...s.link, background: 'var(--surface2)', color: 'var(--text)' }
 
-// Listed only for someone who may use it; see `pages/Administration.jsx`.
-const ADMINISTRATION_PATH = '/administration'
-
 const NAV_LINKS = [
   ['/', 'Dashboard'],
   ['/transactions', 'Transactions'],
@@ -260,7 +257,6 @@ const NAV_LINKS = [
   ['/tasks', 'Tasks'],
   ['/accounts', 'Accounts'],
   ['/settings', 'Settings'],
-  [ADMINISTRATION_PATH, 'Administration'],
   ['/help', 'Help'],
 ]
 
@@ -522,7 +518,7 @@ function LocalPreferenceProfileScreen({
       key: 'restore',
       title: 'Restore a backup',
       summary: 'Load everything from a prior backup.',
-      destination: `${ADMINISTRATION_PATH}?section=backup`,
+      destination: '/settings?section=backup',
     },
     {
       key: 'connect',
@@ -1095,10 +1091,10 @@ export default function App() {
   const preferenceSubjectId = authEnabled
     ? (currentUser?.id || currentUser?.user_id || '')
     : (activeLocalProfile?.id || '')
-  // Who the Administration page is for — the client's reading of the server's `require_admin_or_local`.
+  // Who the administrator's Settings sections are for — the client's reading of the server's `require_admin_or_local`.
   // With sign-in protection off there is no role to hold, so everyone here qualifies.
   const canAdminister = !authEnabled || currentUser?.role === 'admin'
-  // Setters are exposed alongside getters so the Administration security forms can persist a change to
+  // Setters are exposed alongside getters so the Settings security forms can persist a change to
   // the backend and immediately reflect it in shell-level session state without a reload. (useState
   // setters are stable, so they never re-trigger this memo.)
   const appSessionValue = useMemo(() => ({
@@ -1860,7 +1856,7 @@ export default function App() {
                                   ) : null}
                                   <DataLocationLine dataLocation={dataLocation} />
                                 </div>
-                                {NAV_LINKS.filter(([to]) => to !== ADMINISTRATION_PATH || canAdminister).map(([to, label]) => (
+                                {NAV_LINKS.map(([to, label]) => (
                                   <NavLink
                                     key={to}
                                     to={to}

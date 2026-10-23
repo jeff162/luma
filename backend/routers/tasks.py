@@ -215,7 +215,7 @@ def _backup_due_tasks(request: Request | None) -> list[dict]:
             "title":       "Take a new backup",
             "description": why,
             "count":       1,
-            "link":        "/administration?section=backup",
+            "link":        "/settings?section=backup",
             "link_label":  "Open Backup / Restore",
             "severity":    SEVERITY_INFO,
         })
@@ -228,7 +228,7 @@ def _backup_due_tasks(request: Request | None) -> list[dict]:
             "description": "The vault key was replaced after the last backup, so earlier backups no longer "
                            "restore the data provider credentials.",
             "count":       1,
-            "link":        "/administration?section=backup",
+            "link":        "/settings?section=backup",
             "link_label":  "Open Backup / Restore",
             "severity":    SEVERITY_INFO,
         })
@@ -241,7 +241,7 @@ def _backup_due_tasks(request: Request | None) -> list[dict]:
             "description": "The data provider credentials were replaced after the last backup, so earlier "
                            "backups bring back credentials the providers no longer accept.",
             "count":       1,
-            "link":        "/administration?section=backup",
+            "link":        "/settings?section=backup",
             "link_label":  "Open Backup / Restore",
             "severity":    SEVERITY_INFO,
         })
@@ -268,7 +268,7 @@ def _server_error_task(request: Request | None) -> dict | None:
                        "opened. Each is a failure the server did not handle, and its entry in the log "
                        "says where it happened.",
         "count":       unseen,
-        "link":        "/administration?section=errorLog",
+        "link":        "/settings?section=errorLog",
         "link_label":  "Open the error log",
         "severity":    SEVERITY_WARNING,
     }
@@ -292,7 +292,7 @@ def _proxy_certificate_task(request: Request | None) -> dict | None:
                        "before, which happens when it is reinstalled or loses its data. Each computer has "
                        "to install the new one before its browser trusts this server again.",
         "count":       1,
-        "link":        "/administration?section=serverCertificate",
+        "link":        "/settings?section=serverCertificate",
         "link_label":  "Review the certificate",
         "severity":    SEVERITY_WARNING,
         "required":    True,

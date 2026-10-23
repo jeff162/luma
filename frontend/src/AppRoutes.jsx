@@ -16,11 +16,10 @@
  */
 
 import { lazy, Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 
 import {
   loadAccountsPage,
-  loadAdministrationPage,
   loadCategoriesPage,
   loadDashboardPage,
   loadHelpPage,
@@ -39,7 +38,6 @@ const Categories = lazy(loadCategoriesPage)
 const Rules = lazy(loadRulesPage)
 const Accounts = lazy(loadAccountsPage)
 const Settings = lazy(loadSettingsPage)
-const Administration = lazy(loadAdministrationPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
@@ -59,6 +57,13 @@ export function RouteLoadingFallback() {
   )
 }
 
+// Administration's sections joined Settings under the same `?section=` keys, so a bookmark or a
+// remembered startup route from before then still lands on its section. Remove after 0.4.0.
+function AdministrationRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={`/settings${search}`} replace />
+}
+
 export default function AppRoutes() {
   return (
     <Suspense fallback={<RouteLoadingFallback />}>
@@ -75,7 +80,7 @@ export default function AppRoutes() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/recurring" element={<Recurring />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/administration" element={<Administration />} />
+        <Route path="/administration" element={<AdministrationRedirect />} />
         <Route path="/help" element={<Help />} />
         <Route path="/help/:topic" element={<Help />} />
       </Routes>

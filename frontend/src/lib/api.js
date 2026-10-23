@@ -333,7 +333,7 @@ export const api = {
     request('/app/update-check/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   checkForUpdateNow: () => request('/app/update-check/run', { method: 'POST' }),
   autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
-  // Administration -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
+  // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   // The TLS proxy's root certificate, where a server installation has one: { available } and, when it
   // does, the fingerprint and whether it is the certificate on record. Public — a device needs it before
   // sign-in.

@@ -206,8 +206,8 @@ function SignInPasskeysPanel({ user, onUserChange }) {
   )
 }
 
-// The signed-in user's own sign-in methods — password, passkeys and the authenticator app. Per-user, so a Settings
-// section, unlike the installation-wide switch and password policy on Administration
+// The signed-in user's own sign-in methods — password, passkeys and the authenticator app: Settings →
+// Security. Per-user, unlike the installation-wide switch and password policy in the Server group
 // (`administration/AccountSecuritySection.jsx`). Listed only while sign-in protection is on.
 export default function SignInFactorsSection({ passwordPolicy }) {
   const fieldIdBase = useId()

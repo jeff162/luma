@@ -25,7 +25,6 @@ export const loadCategoriesPage = routeChunk(() => import('../pages/Categories.j
 export const loadRulesPage = routeChunk(() => import('../pages/Rules.jsx'))
 export const loadAccountsPage = routeChunk(() => import('../pages/Accounts.jsx'))
 export const loadSettingsPage = routeChunk(() => import('../pages/Settings.jsx'))
-export const loadAdministrationPage = routeChunk(() => import('../pages/Administration.jsx'))
 export const loadImportExportPage = routeChunk(() => import('../pages/ImportExport.jsx'))
 export const loadImportRuleSuggestionsPage = routeChunk(() => import('../pages/ImportRuleSuggestions.jsx'))
 export const loadTasksPage = routeChunk(() => import('../pages/Tasks.jsx'))
@@ -39,7 +38,6 @@ export const ROUTE_PREFETCHERS = [
   loadRulesPage,
   loadAccountsPage,
   loadSettingsPage,
-  loadAdministrationPage,
   loadImportExportPage,
   loadImportRuleSuggestionsPage,
   loadTasksPage,

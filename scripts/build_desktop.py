@@ -73,7 +73,7 @@ Press Ctrl+C in the terminal window to stop it.
 
 Data lives in this folder, in luma-data.db and luma-control.db and the documents folder, and stays here when the application is closed. Moving or copying this whole folder moves the data with it.
 
-Configuration is not required. To change a setting such as the port (8010 unless changed), make a copy of env_example.txt as .env and make the desired changes. Administration -> Startup configuration shows the current source of the available settings.
+Configuration is not required. To change a setting such as the port (8010 unless changed), make a copy of env_example.txt as .env and make the desired changes. Settings -> Startup configuration shows the current source of the available settings.
 
 Options:
   --no-browser    start without opening a browser, just print the address
@@ -88,10 +88,10 @@ READ_ME_INSTALLED = """Luma - installed build
 Run the `luma` executable. It starts the application, prints its address, and opens a browser.
 Press Ctrl+C in the terminal window to stop it.
 
-Data lives in the per-user application data directory, not in the folder with the application. Administration -> Startup configuration reports the
+Data lives in the per-user application data directory, not in the folder with the application. Settings -> Startup configuration reports the
 exact location in use. DATA_DIR in an .env file can be used to specify a different location.
 
-Configuration is not required. To change a setting make a copy of env_example.txt as .env and make the desired changes. Administration -> Startup configuration shows current source of the various settings.
+Configuration is not required. To change a setting make a copy of env_example.txt as .env and make the desired changes. Settings -> Startup configuration shows current source of the various settings.
 
 Options:
   --no-browser    start without opening a browser, and just print the address

@@ -102,7 +102,7 @@ changing, or answering questions about, shared systems, persistence, invariants,
 ### Developer flag
 
 `LUMA_DEVELOPER_OPTIONS=true` in `.env` (or the shell) adds a Developer options section to
-Administration, with tools that reset the app to a known state: clear browser storage, saved
+Settings, with tools that reset the app to a known state: clear browser storage, saved
 preferences or import memory, or go back to the first-run welcome screen.
 
 ### Running as a single process

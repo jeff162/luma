@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
@@ -444,7 +444,6 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
 }
 
 function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateColumns }) {
-  const formId = 'draft-account-form'
   const [name, setName] = useState('')
   const [type, setType] = useState('depository')
   const [ownerId, setOwnerId] = useState('')
@@ -481,7 +480,6 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
   return (
     <div style={{ position: 'relative', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 65%, var(--surface))' }}>
       <form
-        id={formId}
         onSubmit={e => {
           e.preventDefault()
           submit()
@@ -536,7 +534,16 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
             />
           </div>
 
-          <div />
+          {/* The tags cell is free while drafting (tags are added once the account exists), and the
+              action track only fits the ⋯ menu, so the submit sits here beside the cancel. */}
+          <Button
+            small
+            type="submit"
+            disabled={creating}
+            style={{ justifySelf: 'end', height: ACCOUNT_CONTROL_HEIGHT, padding: '0 12px' }}
+          >
+            {creating ? 'Adding…' : 'Add'}
+          </Button>
 
           <button
             type="button"
@@ -1726,6 +1733,7 @@ export default function Accounts() {
   // Active in-page tab, session-scoped (sticks while the app is open, resets to Accounts next launch). A
   // `?tab=` query param (e.g. from a Tasks deep-link that targets a specific tab) takes precedence on arrival.
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [tab, setTabState] = useState(() => {
     const fromUrl = searchParams.get('tab')
     if (ACCOUNT_TABS.some(([id]) => id === fromUrl)) return fromUrl
@@ -2580,6 +2588,18 @@ export default function Accounts() {
                 {label}
               </button>
             ))}
+            {tab === 'accounts' ? (
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
+                {/* Connections create and feed accounts, so they are reachable from here as well as
+                    from the Import page that holds them. */}
+                <Button small variant="ghost" onClick={() => navigate('/import-export?tab=connections')}>
+                  Connections
+                </Button>
+                <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
+                  +New account
+                </Button>
+              </div>
+            ) : null}
           </div>
           {tab === 'accounts' && showOwnerFilterRow ? (
             <div style={{
@@ -2930,47 +2950,6 @@ export default function Accounts() {
                         </>
                       )}
                     </SectionCard>
-                    {showCreateAccount && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          left: 'calc(100% + 8px)',
-                          top: 'calc(100% - 48px)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '7px 8px',
-                          background: 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
-                          border: '1px solid var(--border)',
-                          borderRadius: 14,
-                          boxShadow: '0 10px 24px rgba(0, 0, 0, 0.10)',
-                        }}
-                      >
-                        <button
-                          type="submit"
-                          form="draft-account-form"
-                          style={{
-                            padding: '6px 14px',
-                            borderRadius: 10,
-                            border: 'none',
-                            cursor: creatingAccount ? 'not-allowed' : 'pointer',
-                            fontSize: 13,
-                            fontWeight: 500,
-                            transition: 'opacity 0.15s',
-                            opacity: creatingAccount ? 0.5 : 1,
-                            background: 'var(--accent)',
-                            color: '#fff',
-                          }}
-                          disabled={creatingAccount}
-                        >
-                          {creatingAccount ? 'Adding...' : 'Add'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
-                    <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
-                      +New account
-                    </Button>
                   </div>
                 </div>
               )}

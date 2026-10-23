@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
 
-// Both pages show one section at a time, picked from a list down the left, so every section has to be
+// The page shows one section at a time, picked from a list down the left, so every section has to be
 // opened in turn for its controls to be on screen.
 const SECTIONED_PAGES = [
   ['/settings', 'Settings sections'],
-  ['/administration', 'Administration sections'],
 ]
+// Sections opened from the title row rather than the list, reached by their link instead.
+const HEADER_SECTIONS = ['/settings?section=about']
 
 function unlabeledControls(page) {
   return page.evaluate(() => {
@@ -74,7 +75,7 @@ function unlabeledControls(page) {
   })
 }
 
-test('@a11y every settings and administration section exposes labels and stable ids for visible form controls', async ({ page, baseURL }) => {
+test('@a11y every settings section exposes labels and stable ids for visible form controls', async ({ page, baseURL }) => {
   const findings = []
 
   for (const [path, listLabel] of SECTIONED_PAGES) {
@@ -93,6 +94,13 @@ test('@a11y every settings and administration section exposes labels and stable 
       const title = await page.getByRole('heading', { level: 2 }).first().textContent()
       for (const finding of await unlabeledControls(page)) findings.push({ section: `${path} / ${title}`, ...finding })
     }
+  }
+
+  for (const path of HEADER_SECTIONS) {
+    await page.goto(new URL(path, baseURL).toString())
+    await page.waitForLoadState('networkidle')
+    const title = await page.getByRole('heading', { level: 2 }).first().textContent()
+    for (const finding of await unlabeledControls(page)) findings.push({ section: `${path} / ${title}`, ...finding })
   }
 
   if (findings.length) {

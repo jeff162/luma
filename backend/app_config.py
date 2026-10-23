@@ -19,7 +19,7 @@ Settings that must be known before the app exists (the bind port), before the da
 in-app form. That is the irreducible core the optional `.env` file exists for.
 
 The registry below is the single declaration of each setting. The resolver, the effective-configuration
-report Administration renders, and any setting added later all read from it, so a new knob is one
+report Settings renders, and any setting added later all read from it, so a new knob is one
 entry rather than an entry plus a reader plus a display row.
 """
 

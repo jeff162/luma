@@ -5,7 +5,7 @@ A restore is not a data edit: it replaces every row, the connections and the pro
 Before this, any signed-in member could run one — including the standalone credentials restore, which replaces
 global provider configuration that is otherwise an admin's alone to change. The backup keys are held to the
 same bar because they decide who can read a backup at all, and creating a backup is held to it so the
-server agrees with the Administration page that offers it. Pointing a data source at a **watched folder**
+server agrees with the Settings section that offers it. Pointing a data source at a **watched folder**
 is here for a different reason of the same shape: it names a directory on the server's filesystem, which is
 global app configuration rather than ledger data, and the folder can be set to delete the files it imports.
 The folder *picker* that fills that field in is held to the same bar, for the same reason.

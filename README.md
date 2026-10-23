@@ -331,9 +331,9 @@ A server started this way has no icon in the notification area. Its address is o
 
 ### On each computer that connects
 
-The first visit shows a browser warning, because Caddy issues its own certificate and no computer trusts it yet. Continue past the warning once, choose **Browser warning about this server? Install its certificate** on the sign-in screen, and follow the steps shown for that kind of computer. Once the browser is closed and reopened the warning is gone. With sign-in protection off there is no sign-in screen; the same download and steps are under **Administration → Server certificate**.
+The first visit shows a browser warning, because Caddy issues its own certificate and no computer trusts it yet. Continue past the warning once, choose **Browser warning about this server? Install its certificate** on the sign-in screen, and follow the steps shown for that kind of computer. Once the browser is closed and reopened the warning is gone. With sign-in protection off there is no sign-in screen; the same download and steps are under **Settings → Server certificate**.
 
-To be sure a computer received the server's own certificate, compare the fingerprint it shows against the one printed on the server by `luma --certificate-fingerprint`. **Administration → Server certificate** also has a box that takes a fingerprint and reports whether it matches.
+To be sure a computer received the server's own certificate, compare the fingerprint it shows against the one printed on the server by `luma --certificate-fingerprint`. **Settings → Server certificate** also has a box that takes a fingerprint and reports whether it matches.
 
 ## Locked out
 

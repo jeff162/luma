@@ -6,7 +6,7 @@
 // A server installation behind a TLS proxy presents a certificate issued by the proxy's own authority,
 // which no device trusts until that authority's root is installed on it (`backend/services/
 // proxy_certificate.py`). So the surface has to be reachable from a device that trusts nothing yet and
-// has not signed in: it hangs off the sign-in screen as a dialog, and sits in Administration as a
+// has not signed in: it hangs off the sign-in screen as a dialog, and sits in Settings as a
 // section for whoever runs the server. Both render one panel.
 //
 // It exists only where there is such a certificate. A desktop install and a plain-HTTP server have
@@ -104,7 +104,7 @@ function detectDevice() {
 }
 
 // `checkable` adds the box that compares a fingerprint read off another device. It belongs only where
-// this page itself can be believed — Administration, opened on the server or on a device that already
+// this page itself can be believed — Settings, opened on the server or on a device that already
 // trusts it. On a first visit the page arrives over the very connection in question, so a match
 // announced there would mean nothing.
 //
@@ -184,7 +184,7 @@ export function ServerCertificatePanel({ certificate, onAccept, checkable = fals
       <div style={{ display: 'grid', gap: 4 }}>
         <div style={{ color: 'var(--muted)' }}>
           To be sure the certificate came from this server, compare its SHA-256 fingerprint on the computer with
-          this one, read from the server itself: Administration on a computer that already trusts it, or the
+          this one, read from the server itself: Settings on a computer that already trusts it, or the
           server&rsquo;s <code>--certificate-fingerprint</code> command.
         </div>
         <div style={{ color: 'var(--muted)', fontSize: 12 }}>SHA-256</div>
@@ -246,7 +246,7 @@ export function ServerCertificateLink() {
   )
 }
 
-// Administration's section. Accepting re-reads the certificate, so the warning clears on the answer
+// The Settings section. Accepting re-reads the certificate, so the warning clears on the answer
 // the server gives rather than on the click.
 export function ServerCertificateSection({ certificate, onChange }) {
   async function accept() {

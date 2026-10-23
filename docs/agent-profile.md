@@ -131,6 +131,14 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   a screen looks, hand it to the user and say what to click and what correct looks like: a one-time
   check by the user is a valid test and costs less than a driven browser session.
 
+- Look at a layout before handing it over when it is a new or reworked page, panel or list, or a visual
+  change that has already come back once, because spacing and alignment defects are otherwise found by
+  the user. Run the isolated stack (`.claude/skills/run-app`) and screenshot the affected region in each
+  theme from a short Playwright script, cropped: a few thousand tokens, where each devtools snapshot
+  costs 5–20k. A label or one control's color does not need it. The script passes Playwright's own
+  `~/.cache/ms-playwright/chromium-*` binary as `executablePath`, since the build number in that path
+  changes with each Playwright update.
+
 - Investigate a red run before re-running it, because a green re-run destroys the state that explained
   it. The gate writes every run to `data/check-logs/` and prints the path, and keeps a failed browser
   run's screenshots, videos and traces in `data/check-logs/last-browser-failure/`; check the failure

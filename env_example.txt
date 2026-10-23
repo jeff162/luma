@@ -9,7 +9,7 @@
 #   Source checkout                      the top folder of the checkout
 #   Docker                               the folder holding docker-compose.yml
 #
-# Administration -> Startup configuration shows the path where .env lives and the source
+# Settings -> Startup configuration shows the path where .env lives and the source
 # of the various settings.
 #
 # Some settings only apply to certain deployments:

@@ -665,7 +665,7 @@ registry, since everything there gains an environment variable that outranks it.
 **The environment layer wins** so an operator can force a value from outside the app; a broken stored
 setting would otherwise be unreachable. `.env` is loaded with `override=True`, so the file beats the
 shell environment; the Playwright harness relies on that by pointing `LUMA_ENV_FILE` at an isolated
-file. Because an override is invisible from inside the app, the Administration → Startup configuration
+file. Because an override is invisible from inside the app, the Settings → Startup configuration
 report names the layer each value came from.
 
 **`.env` is loaded by an import every entry point makes first** (`backend/load_env_file.py`). The
@@ -1328,7 +1328,7 @@ display and a `show_by_default` flag.
   preference follows it; an explicit choice wins.
 - **The paths are admin-or-local information, gated on the server.** The status payload carries
   `data_location` only for a session that could read `/auth/config` (`_session_can_manage_config`). The
-  toggle sits in Administration's *Startup configuration* panel, behind the same gate.
+  toggle sits in Settings' *Startup configuration* section, behind the same gate.
 
 ## Where to change things
 

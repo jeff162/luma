@@ -36,7 +36,7 @@ frontend. `--form` chooses between the two available forms:
 - **installed** — databases go to the per-OS user-data directory, the executable goes in some o/s specified home. This is what macOS uses.
 
 The default is portable if the platform supports it; **macOS is installed-only**, because the
-`.app` lives in Applications and user data goes elsewhere. Inside Luma, **Administration → Startup configuration** reports the directories being used.
+`.app` lives in Applications and user data goes elsewhere. Inside Luma, **Settings → Startup configuration** reports the directories being used.
 
 PyInstaller, the build tool, cannot cross-build.
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// Sign-in methods -> Password. The server decides whether the current password is right; what is pinned
+// Settings -> Security -> Password. The server decides whether the current password is right; what is pinned
 // here is that the form sends both passwords, and that a refusal stays on screen with the form still open.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'

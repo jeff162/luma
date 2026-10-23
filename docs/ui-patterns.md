@@ -87,7 +87,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Tabs, a segmented toggle, or a section list.** A tab row names separate management surfaces sharing
   a page. `SegmentedToggle` names peer views of one subject, and carries a count as a `badge` where the
   count is the reason to switch. `SectionListPage` suits many unrelated sections each visited
-  occasionally. A surface that is alone on its tab is not wrapped in a collapsible card.
+  occasionally, grouped under headings by subject so a long list is scanned by group first. A surface
+  that is alone on its tab is not wrapped in a collapsible card.
 - **Which view is showing is session state.** The active tab or toggle is kept in `sessionStorage`, and
   a URL parameter wins over the stored value so a deep link lands where it means to.
 - **Header or toolbar.** The header carries what acts on the whole subject (add one, run a pass, open a

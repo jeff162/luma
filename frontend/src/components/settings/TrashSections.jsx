@@ -421,7 +421,7 @@ export function RulesTrashSection({ onChanged }) {
 }
 
 export function BackupHistoryTrashSection({ onChanged }) {
-  // Backup history entries moved to the trash from Administration → Backup / Restore, for a backup that
+  // Backup history entries moved to the trash from Settings → Backup / Restore, for a backup that
   // was not kept. Restore puts one back in the history; emptying removes them for good.
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)

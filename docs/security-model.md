@@ -181,8 +181,9 @@ once, so it is a settings-scale act. Creating a backup is held to the same gate.
 `backend/authorization.py`; with sign-in protection off there is no role to hold, and they pass. An
 authorization check at the data layer would have no scoping model behind it to enforce.
 
-**The same gate sorts the interface**: what a member may do is on Settings, what is behind
-`require_admin_or_local` is on Administration.
+**The same gate decides what the interface lists.** Settings groups its sections by subject, not by
+role, and a section behind `require_admin_or_local` is listed only for someone who passes it, so a member
+is never shown controls that would all be refused.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity
 has a password and another does not, anyone on the LAN picks the passwordless one and reads the same

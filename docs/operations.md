@@ -50,7 +50,7 @@ This document does not repeat a sequence any of those hold. It records what the 
 
 They are the **same application**. What differs is only how uvicorn is launched and whether something
 wraps it. Standalone versus networked is not one of the differences: it is detected per request
-(`security-model.md` → *Transport security*), and Administration → *Network access* states the reading
+(`security-model.md` → *Transport security*), and Settings → *Network access* states the reading
 for the browser in hand.
 
 ## Desktop
@@ -110,7 +110,7 @@ beside the data. Everywhere else it goes to the terminal, the systemd journal or
 version, the build and, where the launcher started the server, the address it settled on, which nothing
 else records.
 
-**Administration → Error log reads the errors back out of it**, for administrators only, since a
+**Settings → Error log reads the errors back out of it**, for administrators only, since a
 traceback can carry transaction details and paths. Each error is also counted into the control database
 as it is logged, so the Tasks page can show administrators how many none of them has seen; opening the
 Error log acknowledges them for the whole install. The count is kept rather than re-read because the
@@ -168,7 +168,7 @@ visit only.
 - **`luma --certificate-fingerprint` is the reading that does not pass through the browser.** It prints
   the SHA-256 fingerprint and the SHA-1 one, because the Windows certificate viewer shows only the
   latter, as *Thumbprint*.
-- **Comparing a fingerprint is offered in Administration → Server certificate, not on the sign-in
+- **Comparing a fingerprint is offered in Settings → Server certificate, not on the sign-in
   screen**, since only a page reached over an already-trusted connection can be believed about it. The
   sign-in screen links to the hand-out only.
 - **The server remembers the first fingerprint it sees.** Caddy mints a new authority if its data
@@ -271,7 +271,7 @@ a second installation wants a second directory rather than a path per file.
 | `luma-data.db` | the ledger | — |
 | `luma-control.db` | users, sessions, and the credential vault | — |
 | `documents/` | attached documents, one file per attachment (`services/documents.py`) | yes |
-| `luma.log`, `luma.log.1` | the server's own log, read by Administration → **Error log** | yes |
+| `luma.log`, `luma.log.1` | the server's own log, read by Settings → **Error log** | yes |
 | `luma-desktop.log` | startup output where there is no terminal | no |
 | `luma-desktop.lock` | the port of an instance the launcher (`backend/desktop.py`) started | no |
 | `proxy.log` | output of a proxy the server runs itself | no |
@@ -285,7 +285,7 @@ files beside it while the app is open, and copying the `.db` alone yields a copy
 rows. `sqlite3 <source.db> ".backup <target.db>"` is correct against a running instance. This applies to
 a snapshot taken before a restore; the app's own backup is a row-level export and is unaffected.
 
-**Administration → Startup configuration is the authority on what is in force**, with the layer each
+**Settings → Startup configuration is the authority on what is in force**, with the layer each
 value came from (`architecture.md` → *Configuration layers*). Read it before believing anything about a
 running instance — including which database it is open on.
 
@@ -379,12 +379,12 @@ perimeter*.
 | Surface | Answers |
 | --- | --- |
 | `GET /api/health` | is a server listening and answering on this port |
-| Administration → Startup configuration | every effective setting and the layer it came from |
+| Settings → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
 | Settings → About | the version, and for a packaged build the commit it was built from |
 | The connection sync log (**Sync log** on Import → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
-| `luma.log`, read by Administration → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
+| `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing
 else on screen distinguishes a checkout pointed at a restored backup from one pointed at real data. The

@@ -123,8 +123,8 @@ export const HELP_SECTIONS = [
   },
   {
     key: 'administration',
-    label: 'Administration',
-    blurb: 'Running the installation: how it starts, who can sign in, and backups.',
+    label: 'Server',
+    blurb: 'Running the installation: how it starts and who can reach it.',
   },
   {
     key: 'general-concepts',
@@ -247,7 +247,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks, settings and administration -- each saying what it is for and handing off to its own topic.',
+    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each saying what it is for and handing off to its own topic.',
     body: () => (
       <><p>The major sections roughly in the order data moves through them:</p>
         {/* A table rather than the prose tour this used to be: ten sections described at paragraph length
@@ -305,12 +305,8 @@ export const HELP_TOPICS = [
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-settings">Settings</HelpLink></td>
-                <td>Preferences, sign-in methods and the Trash.</td>
-              </tr>
-              <tr>
-                <td><HelpLink to="/help/page-administration">Administration</HelpLink></td>
-                <td>Startup configuration, sign-in protection, users, and Backup / Restore. For
-                  administrators only.</td>
+                <td>Preferences, Backup / Restore, the Trash, and for administrators the server: users,
+                  sign-in protection and startup configuration.</td>
               </tr>
             </tbody>
           </table>
@@ -2029,7 +2025,8 @@ export const HELP_TOPICS = [
         <p>
           <strong>Accounts</strong> are created during the import process. The various sources of transaction data tend to
           either supply account information with the transaction or all the transactions are from a single
-          account and the user identifies that account when the data is imported.
+          account and the user identifies that account when the data is imported. <strong>Connections</strong>,
+          beside <strong>+New account</strong>, opens the bank connections on the Import page.
         </p>
         <p>
           Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
@@ -3977,20 +3974,43 @@ export const HELP_TOPICS = [
     section: 'settings',
     title: 'Settings',
     surfaces: ['Settings'],
-    summary: 'Preferences and housekeeping open to every user: appearance and currency, sign-in methods, the trash, and a few lists the app keeps. Almost none of it has to be touched to use the app.',
+    summary: 'Preferences and housekeeping in three groups: Personal, Data and Server. What only an administrator may change is listed only for an administrator. Almost none of it has to be touched to use the app.',
     body: () => (
       <>
         <p>*needs review*</p>
-        <p>Settings is a collection of both controls that affect the {APP_NAME}'s behavior
-          and various utility type functions. Everything here is open to every user; what only an
-          administrator may change is on the{' '}
-          <HelpLink to="/help/page-administration">Administration</HelpLink> page.</p>
-        <p>The following fall under utility type settings:</p>
+        <p>Settings is a collection of both controls that affect {APP_NAME}'s behavior
+          and various utility type functions, listed in groups by what they are about. A section only
+          an administrator may change is listed only for an administrator. With sign-in protection off
+          there are no roles, and every section is listed.</p>
+        <HelpHeading anchor="personal">Personal</HelpHeading>
         <ul>
+          <li>
+            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
+          </li>
+          <li>
+            <strong>Security</strong> holds the password, passkeys and two-factor sign-in of the user
+            signed in. It is listed only while sign-in protection is on.
+            See <HelpLink to="/help/account-security">account security</HelpLink>.
+          </li>
+        </ul>
+        <HelpHeading anchor="data">Data</HelpHeading>
+        <ul>
+          <li>
+            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
+            encrypted to a backup key, and is where the backup encryption keys are kept. Administrators
+            only. See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+          </li>
           <li>
             <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
             sections that empty separately. An administrator also sees the backup history entries
-            removed from the Backup / Restore page.
+            removed from Backup / Restore.
+          </li>
+          <li>
+            <strong>Import storage</strong> clears the record each import keeps of the rows it
+            refused: duplicates still flagged for review, matches against another source, the
+            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
+            longer appear in the duplicates view and cannot be imported anyway. Imported
+            transactions are not affected.
           </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
@@ -4007,66 +4027,13 @@ export const HELP_TOPICS = [
             the <strong>Forget</strong> button.
           </li>
           <li>
-            <strong>Import storage</strong> clears the record each import keeps of the rows it
-            refused: duplicates still flagged for review, matches against another source, the
-            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
-            longer appear in the duplicates view and cannot be imported anyway. Imported
-            transactions are not affected.
-          </li>
-        </ul>
-        <p>The configuration related settings are:</p>
-        <ul>
-          <li>
-            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
-          </li>
-          <li>
-            <strong>Sign-in methods</strong> holds the password, passkeys and two-factor sign-in for
-            the account that is signed in. It is listed only while sign-in protection is on.
-            See <HelpLink to="/help/account-security">account security</HelpLink>.
-          </li>
-          <li>
             <strong>Currency</strong> defines the meaning of the values in the
             ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
           </li>
-          <li>
-            <strong>About</strong> lists the current version, license,
-            a pointer to the github repository, and the instance identifier. The instance identifier is
-            stored in backups so that a restore can warn before a backup is restored to a system
-            other than the one which it came from. Every restore gives the system a new identifier, so a
-            backup made before a restore is treated as coming from another system. For an administrator, About is also where the check
-            for a new version is switched on or off. When it is on, {APP_NAME} periodically checks for a
-            new release and adds a task when one is available.
-            The task can be dismissed, and returns with the next release.
-          </li>
         </ul>
-      </>
-    ),
-  },
-  {
-    id: 'page-administration',
-    section: 'administration',
-    title: 'Administration',
-    surfaces: ['Administration'],
-    summary: 'The settings that belong to the installation rather than to one user: how it starts, who can sign in, and backups. Only an administrator sees the page.',
-    body: () => (
-      <>
-        <p>*needs review*</p>
-        <p>
-          Administration holds what affects the whole installation. With sign-in protection on, the
-          page is listed only for users who are administrators. With it off, there are no roles and
-          the page is open to anyone using the app.
-        </p>
+        <HelpHeading anchor="server">Server</HelpHeading>
+        <p>What affects the whole installation. Administrators only.</p>
         <ul>
-          <li>
-            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
-            encrypted to a backup key, and is where the backup encryption keys are kept.
-            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
-          </li>
-          <li>
-            <strong>Error log</strong> lists the errors recorded in the "console log" file.
-            A new error adds a task to the Tasks page, which clears once the error log has been
-            opened.
-          </li>
           <li>
             <strong>User management</strong> adds and removes the users who can sign in, sets
             whether each is an administrator, and resets a password. It is listed only while sign-in
@@ -4095,7 +4062,23 @@ export const HELP_TOPICS = [
             overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
             <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
           </li>
+          <li>
+            <strong>Error log</strong> lists the errors recorded in the "console log" file.
+            A new error adds a task to the Tasks page, which clears once the error log has been
+            opened.
+          </li>
         </ul>
+        <HelpHeading anchor="about">About</HelpHeading>
+        <p>
+          <strong>About</strong>, the button at the right of the Settings title, lists the current version, license,
+          a pointer to the github repository, and the instance identifier. The instance identifier is
+          stored in backups so that a restore can warn before a backup is restored to a system
+          other than the one which it came from. Every restore gives the system a new identifier, so a
+          backup made before a restore is treated as coming from another system. For an administrator, About is also where the check
+          for a new version is switched on or off. When it is on, {APP_NAME} periodically checks for a
+          new release and adds a task when one is available.
+          The task can be dismissed, and returns with the next release.
+        </p>
       </>
     ),
   },
@@ -4103,7 +4086,7 @@ export const HELP_TOPICS = [
     id: 'running-a-server',
     section: 'administration',
     title: `Running ${APP_NAME} as a server`,
-    surfaces: ['Network access (Administration)', 'Set up HTTPS (Tasks)'],
+    surfaces: ['Network access (Settings)', 'Set up HTTPS (Tasks)'],
     summary: `One computer runs ${APP_NAME} and the other computers in the household open it in a browser. The same download does this when started in server mode; a reverse proxy in front of it adds HTTPS, which passkeys and connecting a data source from another device both need.`,
     body: () => (
       <>
@@ -4222,7 +4205,7 @@ export const HELP_TOPICS = [
           <strong>Browser warning about this server? Install its certificate</strong> on the sign-in
           screen, and follow the steps shown for that kind of computer. After the browser is closed and reopened
           the warning is gone for good. With sign-in protection off there is no sign-in screen, and the
-          same download and steps are under <strong>Administration &rarr; Server certificate</strong>.
+          same download and steps are under <strong>Settings &rarr; Server certificate</strong>.
         </p>
         <p>
           To be sure a computer received the server's own certificate, compare the fingerprint that
@@ -4252,7 +4235,7 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          <strong>Administration &rarr; Network access</strong> states which of these connections the
+          <strong>Settings &rarr; Network access</strong> states which of these connections the
           browser in use has, and whether other devices can open the installation at all, which is
           what decides who sign-in protection keeps out.
         </p>
@@ -4271,7 +4254,7 @@ export const HELP_TOPICS = [
     id: 'configuration',
     section: 'administration',
     title: 'Configuration settings',
-    surfaces: ['Startup configuration (Administration)'],
+    surfaces: ['Startup configuration (Settings)'],
     summary: `Every setting has a working default, so nothing needs configuring to get started. A .env file overrides the handful of values that have to be known before the app starts, such as the port and where the database files live.`,
     body: () => (
       <>
@@ -4376,7 +4359,7 @@ export const HELP_TOPICS = [
     id: 'data-and-backups',
     section: 'general-concepts',
     title: 'Data on disk, and backups',
-    surfaces: ['Backup / Restore (Administration)'],
+    surfaces: ['Backup / Restore (Settings)'],
     summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
     body: () => (
       <>
@@ -4400,7 +4383,7 @@ export const HELP_TOPICS = [
         <p>*needs review*</p>
         <p>
           Backups are made and restored by an administrator, under <strong>Backup / Restore</strong> on
-          the <HelpLink to="/help/page-administration">Administration</HelpLink> page. A backup holds
+          the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. A backup holds
           everything, in two parts, and what to put back is chosen when restoring.
         </p>
         <ul>
@@ -4631,7 +4614,7 @@ export const HELP_TOPICS = [
     id: 'account-security',
     section: 'general-concepts',
     title: 'Account security: password, passkeys and two-factor',
-    surfaces: ['Sign-in protection (Administration)', 'Sign-in methods (Settings)'],
+    surfaces: ['Sign-in protection (Settings)', 'Security (Settings)'],
     summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. A passkey signs in without a typed password and without a two-factor code; two-factor adds a code at sign-in and is optional.`,
     body: () => (
       <>
@@ -4647,7 +4630,7 @@ export const HELP_TOPICS = [
         <p>*needs review*</p>
         <p>
 
-          Sign-in protection is managed on the <HelpLink to="/help/page-administration">Administration</HelpLink> page.
+          Sign-in protection is managed in the Server group of the <HelpLink to="/help/page-settings#server">Settings</HelpLink> page.
           Enabling sign-in protection involves selecting a required password policy and creating a password
           for the current user who becomes an administrator. Other users will be prompted to create a password
           when they next connect. A password can be entered for them by an administrator but they still will
@@ -4661,7 +4644,7 @@ export const HELP_TOPICS = [
           only newly created passwords.
         </p>
         <p>
-          Each user's own password is changed under <strong>Sign-in methods</strong> on the{' '}
+          Each user's own password is changed under <strong>Security</strong> on the{' '}
           <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is
           required, and the change signs the account out of every other browser.
         </p>
