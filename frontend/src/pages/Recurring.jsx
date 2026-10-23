@@ -1320,31 +1320,30 @@ export default function Recurring() {
               >↗</button>
             )}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {/* "+ New" rather than "Add manually": the page names what is created (see ui-patterns). */}
-              <Button variant="ghost" onClick={() => setAdding(true)}>+ New</Button>
-              {reviewHasAny ? (
-                // The count is the whole signal for whether there is work, so the zero state has to say
-                // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
-                // at zero, and is deliberately not disabled: this button is the only route to the
-                // answered list, so greying it out would strand every answer behind the act of
-                // answering the last one.
-                <Button
-                  variant="ghost"
-                  onClick={() => { setReviewOpen(true); loadTransferReview() }}
-                  title={reviewCount
-                    ? `${reviewCount} transfer${reviewCount === 1 ? '' : 's'} could not be matched up: more than one transaction matches it equally well.`
-                    : 'Nothing pending.'}
-                >
-                  Transfer &amp; payment review{reviewCount ? ` (${reviewCount})` : ''}
-                </Button>
-              ) : null}
-              {/* Quiet: import, sync, edits and the app-load catch-up keep detection current, so this is
-                  a manual override rather than the page's main action. */}
-              <Button variant="ghost" onClick={scan} disabled={scanning}>
-                {scanning ? 'Scanning…' : 'Scan for recurring'}
+            {/* "+ New" rather than "Add manually": the page names what is created (see ui-patterns). */}
+            <Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button>
+            {reviewHasAny ? (
+              // The count is the whole signal for whether there is work, so the zero state has to say
+              // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
+              // at zero, and is deliberately not disabled: this button is the only route to the
+              // answered list, so greying it out would strand every answer behind the act of
+              // answering the last one.
+              <Button
+                small
+                variant="ghost"
+                onClick={() => { setReviewOpen(true); loadTransferReview() }}
+                title={reviewCount
+                  ? `${reviewCount} transfer${reviewCount === 1 ? '' : 's'} could not be matched up: more than one transaction matches it equally well.`
+                  : 'Nothing pending.'}
+              >
+                Transfer &amp; payment review{reviewCount ? ` (${reviewCount})` : ''}
               </Button>
-            </div>
+            ) : null}
+            {/* Quiet: import, sync, edits and the app-load catch-up keep detection current, so this is
+                a manual override rather than the page's main action. */}
+            <Button small variant="ghost" onClick={scan} disabled={scanning}>
+              {scanning ? 'Scanning…' : 'Scan for recurring'}
+            </Button>
           </PageHeader>
           <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 10px' }}>
             {scanSummary
