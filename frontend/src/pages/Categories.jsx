@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput } from '../components/ui.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import {
@@ -1757,13 +1758,18 @@ export default function Categories() {
   const categoryHighlightQuery = categorySearchActive ? categorySearch.trim() : ''
   const emptyCleanupCount = emptyCleanup.groups.length + emptyCleanup.categories.length
 
+  // Paint gate: the first load decides the header's actions and the whole tree, so painting before it
+  // lands shows a page that rearranges itself. A load that runs long still paints, on its loading state.
+  const loadSlow = useBusyIndicator(loading, { delayMs: PAINT_GATE_DELAY_MS })
+  if (loading && !loadSlow) return null
+
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" help={<FeatureExplainer topic="page-categories" placement="bottom-left" />}>
         {/* Empty-state-only offer: a one-time head start, shown only while the tree has no leaf
             categories. Once any leaf exists (starter set added, imported, or hand-made) it's gone, and
             deleting one category won't bring it back while others remain. */}
-        {!flatCats.some(cat => cat.parent_id) ? (
+        {!loading && !flatCats.some(cat => cat.parent_id) ? (
           <Button
             small
             variant="ghost"
