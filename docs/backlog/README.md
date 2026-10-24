@@ -174,10 +174,11 @@ scale — rather than by feature.
   **Compare** (left open deliberately), and the **Trends-tab double-count audit**, gated on that tab
   gaining a tag-report selector and unrelated to cash flow despite sharing the file. The trend-bucketing
   question was settled and built 2026-10-07 — see the Ledger.
-- [import-input-formats.md](import-input-formats.md) — **reduced 2026-09-03 to the two file formats,
+- [import-input-formats.md](import-input-formats.md) — **reduced 2026-09-03 to the file formats,
   unstarted.** The **parse-seam extraction** they shared is done (2026-09-18, with the PayPal statement
   import as the second front end): XLSX first, reusing the entire downstream unchanged, then OFX/QFX/QBO,
-  which follows the statement import's mapping-free path plus a `FITID` rung in dedupe. SimpleFIN — the Plaid-parallel connection track that
+  which follows the statement import's mapping-free path plus a `FITID` rung in dedupe, then QIF for
+  moving from Quicken (added 2026-10-23), mapping-free too, with splits and transfers. SimpleFIN — the Plaid-parallel connection track that
   shared this file — shipped 2026-08-07 and everything it taught is in
   [`../building-a-connector.md`](../building-a-connector.md).
 - [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
