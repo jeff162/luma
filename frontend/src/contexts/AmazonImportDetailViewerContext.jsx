@@ -62,7 +62,7 @@ export function AmazonImportDetailViewerRenderer() {
 
 // Nav-bar restore chip; the badge counts the "you probably lost something" rows (discarded items + duplicate
 // orders), since those are the reason to come back to this report.
-export function MinimizedAmazonImportDetailNavItem() {
+export function MinimizedAmazonImportDetailNavItem({ collapsed = false }) {
   const { viewer, restore } = useAmazonImportDetailViewer()
   if (!viewer || !viewer.minimized) return null
   const title = viewer.params?.title || ''
@@ -73,6 +73,8 @@ export function MinimizedAmazonImportDetailNavItem() {
       label={title ? `Import detail — ${title}` : 'Amazon import detail'}
       badgeCount={lost}
       title={`Restore Amazon import detail${title ? ` — ${title}` : ''}`}
+      navIcon="importDetail"
+      collapsed={collapsed}
       onRestore={restore}
     />
   )

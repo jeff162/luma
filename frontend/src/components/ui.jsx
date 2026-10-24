@@ -45,6 +45,13 @@ export const ROW_HOVER_OPEN_DELAY_MS = 300
 // The dwell for a status hint a pointer often crosses on the way somewhere else, so it does not flash.
 export const HOVER_OPEN_DELAY_MS = 300
 
+// Off screen but still read by assistive technology: a label that has to stay a control's accessible
+// name when the visible text is not there.
+export const VISUALLY_HIDDEN_STYLE = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0,
+}
+
 // The border-box width that fits a wrapped hint to its widest line, or null where nothing would shrink.
 // CSS cannot do this on its own: a `max-content` box whose text overflows `maxWidth` grows to exactly
 // `maxWidth`, and wrapping then leaves the unused remainder of the longest line as a blank strip down

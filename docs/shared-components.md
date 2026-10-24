@@ -55,7 +55,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `usePanelReveal` | A panel whose size settles after its content loads. | `components/detailShared.jsx` |
 | `DetailRangeControl` + `computeDetailRange` | The Month / Year / All-time selector of a drill list. | `components/detailShared.jsx` |
 | `FloatingPanel` / `OverlayBackdrop` | The surface and backdrop under any popover or overlay. | `components/ui.jsx` |
-| `useDetachedReportViewer` + `MinimizedReportPill` | A report that stays open across navigation and minimizes to the navigation pane. | `lib/useDetachedReportViewer.js`, `components/MinimizedReportPill.jsx` |
+| `useDetachedReportViewer` + `MinimizedReportPill` | A report that stays open across navigation and minimizes to the navigation pane. Each report passes a `navIcon` of its own (`components/navIcons.jsx`), which is all that tells it apart in a collapsed pane. | `lib/useDetachedReportViewer.js`, `components/MinimizedReportPill.jsx` |
 | `useUnifiedDuplicatesViewer` | Opening the duplicate report from any surface. | `contexts/UnifiedDuplicatesViewerContext.jsx` |
 | `useReconciliationViewer` | Opening a reconciliation report. A new vendor is an entry in `reconciliationVendors.js` and `RECONCILIATION_REPORTS`, not a new dialog. | `contexts/ReconciliationViewerContext.jsx`, `components/importExport/reconciliation/`, `lib/reconciliationReports.js` |
 | `useBatchDetailPanels` | Opening an import's transaction list in place, from any surface. | `components/importExport/useBatchDetailPanels.jsx` |
@@ -76,7 +76,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `ui.jsx` primitives | `Card`, `Button`, `Select`, `Input`, `Badge`, `Spinner`, `EmptyState`, `Tooltip`, `PageHeader`, `Toggle`, `SelectAllCheckbox`, `CategoryMarker`, and the style helpers `getFormControlStyle` / `getFloatingPanelSurfaceStyle`. | `components/ui.jsx` |
+| `ui.jsx` primitives | `Card`, `Button`, `Select`, `Input`, `Badge`, `Spinner`, `EmptyState`, `Tooltip`, `PageHeader`, `Toggle`, `SelectAllCheckbox`, `CategoryMarker`, and the style helpers `getFormControlStyle` / `getFloatingPanelSurfaceStyle` / `VISUALLY_HIDDEN_STYLE`. | `components/ui.jsx` |
 | `SectionListPage` (+ `useSectionParam`, `Subsection`) | A page of many sections that are each visited occasionally. | `components/SectionListPage.jsx` |
 | `SegmentedToggle` | Switching between peer views of one subject. | `components/ui.jsx` |
 | `AppDialog` / `AppConfirmDialog` / `AppNoticeDialog` / `AppTextEntryDialog` | A dialog that is opened, answered and closed. The body scrolls with the header and actions pinned, so a caller does not cap its own content height. Opened from inside a row or a list, portal it to `<body>`, because it renders where it is mounted. | `components/ui.jsx` |

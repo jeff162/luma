@@ -286,7 +286,7 @@ export const HELP_TOPICS = [
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-rules">Rules</HelpLink></td>
-                <td>Handle the the task of categorizing transactions as they are loaded.
+                <td>Handle the task of categorizing transactions as they are loaded.
                 </td>
               </tr>
               <tr>

@@ -164,13 +164,7 @@ The two sections, in a topic doc:
 Two rules make these load-bearing rather than decorative:
 
 - **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
-- **Code comments cite a stable doc location, never a project filename:** `docs/<doc>.md` → *Section name*. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
-
-## Retiring a shipped backlog item
-
-When a backlog item ships, retire its file rather than keeping it: fold the durable half into the topic
-doc that owns the question, leaving out what a comment at the code site already says, repoint the code citations off the project filename, and record the path in
-`docs/backlog/README.md` → *Ledger*, which states the ritual in full.
+- **Code comments cite a stable doc location, never a project filename:** `docs/<doc>.md` → *Section name*. Backlog filenames are transient by construction and links to them decay. When a project file is deleted, repoint its code citations in the same change.
 
 ## For Claude / harness-based agents
 

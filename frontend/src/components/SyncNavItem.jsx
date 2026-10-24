@@ -20,6 +20,9 @@
 // **The label is relative and the tooltip is absolute.** A resizable pane has no room for
 // "9/5/2026, 07:40 AM", and the question here is staleness rather than the exact moment. `useRelativeTimestamp`
 // re-renders the label as it ages so it cannot drift, and the exact time is one hover away.
+//
+// **Collapsed, the icon carries the state** — turning while a run is live, a check once it has finished —
+// in the same colours the open row's glyph uses, since the label is gone and a tablet has no hover.
 
 import { useState } from 'react'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
@@ -28,7 +31,8 @@ import { connectionProviderLabel as providerLabel, syncFreshness, syncNavLabel }
 import { useRelativeTimestamp } from '../lib/useRelativeTimestamp.js'
 import { rosterAdded } from '../lib/syncRoster.js'
 import { formatTimestamp } from '../lib/utils.js'
-import { AppNoticeDialog } from './ui.jsx'
+import { AppNoticeDialog, VISUALLY_HIDDEN_STYLE } from './ui.jsx'
+import { NavIcon } from './navIcons.jsx'
 
 // What the tooltip says about each provider under the headline, so a stale overall figure can be traced
 // to the connection responsible for it without opening the Connections tab.
@@ -43,7 +47,7 @@ function providerLines(byProvider) {
   })
 }
 
-export function SyncNavItem({ style, activeStyle }) {
+export function SyncNavItem({ style, activeStyle, collapsed = false }) {
   // Every value here is read, none fetched. `providers` is the listing `SyncStatusContext` already loads
   // at boot to spot a sync started elsewhere, and keeps current through a run — this component used to
   // request the same endpoint a second time on every app load purely because the context's flattened
@@ -106,6 +110,7 @@ export function SyncNavItem({ style, activeStyle }) {
   // it, this row is permanent, so it should read as part of the pane rather than as something stashed in
   // it. `activeStyle` marks it while a run is live — the same "you are here" weight an open page carries.
   const rowStyle = driving || finished ? activeStyle : style
+  const glyphColor = driving ? 'var(--accent)' : finished ? 'var(--success)' : 'var(--muted)'
   return (
     <>
       <button type="button" onClick={onClick} title={title} style={{
@@ -119,11 +124,19 @@ export function SyncNavItem({ style, activeStyle }) {
         fontSize: 14,
         minWidth: 0,
       }}>
-        <span aria-hidden style={{
-          flexShrink: 0, marginRight: 8,
-          color: driving ? 'var(--accent)' : finished ? 'var(--success)' : 'var(--muted)',
-        }}>{driving ? '↻' : finished ? '✓' : '↻'}</span>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {collapsed ? (
+          <span style={{ color: glyphColor }}>
+            <NavIcon
+              name={finished ? 'syncDone' : 'sync'}
+              className={driving ? 'ui-refresh-icon is-spinning' : undefined}
+            />
+          </span>
+        ) : (
+          <span aria-hidden style={{ flexShrink: 0, marginRight: 8, color: glyphColor }}>
+            {finished ? '✓' : '↻'}
+          </span>
+        )}
+        <span style={collapsed ? VISUALLY_HIDDEN_STYLE : { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}
         </span>
       </button>

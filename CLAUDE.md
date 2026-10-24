@@ -73,7 +73,3 @@ branch state from the injected snapshot.
   `txn_link` vs `exclude_from_totals`) — picking wrong puts bad data in the ledger quietly
 - `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
   building any UI element** (reuse is the default; a one-off needs justification)
-
-**When a shipped backlog item is disposed of**, the ritual is stated in `docs/backlog/README.md`: fold the
-durable half into the topic doc that owns the question, repoint the code citations off the project
-filename, and record the path in that file's *Ledger*.

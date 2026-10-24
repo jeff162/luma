@@ -6,7 +6,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { createPortal } from 'react-dom'
-import { Card, PageHeader, Button, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
+import { Card, PageHeader, Button, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
@@ -882,10 +882,7 @@ export default function Rules() {
       }}>
         {/* Visually-hidden but real <label htmlFor> — Chrome's "no label associated" check wants an
             actual label association (a placeholder/aria-label alone doesn't satisfy it). */}
-        <label htmlFor={searchId} style={{
-          position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
-          overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0,
-        }}>
+        <label htmlFor={searchId} style={VISUALLY_HIDDEN_STYLE}>
           Search rules by merchant
         </label>
         <SearchInput id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" wrapperStyle={{ width: 260 }} />

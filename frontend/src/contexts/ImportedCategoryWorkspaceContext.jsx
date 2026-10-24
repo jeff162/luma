@@ -18,7 +18,7 @@
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { AppConfirmDialog, AppDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
-import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
+import { MinimizedReportPill } from '../components/MinimizedReportPill.jsx'
 import { UNASSIGNED_CATEGORY_SYSTEM_KEY } from '../lib/importExport/constants.js'
 import {
   normalizeImportCategoryValue,
@@ -425,34 +425,18 @@ export function ImportedCategoryWorkspaceRenderer() {
 
 // Nav-bar chip shown while the workspace is minimized; clicking restores it (and re-fetches categories
 // so the draft reconciles against any edits made while it was stashed).
-export function MinimizedImportedCategoryWorkspaceNavItem() {
+export function MinimizedImportedCategoryWorkspaceNavItem({ collapsed = false }) {
   const ctx = useImportedCategoryWorkspace()
   if (!ctx.isOpen || !ctx.minimized) return null
   return (
-    <button
-      type="button"
-      onClick={ctx.restore}
+    <MinimizedReportPill
+      label="Group categories"
+      badgeCount={ctx.pendingCount}
+      tone="var(--accent)"
+      navIcon="groupCategories"
+      collapsed={collapsed}
       title={`Restore Group Imported Categories${ctx.pendingCount ? ` (${ctx.pendingCount} left to group)` : ''}`}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 10px',
-        margin: '4px 0',
-        background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-        color: 'var(--text)',
-        border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
-        borderRadius: 8,
-        cursor: 'pointer',
-        fontSize: 12,
-        textAlign: 'left',
-        width: '100%',
-        overflow: 'hidden',
-      }}
-    >
-      <span style={{ fontSize: 13, lineHeight: 1, color: 'var(--accent2)' }}>↗</span>
-      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        Group categories
-      </span>
-      <ActionCountBadge count={ctx.pendingCount} tone="warning" />
-    </button>
+      onRestore={ctx.restore}
+    />
   )
 }

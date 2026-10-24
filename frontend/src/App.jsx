@@ -27,6 +27,7 @@ import { ROUTE_PREFETCHERS } from './lib/routeChunks.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
 import DataLocationLine from './components/DataLocationLine.jsx'
+import { useShownDataLocation } from './lib/dataLocation.js'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
 import {
@@ -66,6 +67,7 @@ import {
   SUPPORTED_DATA_PROVIDERS,
 } from './lib/appConfig.js'
 import { localStore } from './lib/browserStorage.js'
+import { NavIcon } from './components/navIcons.jsx'
 import { preventPressDefaults, trackPointer } from './lib/pointerDrag.js'
 
 // Shown in two places that cannot share a component: the dialog below, which renders inside the app,
@@ -235,30 +237,43 @@ const s = {
     fontSize: 20, fontWeight: 700, color: 'var(--accent2)',
     padding: '0 20px 28px', letterSpacing: '-0.5px',
   },
+  logoCollapsed: { padding: '0 14px 20px', display: 'grid', gap: 10, justifyItems: 'start' },
   link: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative',
     padding: '10px 20px', color: 'var(--muted)',
     textDecoration: 'none', fontSize: 14, borderRadius: 6,
     margin: '1px 8px', transition: 'all 0.15s',
+    overflow: 'hidden', whiteSpace: 'nowrap',
+  },
+  // Centres an 18px icon in the collapsed column: 8 margin + 11 padding + 9 = 28, half of 56.
+  linkCollapsed: { padding: '10px 11px' },
+  // Out of sight but still read, so a collapsed link keeps its label as its accessible name.
+  visuallyHidden: {
+    position: 'absolute', width: 1, height: 1, margin: -1, padding: 0,
+    overflow: 'hidden', clip: 'rect(0 0 0 0)', border: 0,
   },
   main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 },
   content: { flex: 1, overflow: 'hidden', minHeight: 0 },
   navFooter: { marginTop: 'auto', padding: '18px 16px 0', borderTop: '1px solid var(--border)' },
+  navFooterCollapsed: {
+    marginTop: 'auto', padding: '14px 14px 0', borderTop: '1px solid var(--border)',
+    display: 'grid', gap: 8, justifyItems: 'start',
+  },
 }
 
 const activeStyle = { ...s.link, background: 'var(--surface2)', color: 'var(--text)' }
 
 const NAV_LINKS = [
-  ['/', 'Dashboard'],
-  ['/transactions', 'Transactions'],
-  ['/import-export', 'Import'],
-  ['/rules', 'Rules'],
-  ['/categories', 'Categories'],
-  ['/recurring', 'Recurring'],
-  ['/tasks', 'Tasks'],
-  ['/accounts', 'Accounts'],
-  ['/settings', 'Settings'],
-  ['/help', 'Help'],
+  ['/', 'Dashboard', 'dashboard'],
+  ['/transactions', 'Transactions', 'transactions'],
+  ['/import-export', 'Import', 'import'],
+  ['/rules', 'Rules', 'rules'],
+  ['/categories', 'Categories', 'categories'],
+  ['/recurring', 'Recurring', 'recurring'],
+  ['/tasks', 'Tasks', 'tasks'],
+  ['/accounts', 'Accounts', 'accounts'],
+  ['/settings', 'Settings', 'settings'],
+  ['/help', 'Help', 'help'],
 ]
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
@@ -314,6 +329,36 @@ const GLOBAL_SCROLLBAR_STYLES = `
     background: transparent;
   }
 
+  .app-nav {
+    transition: width 0.2s ease;
+  }
+  .app-nav.is-resizing {
+    transition: none;
+  }
+  .nav-icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .nav-icon-button:hover {
+    background: var(--surface2);
+    color: var(--text);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .app-nav {
+      transition: none;
+    }
+  }
+
   .nav-resize-handle {
     position: absolute;
     top: 0;
@@ -347,6 +392,48 @@ const NAV_PANE_WIDTH_STORAGE_KEY = 'luma.ui.navPaneWidth'
 const NAV_PANE_DEFAULT_WIDTH = 220
 const NAV_PANE_MIN_WIDTH = 140
 const NAV_PANE_MAX_WIDTH = NAV_PANE_DEFAULT_WIDTH
+// Collapsing keeps the dragged width, so opening the pane again returns it to where it was.
+const NAV_PANE_COLLAPSED_STORAGE_KEY = 'luma.ui.navPaneCollapsed'
+const NAV_PANE_COLLAPSED_WIDTH = 56
+const LUMA_ICON_URL = `${import.meta.env.BASE_URL}favicon.svg`
+
+// A name's initials for the collapsed pane: the first letter of a one-word name, otherwise the first
+// letters of its first and last words. `Array.from` so a name opening on an emoji keeps it whole.
+function nameInitials(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean)
+  if (!words.length) return ''
+  const first = word => Array.from(word)[0].toUpperCase()
+  return words.length === 1 ? first(words[0]) : first(words[0]) + first(words[words.length - 1])
+}
+
+// Shaped like the open pane's profile pill, so the two read as the same thing.
+function ProfileInitials({ name }) {
+  const initials = nameInitials(name)
+  if (!initials) return <NavIcon name="profile" />
+  return (
+    <span aria-hidden="true" style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      width: 26, height: 26, borderRadius: '50%',
+      background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)',
+      fontSize: 11, fontWeight: 600, lineHeight: 1,
+    }}>
+      {initials}
+    </span>
+  )
+}
+
+// Stands in for the wordmark, version and data-location line, so its hover text says what they said.
+function CollapsedNavLogo({ dataLocation, version }) {
+  const shown = useShownDataLocation(dataLocation)
+  const hoverText = [
+    APP_NAME,
+    version ? `v${version}` : null,
+    shown?.serverName,
+    shown?.path,
+    shown?.controlPath ? `Control database: ${shown.controlPath}` : null,
+  ].filter(Boolean).join('\n')
+  return <img src={LUMA_ICON_URL} alt={APP_NAME} title={hoverText} width={28} height={28} style={{ display: 'block' }} />
+}
 
 function clampNavPaneWidth(value) {
   if (!Number.isFinite(value)) return NAV_PANE_DEFAULT_WIDTH
@@ -1015,6 +1102,7 @@ export default function App() {
   const [topTaskSeverity, setTopTaskSeverity] = useState(null)
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth)
   const [navResizing, setNavResizing] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState(() => localStore.get(NAV_PANE_COLLAPSED_STORAGE_KEY) === '1')
   const [authChecked, setAuthChecked] = useState(false)
   // Bumped when the api layer reports a lost session; the identity bootstrap below keys on it so the
   // shell re-establishes or re-gates rather than sitting on a dead session.
@@ -1413,6 +1501,10 @@ export default function App() {
     localStore.set(NAV_PANE_WIDTH_STORAGE_KEY, String(navPaneWidth))
   }, [navPaneWidth])
 
+  useEffect(() => {
+    localStore.set(NAV_PANE_COLLAPSED_STORAGE_KEY, navCollapsed ? '1' : '0')
+  }, [navCollapsed])
+
   function startNavPaneResize(event) {
     preventPressDefaults(event)
     const startX = event.clientX
@@ -1434,6 +1526,25 @@ export default function App() {
   function resetNavPaneWidth() {
     setNavPaneWidth(NAV_PANE_DEFAULT_WIDTH)
   }
+
+  function openNavProfileMenu(event) {
+    event.preventDefault()
+    if (!activeLocalProfile) return
+    setNavProfileMenu({ x: event.clientX, y: event.clientY })
+  }
+
+  const navPaneToggle = (
+    <button
+      type="button"
+      className="nav-icon-button"
+      onClick={() => setNavCollapsed(collapsed => !collapsed)}
+      aria-expanded={!navCollapsed}
+      aria-label={navCollapsed ? 'Expand navigation pane' : 'Collapse navigation pane'}
+      title={navCollapsed ? 'Expand navigation pane' : 'Collapse navigation pane'}
+    >
+      <NavIcon name={navCollapsed ? 'expand' : 'collapse'} />
+    </button>
+  )
 
   async function handleLogout() {
     await api.logout().catch(() => { })
@@ -1814,37 +1925,65 @@ export default function App() {
                               />
                             ) : null}
                             <div style={s.shell}>
-                              <nav style={{ ...s.nav, width: navPaneWidth }}>
-                                <div style={s.logo}>
-                                  <div>{APP_NAME}</div>
-                                  {developerOptionsEnabled ? (
-                                    <div style={{
-                                      marginTop: 3,
-                                      fontSize: 11,
-                                      fontWeight: 600,
-                                      color: 'var(--muted)',
-                                      letterSpacing: '0.04em',
-                                    }}>
-                                      v{APP_VERSION}
+                              <nav
+                                className={`app-nav${navResizing ? ' is-resizing' : ''}`}
+                                style={{ ...s.nav, width: navCollapsed ? NAV_PANE_COLLAPSED_WIDTH : navPaneWidth }}
+                              >
+                                {navCollapsed ? (
+                                  <div style={s.logoCollapsed}>
+                                    <CollapsedNavLogo
+                                      dataLocation={dataLocation}
+                                      version={developerOptionsEnabled ? APP_VERSION : null}
+                                    />
+                                    {navPaneToggle}
+                                  </div>
+                                ) : (
+                                  <div style={s.logo}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {APP_NAME}
+                                      </div>
+                                      {navPaneToggle}
                                     </div>
-                                  ) : null}
-                                  <DataLocationLine dataLocation={dataLocation} />
-                                </div>
-                                {NAV_LINKS.map(([to, label]) => (
+                                    {developerOptionsEnabled ? (
+                                      <div style={{
+                                        marginTop: 3,
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        color: 'var(--muted)',
+                                        letterSpacing: '0.04em',
+                                      }}>
+                                        v{APP_VERSION}
+                                      </div>
+                                    ) : null}
+                                    <DataLocationLine dataLocation={dataLocation} />
+                                  </div>
+                                )}
+                                {NAV_LINKS.map(([to, label, icon]) => (
                                   <NavLink
                                     key={to}
                                     to={to}
                                     end={to === '/'}
-                                    style={({ isActive }) => (isActive ? activeStyle : s.link)}
+                                    title={navCollapsed ? label : undefined}
+                                    style={({ isActive }) => ({
+                                      ...(isActive ? activeStyle : s.link),
+                                      ...(navCollapsed ? s.linkCollapsed : null),
+                                    })}
                                   >
-                                    <span>{label}</span>
+                                    {navCollapsed ? <NavIcon name={icon} /> : null}
+                                    <span style={navCollapsed ? s.visuallyHidden : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {label}
+                                    </span>
                                     {to === '/tasks' && taskCount > 0 && (
                                       <span style={{
                                         background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
                                         color: '#fff',
-                                        fontSize: 11, fontWeight: 700,
-                                        padding: '1px 7px', borderRadius: 99,
-                                        lineHeight: '18px', minWidth: 20, textAlign: 'center',
+                                        fontWeight: 700,
+                                        borderRadius: 99,
+                                        textAlign: 'center',
+                                        ...(navCollapsed
+                                          ? { position: 'absolute', top: 3, left: 22, fontSize: 10, padding: '0 4px', lineHeight: '15px', minWidth: 15 }
+                                          : { fontSize: 11, padding: '1px 7px', lineHeight: '18px', minWidth: 20 }),
                                       }}>
                                         {taskCount}
                                       </span>
@@ -1853,11 +1992,56 @@ export default function App() {
                                 ))}
                                 {/* Permanent, so it belongs with the pages rather than among the stashed-report
                             pills below it — see components/SyncNavItem.jsx. */}
-                                <SyncNavItem style={s.link} activeStyle={activeStyle} />
-                                <MinimizedDuplicatesNavItem />
-                                <MinimizedReconciliationNavItem />
-                                <MinimizedAmazonImportDetailNavItem />
-                                <MinimizedImportedCategoryWorkspaceNavItem />
+                                <SyncNavItem
+                                  style={navCollapsed ? { ...s.link, ...s.linkCollapsed } : s.link}
+                                  activeStyle={navCollapsed ? { ...activeStyle, ...s.linkCollapsed } : activeStyle}
+                                  collapsed={navCollapsed}
+                                />
+                                <MinimizedDuplicatesNavItem collapsed={navCollapsed} />
+                                <MinimizedReconciliationNavItem collapsed={navCollapsed} />
+                                <MinimizedAmazonImportDetailNavItem collapsed={navCollapsed} />
+                                <MinimizedImportedCategoryWorkspaceNavItem collapsed={navCollapsed} />
+                                {navCollapsed ? (
+                                  <div style={s.navFooterCollapsed}>
+                                    {authEnabled ? (
+                                      <span
+                                        role="img"
+                                        aria-label={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
+                                        title={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
+                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, color: 'var(--muted)' }}
+                                      >
+                                        <ProfileInitials name={currentUser?.display_name || currentUser?.username} />
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="nav-icon-button"
+                                        onClick={handleSwitchLocalProfile}
+                                        onContextMenu={openNavProfileMenu}
+                                        aria-label={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}
+                                        title={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}
+                                      >
+                                        <ProfileInitials name={activeLocalProfile?.name} />
+                                      </button>
+                                    )}
+                                    {authEnabled && (
+                                      <button type="button" className="nav-icon-button" onClick={handleLogout} aria-label="Sign out" title="Sign out">
+                                        <NavIcon name="signOut" />
+                                      </button>
+                                    )}
+                                    {shutdownAvailable && (
+                                      <button
+                                        type="button"
+                                        className="nav-icon-button"
+                                        onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
+                                        aria-label="Shut down Luma"
+                                        title="Shut down Luma — stop it on this computer"
+                                      >
+                                        <NavIcon name="shutDown" />
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
                                 <div style={s.navFooter}>
                                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                                     {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
@@ -1894,14 +2078,7 @@ export default function App() {
                                       ) : (
                                         <button
                                           onClick={handleSwitchLocalProfile}
-                                          onContextMenu={e => {
-                                            e.preventDefault()
-                                            if (!activeLocalProfile) return
-                                            setNavProfileMenu({
-                                              x: e.clientX,
-                                              y: e.clientY,
-                                            })
-                                          }}
+                                          onContextMenu={openNavProfileMenu}
                                           style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -1961,15 +2138,18 @@ export default function App() {
                                     </button>
                                   )}
                                 </div>
-                                <div
-                                  className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
-                                  onPointerDown={startNavPaneResize}
-                                  onDoubleClick={resetNavPaneWidth}
-                                  role="separator"
-                                  aria-orientation="vertical"
-                                  aria-label="Resize navigation pane"
-                                  title="Drag to resize · double-click to reset"
-                                />
+                                )}
+                                {navCollapsed ? null : (
+                                  <div
+                                    className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
+                                    onPointerDown={startNavPaneResize}
+                                    onDoubleClick={resetNavPaneWidth}
+                                    role="separator"
+                                    aria-orientation="vertical"
+                                    aria-label="Resize navigation pane"
+                                    title="Drag to resize · double-click to reset"
+                                  />
+                                )}
                               </nav>
                               <div style={s.main}>
                                 {demoLoaded ? (
@@ -2034,6 +2214,9 @@ export default function App() {
                                 <button
                                   onClick={() => {
                                     setNavProfileMenu(null)
+                                    // The inline editor has no room in the icon column, so a rename from a
+                                    // collapsed pane opens it.
+                                    setNavCollapsed(false)
                                     setNavProfileDraft(activeLocalProfile.name)
                                     setNavProfileEditing(true)
                                   }}

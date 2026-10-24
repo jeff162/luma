@@ -180,7 +180,7 @@ export function UnifiedDuplicatesViewerRenderer() {
 }
 
 // Styled as a chip (not a NavLink) so users don't mistake it for a permanent page entry.
-export function MinimizedDuplicatesNavItem() {
+export function MinimizedDuplicatesNavItem({ collapsed = false }) {
   const { viewer, restore } = useUnifiedDuplicatesViewer()
   if (!viewer || !viewer.minimized) return null
   const title = viewer.params?.title
@@ -192,6 +192,8 @@ export function MinimizedDuplicatesNavItem() {
       label={`Duplicates — ${title}`}
       badgeCount={unresolvedRows}
       title={`Restore duplicate detection report — ${title} (${unresolvedRows} left to review)`}
+      navIcon="duplicates"
+      collapsed={collapsed}
       onRestore={restore}
     />
   )

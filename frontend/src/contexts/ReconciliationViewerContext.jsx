@@ -74,7 +74,7 @@ export function ReconciliationViewerRenderer() {
 
 // Styled as a chip (not a NavLink) so users don't mistake it for a permanent page entry. The badge counts
 // the rows the vendor says still need resolving.
-export function MinimizedReconciliationNavItem() {
+export function MinimizedReconciliationNavItem({ collapsed = false }) {
   const { viewer, restore } = useReconciliationViewer()
   if (!viewer || !viewer.minimized) return null
   const report = RECONCILIATION_REPORTS[viewer.params.vendor]
@@ -85,6 +85,8 @@ export function MinimizedReconciliationNavItem() {
       label={title ? `${report.title} — ${title}` : report.title}
       badgeCount={problemCount}
       title={`Restore ${report.title} report${title ? ` — ${title}` : ''} (${problemCount} to resolve)`}
+      navIcon="reconciliation"
+      collapsed={collapsed}
       onRestore={restore}
     />
   )

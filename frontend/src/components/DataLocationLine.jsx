@@ -17,9 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip } from './ui.jsx'
-import { APP_NAME } from '../lib/appConfig.js'
-import { describeDataLocation, NAV_DATA_LOCATION_PREF_KEY } from '../lib/dataLocation.js'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useShownDataLocation } from '../lib/dataLocation.js'
 
 const COPIED_MESSAGE_MS = 1400
 
@@ -28,19 +26,12 @@ const COPIED_MESSAGE_MS = 1400
 const LTR_MARK = '\u200E'
 
 export default function DataLocationLine({ dataLocation }) {
-  // Read here rather than by the shell, which renders above `UserPreferencesProvider` — the same reason
-  // `ThemeController` is its own component. The backend's `show_by_default` is passed as the preference
-  // *default*, so an untouched preference follows the installation (moving the databases later makes the
-  // line appear on its own) while an explicit choice, either way, wins from then on.
-  const [showDataLocation] = useUserPreference(
-    NAV_DATA_LOCATION_PREF_KEY, !!dataLocation?.show_by_default,
-  )
   const [copied, setCopied] = useState(null)
   const timerRef = useRef(null)
   useEffect(() => () => clearTimeout(timerRef.current), [])
 
-  const described = describeDataLocation(dataLocation)
-  if (!described || !showDataLocation) return null
+  const described = useShownDataLocation(dataLocation)
+  if (!described) return null
 
   async function copyPath() {
     clearTimeout(timerRef.current)
@@ -55,11 +46,9 @@ export default function DataLocationLine({ dataLocation }) {
     timerRef.current = setTimeout(() => setCopied(null), COPIED_MESSAGE_MS)
   }
 
-  const serverName = String(dataLocation.app_name || '').trim()
-
   return (
     <>
-    {serverName && serverName !== APP_NAME ? (
+    {described.serverName ? (
       <div
         data-testid="server-app-name"
         style={{
@@ -67,7 +56,7 @@ export default function DataLocationLine({ dataLocation }) {
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}
       >
-        {serverName}
+        {described.serverName}
       </div>
     ) : null}
     <Tooltip
