@@ -75,11 +75,6 @@ scale — rather than by feature.
   a marketplace review shell that Amazon moves onto in the same change, the enriched `eBay: <item>` name
   with a rule pass for uncategorized charges, and eBay joining Amazon as a row in the data-source list. No product
   decisions owed.
-- [import-source-field-registry.md](import-source-field-registry.md) — **shipped; deferred remainder
-  only.** The registry, the origin surfacing built on it, and opt-in source-text rule matching all landed
-  and are folded into `data-model.md`. What remains: selectable report columns drawn
-  from the registry, and structured `(field, op, value)` matchers in place of the shipped
-  "anywhere in the source text" form.
 - [online-categorizer.md](online-categorizer.md) — **parked design.** An opt-in online (LLM) merchant
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth

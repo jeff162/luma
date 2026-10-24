@@ -2641,9 +2641,6 @@ and owed decisions*.
 - **Marketplace enrichment remainder**: AZAD ingestion ergonomics, re-deriving enrichment from stored
   raw values, and the column-centric mapping rework.
   → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)
-- **Import-source field registry remainder**: report columns drawn from the registry, and structured
-  `(field, op, value)` rule matchers.
-  → [`backlog/import-source-field-registry.md`](backlog/import-source-field-registry.md)
 - **Recurring detection**: the pool-load cost of a scoped scan, the long-cadence bias on stale series,
   and showing a transfer pair that is not a series.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
