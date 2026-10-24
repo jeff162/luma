@@ -109,9 +109,9 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
             </label>
           ) : null}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button small variant="ghost" onClick={onClose}>Cancel</Button>
             {total > 0 ? (
-              <Button
+              <Button small
                 onClick={run}
                 disabled={working || selected.size === 0}
                 style={{ background: 'var(--danger)', color: '#fff', border: 'none' }}

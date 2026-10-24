@@ -704,38 +704,17 @@ function LocalPreferenceProfileScreen({
               }}
             />
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button
+              <Button
+                small
                 onClick={() => name.trim() && onCreate(name.trim(), () => setName(''))}
                 disabled={!name.trim() || creating}
-                style={{
-                  background: !name.trim() || creating ? 'var(--surface)' : 'var(--accent)',
-                  color: !name.trim() || creating ? 'var(--muted)' : '#fff',
-                  border: !name.trim() || creating ? '1px solid var(--border)' : 'none',
-                  borderRadius: 10,
-                  padding: '9px 16px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: !name.trim() || creating ? 'not-allowed' : 'pointer',
-                }}
               >
                 {creating ? 'Creating…' : 'Create user'}
-              </button>
+              </Button>
               {showCancel ? (
-                <button
-                  onClick={onCancel}
-                  style={{
-                    marginLeft: 'auto',
-                    background: 'none',
-                    color: 'var(--muted)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 10,
-                    padding: '9px 14px',
-                    fontSize: 13,
-                    cursor: 'pointer',
-                  }}
-                >
+                <Button small variant="ghost" onClick={onCancel} style={{ marginLeft: 'auto' }}>
                   Cancel
-                </button>
+                </Button>
               ) : null}
             </div>
             {error ? (

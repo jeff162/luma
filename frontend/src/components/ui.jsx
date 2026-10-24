@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, forwardRef, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
@@ -757,6 +757,11 @@ export function AppTextEntryDialog({
   )
 }
 
+// The size a `Button` takes when its caller does not say. A page's or panel's action rows (its header
+// cluster and its footer) provide `small`, so every Save, Cancel and Close across the app is one size
+// without each call site having to remember it. An explicit `small={false}` still opts out.
+const ButtonSizeContext = createContext(false)
+
 export function DialogActions({ children, align = 'end', style, background = 'var(--surface2)' }) {
   const justifyContent = align === 'between'
     ? 'space-between'
@@ -776,7 +781,7 @@ export function DialogActions({ children, align = 'end', style, background = 'va
         ...style,
       }}
     >
-      {children}
+      <ButtonSizeContext.Provider value>{children}</ButtonSizeContext.Provider>
     </div>
   )
 }
@@ -810,7 +815,7 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
         {leftAdornment}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginLeft: 'auto' }}>
-        {children}
+        <ButtonSizeContext.Provider value>{children}</ButtonSizeContext.Provider>
       </div>
     </div>
   )
@@ -825,8 +830,10 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
 // `progress` (a 0–1 fraction) turns the button into its own progress bar for a long action it started: the
 // face fills from the left behind the label, which carries the figures. A running bar is the button busy
 // rather than unavailable, so it keeps its full colour even though it is disabled for the duration.
-export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title,
+export function Button({ children, onClick, onMouseDown, variant = 'primary', small: smallProp, disabled, style, title,
   type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress }) {
+  const contextSmall = useContext(ButtonSizeContext)
+  const small = smallProp ?? contextSmall
   const showsProgress = typeof progress === 'number' && Number.isFinite(progress)
   const base = {
     padding: small ? '6px 12px' : '9px 16px',

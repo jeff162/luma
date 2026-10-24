@@ -437,7 +437,7 @@ export function RulePreviewDetail({
           )}
         </div>
         <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', justifyContent: 'flex-end' }}>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          <Button small variant="ghost" onClick={onClose}>Close</Button>
         </div>
       </FloatingPanel>
     </OverlayBackdrop>

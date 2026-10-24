@@ -325,17 +325,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
     cursor: working ? 'not-allowed' : 'pointer',
     opacity: working ? 0.65 : 1,
   }
-  const primaryHeaderButtonStyle = {
-    background: draftState.canSave ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'var(--surface)',
-    color: draftState.canSave ? 'var(--accent2)' : 'var(--muted)',
-    border: `1px solid ${draftState.canSave ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`,
-    borderRadius: 8,
-    padding: '5px 12px',
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: working || !draftState.canSave ? 'not-allowed' : 'pointer',
-    opacity: working ? 0.65 : 1,
-  }
 
   return (
     <DetailPanelShell
@@ -362,22 +351,12 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
               <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={working} />
               Re-evaluate transactions
             </label>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={working || !draftState.canSave}
-              style={primaryHeaderButtonStyle}
-            >
+            <Button small onClick={handleSave} disabled={working || !draftState.canSave}>
               {working ? 'Saving…' : 'Save changes'}
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={working}
-              style={quietHeaderButtonStyle}
-            >
+            </Button>
+            <Button small variant="ghost" onClick={onCancel} disabled={working}>
               Cancel
-            </button>
+            </Button>
             {/* Destructive, so it sits at the far end rather than beside Save, and behind a confirm.
                 Deleting from here saves opening the rule, deciding against it, and hunting the same rule
                 down in the list to remove it. */}

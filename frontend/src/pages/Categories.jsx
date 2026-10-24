@@ -1879,21 +1879,9 @@ export default function Categories() {
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                     Select categories, then right-click to choose an action.
                   </div>
-                  <button
-                    onClick={cancelBulkSelect}
-                    style={{
-                      background: 'none',
-                      border: '1px solid var(--border)',
-                      color: 'var(--muted)',
-                      borderRadius: 999,
-                      padding: '4px 10px',
-                      fontSize: 12,
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
+                  <Button small variant="ghost" onClick={cancelBulkSelect} style={{ flexShrink: 0 }}>
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {loading ? <Spinner /> : ['income', 'expense'].map(sectionType => {

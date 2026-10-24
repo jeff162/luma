@@ -93,6 +93,11 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   a URL parameter wins over the stored value so a deep link lands where it means to.
 - **Header or toolbar.** The header carries what acts on the whole subject (add one, run a pass, open a
   report). A toolbar under it carries what shapes which rows are listed (search, filter, sort).
+- **Action rows use the small button.** A page or panel header's actions and a dialog's or panel's
+  Save, Cancel and Close take `Button`'s `small` size, so the same verbs look the same on every surface.
+  `PageHeader` and `DialogActions` (and so `AppDialog`'s `actions`) apply it to the buttons they hold; a
+  hand-built header or footer passes `small` itself. Buttons inside the body may differ where the
+  content calls for it.
 - **Refresh sits on the title.** `RefreshButton` goes straight after the title of what it reloads:
   `PageHeader` and `AppDialog` take it as `refresh`.
 - **Close is at the upper right** of a panel or dialog header.

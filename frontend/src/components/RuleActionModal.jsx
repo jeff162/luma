@@ -14,7 +14,7 @@ import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.j
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
-import { OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
+import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
   const [categories, setCategories] = useState([])
@@ -180,14 +180,8 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
                     ? 'This edit makes the rule match another rule. Fold your changes into it? This rule will then be removed.'
                     : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button onClick={() => setPendingMerge(null)} style={{
-                      background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--text)',
-                    }}>Cancel</button>
-                    <button onClick={confirmMerge} style={{
-                      background: 'var(--accent)', border: 'none', borderRadius: 6,
-                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#fff',
-                    }}>Add to existing rule</button>
+                    <Button small variant="ghost" onClick={() => setPendingMerge(null)}>Cancel</Button>
+                    <Button small onClick={confirmMerge}>Add to existing rule</Button>
                   </div>
                 </div>
               ) : null}

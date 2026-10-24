@@ -15,6 +15,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { Button } from './ui.jsx'
 
 // The neutral "no constraint" draft the popover starts from when nothing is set yet.
 export const EMPTY_AMOUNT_FILTER = { low: null, lowOp: '>=', high: null, highOp: '<=', side: 'both' }
@@ -107,13 +108,7 @@ export default function AmountFilterControl({ value, onChange }) {
                 cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5,
               }}
             >✕ Clear amount filter</button>
-            <button
-              onClick={apply}
-              style={{
-                background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6,
-                padding: '5px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer',
-              }}
-            >Apply</button>
+            <Button small onClick={apply}>Apply</Button>
           </div>
         </Popover>
       )}

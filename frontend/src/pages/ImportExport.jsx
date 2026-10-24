@@ -3728,7 +3728,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           {/* The two ways out, pinned under the scrolling mapping so neither is a scroll away. */}
           <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
-              <Button
+              <Button small
                 onClick={runImport}
                 disabled={!canImport() || loading}
                 progress={loading && importRowProgress
@@ -3742,7 +3742,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     : `Import ${importableRowCount} rows`)}
               </Button>
             </span>
-            <Button variant="ghost" onClick={resetImport}>Cancel</Button>
+            <Button small variant="ghost" onClick={resetImport}>Cancel</Button>
           </div>
         </div>
         </OverlayBackdrop>
@@ -3805,10 +3805,10 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                 />
               ) : null}
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <Button variant="ghost" onClick={cancelTrailingDataReview} disabled={loading}>
+                <Button small variant="ghost" onClick={cancelTrailingDataReview} disabled={loading}>
                   Cancel
                 </Button>
-                <Button onClick={advancePastDataReview} disabled={loading}>
+                <Button small onClick={advancePastDataReview} disabled={loading}>
                   Continue
                 </Button>
               </div>

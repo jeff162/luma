@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { Input, SegmentedToggle, Tooltip } from './ui.jsx'
+import { Button, Input, SegmentedToggle, Tooltip } from './ui.jsx'
 import { DIRECTIONS, round2, signedAmount } from '../lib/manualTransaction.js'
 import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
@@ -137,27 +137,8 @@ export default function TransactionAmountEditor({ txn, onSave }) {
         {next === null ? 'Enter an amount' : `Will be recorded as ${formatTransactionAmount(next)}`}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button
-          type="button"
-          onClick={save}
-          disabled={!canSave}
-          style={{
-            background: canSave ? 'var(--accent)' : 'var(--surface)',
-            color: canSave ? '#fff' : 'var(--muted)',
-            border: canSave ? 'none' : '1px solid var(--border)',
-            borderRadius: 6, padding: '4px 12px', fontSize: 13,
-            cursor: canSave ? 'pointer' : 'default',
-          }}
-        >{saving ? 'Saving…' : 'Save'}</button>
-        <button
-          type="button"
-          onClick={cancel}
-          disabled={saving}
-          style={{
-            background: 'none', border: '1px solid var(--border)', color: 'var(--muted)',
-            borderRadius: 6, padding: '4px 10px', fontSize: 13, cursor: 'pointer',
-          }}
-        >Cancel</button>
+        <Button small onClick={save} disabled={!canSave}>{saving ? 'Saving…' : 'Save'}</Button>
+        <Button small variant="ghost" onClick={cancel} disabled={saving}>Cancel</Button>
       </div>
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
     </div>

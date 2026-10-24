@@ -247,6 +247,9 @@ export function ActionCountBadge({ count, tone = 'accent' }) {
       justifyContent: 'center',
       minWidth: 20,
       minHeight: 20,
+      // Taller than a line of button text, so without this a button carrying a count grew 5px past its
+      // neighbours. The badge overhangs into the button's padding instead.
+      margin: '-3px 0',
       padding: '0 6px',
       borderRadius: 999,
       fontSize: 11,

@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Badge, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
+import { Badge, Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
@@ -159,14 +159,8 @@ function RuleModal({ prompt, onSave, onCancel }) {
                 ? 'Your changes make this match another rule. Fold them into it? This rule will then be removed.'
                 : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button onClick={() => setPendingMerge(null)} style={{
-                  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                  padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--text)',
-                }}>Cancel</button>
-                <button onClick={confirmMerge} style={{
-                  background: 'var(--accent)', border: 'none', borderRadius: 6,
-                  padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#fff',
-                }}>Add to existing rule</button>
+                <Button small variant="ghost" onClick={() => setPendingMerge(null)}>Cancel</Button>
+                <Button small onClick={confirmMerge}>Add to existing rule</Button>
               </div>
             </div>
           ) : null}

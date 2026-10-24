@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import RuleForm from '../RuleForm.jsx'
+import { Button } from '../ui.jsx'
 
 export function RuleEditorModal({
   suggestion,
@@ -129,68 +130,40 @@ export function RuleEditorModal({
     }
   }
 
-  const quietHeaderButtonStyle = {
-    background: 'transparent',
-    color: 'var(--muted)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    padding: '5px 11px',
-    fontSize: 12,
-    fontWeight: 500,
-    cursor: working ? 'not-allowed' : 'pointer',
-    opacity: working ? 0.65 : 1,
-  }
-  const primaryHeaderButtonStyle = {
-    background: draftState.canSave ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'var(--surface)',
-    color: draftState.canSave ? 'var(--accent2)' : 'var(--muted)',
-    border: `1px solid ${draftState.canSave ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`,
-    borderRadius: 8,
-    padding: '5px 12px',
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: working || !draftState.canSave ? 'not-allowed' : 'pointer',
-    opacity: working ? 0.65 : 1,
-  }
-
   function renderHeaderActions() {
     if (draftOnly) {
       return (
-        <button
-          type="button"
+        <Button
+          small
+          variant="ghost"
           onClick={handleCloseWithDraft}
           disabled={working}
           title="Close — your edits stay on the conflict card; its Apply creates the rule"
-          style={quietHeaderButtonStyle}
         >
           Close
-        </button>
+        </Button>
       )
     }
     if (!isAccepted && !matchOnly) {
       return (
         <>
-          <button
-            type="button"
+          <Button
+            small
             onClick={handleCloseWithDraft}
             disabled={working}
             title="Close — your edits stay on the suggestion card; use the card's Save button when ready"
-            style={primaryHeaderButtonStyle}
           >
             Close
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            small
+            variant="ghost"
             onClick={handleAccept}
             disabled={working || !draftState.canSave}
             title="Create this rule now and move the suggestion to accepted"
-            style={{
-              ...quietHeaderButtonStyle,
-              cursor: working || !draftState.canSave ? 'not-allowed' : 'pointer',
-              opacity: working || !draftState.canSave ? 0.65 : 1,
-            }}
           >
             {working ? 'Saving…' : 'Save rule'}
-          </button>
+          </Button>
         </>
       )
     }
@@ -199,22 +172,12 @@ export function RuleEditorModal({
     const saveLabel = isAccepted ? 'Save' : matchOnly ? 'Save match' : 'Save rule'
     return (
       <>
-        <button
-          type="button"
-          onClick={saveAction}
-          disabled={working || !draftState.canSave}
-          style={primaryHeaderButtonStyle}
-        >
+        <Button small onClick={saveAction} disabled={working || !draftState.canSave}>
           {working ? 'Saving…' : saveLabel}
-        </button>
-        <button
-          type="button"
-          onClick={cancelAction}
-          disabled={working}
-          style={quietHeaderButtonStyle}
-        >
+        </Button>
+        <Button small variant="ghost" onClick={cancelAction} disabled={working}>
           Cancel
-        </button>
+        </Button>
       </>
     )
   }

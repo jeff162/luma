@@ -12,6 +12,7 @@
 import { useRef, useState } from 'react'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
+import { Button } from './ui.jsx'
 import { activeRulesFacetCount } from '../lib/rulesFilter.js'
 
 // A list longer than this grows a type-to-filter search box, so a big category/tag set stays findable.
@@ -194,13 +195,9 @@ export default function RulesFilterPopover({ facets, onChange, options, onClose,
         >
           Clear all{activeCount > 0 ? ` (${activeCount})` : ''}
         </button>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 12px', fontSize: 12, cursor: 'pointer', color: 'var(--text)' }}
-        >
+        <Button small variant="ghost" onClick={onClose}>
           Done
-        </button>
+        </Button>
       </div>
     </div>
   )

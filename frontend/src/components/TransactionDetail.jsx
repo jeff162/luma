@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
-import { AppConfirmDialog, AppNoticeDialog, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, Button, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, NamelessMerchant, getTxnMerchantLabel, getTxnName } from './TransactionRow.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
@@ -419,14 +419,8 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
               minWidth: 220,
             }}
           />
-          <button onClick={commitEditingName} style={{
-            background: 'var(--accent)', color: '#fff', border: 'none',
-            borderRadius: 6, padding: '4px 12px', fontSize: 13, cursor: 'pointer',
-          }}>Save</button>
-          <button onClick={cancelEditingName} style={{
-            background: 'none', border: '1px solid var(--border)', color: 'var(--muted)',
-            borderRadius: 6, padding: '4px 10px', fontSize: 13, cursor: 'pointer',
-          }}>Cancel</button>
+          <Button small onClick={commitEditingName}>Save</Button>
+          <Button small variant="ghost" onClick={cancelEditingName}>Cancel</Button>
         </div>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

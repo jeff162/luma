@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import TransientTextInput from './TransientTextInput.jsx'
+import { Button } from './ui.jsx'
 
 /*
  * Shared transaction-note editor. Both surfaces that edit a note — the right-click note popover
@@ -89,38 +90,13 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
         }}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button
-          type="button"
-          onClick={() => save(draft.trim() || null)}
-          disabled={saving || !dirty}
-          style={{
-            background: dirty ? 'var(--accent)' : 'var(--surface)',
-            color: dirty ? '#fff' : 'var(--muted)',
-            border: dirty ? 'none' : '1px solid var(--border)',
-            borderRadius: 8,
-            padding: '6px 12px',
-            fontSize: 12,
-            cursor: dirty && !saving ? 'pointer' : 'default',
-          }}
-        >
+        <Button small onClick={() => save(draft.trim() || null)} disabled={saving || !dirty}>
           {saving ? 'Saving…' : 'Save note'}
-        </button>
+        </Button>
         {onCancel ? (
-          <button
-            type="button"
-            onClick={cancel}
-            style={{
-              background: 'var(--surface)',
-              color: 'var(--muted)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '6px 10px',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
+          <Button small variant="ghost" onClick={cancel}>
             Cancel
-          </button>
+          </Button>
         ) : null}
         {hasNote ? (
           <button

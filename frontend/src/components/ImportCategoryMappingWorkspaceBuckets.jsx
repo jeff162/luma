@@ -1213,8 +1213,8 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                <Button variant="ghost" onClick={onClose}>Keep Draft & Close</Button>
-                <Button
+                <Button small variant="ghost" onClick={onClose}>Keep Draft & Close</Button>
+                <Button small
                   variant={activeSourceCount === 0 ? 'primary' : 'ghost'}
                   onClick={async () => { setSaving(true); try { await onApply(buildCurrentDraftState()) } finally { setSaving(false) } }}
                   disabled={saving}
@@ -1223,8 +1223,8 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                 </Button>
               </div>
               <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                <Button variant="ghost" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(u => [...u, cloneImportCategoryMappingSnapshot(snapshot)]); setRedoStack(r => r.slice(0, -1)); setSnapshot(cloneImportCategoryMappingSnapshot(next)); setEditingId(null) }} disabled={redoStack.length === 0}>Redo</Button>
-                <Button variant="ghost" onClick={() => { if (!undoStack.length) return; const prev = undoStack[undoStack.length - 1]; setRedoStack(r => [...r, cloneImportCategoryMappingSnapshot(snapshot)]); setUndoStack(u => u.slice(0, -1)); setSnapshot(cloneImportCategoryMappingSnapshot(prev)); setEditingId(null) }} disabled={undoStack.length === 0}>Undo</Button>
+                <Button small variant="ghost" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(u => [...u, cloneImportCategoryMappingSnapshot(snapshot)]); setRedoStack(r => r.slice(0, -1)); setSnapshot(cloneImportCategoryMappingSnapshot(next)); setEditingId(null) }} disabled={redoStack.length === 0}>Redo</Button>
+                <Button small variant="ghost" onClick={() => { if (!undoStack.length) return; const prev = undoStack[undoStack.length - 1]; setRedoStack(r => [...r, cloneImportCategoryMappingSnapshot(snapshot)]); setUndoStack(u => u.slice(0, -1)); setSnapshot(cloneImportCategoryMappingSnapshot(prev)); setEditingId(null) }} disabled={undoStack.length === 0}>Undo</Button>
               </div>
             </div>
           </div>

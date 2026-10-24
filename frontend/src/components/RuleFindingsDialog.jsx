@@ -687,7 +687,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
               Show dismissed{dismissedCount > 0 ? ` (${dismissedCount})` : ''}
             </label>
           ) : null}
-          <Button variant="ghost" onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Button>
+          <Button small variant="ghost" onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Button>
         </div>
     </DetailPanelShell>
   )

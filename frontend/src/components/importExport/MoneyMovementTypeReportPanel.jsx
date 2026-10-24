@@ -52,7 +52,7 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
             <div style={{ fontSize: 16, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{type}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>Transactions on this source carrying this PayPal type</div>
           </div>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          <Button small variant="ghost" onClick={onClose}>Close</Button>
         </FloatingPanelHeader>
 
         <div style={{ padding: '8px 16px 16px', overflowY: 'auto' }}>
