@@ -2024,7 +2024,8 @@ row back.
 
 Restore inserts only the payload columns the live table still has (`_insert_section` intersects with
 `PRAGMA table_info`). A column the schema has since added takes its default; one since dropped is
-skipped.
+skipped. Likewise a section: restore reads only the sections `BACKUP_SECTIONS` lists, so an older
+backup's retired section is ignored (`merchant_renames`, whose table v84 dropped).
 
 - **A renamed column is translated explicitly**, since drop-and-default would lose its value. A
   version-7 account's `plaid_account_id` / `plaid_item_id` become `external_account_id` and a resolved
@@ -2650,8 +2651,6 @@ and owed decisions*.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
-- **`clean_name` / merchant rename: keep or drop.**
-  → [`backlog/merchant-rename-fate.md`](backlog/merchant-rename-fate.md)
 - **A check that fresh and migrated databases get the same schema** (*Schema evolution*).
   → [`backlog/test-coverage-gaps.md`](backlog/test-coverage-gaps.md)
 - **The invariants a semantic database checker would assert.**

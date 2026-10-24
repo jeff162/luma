@@ -12,7 +12,7 @@ independent of the import-run workflow:
   protect: the financial data, the accounts (`services/accounts_backup.py`: identities, the perimeter,
   backup keys, and the data-source credentials as ciphertext with the vault that opens them), and both in
   one file. The financial data is everything in the data DB except credentials, and round-trips it: owners,
-  accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
+  accounts, categories, rules, import profiles/batches/history, transactions,
   the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
   the account-pair distinct assertions, recurring series (`recurring_series` + the `txn` membership
   link), and UI/layout preferences (`ui_preference`). Restore wipes and rebuilds inside one
@@ -578,7 +578,6 @@ BACKUP_SECTIONS = (
      "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at FROM account ORDER BY rowid"),
     ("categories", "category", "SELECT * FROM category ORDER BY rowid"),
     ("category_rules", "category_rule", "SELECT * FROM category_rule ORDER BY rowid"),
-    ("merchant_renames", "merchant_rename", "SELECT * FROM merchant_rename ORDER BY rowid"),
     ("csv_profiles", "csv_import_profile", "SELECT * FROM csv_import_profile ORDER BY rowid"),
     # Provider-account mapping + the connection's coverage claim. This rides the DATA backup, not the
     # credentials one, even though it hangs off `connection`: it holds no secret, and its coverage MUST
@@ -683,7 +682,8 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, 15 the
 # `connections` section, 16 the `import_batch_rejected_rows` section, and 17 the `backup_history` section
 # — all purely additive, which is why an older archive still restores through exactly the same path with
-# the new section simply absent.
+# the new section simply absent. A section can also be retired: restore reads only the sections listed
+# above, so an older archive's retired section is ignored (`merchant_renames`, whose table was dropped).
 BACKUP_PAYLOAD_VERSION = 17
 RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 
@@ -1316,7 +1316,6 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM import_batch")
     conn.execute("DELETE FROM import_workflow_state")
     conn.execute("DELETE FROM category_rule")
-    conn.execute("DELETE FROM merchant_rename")
     # Named rather than left to its cascade from csv_import_profile: foreign keys are deferred for the
     # whole wipe, and a watched folder's per-file watermark describes *this* machine's filesystem, so
     # it must not outlive the sources it belongs to under any ordering.

@@ -347,12 +347,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # and a card with none (an items-only card holding parked detail) is left unattributed. v81 adds
 # `rule_conflict`, the rule pairs a categorization pass caught deciding a transaction arbitrarily. v82 adds
 # `backup_history`, the backups this system made. v83 adds `backup_history.deleted_at`, the history's trash.
+# v84 drops `merchant_rename`, a pattern → clean-name table nothing ever wrote or read; a category rule's
+# `clean_name` is the rename.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 83
+CURRENT_VERSION = 84
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2604,6 +2606,14 @@ def _add_backup_history_trash(conn):
         conn.execute("ALTER TABLE backup_history ADD COLUMN deleted_at TEXT")
 
 
+@migration(84)
+def _drop_merchant_rename(conn):
+    # Pattern → clean-name renames were never wired up: nothing could write a row or read one, so the table
+    # is empty everywhere, and a category rule's `clean_name` is what renames a merchant. Its index goes
+    # with it.
+    conn.execute("DROP TABLE IF EXISTS merchant_rename")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3856,7 +3866,6 @@ def init_db(db_path: str | None = None):
                 ON amazon_funding_map(last4, COALESCE(network, ''), amazon_account_id)
                 WHERE amazon_account_id IS NOT NULL;
         """)
-        init_merchant_renames(conn)
 
         _seed_default_categories(conn)
 
@@ -4306,19 +4315,3 @@ def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool =
     upsert_cat("Refund", income_group)
     upsert_cat("Interest Income", income_group)
     upsert_cat("Other Income", income_group)
-
-
-
-
-
-def init_merchant_renames(conn: sqlite3.Connection):
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS merchant_rename (
-            id          TEXT PRIMARY KEY,
-            raw_pattern TEXT NOT NULL UNIQUE,
-            clean_name  TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_rename_pattern ON merchant_rename(raw_pattern)
-    """)

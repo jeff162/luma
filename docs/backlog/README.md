@@ -190,9 +190,6 @@ scale — rather than by feature.
   undo. Both convenience only — per-row restore already prevents loss. Also holds two measured/scoped
   deferrals: bank-side type prefixes, and letting a coverage reject rest on the actual twin rather than
   on whichever same-amount row filled the candidate slot (the report half of that one shipped).
-- [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
-  the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
-  `category_rule.clean_name`); revisit when Plaid sync is exercised.
 - [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not
   needed yet.** Document-only backups, with each data backup carrying only the documents added since the
   last one. Started when the backup history shows documents as the bulk of a backup.

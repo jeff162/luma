@@ -124,7 +124,6 @@ TABLE_TO_SECTION = {
     "account": "accounts",
     "category": "categories",
     "category_rule": "category_rules",
-    "merchant_rename": "merchant_renames",
     "csv_import_profile": "csv_profiles",
     "connection_account": "connection_accounts",
     "import_batch": "import_batches",
@@ -303,7 +302,6 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "INSERT INTO category (id, parent_id, name, sort_order, exclude_from_totals, import_source_batch_id, is_active) VALUES (?, ?, 'Imported Cat', 0, 0, ?, 1)",
                     (str(uuid.uuid4()), unassigned, batch),
                 )
-                conn.execute("INSERT INTO merchant_rename (id, raw_pattern, clean_name) VALUES (?, 'amzn mktp', 'Amazon')", (str(uuid.uuid4()),))
                 conn.execute("INSERT INTO import_workflow_state (key, payload_json) VALUES ('imported_category_settings', '{}')")
 
                 # A recurring series + the txn membership link, so the round trip covers both the
