@@ -3,7 +3,7 @@
 
 """
 App-level provider credentials: the aggregator's own app secret (Plaid's client_id + secret + env),
-one per provider, moved out of `.env` into the vaulted DB (security-and-deployment-model phase 6b).
+one per provider, moved out of `.env` into the vaulted DB.
 
 Only the secret is sensitive — it is vault-encrypted under the workspace DEK; client_id/env are
 semi-public and stored plaintext. The saved `provider_config` row is the only source: the Configure card

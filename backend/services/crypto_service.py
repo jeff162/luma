@@ -1269,7 +1269,7 @@ def decrypt_connection_credential(user: dict, provider: str, external_id: str, c
 #
 # Distinct from a per-connection credential: this is the *app*-level secret that identifies the Luma
 # app to the provider (Plaid's `secret`), one per provider, not per linked bank. It moves out of `.env`
-# into the vaulted DB (phase 6b) so it isn't a plaintext secret on disk. Only the secret is vaulted —
+# into the vaulted DB so it isn't a plaintext secret on disk. Only the secret is vaulted —
 # the paired `client_id`/`env` are semi-public and stored plaintext by the caller.
 
 def _app_credential_aad(provider: str) -> bytes:

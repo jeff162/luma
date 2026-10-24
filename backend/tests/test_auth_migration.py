@@ -1,5 +1,5 @@
 """
-Unified single-table identity model (phase 2c): the one-time local-profile -> user_account
+Unified single-table identity model: the one-time local-profile -> user_account
 unification, enable/disable-as-a-flag-flip, the dropped auth latch, the unset-password (claim)
 primitive, the forced password-change login branch, and the pwless-session invalidation.
 

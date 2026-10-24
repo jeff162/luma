@@ -1,5 +1,5 @@
 """
-Provider-agnostic connection seam (phase 6a): the plaid_item -> connection cutover.
+Provider-agnostic connection seam: the plaid_item -> connection cutover.
 
 Pins the three edges of the seam that must hold for a second provider to plug in:
   1. the migration backfill folds legacy plaid_item rows into provider='plaid' connections (idempotently);
@@ -649,7 +649,7 @@ class CredentialBackupTests(unittest.TestCase):
         cs.lock_all()
 
     def _connect_one(self, client):
-        # Exchange now resolves the provider's app credential (phase 6b), so Plaid must be configured
+        # Exchange now resolves the provider's app credential, so Plaid must be configured
         # first (the vault is unlocked by set-passphrase, so the secret can be vaulted).
         client.post("/api/providers/plaid/config", json={"client_id": "cid-1", "secret": "app-secret-1"})
         with mock.patch("backend.services.plaid_service.exchange_public_token",

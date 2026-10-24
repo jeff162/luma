@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Per-provider app-credential configuration — the Configure card's backend (security-and-deployment-model
-phase 6b). Admin-gated to configure; the app credential lives in the vaulted DB (`provider_config`), the
+Per-provider app-credential configuration — the Configure card's backend. Admin-gated to configure; the app credential lives in the vaulted DB (`provider_config`), the
 secret encrypted under the workspace DEK. Reading status never returns the secret, only whether one is on
 file and from where (vaulted DB vs. `.env` bootstrap). The secret is readable in exactly one place, and
 only on request: `GET /{provider}/secret`, the Configure dialog's reveal (see its docstring for why that

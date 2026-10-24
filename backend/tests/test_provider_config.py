@@ -1,5 +1,5 @@
 """
-App-level provider credentials in the vault (phase 6b-1): the Plaid client_id/secret/env move out of
+App-level provider credentials in the vault: the Plaid client_id/secret/env move out of
 `.env` into the vaulted `provider_config` table.
 
 Pins the edges: only the secret is vaulted (client_id/env plaintext, secret never returned by status);

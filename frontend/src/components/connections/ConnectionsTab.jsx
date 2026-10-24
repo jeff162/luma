@@ -31,7 +31,7 @@ import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { useConnectionOperations } from '../../lib/useConnectionOperations.js'
 import { IMPORT_CONFIG_MAX_WIDTH } from '../../lib/importExport/constants.js'
 
-// --- Data-source connections (security phase 6b) --------------------------------------------------
+// --- Data-source connections --------------------------------------------------------------------
 //
 // The Import page's Connections tab: everything about a data connection. Across the top, the routine
 // pull for every connection and the whole sync log; below, one card per supported aggregator, plus the

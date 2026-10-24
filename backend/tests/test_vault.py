@@ -1,7 +1,6 @@
 """
 Multi-wrap vault core: the workspace-DEK envelope model that replaced the retired per-user
-`server_managed` scheme (phase 3), and the keypair slots that made enrollment and rotation
-possible (phases 4–5).
+`server_managed` scheme, and the keypair slots that made enrollment and rotation possible.
 
 These pin the security-relevant invariants: one workspace DEK behind every slot; the AEAD tag as the
 secret's only verifier (a wrong secret never opens anything); the DEK living only in the process
@@ -246,7 +245,7 @@ class VaultTests(unittest.TestCase):
         # Why `ready_for_production` survives the floor being unconditional. It is not asking about the
         # passphrase just set — nothing weak can be set — it is asserting a property of *every* slot,
         # including one this service did not write: a slot carried in from an older, laxer install, or a
-        # future slot method (phase 4's passkeys) that wraps the same DEK. The DEK is only ever as strong
+        # another slot method (a passkey) that wraps the same DEK. The DEK is only ever as strong
         # as its weakest wrap, and a check that ran only when a passphrase was chosen would never see one.
         cs.set_passphrase(self.alice, "a-sufficiently-long-passphrase")
         cdb.upsert_vault_slot(

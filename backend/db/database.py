@@ -780,8 +780,7 @@ def _add_amazon_charge_reviewed(conn):
 
 @migration(18)
 def _add_connection_table(conn):
-    # Provider-agnostic connections supersede plaid_item as the credential store (see
-    # security-and-deployment-model.md phase 6a). Fresh installs get the table from init_db's baseline
+    # Provider-agnostic connections supersede plaid_item as the credential store. Fresh installs get the table from init_db's baseline
     # CREATE; existing databases get it here, then legacy plaid_item rows are folded into connection rows
     # (the data half, below). This runs before v20, which renames the account columns and finally drops the
     # plaid_item table — so the plaid_item_id references here operate on the still-legacy pre-v20 schema.
@@ -840,8 +839,7 @@ def _backfill_connections_from_plaid_items(conn):
 
 @migration(19)
 def _add_provider_config_table(conn):
-    # App-level provider credentials move out of `.env` into the vaulted DB (security-and-deployment-model
-    # 6b). Fresh installs get the table from init_db's baseline CREATE; existing databases get it here.
+    # App-level provider credentials move out of `.env` into the vaulted DB. Fresh installs get the table from init_db's baseline CREATE; existing databases get it here.
     # There is **no data migration** (decided 2026-08-01): the app credential is re-entered once via the
     # provider Configure card, and `.env` remains a bootstrap/override the resolver still falls back to.
     conn.execute("""
@@ -858,12 +856,12 @@ def _add_provider_config_table(conn):
 
 @migration(20)
 def _account_connection_columns(conn):
-    # 6b-3 (security-and-deployment-model.md): make the account→connection link provider-neutral. Rename
+    # Make the account→connection link provider-neutral. Rename
     # plaid_account_id → external_account_id (the per-account provider handle); replace the plaid_item_id
     # string — a Plaid item_id, or the 'csv_import'/'manual' sentinels — with an explicit connection_id FK
     # (→ connection.id, NULL when an account isn't backed by a live connection) plus a provider
     # discriminator; then drop the now-vestigial plaid_item table (connection has been the credential store
-    # since 6a). Uses in-place ALTERs (SQLite ≥ 3.35 for DROP COLUMN) rather than a table rebuild, so the
+    # since v18). Uses in-place ALTERs (SQLite ≥ 3.35 for DROP COLUMN) rather than a table rebuild, so the
     # account.id that every other table's FK references is never dropped. Fresh installs get the final shape
     # from init_db's baseline CREATE and never reach here.
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
@@ -2789,7 +2787,7 @@ def init_db(db_path: str | None = None):
             -- credential vault-encrypted under the workspace DEK (`credential_enc`; the plaintext column is
             -- always ''). `external_id` is the provider's stable handle (Plaid's item_id); accounts link
             -- back via account.connection_id (see the account table). The credential store — superseded the
-            -- old `plaid_item` table, dropped in migration v20 (security-and-deployment-model.md 6a/6b-3).
+            -- old `plaid_item` table, dropped in migration v20.
             CREATE TABLE IF NOT EXISTS connection (
                 id             TEXT PRIMARY KEY,
                 provider       TEXT NOT NULL,
@@ -3033,8 +3031,8 @@ def init_db(db_path: str | None = None):
                 ON connection_sync_log(started_at);
 
             -- App-level provider credentials (one row per provider): the app secret that identifies the
-            -- Luma app to the aggregator (Plaid's client_id + secret), moved out of `.env` into the DB
-            -- (security-and-deployment-model.md 6b). Only `secret` is sensitive — it is vault-encrypted
+            -- Luma app to the aggregator (Plaid's client_id + secret), moved out of `.env` into the DB.
+            -- Only `secret` is sensitive — it is vault-encrypted
             -- under the workspace DEK (`secret_enc`; the plaintext column is always ''); `client_id`/`env`
             -- are semi-public and stored plaintext. Distinct from `connection` (the per-bank credential).
             CREATE TABLE IF NOT EXISTS provider_config (

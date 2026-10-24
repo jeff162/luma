@@ -1359,5 +1359,3 @@ display and a `show_by_default` flag.
   → [`backlog/import-rule-suggestion-review-extraction.md`](backlog/import-rule-suggestion-review-extraction.md)
 - **Auto-restoring hard-rejected rows when the import they matched is undone.**
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
-- **Where the build-phase technical record lands.**
-  → [`backlog/security-and-deployment-model.md`](backlog/security-and-deployment-model.md)

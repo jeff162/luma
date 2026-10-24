@@ -1,5 +1,5 @@
 """
-Vault + gating through the full HTTP stack (phase 3): the /auth/vault/* lifecycle, the vault status
+Vault + gating through the full HTTP stack: the /auth/vault/* lifecycle, the vault status
 fields and transport block on /auth/status, and the connect/Production gates that key off vault state.
 
 Runs perimeter-off (the shared harness identity), which is the case that must still require a vault to

@@ -1,5 +1,5 @@
 """
-Transport-security detection (phase 3): per-request loopback/HTTPS detection, the permissible-HTTP
+Transport-security detection: per-request loopback/HTTPS detection, the permissible-HTTP
 rule (`https_expected`), the protected-link gate, and the computed "Set up HTTPS" task.
 
 The rule under test: plain HTTP on a networked bind is fine only with no perimeter to defeat — no

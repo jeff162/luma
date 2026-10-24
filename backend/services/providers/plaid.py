@@ -6,8 +6,8 @@ The Plaid adapter — the first concrete `ProviderAdapter`.
 
 It delegates the SDK details to `plaid_service` (the thin Plaid-model boundary) and translates that
 module's Plaid-shaped dicts into the provider-neutral contract in `base.py`, so the routers and sync
-path never see a Plaid field name. The app-level credentials (`client_id`/`secret`/`env`) still come
-from the environment via `plaid_service` in this phase; moving them into the vaulted DB is phase 6b.
+path never see a Plaid field name. The app-level credentials (`client_id`/`secret`/`env`) arrive per
+call as `app_config`, resolved by `providers.config` (see `base.py`).
 """
 
 from __future__ import annotations

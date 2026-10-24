@@ -12,7 +12,7 @@ four operations and normalizes to provider-neutral field names, so callers never
 Every operation takes `app_config` — the resolved app-level credential ({client_id, secret, env})
 the aggregator needs to authenticate the Luma app itself, obtained via `providers.config.resolve_app_config`
 (vaulted DB, or the `.env` bootstrap). It is passed in per call rather than read from the environment,
-so app credentials live under the vault (phase 6b). A provider that has no app-level credential at all
+so app credentials live under the vault. A provider that has no app-level credential at all
 sets `requires_app_config = False` and receives `{}` — see the capability declarations on the class.
 
 Normalized contracts (plain dicts, provider-neutral keys):

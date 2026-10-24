@@ -84,7 +84,7 @@ access rather than a scoped token. There is no sandbox mode in which to ask late
 The provider-seam work OFX would need — a connect flow that is not Link, a range-pull fallback for
 providers with no cursor API, and support for a provider with no app-level credential — is **not**
 OFX-specific. **All three now exist** (built with the SimpleFIN adapter, 2026-08-07; see
-[`security-and-deployment-model.md`](security-and-deployment-model.md) → phase 6c): `connect_spec` +
+[`../building-a-connector.md`](../building-a-connector.md)): `connect_spec` +
 the shared `establish_connection`, the base adapter's range-pull `fetch_transactions_sync`, and
 `requires_app_config = False`. OFX would declare the same capabilities rather than add new ones, which
 removes most of what made this look expensive.
