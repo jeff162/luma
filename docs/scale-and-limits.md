@@ -161,10 +161,9 @@ shows up in a mutation's latency; the fix is a due-query that never assembles th
 ## Many sessions on one server
 
 When many sessions use one Luma server at the same time, pages can load slowly or stop loading
-altogether, even though the computer is mostly idle and the database answers quickly. One person using
-the app does not see this. The browser tests did, because they run many browser sessions against one
-server at once: with ten, the transaction list took 10 to 16 seconds to load instead of a fraction of a
-second, and tests failed waiting for it.
+altogether, even though the computer is mostly idle and the database answers quickly. One person barely
+notices it. Ten sessions at once, as the browser tests can run, turn a transaction list that loads in a
+fraction of a second into one that takes 10 to 16 seconds.
 
 ### Why it happens
 
@@ -188,26 +187,16 @@ Measured on the demo ledger, reading 200 rows took:
 
 With one person, a page asks for about 27 things at once and the effect is small: the transaction list
 takes about 150 ms instead of 63 ms on a ledger of 20,000 transactions. It grows quickly with the number
-of sessions, which is why ten browser sessions turned it into seconds.
+of sessions, which is how ten sessions turn it into seconds.
 
 A different database would not remove it. The waiting happens in Python, not in SQLite, and SQLite
 suits a program that runs on a single machine with its data in one file.
 
-### What made it worse, and was fixed
+### What makes it worse
 
-Investigating the stalled tests turned up three problems, each fixed:
-
-- **An edit held the database's write lock while it rescanned recurring charges.** SQLite allows one
-  writer at a time, so every other change waited behind the rescan. The edit is now saved first, and the
-  rescan runs after it (`data-model.md` → *When a scan runs*).
-- **Pages that only read data held the write lock while they loaded.** Saving a cached count, or tidying
-  an import card, took the lock, and the page kept it until it had finished reading everything else. Those
-  writes now happen only when something actually changed, and let go of the lock straight away.
-- **The reimbursement reminders on Tasks ran a few queries for every reimbursement.** On a ledger with
-  441 reimbursable transactions that was 1,779 queries every time Tasks was checked, which happens on
-  every page change and after every edit. It now takes 25, however many there are.
-
-The rules for writing code that avoids these are in `architecture.md` → *Database concurrency*.
+Code makes it worse in two ways: by holding the database's write lock longer than its write needs, so
+every other change waits, and by issuing queries whose number grows with the ledger. The rules against
+the first are in `architecture.md` → *Database concurrency*; the query budget below checks the second.
 
 ### What guards against it now
 
@@ -217,8 +206,7 @@ The rules for writing code that avoids these are in `architecture.md` → *Datab
   other.
 - **The requests every page makes may not issue more queries as the ledger grows**
   (`backend/tests/test_query_budget.py`). Each is run against a small ledger and one ten times larger,
-  and both must take the same number of queries. This is the check that would have caught the
-  reimbursement reminders.
+  and both must take the same number of queries.
 - **A page that only reads may not keep the write lock** (`backend/tests/test_read_path_write_lock.py`).
 - **`npm run ui:stress` runs the browser tests with ten sessions** and reports how the server held up.
   It is a measurement, not a pass or fail check, and some tests are expected to fail along the way. Run
@@ -227,14 +215,14 @@ The rules for writing code that avoids these are in `architecture.md` → *Datab
 
 ### Reading the stress report
 
-The figures from a run on 2026-10-15, on a machine with 20 cores, after the fixes above:
+Figures from a typical run on 2026-10-15, on a machine with 20 cores:
 
 | Report line | Figure | What it says |
 | --- | --- | --- |
 | Specs failed | 2, and 22 did not run | Ten sessions are past what the tests can absorb. A run with none failing is good news, not the expected result. |
 | `database is locked` errors | 0 | A write waited the full 15 seconds for the lock. Anything above zero means something holds the lock too long again. |
-| Longest single write | 2.9 s | Mostly time spent waiting for the lock. Before the fixes this reached 14 to 15 seconds. |
-| Requests over a second | 168, 543 s in total | The overall amount of waiting. Before the fixes, 608 to 815 seconds. |
+| Longest single write | 2.9 s | Mostly time spent waiting for the lock. |
+| Requests over a second | 168, 543 s in total | The overall amount of waiting. |
 | Slowest request | `GET /api/transactions`, 13 s | The transaction list suffers most, because it reads the most rows. |
 | Slowest connections | about 13 s, nearly all in database calls | Time in database calls includes each row's wait for Python's turn, so a long one is either slow SQL or a queue behind other requests. Timing the same request on its own tells which. |
 
@@ -257,10 +245,10 @@ another window to attach to it:
 4. Each line of `profile.txt` is one call stack and how often it was seen; group them by the endpoint in
    each stack to see which requests take the time.
 
-At the time of writing the profile shows the Tasks check as the largest single user of Python's turn,
-about 40%, mostly the recurring charge findings and the rule amount checks. Both are recomputed on every
-check. Keeping their results until the data changes was considered, but every edit changes the data and
-is followed by a check, so it would save little where it matters.
+In a profile of that run, the Tasks check is the largest single user of Python's turn, about 40%, mostly
+the recurring charge findings and the rule amount checks. Both are recomputed on every check rather than
+cached, because every edit changes the data and is followed by a check, so a cached result would rarely
+be reused.
 
 ## Measuring performance
 
