@@ -218,8 +218,8 @@ shapes: `null` (unset, falls back to a page's registered default), the `{start:n
   amount rule to debits or credits, rename a merchant, and add tags. Manually overridden categories are
   preserved; a per-transaction tag edit overrides only that row's rule-derived tag presence.
 
-- **Shared filter facets:** every axis the FilterBar exposes — account, group, category, owner, payee,
-  tag, attribute — is declared once in `services/transaction_facets.py` and consumed by every faceted
+- **Shared filter facets:** every axis the FilterBar exposes — account (by id or by type), group,
+  category, owner, payee, tag, attribute — is declared once in `services/transaction_facets.py` and consumed by every faceted
   endpoint through a `TransactionFacets` dependency and `append_facets`. Facets AND with each other;
   values within one facet OR. Rationale and invariants: `data-model.md` → *One facet registry, both
   halves* and *Attributes — filtering by what a row is*.

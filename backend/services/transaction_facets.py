@@ -4,8 +4,8 @@
 """
 The shared filter facets — one definition of "is a member of this facet set", for every surface.
 
-A *facet* is one axis the app-wide FilterBar exposes as chips: account, group, category, owner, payee,
-tag, and attribute. Each is accepted as an **include** set and an **exclude** set, and the two are the same expression
+A *facet* is one axis the app-wide FilterBar exposes as chips: account (by name or by type), group,
+category, owner, payee, tag, and attribute. Each is accepted as an **include** set and an **exclude** set, and the two are the same expression
 — exclusion is the NULL-safe negation of the membership the include path builds, so they cannot drift.
 
 **Why this is a registry rather than a helper per endpoint.** Nine endpoints consume these facets (the
@@ -104,6 +104,20 @@ def account_membership(ids: list[str]) -> Optional[tuple[str, list]]:
         f"{EFFECTIVE_ACCOUNT_ID_SQL} IN "
         f"(SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))",
         list(ids),
+    )
+
+
+# "Every account of this type", beside the account facet's named accounts. A type chip keeps covering
+# a card opened after it was picked, which a hand-picked set of accounts does not. The type is the
+# *effective* account's, so a merged child reads as its group, as rules scoped by account type do
+# (see docs/data-model.md → *Rules*).
+def account_type_membership(types: list[str]) -> Optional[tuple[str, list]]:
+    if not types:
+        return None
+    placeholders = ','.join('?' * len(types))
+    return (
+        f"(SELECT type FROM account WHERE id = {EFFECTIVE_ACCOUNT_ID_SQL}) IN ({placeholders})",
+        list(types),
     )
 
 
@@ -267,7 +281,9 @@ class Facet:
 
 
 FACETS: tuple[Facet, ...] = (
-    Facet('account', 'account_ids', 'exclude_account_ids', account_membership),
+    Facet('account', 'account_ids', 'exclude_account_ids', account_membership, variants=(
+        Facet('account_type', 'account_types', 'exclude_account_types', account_type_membership),
+    )),
     Facet('group', 'group_ids', 'exclude_group_ids', group_membership),
     Facet('category', 'category_ids', 'exclude_category_ids', category_membership),
     Facet('owner', 'owner_ids', 'exclude_owner_ids', owner_membership),
@@ -306,6 +322,7 @@ class TransactionFacets:
 
     attribute_ids: Optional[str] = Query(None, description="comma-separated attribute keys (see GET /transactions/filter-attributes)")
     account_ids: Optional[str] = Query(None, description="comma-separated account IDs (effective/top-level account)")
+    account_types: Optional[str] = Query(None, description="comma-separated account types; ORs with account_ids")
     group_ids: Optional[str] = Query(None, description="comma-separated top-level group IDs")
     category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs")
     owner_ids: Optional[str] = Query(None, description="comma-separated owner IDs")
@@ -313,6 +330,7 @@ class TransactionFacets:
     payee_contains: Optional[str] = Query(None, description="pipe-separated fragments of the shown payee name")
     tag_ids: Optional[str] = Query(None, description="comma-separated tag IDs")
     exclude_account_ids: Optional[str] = Query(None, description="account IDs to exclude ('is not')")
+    exclude_account_types: Optional[str] = Query(None, description="account types to exclude ('is not')")
     exclude_group_ids: Optional[str] = Query(None, description="group IDs to exclude ('is not')")
     exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')")
     exclude_owner_ids: Optional[str] = Query(None, description="owner IDs to exclude ('is not')")

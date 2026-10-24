@@ -102,7 +102,8 @@ lands until the user says what each provider account is.
 
 `account.type` is one of `depository`, `credit`, `savings`, `loan`, `investment`, `p2p`, `other`, the
 marketplace `amazon`, or the wallet `paypal`. It is user-editable, and it is what the account-type rule
-scope matches (see [Rules](#rules)).
+scope and the account-type filter match (see [Rules](#rules) and *One facet registry, both halves*). Both
+read the type of the row's *effective* account, so a merged child counts as its group's type.
 
 - A recognized PayPal import sets `type = 'paypal'` on a **newly created** target account only.
 - Approving a PayPal source's money-movement `Type`s also types that source's accounts `paypal` while
@@ -581,6 +582,9 @@ unfiltered, and a total stops matching the list it drills into.
   (`payees`) and fragments (`payee_contains`) as variants of one facet, because two facets would AND.
   The fragment is compared against the name the row shows, so a row is never returned for a raw
   descriptor it does not display. `GET /transactions/payee-names` lists the names a fragment selects.
+  The account facet likewise takes ids (`account_ids`) and types (`account_types`), so "credit cards
+  plus one checking account" is one selection, and an excluded account can be carved out of an included
+  type. A type covers an account added after the chip was picked.
 - **The CSV export takes the list feed's whole filter, row source and order**
   (`transaction_list_filters`, `transaction_list_scope` in `routers/transactions.py`), so the file holds
   the rows on screen. `tests/test_export_matches_ledger.py` asserts the dependency names every filter
@@ -2622,8 +2626,6 @@ and owed decisions*.
 - **Number and date display formatting**, and the free-text parse bucket behind it. The correctness
   risk is the ledger search's date/amount ambiguity.
   → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
-- **Account type as a filtering and search axis.** It exists as a rule scope only.
-  → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
 - **Incremental backups for attached documents**, once documents are the bulk of a backup.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:

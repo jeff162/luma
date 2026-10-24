@@ -25,6 +25,10 @@
 // the one joined with `|`, because a payee name may legitimately contain a comma.
 export const FILTER_FACETS = [
   { type: 'account',  include: 'account_ids',  exclude: 'exclude_account_ids' },
+  // Every account of a type. The backend ORs it with `account_ids`, so "credit cards plus this checking
+  // account" is one selection; the type value travels in its own field because the id must stay unique
+  // among all chips.
+  { type: 'account_type', include: 'account_types', exclude: 'exclude_account_types', valueKey: 'value' },
   { type: 'group',    include: 'group_ids',    exclude: 'exclude_group_ids' },
   { type: 'category', include: 'category_ids', exclude: 'exclude_category_ids' },
   { type: 'owner',    include: 'owner_ids',    exclude: 'exclude_owner_ids' },

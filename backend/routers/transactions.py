@@ -785,7 +785,7 @@ def _build_transaction_filter(
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     sync_connection_id=None, expanded=False,
     needs_review=None, include_trashed=False, recurring_series_id=None,
-    recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
+    recurring_excluded_series_id=None, import_evidence_type=None,
     amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
     recurring_only=None,
     **facet_kwargs,
@@ -876,11 +876,6 @@ def _build_transaction_filter(
     )
     append_facets(clauses, params, facets_from(facet_kwargs))
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
-    # Scope by the *effective* account type ('paypal'/'amazon'/…) — the money-movement report uses this
-    # with `import_evidence_type` to list every row the type-scoped rule reaches.
-    if account_type and isinstance(account_type, str):
-        clauses.append("COALESCE(p.type, a.type) = ?")
-        params.append(account_type)
     # Rows whose captured import evidence carries a specific `Type` value (the PayPal money-movement Type).
     # Matched case-insensitively against the extra_text_fields entry whose header is "Type".
     if import_evidence_type and isinstance(import_evidence_type, str):
@@ -1049,7 +1044,6 @@ def transaction_list_filters(
     amount_max:   Optional[float] = Query(None),
     amount_min_op: Optional[str]  = Query(">="),
     amount_max_op: Optional[str]  = Query("<="),
-    account_type: Optional[str] = Query(None),
     import_evidence_type: Optional[str] = Query(None),
     needs_review: bool          = Query(False),
     include_trashed: bool       = Query(False),
@@ -1131,7 +1125,6 @@ def list_transactions(
     amount_max:   Optional[float] = Query(None, description="Upper amount-magnitude bound; compares against ABS(amount). Pair with amount_max_op."),
     amount_min_op: Optional[str]  = Query(">=", description="Lower-bound comparator: '>=' (default) or '>'."),
     amount_max_op: Optional[str]  = Query("<=", description="Upper-bound comparator: '<=' (default) or '<'."),
-    account_type: Optional[str] = Query(None, description="Only rows whose effective account is of this type (e.g. 'paypal')."),
     import_evidence_type: Optional[str] = Query(None, description="Only rows whose captured import evidence carries this `Type` value (PayPal money-movement report)."),
     needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
@@ -1156,7 +1149,7 @@ def list_transactions(
             needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
             recurring_only=recurring_only,
             recurring_excluded_series_id=recurring_excluded_series_id,
-            account_type=account_type, import_evidence_type=import_evidence_type,
+            import_evidence_type=import_evidence_type,
             amount_min=amount_min, amount_max=amount_max,
             amount_min_op=amount_min_op, amount_max_op=amount_max_op,
         ),

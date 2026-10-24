@@ -1917,9 +1917,13 @@ export default function Dashboard() {
   // own meaning.
   const facetParams = useMemo(() => selectionsToParams(filters.selections), [filters.selections])
   // A single account selection also fills the singular `account_id` some endpoints take; two or more
-  // has no singular form, so those fall back to `account_ids` alone.
+  // has no singular form, so those fall back to `account_ids` alone. So does one account beside an
+  // account-type chip: the two widen each other, and the account alone would narrow to it.
   const accountSelections = selectionsOfType(filters.selections, 'account')
-  const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
+  const accountTypeSelections = selectionsOfType(filters.selections, 'account_type')
+  const accountId = accountSelections.length === 1 && accountTypeSelections.length === 0
+    ? accountSelections[0].id
+    : undefined
   // Tags and owners travel as arguments of their own on the totals/trend calls.
   const { tag_ids: tagIds, owner_ids: ownerIds } = facetParams
   // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.

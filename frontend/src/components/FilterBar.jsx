@@ -14,6 +14,7 @@ import { api } from '../lib/api.js'
 import { CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
+import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -102,6 +103,11 @@ function payeeContainsSelection(fragment) {
     label: `Payee contains “${fragment}”`,
     value: fragment,
   }
+}
+
+// Every account of one type as a selection. The id is prefixed so it cannot collide with another chip's.
+function accountTypeSelection(type, label) {
+  return { type: 'account_type', id: `account-type:${type}`, label: `${label} accounts`, value: type }
 }
 
 // Placed against the viewport rather than against its trigger: a FilterBar may sit inside a dialog, whose
@@ -334,6 +340,39 @@ function FilterPopover({ onClose }) {
     return nodes
   }, [categories])
 
+  // Only types some account has, in the order the Accounts page lists them; a stored type that list
+  // does not know comes after, under its own value, and accounts with no type at all come last. The
+  // column is nullable, and "no type" is not a value the type filter can name.
+  const accountsByType = useMemo(() => {
+    const known = ACCOUNT_TYPES.map(t => t.value)
+    const rank = type => (type == null ? known.length + 1 : known.includes(type) ? known.indexOf(type) : known.length)
+    const types = [...new Set(accounts.map(a => a.type ?? null))].sort((x, y) => rank(x) - rank(y))
+    return types.map(type => ({
+      type,
+      label: type == null ? 'No type' : (ACCOUNT_TYPE_LABEL[type] ?? type),
+      members: accounts.filter(a => (a.type ?? null) === type),
+    }))
+  }, [accounts])
+
+  // `muted` when the account's whole type is already included, as a leaf under a selected group is.
+  function renderAccountRow(a, muted) {
+    const sel = { type: 'account', id: a.id, label: `${a.name}${a.mask ? ` ···${a.mask}` : ''}` }
+    return (
+      <div key={a.id} onClick={() => pickInclude(sel)} style={{
+        ...rowStyle,
+        paddingLeft: 'calc(16px + 2ch)',
+        background: rowBg(a.id),
+        justifyContent: 'space-between',
+      }}>
+        <div style={{ color: muted ? 'var(--muted)' : undefined }}>
+          <div style={{ fontSize: 13 }}>{a.name}</div>
+          {a.mask && <div style={{ fontSize: 11, color: 'var(--muted)' }}>···{a.mask}</div>}
+        </div>
+        <RowTrailing mode={selectionOf(a.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
+      </div>
+    )
+  }
+
   return (
     <Popover onClose={onClose} style={{ minWidth: 420 }}>
       {/* Tabs size to their own labels rather than to equal `flex: 1` cells. Equal cells put the widest
@@ -354,24 +393,25 @@ function FilterPopover({ onClose }) {
 
       <div style={{ maxHeight: 300, overflowY: 'auto', padding: '6px 0' }}>
 
-        {tab === 'accounts' && accounts.map(a => {
-          const sel = { type: 'account', id: a.id, label: `${a.name}${a.mask ? ` ···${a.mask}` : ''}` }
+        {/* Accounts under their type. A type heading selects every account of that type, including
+          one added later, which picking its accounts one by one does not. */}
+        {tab === 'accounts' && accountsByType.map(({ type, label, members }) => {
+          const typeSel = type == null ? null : accountTypeSelection(type, label)
+          const typeIncluded = typeSel ? isIncluded(typeSel.id) : false
           return (
-            <div key={a.id} onClick={() => pickInclude(sel)} style={{
-              ...rowStyle,
-              background: rowBg(a.id),
-              justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 16 }}>
-                  {a.type === 'credit' ? '💳' : a.type === 'investment' ? '📈' : '🏦'}
-                </span>
-                <div>
-                  <div style={{ fontSize: 13 }}>{a.name}</div>
-                  {a.mask && <div style={{ fontSize: 11, color: 'var(--muted)' }}>···{a.mask}</div>}
-                </div>
+            <div key={type ?? ''}>
+              <div onClick={typeSel ? () => pickInclude(typeSel) : undefined} style={{
+                ...rowStyle,
+                padding: '6px 14px 4px 16px',
+                cursor: typeSel ? 'pointer' : 'default',
+                background: typeSel ? rowBg(typeSel.id) : 'transparent',
+                justifyContent: 'space-between',
+                borderTop: '1px solid var(--border)',
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: typeSel ? 'var(--accent2)' : 'var(--muted)' }}>{label}</span>
+                {typeSel && <RowTrailing mode={selectionOf(typeSel.id)?.mode} excludable onExclude={() => pickExclude(typeSel)} />}
               </div>
-              <RowTrailing mode={selectionOf(a.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
+              {members.map(a => renderAccountRow(a, typeIncluded))}
             </div>
           )
         })}

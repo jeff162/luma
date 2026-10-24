@@ -277,7 +277,7 @@ class FilterExclusionTests(unittest.TestCase):
                 account_id=None, source_account_ids=None, category_id=None,
                 direction=None, view=None, search=None, quick_filter=None, ids=None,
                 recurring_series_id=None, recurring_excluded_series_id=None,
-                account_type=None, import_evidence_type=None,
+                import_evidence_type=None,
                 needs_review=False, include_trashed=False, limit=1, offset=0,
             )
         self.assertEqual(len(resp["transactions"]), 1)       # page is capped…

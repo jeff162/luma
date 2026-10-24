@@ -102,7 +102,7 @@ class MonthlyByGroupTests(unittest.TestCase):
             category_id=None, require_all_tag_ids=None, require_all_attribute_ids=None, direction=None,
             view=view, search=None, quick_filter=None, ids=None, sync_connection_id=None,
             recurring_series_id=None, recurring_only=False, recurring_excluded_series_id=None,
-            amount_min=None, amount_max=None, amount_min_op=">=", amount_max_op="<=", account_type=None,
+            amount_min=None, amount_max=None, amount_min_op=">=", amount_max_op="<=",
             import_evidence_type=None, needs_review=False, include_trashed=False, limit=0, offset=0,
         )
         return result["sum_amount"]

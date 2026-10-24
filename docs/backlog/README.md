@@ -103,14 +103,6 @@ scale — rather than by feature.
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
-- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **reduced 2026-09-03 to
-  part 3, which has not started.** The account-*type* axis itself shipped (2026-07-21, migration v13):
-  PayPal is a first-class account type, rules match and rank on `account_type`, and the money-movement
-  rules collapsed onto it — all in [`../data-model.md`](../data-model.md) → *Accounts* / *Rules*,
-  including why the axis is the account's type and not the batch's `source_kind`. What stays is
-  **filtering and search** by account type: structured filters (the safe half, shippable alone) and the
-  `accttype:`/`acctname:` free-text grammar (a design pass, not a feature), which must compile into the
-  rule matcher's own `match_expr` rather than fork a second matcher.
 - [transaction-attachments.md](transaction-attachments.md) — **reduced 2026-09-03 to the unbuilt
   extraction tiers.** Phase 1 shipped 2026-08-24 — the `document` table and on-disk store, the
   format-agnostic ingestion seam (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text

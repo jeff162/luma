@@ -278,3 +278,81 @@ class FacetSemanticsTests(unittest.TestCase):
         clauses, params = _build_transaction_filter()
         self.assertEqual(clauses, ["t.trashed_at IS NULL"])
         self.assertEqual(params, [])
+
+
+class AccountTypeFacetTests(unittest.TestCase):
+    """The account facet named by type: every account of a type, by its group's type when merged."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "account-types.db"
+        init_db(str(self.db_path))
+        self.accounts = {}
+        with self._use_db_path(), get_db() as conn:
+            # `merged` is a checking-typed account merged into card A, so it reads as a credit card.
+            for key, account_type, parent in (
+                ("card_a", "credit", None),
+                ("card_b", "credit", None),
+                ("checking", "depository", None),
+                ("merged", "depository", "card_a"),
+            ):
+                account_id = str(uuid.uuid4())
+                self.accounts[key] = account_id
+                conn.execute(
+                    """
+                    INSERT INTO account
+                      (id, external_account_id, provider, name, display_name, type, subtype, mask,
+                       owner_id, parent_account_id, trashed_at)
+                    VALUES (?, ?, 'fixture_facets', ?, ?, ?, NULL, NULL, ?, ?, NULL)
+                    """,
+                    (account_id, f"acct_{account_id}", key, key, account_type, SHARED_OWNER_ID,
+                     self.accounts[parent] if parent else None),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO txn
+                      (id, account_id, date, amount, merchant_name, display_name, raw_name,
+                       owner_id, is_pending, needs_review)
+                    VALUES (?, ?, '2026-05-10', 10.0, 'Shop', 'Shop', 'Shop', ?, 0, 0)
+                    """,
+                    (f"txn-{key}", account_id, SHARED_OWNER_ID),
+                )
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _ledger_keys(self, **facet_kwargs) -> set[str]:
+        with self._use_db_path():
+            result = list_transactions(
+                month=None, date_start=None, date_end=None, import_batch_id=None,
+                sort_by="date", sort_dir="desc", account_id=None, category_id=None,
+                facets=TransactionFacets(**facet_kwargs),
+                direction=None, search=None, quick_filter=None, limit=200, offset=0,
+            )
+        return {txn["id"].removeprefix("txn-") for txn in result["transactions"]}
+
+    def test_a_type_selects_every_account_of_it_including_merged_children(self):
+        self.assertEqual(self._ledger_keys(account_types="credit"), {"card_a", "card_b", "merged"})
+
+    def test_a_type_ors_with_named_accounts(self):
+        self.assertEqual(
+            self._ledger_keys(account_types="credit", account_ids=self.accounts["checking"]),
+            {"card_a", "card_b", "merged", "checking"},
+        )
+
+    def test_excluding_a_type_drops_every_account_of_it(self):
+        self.assertEqual(self._ledger_keys(exclude_account_types="credit"), {"checking"})
+
+    def test_an_excluded_account_is_carved_out_of_an_included_type(self):
+        self.assertEqual(
+            self._ledger_keys(account_types="credit", exclude_account_ids=self.accounts["card_b"]),
+            {"card_a", "merged"},
+        )
