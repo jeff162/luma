@@ -41,30 +41,10 @@ stragglers:
 Migration is mechanical (`title="x"` → wrap with `<Tooltip content="x">`), in batches, highest-visibility
 first — and each batch owes the accessibility parity the shared `Tooltip` does not give for free (see
 [`../ui-patterns.md`](../ui-patterns.md) → *Loading and feedback*), which is what keeps it from being a
-find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`), and
-remember `NoteCell` (`title={txn.notes}` / "Add note") is **dead code** — handle it in the dead-code
-sweep below, not here. Native `title` is also a *legitimate* choice where its viewport-escaping edge
+find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`). Native `title` is also a *legitimate* choice where its viewport-escaping edge
 behavior matters (see `ui-patterns.md`) — this migration is about consistency, not eradication.
 
-## 3. Dead-code sweep
-
-Remove the unreferenced legacy files (the user keeps these for possible reuse, so remove only in a
-deliberate sweep — all five still present as of 2026-06-24):
-- `frontend/src/components/CategoryPickerLegacy.jsx`
-- `frontend/src/components/CategoryPickerFlatSearchLegacy.jsx`
-- `frontend/src/components/ImportCategoryMappingWorkspaceBucketsLegacy.jsx`
-- `frontend/src/components/ImportCategoryMappingWorkspaceLegacy.jsx`
-- `frontend/src/lib/importCategoryMappingStateLegacy.js`
-
-Worth knowing before reusing either category picker rather than deleting it: `handleSave` in both has
-no rejection path, so a failed create leaves the dialog stuck on "Saving…" with the button disabled and
-no way out. Found during the 2026-08-20 sweep that fixed the same shape everywhere it was live, and
-deliberately not fixed here, since fixing code nothing renders only makes it look maintained.
-
-Also the unused `NoteCell` in `TransactionRow.jsx`. (The orphaned `backend/routers/categorizer.py`
-duplicate was already deleted.)
-
-## 4. Opt-in per-detail-panel Refresh
+## 3. Opt-in per-detail-panel Refresh
 
 After a bulk edit the detail panels reconcile rows in place, so a row recategorized out of scope
 *lingers* until the panel is re-drilled. Transactions + Categories have their own reload/Refresh; the
@@ -82,7 +62,7 @@ renders a `↻ Refresh` next to the bar only when a host passes one (shared half
 Nothing structural — a prop plus per-host one-liners. See `ui-patterns.md` → *Transaction lists*
 for the in-place reconcile contract this complements.
 
-## 5. `category_owner_ids` — the client half
+## 4. `category_owner_ids` — the client half
 
 The dead `category_owner_ids` query parameter was removed from `/summary/by-group` (it was declared and
 never read; its three sibling summary endpoints never had it). The client half is still there:

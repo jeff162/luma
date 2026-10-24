@@ -80,7 +80,7 @@ scale — rather than by feature.
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
   resuming next time rules are in focus.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
-  the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
+  the rest of the native-`title` → shared-`Tooltip` migration, and an opt-in
   per-detail-panel Refresh seam.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large

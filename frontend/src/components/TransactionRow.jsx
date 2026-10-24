@@ -138,50 +138,6 @@ export function NotePopover({ txn, onSave, onClose, positioning = 'absolute' }) 
   )
 }
 
-export function NoteCell({ txn, onUpdateNote }) {
-  const [showPopover, setShowPopover] = useState(false)
-  const hasNote = !!txn.notes
-
-  async function handleSave(val) {
-    await api.updateNotes(txn.id, val)
-    onUpdateNote?.(txn.id, val)
-  }
-
-  return (
-    <div
-      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
-      onClick={e => { e.stopPropagation(); setShowPopover(v => !v) }}
-    >
-      {hasNote ? (
-        <span
-          title={txn.notes}
-          style={{
-            fontSize: 13, cursor: 'pointer', opacity: 0.75,
-            lineHeight: 1, padding: '0 2px',
-          }}
-        >📝</span>
-      ) : (
-        <span
-          title="Add note"
-          style={{
-            fontSize: 11, cursor: 'pointer', opacity: 0,
-            color: 'var(--muted)', padding: '0 2px', lineHeight: 1,
-            // revealed by parent row hover via CSS class would be ideal,
-            // but since we're inline-styling, we show it via the context menu instead
-          }}
-        >+</span>
-      )}
-      {showPopover && (
-        <NotePopover
-          txn={txn}
-          onSave={handleSave}
-          onClose={() => setShowPopover(false)}
-        />
-      )}
-    </div>
-  )
-}
-
 export function useContextMenu() {
   const [menu, setMenu] = useState(null)
 
