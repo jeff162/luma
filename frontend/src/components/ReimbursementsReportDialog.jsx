@@ -23,6 +23,7 @@ import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import { UndoToast } from './CategoryTreePrimitives.jsx'
 import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
+import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 
 /*
  * Everything still owed back, in one place — the answer to "has anyone paid me back yet?" without
@@ -66,10 +67,7 @@ export default function ReimbursementsReportDialog({
   const [editing, setEditing] = useState(null)
   // A received row opens its transaction, not a reimbursement editor — see openLooseRow.
   const [looseTxn, setLooseTxn] = useState(null)
-  // Which right-column row is in flight, which left-column entry is under it, and the drop awaiting a
-  // portion choice. The dragged row is module-adjacent state rather than dataTransfer because `dragover`
-  // cannot read dataTransfer — the same reason the category tree keeps its own payload.
-  const [dragRow, setDragRow] = useState(null)
+  // Which left-column entry a dragged row is over, and the drop awaiting a portion choice.
   const [dropTarget, setDropTarget] = useState(null)
   const [pendingDrop, setPendingDrop] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -166,20 +164,8 @@ export default function ReimbursementsReportDialog({
       : { untrackedRow: entry.row, txnId: entry.row.txn_id })
   }
 
-  // Only a droppable target highlights and accepts. Without the preventDefault the browser refuses the
-  // drop outright, so the refusal reasons double as the "is this a target" test.
-  function allowDrop(event, entry) {
-    if (!dragRow || dropRefusal(entry, dragRow)) return
-    event.preventDefault()
-    setDropTarget(entry.id)
-  }
-
-  function handleDrop(event, entry) {
-    event.preventDefault()
+  function handleDrop(entry, row) {
     setDropTarget(null)
-    const row = dragRow
-    setDragRow(null)
-    if (!row) return
     const refusal = dropRefusal(entry, row)
     if (refusal) { setError(refusal); return }
     // A divided row cannot be assumed whole — which of its portions this covers is a real question, and
@@ -372,9 +358,8 @@ export default function ReimbursementsReportDialog({
                     busy={busy}
                     onOpen={() => openEntry(entry)}
                     onComplete={() => completeEntry(entry)}
-                    onDragOver={event => allowDrop(event, entry)}
-                    onDragLeave={() => setDropTarget(null)}
-                    onDrop={event => handleDrop(event, entry)}
+                    onDropTargetChange={over => setDropTarget(over ? entry.id : null)}
+                    onDrop={row => handleDrop(entry, row)}
                   />
                 ))}
                 {board.expenses.length ? null : (
@@ -387,11 +372,12 @@ export default function ReimbursementsReportDialog({
                   <button
                     key={entry.id}
                     type="button"
-                    draggable
-                    onDragStart={() => setDragRow(entry.row)}
-                    onDragEnd={() => { setDragRow(null); setDropTarget(null) }}
+                    onPointerDown={event => startPointerDrag(event, {
+                      onStart: () => entry.row,
+                      onEnd: () => setDropTarget(null),
+                    })}
                     onClick={() => openLooseRow(entry.row)}
-                    style={{ ...looseRowStyle, cursor: 'grab' }}
+                    style={{ ...looseRowStyle, ...DRAG_SOURCE_STYLE, cursor: 'grab' }}
                   >
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {entry.row.payee}
@@ -516,8 +502,15 @@ const looseRowStyle = {
  * across two reimbursements appears under both, and stating its full value in each would double it on
  * screen.
  */
-function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, onDragOver, onDragLeave, onDrop }) {
+function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, onDropTargetChange, onDrop }) {
   const [hovered, setHovered] = useState(false)
+  // Only a target that can take the row lights up, so the refusal reasons double as the "is this a
+  // target" test. Every entry still takes the drop, so landing on one that cannot says why.
+  const dropRef = useDropZone({
+    onEnter: row => onDropTargetChange(!dropRefusal(entry, row)),
+    onLeave: () => onDropTargetChange(false),
+    onDrop: row => onDrop(row),
+  })
   const tracked = entry.kind === 'record'
   const amount = tracked ? entry.reimbursement.residual : entry.row.unclaimed
   const due = isDue(entry.dueOn)
@@ -531,9 +524,7 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
   const owners = ownerLabels ? entry.owners || [] : []
   return (
     <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      ref={dropRef}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -592,13 +583,14 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
 
 
 function Section({ title, note, children }) {
+  const scrollRef = useDropZone({ autoScroll: true })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </div>
       {note ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{note}</div> : null}
-      <div style={{
+      <div ref={scrollRef} style={{
         display: 'grid', gap: 3, alignContent: 'start', flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
         scrollbarWidth: 'thin',
       }}>{children}</div>

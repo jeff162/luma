@@ -9,16 +9,16 @@
  * own scroll viewport. See `TransactionListTable.jsx`, `Transactions.jsx`, and `Rules.jsx`
  * for canonical consumers.
  *
- * Column reorder tracks the mouse directly rather than using HTML5 drag-and-drop: during a native
- * drag the browser auto-scrolls whatever scrollable box the pointer nears — the report's rows, or the
- * page under a floating panel — and no drag event can switch that off. The only scrolling a column
- * move wants is horizontal: holding a pill near the left/right edge of the nearest
- * horizontally-scrollable ancestor scrolls that ancestor via requestAnimationFrame, so a column can
- * be dragged past the viewport edge when the table is wider than its container.
+ * Column reorder is a pointer drag (lib/pointerDrag.js) with no drop zones: the target is worked out
+ * from the header cells under the pointer. The only scrolling a column move wants is horizontal:
+ * holding a pill near the left/right edge of the nearest horizontally-scrollable ancestor scrolls that
+ * ancestor via requestAnimationFrame, so a column can be dragged past the viewport edge when the table
+ * is wider than its container.
  */
 
 import { useEffect, useMemo, useRef } from 'react'
 import PillTableHeader from './PillTableHeader.jsx'
+import { preventPressDefaults, startPointerDrag } from '../lib/pointerDrag.js'
 
 // The committed grid template is published as this CSS variable on the table root; the header and
 // body consume it via var(), so a live resize can update widths by mutating the variable on the DOM
@@ -44,9 +44,6 @@ function getHeaderPillCellPadding(index, count) {
   if (index === count - 1) return '0 0 0 5px'
   return '0 5px'
 }
-
-// Past this many pixels of movement a press on a pill is a column move; short of it, a click (sort).
-const REORDER_THRESHOLD = 4
 
 function reorderColumns(columns, sourceKey, targetKey, dropAfter) {
   const sourceIndex = columns.findIndex(column => column.key === sourceKey)
@@ -89,9 +86,8 @@ export default function PillGridTable({
   const dropMarkerRef = useRef(null)
   const columnsRef = useRef(columns)
   columnsRef.current = columns
-  // The in-progress column move: { key, startX, startY, active, clientX, clientY, pill, ghost,
-  // nextColumns, cancel, removeListeners }. Like resize, it never touches React state, so moving a column re-renders nothing until the
-  // drop. Its window listeners live only for the one gesture; `cancel` removes them.
+  // The column move in progress: { key, clientX, clientY, pill, nextColumns }. Like resize, it never
+  // touches React state, so moving a column re-renders nothing until the drop.
   const reorderState = useRef(null)
   const resizeState = useRef(null)
   const dragScrollFrame = useRef(null)
@@ -101,7 +97,7 @@ export default function PillGridTable({
   // mutate that variable (and the min-width) DIRECTLY on the DOM per frame — no React state, so
   // nothing re-renders (not this table's body, not the preference consumers the controlled `columns`
   // flows through); the browser just re-lays-out via CSS. We commit once via onColumnsChange on
-  // mouse-up. `liveResizeRef` holds the latest widths for that commit.
+  // release. `liveResizeRef` holds the latest widths for that commit.
   const liveResizeRef = useRef(null)
 
   const gridTemplateColumns = useMemo(
@@ -146,11 +142,13 @@ export default function PillGridTable({
       if (committed) onColumnsChange(committed)
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
   }, [onColumnsChange])
 
@@ -178,7 +176,6 @@ export default function PillGridTable({
 
   useEffect(() => () => {
     if (dragScrollFrame.current) window.cancelAnimationFrame(dragScrollFrame.current)
-    reorderState.current?.cancel()
   }, [])
 
   function stopDragScroll() {
@@ -237,75 +234,45 @@ export default function PillGridTable({
   }
 
   function startReorder(event, columnKey) {
-    if (typeof onColumnsChange !== 'function' || event.button !== 0) return
+    if (typeof onColumnsChange !== 'function') return
     // Stops the press from starting a text selection; the click that sorts still fires.
-    event.preventDefault()
+    preventPressDefaults(event)
     const state = {
       key: columnKey,
-      startX: event.clientX,
-      startY: event.clientY,
-      active: false,
       clientX: event.clientX,
       clientY: event.clientY,
       pill: event.currentTarget,
-      ghost: null,
       nextColumns: null,
-      cancel: () => endReorder(state),
     }
-    reorderState.current = state
-
-    function onMove(moveEvent) {
-      state.clientX = moveEvent.clientX
-      state.clientY = moveEvent.clientY
-      if (!state.active) {
-        if (Math.hypot(moveEvent.clientX - state.startX, moveEvent.clientY - state.startY) < REORDER_THRESHOLD) return
-        state.active = true
-        state.ghost = createReorderGhost(state.pill)
+    startPointerDrag(event, {
+      onStart: () => {
+        reorderState.current = state
         state.pill.style.opacity = '0.5'
-        document.body.style.cursor = 'grabbing'
-      }
-      state.ghost.style.transform = `translate(${moveEvent.clientX - state.startX}px, ${moveEvent.clientY - state.startY}px)`
-      updateReorderTarget()
-      updateEdgeScroll(moveEvent.clientX, moveEvent.clientY)
-    }
-
-    function onUp() {
-      endReorder(state)
-      if (!state.active) return
-      // Releasing over the pill it started on would otherwise read as a click and sort the column.
-      const swallowClick = clickEvent => clickEvent.stopPropagation()
-      window.addEventListener('click', swallowClick, { capture: true, once: true })
-      window.setTimeout(() => window.removeEventListener('click', swallowClick, { capture: true }), 0)
-      if (state.nextColumns) onColumnsChange(state.nextColumns)
-    }
-
-    function onKeyDown(keyEvent) {
-      if (keyEvent.key !== 'Escape') return
-      keyEvent.preventDefault()
-      endReorder(state)
-    }
-
-    state.removeListeners = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    window.addEventListener('keydown', onKeyDown)
+        return columnKey
+      },
+      onMove: point => {
+        state.clientX = point.clientX
+        state.clientY = point.clientY
+        updateReorderTarget()
+        updateEdgeScroll(point.clientX, point.clientY)
+      },
+      onEnd: ({ cancelled }) => {
+        if (reorderState.current === state) reorderState.current = null
+        stopDragScroll()
+        state.pill.style.opacity = ''
+        if (dropMarkerRef.current) dropMarkerRef.current.style.display = 'none'
+        if (!cancelled && state.nextColumns) onColumnsChange(state.nextColumns)
+      },
+      preview: reorderPreview,
+    })
   }
 
-  // The translucent copy of the pill that follows the pointer, standing in for the browser's drag image.
-  // It hangs off <body> because the table often sits in a floating panel, and a `position: fixed` element
-  // inside a transformed ancestor is placed relative to that ancestor.
-  function createReorderGhost(pill) {
+  // The translucent copy of the pill that follows the pointer.
+  function reorderPreview(pill) {
     const rect = pill.getBoundingClientRect()
     const ghost = pill.cloneNode(true)
     ghost.removeAttribute('title')
     Object.assign(ghost.style, {
-      position: 'fixed',
-      left: `${rect.left}px`,
-      top: `${rect.top}px`,
       width: `${rect.width}px`,
       height: `${rect.height}px`,
       margin: '0',
@@ -313,11 +280,8 @@ export default function PillGridTable({
       letterSpacing: window.getComputedStyle(pill).letterSpacing,
       opacity: '0.75',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.18)',
-      pointerEvents: 'none',
-      zIndex: '10000',
     })
-    document.body.appendChild(ghost)
-    return ghost
+    return { element: ghost }
   }
 
   // The drop target is the header cell under the pointer; which half of it the pointer is over decides
@@ -329,7 +293,7 @@ export default function PillGridTable({
   function updateReorderTarget() {
     const state = reorderState.current
     const marker = dropMarkerRef.current
-    if (!state?.active || !marker) return
+    if (!state || !marker) return
     const header = marker.parentElement
     const headerRect = header.getBoundingClientRect()
     let target = null
@@ -362,21 +326,9 @@ export default function PillGridTable({
     }
   }
 
-  // Ends the gesture and undoes its visual state; applying the drop, if any, is the caller's job.
-  function endReorder(state) {
-    state.removeListeners()
-    if (reorderState.current === state) reorderState.current = null
-    stopDragScroll()
-    if (!state.active) return
-    state.ghost.remove()
-    state.pill.style.opacity = ''
-    document.body.style.cursor = ''
-    if (dropMarkerRef.current) dropMarkerRef.current.style.display = 'none'
-  }
-
   function startResize(event, columnKey) {
     if (typeof onColumnsChange !== 'function') return
-    event.preventDefault()
+    preventPressDefaults(event)
     event.stopPropagation()
     resizeState.current = {
       key: columnKey,

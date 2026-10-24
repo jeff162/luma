@@ -9,6 +9,7 @@
 // owns its own position/size/drag state.
 
 import { useEffect, useRef, useState } from 'react'
+import { preventPressDefaults } from '../../lib/pointerDrag.js'
 
 import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
 
@@ -70,23 +71,28 @@ export function RawFilePreview({
       setSize({ w, h })
     }
     function onUp() { setDragState(null) }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
   }, [dragState, embedded])
 
   function startMove(e) {
     if (embedded) return
     startRef.current = { x: pos.x, y: pos.y, mx: e.clientX, my: e.clientY }
     setDragState('move')
-    e.preventDefault()
+    preventPressDefaults(e)
   }
 
   function startResize(e, dir) {
     if (embedded) return
     startRef.current = { dir, x: pos.x, y: pos.y, w: size.w, h: size.h, mx: e.clientX, my: e.clientY }
     setDragState('resize')
-    e.preventDefault()
+    preventPressDefaults(e)
     e.stopPropagation()
   }
 
@@ -125,9 +131,10 @@ export function RawFilePreview({
       userSelect: dragState ? 'none' : 'auto',
       overflow: 'hidden',
     }}>
-      <div onMouseDown={startMove} style={{
+      <div onPointerDown={startMove} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '8px 12px', cursor: embedded ? 'default' : 'grab',
+        touchAction: embedded ? undefined : 'none',
         borderBottom: '1px solid var(--border)',
         background: headerBackground, borderRadius: '10px 10px 0 0', flexShrink: 0,
       }}>
@@ -140,7 +147,7 @@ export function RawFilePreview({
         </div>
         {onClose ? (
           <button
-            onMouseDown={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
             onClick={onClose}
             style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
           >×</button>
@@ -248,8 +255,8 @@ export function RawFilePreview({
       {!embedded ? RESIZE_HANDLES.map(handle => (
         <div
           key={handle.dir}
-          onMouseDown={e => startResize(e, handle.dir)}
-          style={{ position: 'absolute', ...handle.style, zIndex: handle.corner ? 2 : 1 }}
+          onPointerDown={e => startResize(e, handle.dir)}
+          style={{ position: 'absolute', ...handle.style, zIndex: handle.corner ? 2 : 1, touchAction: 'none' }}
         />
       )) : null}
     </div>

@@ -20,6 +20,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
 import { localStore, sessionStore } from '../lib/browserStorage.js'
+import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -1110,7 +1111,6 @@ function AccountRow({
   dragDisabled = false,
   dropActive = false,
   onDragStart,
-  onDragEnd,
   allTags = [],
   tagsEditMode = false,
   tagPickerAccountId = null,
@@ -1316,12 +1316,11 @@ function AccountRow({
         }}>
         <button
           type="button"
-          draggable={canDrag}
-          onDragStart={event => onDragStart?.(event, account)}
-          onDragEnd={() => onDragEnd?.()}
+          onPointerDown={canDrag ? event => onDragStart?.(event, account) : undefined}
           onClick={event => event.preventDefault()}
           title={canDrag ? (isChild ? 'Drag to reorder or pull out to top level' : 'Drag to merge or reorder') : undefined}
           style={{
+            ...DRAG_SOURCE_STYLE,
             background: 'none',
             border: 'none',
             color: canDrag ? 'var(--muted)' : 'color-mix(in srgb, var(--muted) 55%, transparent)',
@@ -1774,7 +1773,7 @@ export default function Accounts() {
 
   function startAccountColumnResize(event, key) {
     if (!ACCOUNT_RESIZABLE_COLUMN_KEYS.has(key)) return
-    event.preventDefault()
+    preventPressDefaults(event)
     event.stopPropagation()
     columnResizeRef.current = { key, startX: event.clientX, startColumns: accountColumns.map(c => ({ ...c })) }
   }
@@ -1801,11 +1800,13 @@ export default function Accounts() {
       setLiveAccountColumns(null)
       if (committed) onAccountColumnsChange(committed)
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
   }, [onAccountColumnsChange])
 
@@ -2211,60 +2212,68 @@ export default function Accounts() {
     }
   }
 
+  // The grip picks the account up; what follows the pointer is a copy of its whole row, so it reads as
+  // the account record rather than as the grip.
   function handleAccountDragStart(event, account) {
-    if (movingAccountId || showCreateAccount) {
-      event.preventDefault()
-      return
-    }
-    setDraggingAccountId(account.id)
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', account.id)
-
-    // Clone the row element as the drag ghost so it looks like the account record.
-    const rowEl = event.currentTarget.closest('[data-account-row]')
-    if (rowEl) {
-      const clone = rowEl.cloneNode(true)
-      clone.style.position = 'fixed'
-      clone.style.top = '-9999px'
-      clone.style.left = '-9999px'
-      clone.style.width = `${rowEl.offsetWidth}px`
-      clone.style.opacity = '0.92'
-      clone.style.pointerEvents = 'none'
-      clone.style.borderRadius = '8px'
-      clone.style.boxShadow = '0 8px 24px rgba(0,0,0,0.22)'
-      clone.style.background = 'var(--surface)'
-      clone.style.border = '1px solid var(--border)'
-      document.body.appendChild(clone)
-      event.dataTransfer.setDragImage(clone, rowEl.offsetWidth / 2, rowEl.offsetHeight / 2)
-      requestAnimationFrame(() => document.body.removeChild(clone))
-    }
+    startPointerDrag(event, {
+      onStart: () => {
+        if (movingAccountId || showCreateAccount) return null
+        setDraggingAccountId(account.id)
+        return account
+      },
+      onEnd: clearDragState,
+      preview: source => {
+        const rowEl = source.closest('[data-account-row]')
+        if (!rowEl) return {}
+        const clone = rowEl.cloneNode(true)
+        Object.assign(clone.style, {
+          width: `${rowEl.offsetWidth}px`,
+          opacity: '0.92',
+          borderRadius: '8px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.22)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+        })
+        return { element: clone, offsetX: rowEl.offsetWidth / 2, offsetY: rowEl.offsetHeight / 2 }
+      },
+    })
   }
 
-  function handleAccountDragEnd() {
-    clearDragState()
-  }
+  const listDropRef = useDropZone({
+    accepts: () => !showCreateAccount && !movingAccountId,
+    onOver: (dragged, point) => handleListDragOver(dragged, point),
+    onLeave: () => {
+      setDropIntent(null)
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+    },
+    onDrop: (dragged, point) => handleListDrop(dragged, point),
+  })
+  const attachList = useCallback(element => {
+    listRef.current = element
+    listDropRef(element)
+  }, [listDropRef])
 
   const dragInvalidSinceRef = useRef(null)
 
   // Drag-over handler — child accounts can return to top level by being pulled
   // into the left gutter; otherwise drag intent falls back to regroup detection.
-  function handleListDragOver(event) {
-    if (!listRef.current || !draggingAccount || showCreateAccount || movingAccountId) return
-    event.preventDefault()
+  function handleListDragOver(dragged, point) {
+    if (!listRef.current) return
 
     const listRect = listRef.current.getBoundingClientRect()
     const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH
-    if (draggingAccount.parent_account_id && event.clientX <= detachZoneRight) {
-      event.dataTransfer.dropEffect = 'move'
-      setDropIntent({ kind: 'detach', accountId: draggingAccount.id })
+    if (dragged.parent_account_id && point.clientX <= detachZoneRight) {
+      setDropIntent({ kind: 'detach', accountId: dragged.id })
       dragInvalidSinceRef.current = null
       clearTimeout(dragTooltipTimerRef.current)
       setDragTooltip(null)
       return
     }
     const el = document.elementFromPoint(
-      Math.max(listRect.left + 1, Math.min(event.clientX, listRect.right - 1)),
-      event.clientY,
+      Math.max(listRect.left + 1, Math.min(point.clientX, listRect.right - 1)),
+      point.clientY,
     )
     const rowEl = el?.closest('[data-account-row-id]')
     const targetId = rowEl?.dataset?.accountRowId
@@ -2279,10 +2288,9 @@ export default function Accounts() {
     }
 
     // Within own group — highlight parent but no action.
-    const draggingGroupRootId = draggingAccount.parent_account_id || null
+    const draggingGroupRootId = dragged.parent_account_id || null
     const targetGroupRootId = target.parent_account_id || (childAccountsByParent.get(target.id)?.length > 0 && !collapsedGroups.has(target.id) ? target.id : null)
     if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
-      event.dataTransfer.dropEffect = 'move'
       setDropIntent({ kind: 'merge', targetId: draggingGroupRootId })
       dragInvalidSinceRef.current = null
       clearTimeout(dragTooltipTimerRef.current)
@@ -2291,8 +2299,7 @@ export default function Accounts() {
     }
 
     const mergeTarget = resolveDropTarget(target)
-    if (canAttachAccount(draggingAccount, mergeTarget)) {
-      event.dataTransfer.dropEffect = 'move'
+    if (canAttachAccount(dragged, mergeTarget)) {
       setDropIntent({ kind: 'merge', targetId: mergeTarget.id })
       dragInvalidSinceRef.current = null
       clearTimeout(dragTooltipTimerRef.current)
@@ -2301,19 +2308,18 @@ export default function Accounts() {
     }
 
     // Cannot merge accounts — show tooltip after delay.
-    event.dataTransfer.dropEffect = 'none'
     setDropIntent(null)
-    const sourceMissingType = !draggingAccount.type
-    const sourceMissingOwner = !draggingAccount.owner_id
+    const sourceMissingType = !dragged.type
+    const sourceMissingOwner = !dragged.owner_id
     const targetMissingType = !mergeTarget.type
     const targetMissingOwner = !mergeTarget.owner_id
     const sourceMissingFields = sourceMissingType || sourceMissingOwner
     const sourceNeeds = [sourceMissingType ? 'a type' : null, sourceMissingOwner ? 'an owner' : null].filter(Boolean)
     const targetNeeds = [targetMissingType ? 'a type' : null, targetMissingOwner ? 'an owner' : null].filter(Boolean)
     const ownerMismatch = !sourceMissingFields && !(targetMissingType || targetMissingOwner) &&
-      !ownersAreCompatible(draggingAccount, mergeTarget, owners)
+      !ownersAreCompatible(dragged, mergeTarget, owners)
     const typeMismatch = !sourceMissingFields && !(targetMissingType || targetMissingOwner) &&
-      (draggingAccount.type || '') !== (mergeTarget.type || '')
+      (dragged.type || '') !== (mergeTarget.type || '')
     const reasons = [
       sourceNeeds.length ? `this account needs ${sourceNeeds.join(' and ')}` : null,
       targetNeeds.length && !sourceMissingFields ? `that account needs ${targetNeeds.join(' and ')}` : null,
@@ -2324,7 +2330,7 @@ export default function Accounts() {
       dragInvalidSinceRef.current = Date.now()
       clearTimeout(dragTooltipTimerRef.current)
       dragTooltipTimerRef.current = setTimeout(() => {
-        setDragTooltip({ x: event.clientX, y: event.clientY, message: `Can't merge with this account: ${reasons}` })
+        setDragTooltip({ x: point.clientX, y: point.clientY, message: `Can't merge with this account: ${reasons}` })
       }, 600)
     } else if (!reasons) {
       dragInvalidSinceRef.current = null
@@ -2335,19 +2341,17 @@ export default function Accounts() {
 
   // Drop handler — child accounts may detach in the left gutter, otherwise drops
   // either merge into another top-level account or no-op within the same group.
-  function handleListDrop(event) {
-    if (!draggingAccount) return
+  function handleListDrop(dragged, point) {
     const listRect = listRef.current?.getBoundingClientRect()
     if (!listRect) return
     const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH
-    if (draggingAccount.parent_account_id && event.clientX <= detachZoneRight) {
-      event.preventDefault()
-      detachAccount(draggingAccount)
+    if (dragged.parent_account_id && point.clientX <= detachZoneRight) {
+      detachAccount(dragged)
       return
     }
     const el = document.elementFromPoint(
-      Math.max(listRect.left + 1, Math.min(event.clientX, listRect.right - 1)),
-      event.clientY,
+      Math.max(listRect.left + 1, Math.min(point.clientX, listRect.right - 1)),
+      point.clientY,
     )
     const rowEl = el?.closest('[data-account-row-id]')
     const targetId = rowEl?.dataset?.accountRowId
@@ -2355,7 +2359,7 @@ export default function Accounts() {
     if (!target) { clearDragState(); return }
 
     // Drop within own group — no-op.
-    const draggingGroupRootId = draggingAccount.parent_account_id || null
+    const draggingGroupRootId = dragged.parent_account_id || null
     const targetGroupRootId = target.parent_account_id || (childAccountsByParent.get(target.id)?.length > 0 && !collapsedGroups.has(target.id) ? target.id : null)
     if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
       clearDragState()
@@ -2363,9 +2367,8 @@ export default function Accounts() {
     }
 
     const mergeTarget = resolveDropTarget(target)
-    if (!canAttachAccount(draggingAccount, mergeTarget)) return
-    event.preventDefault()
-    attachAccount(draggingAccount, mergeTarget)
+    if (!canAttachAccount(dragged, mergeTarget)) return
+    attachAccount(dragged, mergeTarget)
   }
 
   const activeAccounts = accounts.filter(account => !account.trashed_at)
@@ -2787,9 +2790,7 @@ export default function Accounts() {
                             />
                           </div>
                           <div
-                            ref={listRef}
-                            onDragOver={handleListDragOver}
-                            onDrop={handleListDrop}
+                            ref={attachList}
                             onContextMenu={e => {
                               if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
                               e.preventDefault()
@@ -2900,7 +2901,6 @@ export default function Accounts() {
                                     dragDisabled={rootDragDisabled}
                                     dropActive={groupMergeActive}
                                     onDragStart={handleAccountDragStart}
-                                    onDragEnd={handleAccountDragEnd}
                                     {...accountTagProps}
                                   />
                                   {!isCollapsed && children.map((child, childIdx) => (
@@ -2930,7 +2930,6 @@ export default function Accounts() {
                                       dragDisabled={!!movingAccountId}
                                       dropActive={groupMergeActive}
                                       onDragStart={handleAccountDragStart}
-                                      onDragEnd={handleAccountDragEnd}
                                       {...accountTagProps}
                                     />
                                   ))}

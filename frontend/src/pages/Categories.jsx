@@ -29,6 +29,7 @@ import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/ui
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { localStore } from '../lib/browserStorage.js'
+import { preventPressDefaults, trackPointer, useDropZone } from '../lib/pointerDrag.js'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -686,7 +687,11 @@ export default function Categories() {
   const [bulkSelectMode, setBulkSelectMode] = useState(false)
 
   const listRef = useRef(null)
-  const dragScrollRef = useRef(null)
+  const listDropRef = useDropZone({ autoScroll: true })
+  const attachList = useCallback(element => {
+    listRef.current = element
+    listDropRef(element)
+  }, [listDropRef])
   const selectedRef = useRef(null)
   const contentLayoutRef = useRef(null)
 
@@ -878,28 +883,24 @@ export default function Categories() {
   }
 
   function startResizeDivider(event) {
-    event.preventDefault()
+    preventPressDefaults(event)
     const layoutRect = contentLayoutRef.current?.getBoundingClientRect?.()
     if (!layoutRect) return
     let nextWidth = leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH
 
-    function handlePointerMove(moveEvent) {
-      nextWidth = clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)
-      setLeftPanelWidth(nextWidth)
-    }
-
-    function stopResize() {
-      window.removeEventListener('mousemove', handlePointerMove)
-      window.removeEventListener('mouseup', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      persistLeftPanelWidth(nextWidth)
-    }
-
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', handlePointerMove)
-    window.addEventListener('mouseup', stopResize)
+    trackPointer(event, {
+      onMove: moveEvent => {
+        nextWidth = clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)
+        setLeftPanelWidth(nextWidth)
+      },
+      onEnd: () => {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        persistLeftPanelWidth(nextWidth)
+      },
+    })
   }
 
   function getSectionGroups(sectionType) {
@@ -985,32 +986,6 @@ export default function Categories() {
 
   function childrenForGroup(groupId) {
     return flatCats.filter(cat => cat.parent_id === groupId)
-  }
-
-  function handleListDragOver(e) {
-    const el = listRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const zone = 48
-    const speed = 8
-    cancelAnimationFrame(dragScrollRef.current)
-    if (e.clientY < rect.top + zone) {
-      const scroll = () => {
-        el.scrollTop -= speed
-        dragScrollRef.current = requestAnimationFrame(scroll)
-      }
-      dragScrollRef.current = requestAnimationFrame(scroll)
-    } else if (e.clientY > rect.bottom - zone) {
-      const scroll = () => {
-        el.scrollTop += speed
-        dragScrollRef.current = requestAnimationFrame(scroll)
-      }
-      dragScrollRef.current = requestAnimationFrame(scroll)
-    }
-  }
-
-  function handleListDragLeave() {
-    cancelAnimationFrame(dragScrollRef.current)
   }
 
   function updateScrollState(ref, setter) {
@@ -1137,7 +1112,6 @@ export default function Categories() {
   }
 
   function handleDropRow(dragged, targetCat, dropPosition = 'after') {
-    cancelAnimationFrame(dragScrollRef.current)
     return runMove(() => placeDroppedRow(dragged, targetCat, dropPosition))
   }
 
@@ -1171,7 +1145,6 @@ export default function Categories() {
   }
 
   function handleGroupDropEnd(dragged, group) {
-    cancelAnimationFrame(dragScrollRef.current)
     return runMove(() => placeAtGroupEnd(dragged, group))
   }
 
@@ -1185,7 +1158,6 @@ export default function Categories() {
   }
 
   function handleSectionDropEnd(dragged, sectionType) {
-    cancelAnimationFrame(dragScrollRef.current)
     if (!dragged.isGroup) return
     return runMove(() => moveGroup(dragged, sectionType))
   }
@@ -1849,9 +1821,7 @@ export default function Categories() {
           </div>
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div
-              ref={listRef}
-              onDragOver={handleListDragOver}
-              onDragLeave={handleListDragLeave}
+              ref={attachList}
               onScroll={() => updateScrollState(listRef, setListScrollState)}
               style={{
                 flex: 1,
@@ -2153,12 +2123,13 @@ export default function Categories() {
         </div>
 
         <div
-          onMouseDown={startResizeDivider}
+          onPointerDown={startResizeDivider}
           title="Drag to resize panels"
           style={{
             minHeight: 0,
             cursor: 'col-resize',
             background: 'transparent',
+            touchAction: 'none',
           }}
         />
 

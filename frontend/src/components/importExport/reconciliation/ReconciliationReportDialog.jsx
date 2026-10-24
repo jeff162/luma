@@ -183,7 +183,7 @@ export function ReconciliationReportDialog({
   }
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
-      <span onMouseDown={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <span onPointerDown={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
         <FeatureExplainer topic={vendor.explainerTopic} placement="bottom-left" />
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
@@ -191,14 +191,14 @@ export function ReconciliationReportDialog({
           {report.title}
           {onReload ? (
             <RefreshButton onRefresh={onReload} loading={loading} disabled={busy}
-              onMouseDown={e => e.stopPropagation()} />
+              onPointerDown={e => e.stopPropagation()} />
           ) : null}
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>{vendor.subtitle}</div>
       </div>
       {onMinimize ? (
         <button type="button" title="Minimize to nav bar (state is preserved — click the pill to restore)"
-          onClick={onMinimize} onMouseDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>
+          onClick={onMinimize} onPointerDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>
       ) : null}
     </div>
   )

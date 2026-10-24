@@ -14,11 +14,7 @@ import {
   getSharedPillLabelStyle,
   getSharedPillStyle,
 } from './pillStyles.js'
-import {
-  clearCategoryTreeDragItem,
-  getCategoryTreeDragItem,
-  setCategoryTreeDragItem,
-} from './CategoryTreePrimitives.jsx'
+import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, trackPointer, useDropZone } from '../lib/pointerDrag.js'
 import {
   cloneCategoryImportSnapshot,
   createCategoryImportDraftState,
@@ -88,21 +84,14 @@ function clampOverlayPosition(x, y, width, height, padding = 12) {
   }
 }
 
-function autoScrollContainer(container, clientY, threshold = 48, maxStep = 22) {
-  if (!container) return
-  const rect = container.getBoundingClientRect()
-  if (clientY < rect.top || clientY > rect.bottom) return
-
-  let delta = 0
-  if (clientY < rect.top + threshold) {
-    const intensity = 1 - ((clientY - rect.top) / threshold)
-    delta = -Math.ceil(maxStep * intensity)
-  } else if (clientY > rect.bottom - threshold) {
-    const intensity = 1 - ((rect.bottom - clientY) / threshold)
-    delta = Math.ceil(maxStep * intensity)
+// Where the pointer holds the copy of a dragged pill: toward its right end, clear of the count badge that
+// marks a multi-item drag at its left.
+function pillPreview(source) {
+  const rect = source.getBoundingClientRect()
+  return {
+    offsetX: Math.min(Math.max(rect.width * 0.82, 44), Math.max(44, rect.width - 12)),
+    offsetY: Math.min(Math.max(rect.height * 0.3, 10), Math.max(10, rect.height - 10)),
   }
-
-  if (delta) container.scrollTop += delta
 }
 
 function findNode(tree, nodeId) {
@@ -247,6 +236,7 @@ function SourceChip({ label, selected, grouped = false, groupCount = 0, showCoun
 }
 
 function SetAsideTray({ count, selected, collapsed, onToggle, onDrop, onContextMenu, children }) {
+  const dropRef = useDropZone({ accepts: item => item.isSource, onDrop })
   return (
     <div
       style={{
@@ -292,12 +282,7 @@ function SetAsideTray({ count, selected, collapsed, onToggle, onDrop, onContextM
       </div>
       {!collapsed ? (
         <div
-          onDragOver={event => {
-            const item = getCategoryTreeDragItem()
-            if (!item?.isSource) return
-            event.preventDefault()
-          }}
-          onDrop={onDrop}
+          ref={dropRef}
           onContextMenu={onContextMenu}
           style={{ padding: '10px', minHeight: 72, overflow: 'hidden' }}
         >
@@ -334,17 +319,14 @@ function GroupCard({
   const activeChildren = group.children.filter(child => !child.imported)
   const importedChildren = group.children.filter(child => child.imported)
   const renderedChildren = showPreviouslyImportedBadge ? [...activeChildren, ...importedChildren] : group.children
+  const dropRef = useDropZone({ onDrop: item => onDropGroup(group.id, item) })
 
   return (
     <div
+      ref={dropRef}
       data-group-card="true"
       data-group-id={group.id}
       onContextMenu={onContextMenu}
-      onDragOver={event => event.preventDefault()}
-      onDrop={event => {
-        event.preventDefault()
-        onDropGroup(group.id)
-      }}
       style={{ breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', pageBreakInside: 'avoid', display: 'inline-block', width: '100%', borderRadius: 16, border: selectedNodeId === group.id ? '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))' : '1px solid var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 70%, var(--surface)), color-mix(in srgb, var(--surface) 88%, black))', boxShadow: '0 10px 24px rgba(15, 23, 42, 0.16)', overflow: 'hidden' }}
     >
       <div style={{ padding: '8px 10px 8px', borderBottom: collapsed ? 'none' : '1px solid color-mix(in srgb, var(--border) 78%, transparent)', background: selectedNodeId === group.id ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 86%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7 }}>
@@ -470,27 +452,16 @@ function GroupCard({
                   </div>
                 ) : null}
                 <div
-                  draggable={!child.imported}
                   onClick={event => {
                     onSelectChild(child.id, group.id, event)
                   }}
-                  onDragOver={event => event.preventDefault()}
-                  onDrop={event => {
-                    event.preventDefault()
-                    onDropGroup(group.id)
-                  }}
-                  onDragStart={event => {
-                    if (child.imported) {
-                      event.preventDefault()
-                      return
-                    }
-                    onChildDragStart(child.id, event)
-                  }}
-                  onDragEnd={() => {
-                    if (child.imported) return
-                    onChildDragEnd()
-                  }}
+                  onPointerDown={child.imported ? undefined : event => startPointerDrag(event, {
+                    onStart: ({ target }) => onChildDragStart(child.id, target),
+                    onEnd: onChildDragEnd,
+                    preview: pillPreview,
+                  })}
                   style={{
+                    ...DRAG_SOURCE_STYLE,
                     position: 'relative',
                     ...getSharedPillStyle({ tone: selectedChildIds.includes(child.id) ? 'selected' : 'default' }),
                     outline: dragChildIds.includes(child.id) ? '2px dashed color-mix(in srgb, var(--accent) 42%, var(--border))' : 'none',
@@ -607,8 +578,19 @@ export default function CategoryImportWorkspace({
   const [dragLeadId, setDragLeadId] = useState(null)
   const [measuredGroupHeights, setMeasuredGroupHeights] = useState({})
   const contentLayoutRef = useRef(null)
-  const sourceScrollRef = useRef(null)
   const rightPanelScrollRef = useRef(null)
+  // The pool takes back grouped categories and set-aside items; both panes scroll under a drag held at
+  // their edge.
+  const sourcePoolDropRef = useDropZone({
+    accepts: item => !item.isSource || item.fromSetAside,
+    onDrop: item => handleDropOnSourcePool(item),
+    autoScroll: true,
+  })
+  const rightPanelDropRef = useDropZone({ autoScroll: true })
+  const rightPanelRef = useCallback(element => {
+    rightPanelScrollRef.current = element
+    rightPanelDropRef(element)
+  }, [rightPanelDropRef])
   const panelMenuRef = useRef(null)
   const groupMenuRef = useRef(null)
   const sourceMenuRef = useRef(null)
@@ -995,26 +977,19 @@ export default function CategoryImportWorkspace({
   }
 
   function startResizeDivider(event) {
-    event.preventDefault()
+    preventPressDefaults(event)
     const layoutRect = contentLayoutRef.current?.getBoundingClientRect?.()
     if (!layoutRect) return
 
-    function handlePointerMove(moveEvent) {
-      const nextWidth = clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)
-      setLeftPanelWidth(nextWidth)
-    }
-
-    function stopResize() {
-      window.removeEventListener('mousemove', handlePointerMove)
-      window.removeEventListener('mouseup', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', handlePointerMove)
-    window.addEventListener('mouseup', stopResize)
+    trackPointer(event, {
+      onMove: moveEvent => setLeftPanelWidth(clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)),
+      onEnd: () => {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      },
+    })
   }
 
   function handleSelectSource(sourceValue, event) {
@@ -1084,11 +1059,9 @@ export default function CategoryImportWorkspace({
     setSourceMenu({ x: position.x, y: position.y, mode: inSetAside ? 'restore' : 'setAside' })
   }
 
-  function handleSourceDragStart(sourceValue, event) {
-    if (event.target?.closest?.('[data-pill-no-drag="true"]')) {
-      event.preventDefault()
-      return
-    }
+  // Picks up a pool item, with the rest of the selection when it is part of one. Returns the dragged item.
+  function handleSourceDragStart(sourceValue, target) {
+    if (target?.closest?.('[data-pill-no-drag="true"]')) return null
     const sourceIds = snapshot.selectedSourceIds.includes(sourceValue) ? [...snapshot.selectedSourceIds] : [sourceValue]
     flushSync(() => {
       clearBucketSelection()
@@ -1099,17 +1072,20 @@ export default function CategoryImportWorkspace({
       setDragSourceGroupIds(sourceIds.length > 1 ? sourceIds : [])
       setDragSourceLeadId(sourceValue)
     })
-    setCategoryTreeDragItem({ id: `source:${sourceValue}`, isSource: true, sourceIds, fromSetAside: (snapshot.setAsideOrder || []).includes(sourceValue) })
-    const dragElement = event.currentTarget
-    if (dragElement instanceof HTMLElement) {
-      const rect = dragElement.getBoundingClientRect()
-      event.dataTransfer.setDragImage(
-        dragElement,
-        Math.min(Math.max(rect.width * 0.82, 44), Math.max(44, rect.width - 12)),
-        Math.min(Math.max(rect.height * 0.3, 10), Math.max(10, rect.height - 10)),
-      )
-    }
-    event.dataTransfer.effectAllowed = 'move'
+    return { id: `source:${sourceValue}`, isSource: true, sourceIds, fromSetAside: (snapshot.setAsideOrder || []).includes(sourceValue) }
+  }
+
+  function handleSourceDragEnd() {
+    setDragSourceGroupIds([])
+    setDragSourceLeadId(null)
+  }
+
+  function startSourceDrag(sourceValue, event) {
+    startPointerDrag(event, {
+      onStart: ({ target }) => handleSourceDragStart(sourceValue, target),
+      onEnd: handleSourceDragEnd,
+      preview: pillPreview,
+    })
   }
 
   function handleSelectCategory(nodeId, groupId, event) {
@@ -1149,13 +1125,12 @@ export default function CategoryImportWorkspace({
     setSnapshot(prev => ({ ...prev, selectedNodeId: nodeId }))
   }
 
-  function handleChildDragStart(childId, event) {
-    if (event.target?.closest?.('[data-pill-no-drag="true"]')) {
-      event.preventDefault()
-      return
-    }
+  // Picks up a grouped category, with the rest of its group's selection when it is part of one. Returns
+  // the dragged item.
+  function handleChildDragStart(childId, target) {
+    if (target?.closest?.('[data-pill-no-drag="true"]')) return null
     const info = findNode(snapshot.tree, childId)
-    if (!info?.group) return
+    if (!info?.group) return null
     clearSourceSelection()
     const childIds = selectedBucketCategoryIds.includes(childId)
       ? selectedBucketCategoryIds.filter(id => findNode(snapshot.tree, id)?.group?.id === info.group.id)
@@ -1169,21 +1144,10 @@ export default function CategoryImportWorkspace({
       setDragChildIds(childIds.length > 1 ? childIds : [])
       setDragLeadId(childId)
     })
-    setCategoryTreeDragItem({ id: childId, ids: childIds, isSource: false, parentId: info.group.id })
-    const dragElement = event.currentTarget
-    if (dragElement instanceof HTMLElement) {
-      const rect = dragElement.getBoundingClientRect()
-      event.dataTransfer.setDragImage(
-        dragElement,
-        Math.min(Math.max(rect.width * 0.82, 44), Math.max(44, rect.width - 12)),
-        Math.min(Math.max(rect.height * 0.3, 10), Math.max(10, rect.height - 10)),
-      )
-    }
-    event.dataTransfer.effectAllowed = 'move'
+    return { id: childId, ids: childIds, isSource: false, parentId: info.group.id }
   }
 
   function handleChildDragEnd() {
-    clearCategoryTreeDragItem()
     setDragChildIds([])
     setDragLeadId(null)
   }
@@ -1266,12 +1230,9 @@ export default function CategoryImportWorkspace({
     setBucketSelectionAnchor(null)
   }
 
-  function handleDropOnGroup(groupId) {
-    const item = getCategoryTreeDragItem()
-    if (!item) return
+  function handleDropOnGroup(groupId, item) {
     if (item.isSource) applyAddSourceToGroup(item.sourceIds || [], groupId)
     else moveChildToGroup(item.ids || item.id, groupId)
-    clearCategoryTreeDragItem()
     setDragSourceGroupIds([])
     setDragSourceLeadId(null)
     setDragChildIds([])
@@ -1313,9 +1274,7 @@ export default function CategoryImportWorkspace({
     onDeleteSources(selected)
   }
 
-  function handleDropOnSourcePool() {
-    const item = getCategoryTreeDragItem()
-    if (!item) return
+  function handleDropOnSourcePool(item) {
     if (item.isSource && item.fromSetAside) {
       applySnapshotChange(next => {
         const restoring = (item.sourceIds || []).filter(value => (next.setAsideOrder || []).includes(value))
@@ -1323,7 +1282,6 @@ export default function CategoryImportWorkspace({
         next.sourceOrder = Array.from(new Set([...(next.sourceOrder || []), ...restoring])).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
         next.selectedSourceIds = []
       })
-      clearCategoryTreeDragItem()
       setDragSourceGroupIds([])
       setDragSourceLeadId(null)
       setSelectionAnchor(null)
@@ -1331,21 +1289,17 @@ export default function CategoryImportWorkspace({
     }
     if (item.isSource) return
     returnChildrenToSourcePool(item.ids || item.id)
-    clearCategoryTreeDragItem()
     setDragChildIds([])
     setDragLeadId(null)
   }
 
-  function handleDropOnSetAside() {
-    const item = getCategoryTreeDragItem()
-    if (!item?.isSource) return
+  function handleDropOnSetAside(item) {
     applySnapshotChange(next => {
       const moving = (item.sourceIds || []).filter(value => next.sourceOrder.includes(value))
       next.sourceOrder = next.sourceOrder.filter(value => !moving.includes(value))
       next.setAsideOrder = Array.from(new Set([...(next.setAsideOrder || []), ...moving])).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
       next.selectedSourceIds = []
     })
-    clearCategoryTreeDragItem()
     setDragSourceGroupIds([])
     setDragSourceLeadId(null)
     setSelectionAnchor(null)
@@ -1499,14 +1453,7 @@ export default function CategoryImportWorkspace({
               </div>
             </div>
             <div
-              ref={sourceScrollRef}
-              onDragOver={event => {
-                autoScrollContainer(sourceScrollRef.current, event.clientY)
-                const item = getCategoryTreeDragItem()
-                if (!item) return
-                if (!item.isSource || item.fromSetAside) event.preventDefault()
-              }}
-              onDrop={event => { event.preventDefault(); handleDropOnSourcePool() }}
+              ref={sourcePoolDropRef}
               onContextMenu={event => {
                 if (!snapshot.selectedSourceIds.length || sourceSelectionInSetAside) return
                 event.preventDefault()
@@ -1522,7 +1469,7 @@ export default function CategoryImportWorkspace({
                   {snapshot.sourceOrder.map(sourceValue => {
                     const showDragCount = dragSourceGroupIds.length > 1 && dragSourceLeadId === sourceValue
                     return (
-                      <button key={sourceValue} type="button" draggable onClick={event => handleSelectSource(sourceValue, event)} onContextMenu={event => openSourceMenuAt(sourceValue, event)} onDragStart={event => handleSourceDragStart(sourceValue, event)} onDragEnd={() => { clearCategoryTreeDragItem(); setDragSourceGroupIds([]); setDragSourceLeadId(null) }} style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', color: 'var(--text)', outline: 'none' }}>
+                      <button key={sourceValue} type="button" onClick={event => handleSelectSource(sourceValue, event)} onContextMenu={event => openSourceMenuAt(sourceValue, event)} onPointerDown={event => startSourceDrag(sourceValue, event)} style={{ ...DRAG_SOURCE_STYLE, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', color: 'var(--text)', outline: 'none' }}>
                         <SourceChip label={sourceValue} selected={snapshot.selectedSourceIds.includes(sourceValue)} grouped={dragSourceGroupIds.includes(sourceValue)} groupCount={dragSourceGroupIds.length} showCount={showDragCount} />
                       </button>
                     )
@@ -1536,10 +1483,7 @@ export default function CategoryImportWorkspace({
                 selected={sourceSelectionInSetAside}
                 collapsed={setAsideCollapsed}
                 onToggle={() => setSnapshot(prev => ({ ...prev, collapsedGroups: { ...prev.collapsedGroups, __setAside: !prev.collapsedGroups?.__setAside } }))}
-                onDrop={event => {
-                  event.preventDefault()
-                  handleDropOnSetAside()
-                }}
+                onDrop={handleDropOnSetAside}
                 onContextMenu={event => {
                   if (!snapshot.selectedSourceIds.length || !sourceSelectionInSetAside) return
                   event.preventDefault()
@@ -1554,7 +1498,7 @@ export default function CategoryImportWorkspace({
                       {snapshot.setAsideOrder.map(sourceValue => {
                         const showDragCount = dragSourceGroupIds.length > 1 && dragSourceLeadId === sourceValue
                         return (
-                          <button key={`aside:${sourceValue}`} type="button" draggable onClick={event => handleSelectSource(sourceValue, event)} onContextMenu={event => openSourceMenuAt(sourceValue, event)} onDragStart={event => handleSourceDragStart(sourceValue, event)} onDragEnd={() => { clearCategoryTreeDragItem(); setDragSourceGroupIds([]); setDragSourceLeadId(null) }} style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', color: 'var(--text)', outline: 'none' }}>
+                          <button key={`aside:${sourceValue}`} type="button" onClick={event => handleSelectSource(sourceValue, event)} onContextMenu={event => openSourceMenuAt(sourceValue, event)} onPointerDown={event => startSourceDrag(sourceValue, event)} style={{ ...DRAG_SOURCE_STYLE, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', color: 'var(--text)', outline: 'none' }}>
                             <SourceChip label={sourceValue} selected={snapshot.selectedSourceIds.includes(sourceValue)} grouped={dragSourceGroupIds.includes(sourceValue)} groupCount={dragSourceGroupIds.length} showCount={showDragCount} />
                           </button>
                         )
@@ -1568,11 +1512,12 @@ export default function CategoryImportWorkspace({
           </div>
 
           <div
-            onMouseDown={startResizeDivider}
+            onPointerDown={startResizeDivider}
             title="Drag to resize panels"
             style={{
               minHeight: 0,
               cursor: 'col-resize',
+              touchAction: 'none',
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--border) 72%, transparent), color-mix(in srgb, var(--border) 38%, transparent))',
               boxShadow: 'inset 1px 0 0 color-mix(in srgb, white 6%, transparent), inset -1px 0 0 color-mix(in srgb, black 14%, transparent)',
             }}
@@ -1590,11 +1535,8 @@ export default function CategoryImportWorkspace({
               </div>
             </div>
             <div
-              ref={rightPanelScrollRef}
+              ref={rightPanelRef}
               style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto', padding: 12, background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 34%, var(--surface)), var(--surface))' }}
-              onDragOver={event => {
-                autoScrollContainer(rightPanelScrollRef.current, event.clientY)
-              }}
               onContextMenu={event => {
                 if (event.target.closest('[data-group-card="true"]')) return
                 event.preventDefault()

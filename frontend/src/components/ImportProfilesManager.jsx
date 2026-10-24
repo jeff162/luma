@@ -47,6 +47,7 @@ import { PICKER_IDS } from '../lib/filePicker.js'
 import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
 import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import { preventPressDefaults } from '../lib/pointerDrag.js'
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed', label: 'Single column — negative = debit' },
@@ -151,7 +152,7 @@ function ProfileForm({
   onCancel,
   onNotice,
   floating = false,
-  onHeaderMouseDown = null,
+  onHeaderPointerDown = null,
   headerCursor = 'default',
 }) {
   // The profile form supports both "create a reusable data source from a sample
@@ -462,15 +463,16 @@ function ProfileForm({
         padding: floating ? '14px 18px 12px' : 0,
         borderBottom: floating ? '1px solid color-mix(in srgb, var(--accent) 18%, var(--border))' : 'none',
         background: floating ? getFloatingPanelHeaderBackground(true) : 'transparent',
-        cursor: floating && onHeaderMouseDown ? headerCursor : 'default',
-        userSelect: floating && onHeaderMouseDown ? 'none' : 'auto',
+        cursor: floating && onHeaderPointerDown ? headerCursor : 'default',
+        userSelect: floating && onHeaderPointerDown ? 'none' : 'auto',
+        touchAction: floating && onHeaderPointerDown ? 'none' : undefined,
         // Stick to the top of the scrolling panel so the title + close stay reachable when a loaded
         // template grows the body past the viewport.
         position: floating ? 'sticky' : undefined,
         top: floating ? 0 : undefined,
         zIndex: floating ? 3 : undefined,
       }}
-        onMouseDown={floating ? onHeaderMouseDown : undefined}
+        onPointerDown={floating ? onHeaderPointerDown : undefined}
       >
         <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--muted)', flex: 1, minWidth: 0 }}>
           <div
@@ -489,7 +491,7 @@ function ProfileForm({
             type="button"
             aria-label="Close"
             title="Close (same as Cancel)"
-            onMouseDown={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
             onClick={onCancel}
             style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
           >×</button>
@@ -1130,11 +1132,13 @@ export default function ImportProfilesManager({
     function handleUp() {
       setFormPanelDragging(false)
     }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
     return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
     }
   }, [formPanelDragging])
 
@@ -1163,7 +1167,7 @@ export default function ImportProfilesManager({
       height: rect.height,
     }
     setFormPanelDragging(true)
-    event.preventDefault()
+    preventPressDefaults(event)
   }
 
   async function handleSave(data, meta = {}) {
@@ -1310,7 +1314,7 @@ export default function ImportProfilesManager({
               }}
               onNotice={setNoticeDialog}
               floating
-              onHeaderMouseDown={startFormPanelDrag}
+              onHeaderPointerDown={startFormPanelDrag}
               headerCursor={formPanelDragging ? 'grabbing' : 'grab'}
             />
           </div>

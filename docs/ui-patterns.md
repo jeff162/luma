@@ -23,6 +23,7 @@ lookup. Data semantics are in [`data-model.md`](data-model.md).
 - [Loading and feedback](#loading-and-feedback)
 - [Status, badges and timestamps](#status-badges-and-timestamps)
 - [Empty states](#empty-states)
+- [Dragging](#dragging)
 - [Dropping and pasting files](#dropping-and-pasting-files)
 - [Secret fields](#secret-fields)
 - [Confirmation and dismissal](#confirmation-and-dismissal)
@@ -238,6 +239,18 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - Brief and quiet: `None.` or `No accounts yet.` rather than instructions.
 - Close in size to the sections around it, with the primary action inside or beside it.
+
+## Dragging
+
+- **Every press-and-move gesture goes through `lib/pointerDrag.js`**, never mouse events or the
+  browser's drag-and-drop, because both are mouse-only in practice and the app is used on tablets.
+- **A handle whose only job is the gesture** (a splitter, a resize grip, a panel header) follows the
+  press at once with `trackPointer` and sets `touch-action: none`.
+- **An item that is also clicked, or sits in a scrolling list,** is picked up with `startPointerDrag`:
+  after a few pixels with a mouse, after a press-and-hold with a finger, so a swipe still scrolls. Its
+  targets are `useDropZone`s, and a list it is dragged along scrolls only if it asks to.
+- **A control inside a drag handle stops the pointer press** (`onPointerDown`), not the mouse press, to
+  keep out of the drag.
 
 ## Dropping and pasting files
 

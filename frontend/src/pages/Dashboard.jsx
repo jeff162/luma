@@ -67,6 +67,7 @@ import { periodAverage, seriesDateRange } from '../lib/periodAverage.js'
 import AvgPill from '../components/AvgPill.jsx'
 import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
 import AxisAvgPill from '../components/AxisAvgPill.jsx'
+import { preventPressDefaults } from '../lib/pointerDrag.js'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -1276,7 +1277,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
   // Draggable divider between "Total per month" (left) and "Annual totals" (right): a persisted
   // left-panel width fraction. The continuous drag goes through useDeferredPreference so it only
-  // persists once on mouse-up (setPreference writes on every call); we wire the cursor→fraction math
+  // persists once on release (setPreference writes on every call); we wire the cursor→fraction math
   // and the window listeners here.
   const clampSplit = useCallback(
     frac => Math.min(TRENDS_SPLIT_MAX, Math.max(TRENDS_SPLIT_MIN, Number(Number(frac).toFixed(4)))),
@@ -1295,13 +1296,15 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
       setSplitLive(clampSplit((event.clientX - rect.left) / rect.width))
     }
     const onUp = () => commitSplit()
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     const priorUserSelect = document.body.style.userSelect
     document.body.style.userSelect = 'none'  // suppress text selection while dragging
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
       document.body.style.userSelect = priorUserSelect
     }
   }, [draggingSplit, setSplitLive, commitSplit, clampSplit])
@@ -1656,9 +1659,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
           role="separator"
           aria-orientation="vertical"
           title="Drag to resize · double-click to reset"
-          onMouseDown={event => { event.preventDefault(); setSplitLive(leftFr) }}
+          onPointerDown={event => { preventPressDefaults(event); setSplitLive(leftFr) }}
           onDoubleClick={resetSplit}
-          style={{ cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' }}
+          style={{ cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch', touchAction: 'none' }}
         >
           <div style={{
             width: 4, height: 44, borderRadius: 3,

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { DRAG_SOURCE_STYLE } from '../lib/pointerDrag.js'
+
 // Pill table headers keep sort, move, and resize on one shared surface.
 // Resize belongs to the column on the left of a divider so dragging it changes
 // that column's width without silently reallocating space into its neighbor.
@@ -22,7 +24,7 @@ export default function PillTableHeader({
     return (
       <button
         type="button"
-        onMouseDown={event => onStartResize(event, col.key)}
+        onPointerDown={event => onStartResize(event, col.key)}
         title={col.resizeRightTitle || `Drag to resize ${col.label || col.key}`}
         style={{
           position: 'absolute',
@@ -34,6 +36,7 @@ export default function PillTableHeader({
           background: 'transparent',
           padding: 0,
           cursor: 'col-resize',
+          touchAction: 'none',
         }}
       />
     )
@@ -134,9 +137,10 @@ export default function PillTableHeader({
                 type="button"
                 onClick={() => { if (canSort) onSort(col.key) }}
                 onContextMenu={event => col.onContextMenu?.(event, col)}
-                onMouseDown={canReorder ? event => onStartReorder(event, col.key) : undefined}
+                onPointerDown={canReorder ? event => onStartReorder(event, col.key) : undefined}
                 title={col.title}
                 style={{
+                  ...(canReorder ? DRAG_SOURCE_STYLE : null),
                   background: isSorted
                     ? 'color-mix(in srgb, var(--accent) 15%, var(--surface2))'
                     : 'var(--surface2)',

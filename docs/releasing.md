@@ -51,6 +51,14 @@ python3.12 -m venv backend/venv
 backend/venv/bin/python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
 ```
 
+On Linux, PyInstaller also needs Python's shared library, which the distribution packages apart from
+Python itself. Without it the build stops with `Python shared library ... was not found`. On Ubuntu 24.04
+and WSL that package is `libpython3.12t64`, not the `libpython3.12` the error names:
+
+```bash
+sudo apt install libpython3.12t64
+```
+
 Windows:
 
 ```powershell
@@ -58,7 +66,7 @@ py -3.12 -m venv backend\venv
 backend\venv\Scripts\python -m pip install -r backend\requirements.txt -r backend\requirements-build.txt
 ```
 
-`requirements-build.txt` holds the depedencies for building and testing which are not required for running a build.
+`requirements-build.txt` holds the dependencies for building and testing which are not required for running a build.
 
 ## Building
 

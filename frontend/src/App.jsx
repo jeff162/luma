@@ -66,6 +66,7 @@ import {
   SUPPORTED_DATA_PROVIDERS,
 } from './lib/appConfig.js'
 import { localStore } from './lib/browserStorage.js'
+import { preventPressDefaults, trackPointer } from './lib/pointerDrag.js'
 
 // Shown in two places that cannot share a component: the dialog below, which renders inside the app,
 // and the error boundary's fallback, which renders in place of it. Sharing the words is what keeps the
@@ -322,6 +323,7 @@ const GLOBAL_SCROLLBAR_STYLES = `
     cursor: col-resize;
     z-index: 2;
     background: transparent;
+    touch-action: none;
   }
   .nav-resize-handle::after {
     content: '';
@@ -1412,28 +1414,21 @@ export default function App() {
   }, [navPaneWidth])
 
   function startNavPaneResize(event) {
-    event.preventDefault()
+    preventPressDefaults(event)
     const startX = event.clientX
     const startWidth = navPaneWidth
-
-    function handleMove(moveEvent) {
-      const next = clampNavPaneWidth(startWidth + (moveEvent.clientX - startX))
-      setNavPaneWidth(next)
-    }
-
-    function stop() {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', stop)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setNavResizing(false)
-    }
 
     setNavResizing(true)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', stop)
+    trackPointer(event, {
+      onMove: moveEvent => setNavPaneWidth(clampNavPaneWidth(startWidth + (moveEvent.clientX - startX))),
+      onEnd: () => {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setNavResizing(false)
+      },
+    })
   }
 
   function resetNavPaneWidth() {
@@ -1968,7 +1963,7 @@ export default function App() {
                                 </div>
                                 <div
                                   className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
-                                  onMouseDown={startNavPaneResize}
+                                  onPointerDown={startNavPaneResize}
                                   onDoubleClick={resetNavPaneWidth}
                                   role="separator"
                                   aria-orientation="vertical"

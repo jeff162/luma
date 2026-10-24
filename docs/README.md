@@ -100,6 +100,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Loading and feedback](ui-patterns.md#loading-and-feedback)
 - [Status, badges and timestamps](ui-patterns.md#status-badges-and-timestamps)
 - [Empty states](ui-patterns.md#empty-states)
+- [Dragging](ui-patterns.md#dragging)
 - [Dropping and pasting files](ui-patterns.md#dropping-and-pasting-files)
 - [Secret fields](ui-patterns.md#secret-fields)
 - [Confirmation and dismissal](ui-patterns.md#confirmation-and-dismissal)

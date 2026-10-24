@@ -9,6 +9,7 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 import { suggestPassphrase } from '../lib/passphraseGenerator.js'
+import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -464,10 +465,10 @@ export const FloatingPanel = forwardRef(function FloatingPanel(
   )
 })
 
-export function FloatingPanelHeader({ children, active = true, onMouseDown, style }) {
+export function FloatingPanelHeader({ children, active = true, onPointerDown, style }) {
   return (
     <div
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -522,7 +523,7 @@ export function AppDialog({
 
   function startDrag(event) {
     if (!draggable || event.button !== 0) return
-    event.preventDefault()
+    preventPressDefaults(event)
     const panel = panelRef.current
     const rect = panel?.getBoundingClientRect()
     const startX = event.clientX
@@ -537,18 +538,12 @@ export function AppDialog({
     const minY = rect ? -baseTop : -Infinity
     const maxY = rect ? window.innerHeight - margin - baseTop : Infinity
     const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi)
-    function onMove(moveEvent) {
-      setDrag({
+    trackPointer(event, {
+      onMove: moveEvent => setDrag({
         x: clamp(origin.x + moveEvent.clientX - startX, minX, maxX),
         y: clamp(origin.y + moveEvent.clientY - startY, minY, maxY),
-      })
-    }
-    function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+      }),
+    })
   }
 
   return (
@@ -582,16 +577,16 @@ export function AppDialog({
       >
         {(title || description) ? (
           <FloatingPanelHeader
-            onMouseDown={draggable ? startDrag : undefined}
-            style={{ padding: headerPadding, flexShrink: 0, ...(draggable ? { cursor: 'move', userSelect: 'none' } : null) }}
+            onPointerDown={draggable ? startDrag : undefined}
+            style={{ padding: headerPadding, flexShrink: 0, ...(draggable ? { cursor: 'move', userSelect: 'none', touchAction: 'none' } : null) }}
           >
             <div>
               {title ? (
                 <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {help ? <span onMouseDown={event => event.stopPropagation()} style={{ display: 'inline-flex', fontWeight: 400 }}>{help}</span> : null}
+                  {help ? <span onPointerDown={event => event.stopPropagation()} style={{ display: 'inline-flex', fontWeight: 400 }}>{help}</span> : null}
                   {title}
                   {/* Kept out of the drag: a press on it must not also pick the dialog up. */}
-                  {refresh ? <span onMouseDown={event => event.stopPropagation()} style={{ display: 'inline-flex' }}>{refresh}</span> : null}
+                  {refresh ? <span onPointerDown={event => event.stopPropagation()} style={{ display: 'inline-flex' }}>{refresh}</span> : null}
                 </div>
               ) : null}
               {description ? (
@@ -830,7 +825,7 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
 // `progress` (a 0–1 fraction) turns the button into its own progress bar for a long action it started: the
 // face fills from the left behind the label, which carries the figures. A running bar is the button busy
 // rather than unavailable, so it keeps its full colour even though it is disabled for the duration.
-export function Button({ children, onClick, onMouseDown, variant = 'primary', small: smallProp, disabled, style, title,
+export function Button({ children, onClick, onMouseDown, onPointerDown, variant = 'primary', small: smallProp, disabled, style, title,
   type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress }) {
   const contextSmall = useContext(ButtonSizeContext)
   const small = smallProp ?? contextSmall
@@ -870,6 +865,7 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
       disabled={!!disabled}
       onClick={disabled ? undefined : onClick}
       onMouseDown={disabled ? undefined : onMouseDown}
+      onPointerDown={disabled ? undefined : onPointerDown}
       style={{ ...base, ...variants[variant] }}
       title={title}
     >
@@ -906,7 +902,7 @@ export const REFRESH_TURN_FALLBACK_MS = 1200
 // The turn stops at the end of a rotation rather than wherever it happens to be, which is also what makes
 // "at least once" hold without a timer: `lingering` is set as the animation starts and cleared only at an
 // iteration boundary reached with nothing left to wait for.
-export function RefreshButton({ onRefresh, loading = false, disabled = false, title = 'Refresh', onMouseDown }) {
+export function RefreshButton({ onRefresh, loading = false, disabled = false, title = 'Refresh', onPointerDown }) {
   const [inFlight, setInFlight] = useState(false)
   const [lingering, setLingering] = useState(false)
   const slowLoad = useBusyIndicator(loading)
@@ -941,7 +937,7 @@ export function RefreshButton({ onRefresh, loading = false, disabled = false, ti
       variant="ghost"
       small
       onClick={refresh}
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       disabled={disabled}
       title={title}
       aria-label="Refresh"

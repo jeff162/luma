@@ -124,9 +124,8 @@ describe('an untracked row', () => {
  * list. What is asserted here is that it performs the *same* operation under the *same* rules, because
  * a second path that quietly does what the first refuses is worse than no second path.
  *
- * jsdom has no drag implementation, so the events are dispatched directly; the component reads its
- * dragged row from state rather than from `dataTransfer` (which `dragover` cannot read anyway), so
- * these are the real handlers running.
+ * The drag is driven through the real pointer handlers; jsdom does no layout, so the hit test that
+ * finds the entry under the pointer is pointed at the target directly.
  */
 describe('dragging a payment onto what it repays', () => {
   const RECORD = {
@@ -138,10 +137,12 @@ describe('dragging a payment onto what it repays', () => {
 
   function drag(sourceName, targetName) {
     const source = screen.getByRole('button', { name: new RegExp(sourceName) })
-    fireEvent.dragStart(source)
-    const target = screen.getByRole('button', { name: new RegExp(targetName) }).parentElement
-    fireEvent.dragOver(target)
-    fireEvent.drop(target)
+    const target = screen.getByRole('button', { name: new RegExp(targetName) })
+    document.elementFromPoint = () => target
+    const at = { pointerId: 1, pointerType: 'mouse', button: 0, clientY: 0 }
+    fireEvent.pointerDown(source, { ...at, clientX: 0 })
+    fireEvent.pointerMove(window, { ...at, clientX: 20 })
+    fireEvent.pointerUp(window, { ...at, clientX: 20 })
   }
 
   it('adds the payment to a reimbursement it is dropped on', async () => {
@@ -211,10 +212,12 @@ describe('undoing a pairing', () => {
 
   function drag(sourceName, targetName) {
     const source = screen.getByRole('button', { name: new RegExp(sourceName) })
-    fireEvent.dragStart(source)
-    const target = screen.getByRole('button', { name: new RegExp(targetName) }).parentElement
-    fireEvent.dragOver(target)
-    fireEvent.drop(target)
+    const target = screen.getByRole('button', { name: new RegExp(targetName) })
+    document.elementFromPoint = () => target
+    const at = { pointerId: 1, pointerType: 'mouse', button: 0, clientY: 0 }
+    fireEvent.pointerDown(source, { ...at, clientX: 0 })
+    fireEvent.pointerMove(window, { ...at, clientX: 20 })
+    fireEvent.pointerUp(window, { ...at, clientX: 20 })
   }
 
   it('offers an undo for a drop onto an existing record, and takes the transaction back off', async () => {

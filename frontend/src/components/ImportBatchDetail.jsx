@@ -278,7 +278,7 @@ export default function ImportBatchDetail({
         <RefreshButton
           onRefresh={refresh}
           loading={reloading}
-          onMouseDown={event => event.stopPropagation()}
+          onPointerDown={event => event.stopPropagation()}
           title="Refresh — re-query the list and drop transactions that no longer match"
         />
       </div>

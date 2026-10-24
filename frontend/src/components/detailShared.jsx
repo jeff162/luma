@@ -9,8 +9,8 @@
  * non-obvious design points:
  *
  *   - `useDetailPanelChrome` does drag via direct-DOM writes (requestAnimationFrame-batched)
- *     and only commits the final position to React state on mouseup. This skips React
- *     reconciliation per mousemove — crucial for dialogs hosting large tables. Trade-off
+ *     and only commits the final position to React state on release. This skips React
+ *     reconciliation per pointer move — crucial for dialogs hosting large tables. Trade-off
  *     documented at the drag effect itself.
  *
  *   - `DetailPanelShell` claims a slot in `PanelStackContext` so z-index ordering and click-
@@ -34,6 +34,7 @@ import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDispl
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 import { isEditableTarget } from '../lib/uiInteractions.js'
+import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMatchingTransactions.js'
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
@@ -167,7 +168,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     if (grabCursor) document.body.style.cursor = active ? 'grabbing' : ''
   }
 
-  // Direct-DOM drag: each mousemove writes `left`/`top` on panelRef (rAF-batched) instead of driving
+  // Direct-DOM drag: each pointer move writes `left`/`top` on panelRef (rAF-batched) instead of driving
   // React state, so mid-drag never reconciles the (potentially huge) panel body. We keep the whole
   // gesture — start, move, and end — off React state; the only state write is the single setPos on
   // release so later renders read an up-to-date position. This is why a plain click on a header
@@ -182,7 +183,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
       y: e.clientY - (pos ? pos.y : rect.top),
     }
     hasDragged.current = false
-    e.preventDefault()
+    preventPressDefaults(e)
 
     let pendingFrame = null
     let lastEvent = null
@@ -211,10 +212,10 @@ export function useDetailPanelChrome(onClose, options = {}) {
       lastEvent = { clientX: ev.clientX, clientY: ev.clientY }
       if (!pendingFrame) pendingFrame = requestAnimationFrame(applyFrame)
     }
+    let stopTracking = null
     function teardown() {
       if (pendingFrame) { cancelAnimationFrame(pendingFrame); pendingFrame = null }
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      stopTracking?.()
       setGestureCosmetics(false, true)
       gestureCleanup.current = null
     }
@@ -225,8 +226,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
       // Only a real move persists geometry; a plain click (no drag) leaves the saved position alone.
       if (hasDragged.current) onGestureEnd?.({ pos: lastWritten || pos, size })
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    stopTracking = trackPointer(e, { onMove, onEnd: onUp })
     setGestureCosmetics(true, true)
     gestureCleanup.current = teardown
   }
@@ -251,7 +251,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     let seededPos = pos
     if (!size) setDesiredSize({ width: rect.width, height: rect.height })
     if (!pos) { seededPos = { x: rect.left, y: rect.top }; setPos(seededPos) }
-    e.preventDefault()
+    preventPressDefaults(e)
     e.stopPropagation()
 
     let lastGeom = { pos: seededPos, size: size || { width: rect.width, height: rect.height } }
@@ -280,9 +280,9 @@ export function useDetailPanelChrome(onClose, options = {}) {
         lastGeom = { ...lastGeom, pos: nextPos }
       }
     }
+    let stopTracking = null
     function teardown() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      stopTracking?.()
       setGestureCosmetics(false)
       gestureCleanup.current = null
     }
@@ -290,8 +290,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
       teardown()
       onGestureEnd?.(lastGeom)
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    stopTracking = trackPointer(e, { onMove, onEnd: onUp })
     setGestureCosmetics(true)
     gestureCleanup.current = teardown
   }
@@ -898,11 +897,12 @@ export function DetailPanelShell({
   const availableHeight = pos
     ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
     : '85vh'
-  // mousedown anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
-  // Using mousedown rather than click means the panel rises immediately, before any nested
+  // A press anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
+  // Using the press rather than click means the panel rises immediately, before any nested
   // event listener runs — so the focused panel is on top while the user's actual gesture
-  // (button press, drag-to-select) executes against it.
-  const onPanelMouseDown = stack.bringToFront
+  // (button press, drag-to-select) executes against it. A pointer press rather than a mouse
+  // press, because a finger dragging the header produces no mouse events at all.
+  const onPanelPointerDown = stack.bringToFront
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: stack.zIndex - 1,
@@ -917,7 +917,7 @@ export function DetailPanelShell({
     }}>
       <div
         ref={panelRef}
-        onMouseDownCapture={onPanelMouseDown}
+        onPointerDownCapture={onPanelPointerDown}
         style={{
           position: pos ? 'fixed' : 'relative',
           left: pos ? pos.x : undefined,
@@ -941,7 +941,7 @@ export function DetailPanelShell({
         }}
       >
         <div
-          onMouseDown={onDragStart}
+          onPointerDown={onDragStart}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0,
@@ -949,6 +949,7 @@ export function DetailPanelShell({
             // Grab affordance at rest; the grabbing cursor during an active drag is applied to <body>
             // by useDetailPanelChrome so it wins panel-wide without re-rendering.
             cursor: 'grab',
+            touchAction: 'none',
           }}
         >
           <div style={{ flex: 1 }}>{header}</div>
@@ -972,7 +973,7 @@ export function DetailPanelShell({
         {onResizeStart && PANEL_RESIZE_HANDLES.map(handle => (
           <div
             key={handle.dir}
-            onMouseDown={e => onResizeStart(e, handle.dir)}
+            onPointerDown={e => onResizeStart(e, handle.dir)}
             title="Drag to resize"
             style={{
               position: 'absolute',

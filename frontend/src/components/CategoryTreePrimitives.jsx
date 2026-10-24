@@ -6,26 +6,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { CategoryMarker, HighlightedText } from './ui.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
+import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
 /*
  * These primitives keep every tree surface on the same interaction contract: rows select before they rename,
- * deletes confirm inline, and drag/drop shares one transient payload because rows, lanes, and end zones do not
- * all live under a single parent state owner.
+ * deletes confirm inline, and a dragged row is a target for rows and end lanes alike, which need not share a
+ * parent state owner because the drag carries its own item (lib/pointerDrag.js).
  */
-let dragItem = null
-
-export function setCategoryTreeDragItem(item) {
-  dragItem = item
-}
-
-export function clearCategoryTreeDragItem() {
-  dragItem = null
-}
-
-export function getCategoryTreeDragItem() {
-  return dragItem
-}
 
 export function normalizeCategoryType(value) {
   return value === 'income' ? 'income' : 'expense'
@@ -360,48 +348,32 @@ export function CategoryTreeRow({
   const showGroupToggleSlot = !isChild
   const canDrag = draggable && !bulkSelectMode
 
-  function canAcceptDrop() {
-    if (!acceptDrop) return false
-    if (!dragItem || dragItem.id === cat.id) return false
-    if (dragItem.childIds?.includes(cat.id)) return false
-    if (isChild && dragItem.isGroup) return false
-    return true
-  }
+  const dropRef = useDropZone({
+    accepts: item => (
+      acceptDrop
+      && item.id !== cat.id
+      && !item.childIds?.includes(cat.id)
+      && !(isChild && item.isGroup)
+    ),
+    onEnter: () => setDragOver(true),
+    onLeave: () => setDragOver(false),
+    onDrop: (item, point, element) => {
+      const rect = element.getBoundingClientRect()
+      onDropRow?.(item, cat, point.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
+    },
+  })
 
   return (
     <div
-      draggable={canDrag}
-      onDragStart={e => {
-        if (!canDrag) {
-          e.preventDefault()
-          return
-        }
-        dragItem = onDragStartRow?.(cat) ?? {
+      ref={dropRef}
+      onPointerDown={canDrag ? event => startPointerDrag(event, {
+        onStart: () => onDragStartRow?.(cat) ?? {
           id: cat.id,
           parentId: cat.parent_id,
           isGroup: !cat.parent_id,
           categoryType: normalizeCategoryType(cat.category_type),
-        }
-        e.dataTransfer.effectAllowed = 'move'
-      }}
-      onDragOver={e => {
-        if (!canAcceptDrop()) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!canAcceptDrop()) {
-          dragItem = null
-          return
-        }
-        const rect = e.currentTarget.getBoundingClientRect()
-        const dropPosition = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-        onDropRow?.(dragItem, cat, dropPosition)
-        dragItem = null
-      }}
+        },
+      }) : undefined}
       onClick={e => {
         if (bulkSelectMode) return
         if (!confirmDelete) onSelect(cat, e)
@@ -418,8 +390,8 @@ export function CategoryTreeRow({
         alignItems: 'center',
         gap: isChild ? 5 : 2,
         padding: isChild ? '2px 9px 2px 46px' : '4px 9px 4px 11px',
+        ...DRAG_SOURCE_STYLE,
         cursor: canDrag ? 'grab' : 'default',
-        userSelect: 'none',
         borderBottom: '1px solid var(--border)',
         background: dragOver
           ? 'var(--surface2)'
@@ -556,12 +528,17 @@ export function CategoryTreeRow({
   )
 }
 
-function DropLane({ label, active, onDragOver, onDragLeave, onDrop }) {
+function DropLane({ label, accepts, onDrop }) {
+  const [active, setActive] = useState(false)
+  const dropRef = useDropZone({
+    accepts,
+    onEnter: () => setActive(true),
+    onLeave: () => setActive(false),
+    onDrop,
+  })
   return (
     <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      ref={dropRef}
       style={{
         height: active ? 24 : 3,
         margin: active ? '2px 8px' : '0 8px',
@@ -582,49 +559,21 @@ function DropLane({ label, active, onDragOver, onDragLeave, onDrop }) {
 }
 
 export function GroupEndDropZone({ group, onDropEnd }) {
-  const [dragOver, setDragOver] = useState(false)
-
   return (
     <DropLane
       label={`Move to ${group.name}`}
-      active={dragOver}
-      onDragOver={e => {
-        if (!dragItem || dragItem.isGroup) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!dragItem || dragItem.isGroup) return
-        onDropEnd(dragItem, group)
-        dragItem = null
-      }}
+      accepts={item => !item.isGroup}
+      onDrop={item => onDropEnd(item, group)}
     />
   )
 }
 
 export function SectionEndDropZone({ sectionMeta, sectionType, onDropEnd }) {
-  const [dragOver, setDragOver] = useState(false)
-
   return (
     <DropLane
       label={`Move group to end of ${sectionMeta[sectionType].label}`}
-      active={dragOver}
-      onDragOver={e => {
-        if (!dragItem || !dragItem.isGroup) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!dragItem || !dragItem.isGroup) return
-        onDropEnd(dragItem, sectionType)
-        dragItem = null
-      }}
+      accepts={item => item.isGroup}
+      onDrop={item => onDropEnd(item, sectionType)}
     />
   )
 }

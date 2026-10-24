@@ -63,6 +63,13 @@ instruction and fix the drift.
 
 - Playwright's WebKit build is installed, so a bug reported in a browser you lack can be reproduced
   here; propose that in the first round and reproduce the exact click sequence before theorizing.
+  After a Playwright upgrade, `npx playwright install webkit` fetches the new build. If its launch then
+  names a missing system library, `apt-get download` that package and its dependencies, extract them
+  with `dpkg-deb -x`, and copy the `.so` files into the build's `minibrowser-wpe/sys/lib`; no `sudo` is
+  needed. Launch with `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1`.
+- Playwright cannot produce a real finger drag in WebKit. Chromium can, through a CDP session's
+  `Input.dispatchTouchEvent`, which is the way to check scroll-versus-drag behaviour; an iPad is the
+  only full check for Safari's engine.
 
 - The browser specs run against the demo ledger, which a script can build (temp database, `init_db`,
   `load_demo_data`, `scan_and_store`, then the service call the page makes), so a spec failure about
