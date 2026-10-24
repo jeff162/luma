@@ -94,6 +94,11 @@ scale — rather than by feature.
   (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
   `txn`; the revisit threshold is roughly 50,000 rows.
+- [collapsible-nav-pane.md](collapsible-nav-pane.md) — **design settled, not started (2026-10-24).**
+  The navigation pane collapses to a column of icons and opens again like a sideways window shade, from
+  one toggle, so a tablet gives its width to the page. Covers the collapsed form of each kind of pane
+  content (page links, the Tasks badge, the sync row, the minimized-report pills, the footer), the
+  hand-drawn icon module, and the tablet's lack of hover.
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
