@@ -147,7 +147,9 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   `frontend/test-results/` only until the next run starts.
 
 - Redirect a test or build run to a file and read the file; never pipe it into `tail`, `head` or `grep`,
-  because the pipe discards the only evidence an unexpected failure produces.
+  because the pipe discards the only evidence an unexpected failure produces. The file goes in the
+  session scratchpad, not `data/check-logs/`: that directory belongs to the gate, which never prunes a
+  loose file left in it.
 
 - The gate's browser step (`npm run ui:test`) leaves out the a11y lane that CI runs, so run
   `npm run ui:test:all` after touching shared UI.

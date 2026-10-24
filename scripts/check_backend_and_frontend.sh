@@ -31,7 +31,8 @@
 # Retention: a failed run's logs and the browser copy are deleted once they are 30 days old, which is long
 # enough to investigate a failure, and anything still open by then is named in
 # `docs/transient-failures.md`. Passing runs are pruned to the last three. Loose files at the top of
-# `data/check-logs/` were not written by this script and are left alone.
+# `data/check-logs/` are left alone; the only one this script writes is `00-README.md`, which describes
+# the directory.
 #
 # Usage:
 #   ./scripts/check_backend_and_frontend.sh                 # everything: backend suite + frontend check
@@ -52,6 +53,23 @@ retention_days=30
 mkdir -p "$run_dir"
 # Anything in `frontend/test-results/` newer than this was written by this run, not left by an earlier one.
 touch "$run_dir/.started"
+
+# `data/` is gitignored, so the directory's description is written here, beside the policy it states.
+cat > "$logs_dir/00-README.md" <<EOF
+# check-logs
+
+Written by \`scripts/check_backend_and_frontend.sh\`, the test gate. Each run's full output is kept in a
+folder named by its start time.
+
+- A failed run is marked with \`.failed\` and kept for $retention_days days as evidence; open intermittents are
+  named in \`docs/transient-failures.md\`.
+- Passing runs are pruned to the newest three.
+- \`last-browser-failure/\` holds the screenshots, videos and traces of the latest failed browser run,
+  replaced only by the next one and deleted after $retention_days days.
+- Loose files are never pruned, so ad-hoc logs do not belong here.
+
+This file is rewritten on every run.
+EOF
 
 # Run one phase, streaming it as before while keeping the whole thing on disk. `PIPESTATUS[0]` is the
 # phase's own exit code — without it every phase would report `tee`'s success instead.
