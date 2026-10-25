@@ -590,7 +590,14 @@ where the server can tell whether it is met.
 - **Other devices connect over HTTPS.** Without it the session cookie and every typed secret cross the
   network readable, and passkeys are unavailable (*Transport security*). Whether another device can
   connect in cleartext is read from what the launcher started — a bind wider than loopback is the
-  network reaching plain HTTP — and from any such request actually seen.
+  network reaching plain HTTP — and from any such request actually seen. Three cases get their own
+  message:
+  - **A wide bind with a proxy in use is elevated**, because devices can skip the proxy and HTTPS is
+    bypassed. A proxy counts as in use if a device has connected over HTTPS since startup or the proxy
+    answers on this machine now. An old certificate record does not count, since the operator may have
+    switched to plain HTTP since.
+  - **A wide bind with no proxy** is the supported plain-HTTP setup, so it is an ordinary *not met*.
+  - **A source checkout on the network** is told to use server mode behind HTTPS instead.
 - **The server is opened by name.** A browser allows passkeys only on a domain, never on an IP address
   (*Obstacles*), and without passkeys the password is the only factor most people will use.
 - **The vault passphrase meets the strength rule, backups carry the vault as it is now, devices trust

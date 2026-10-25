@@ -60,7 +60,7 @@ class ReachableFromNetworkTests(unittest.TestCase):
 
     def setUp(self):
         for name, value in (("_declared", None), ("_seen_from_network", False),
-                            ("_seen_plain_http_from_network", False)):
+                            ("_seen_plain_http_from_network", False), ("_seen_https_from_network", False)):
             patcher = mock.patch.object(transport, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)

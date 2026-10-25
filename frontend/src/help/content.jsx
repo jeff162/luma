@@ -4281,41 +4281,42 @@ export const HELP_TOPICS = [
     section: 'administration',
     title: 'Security checklist',
     surfaces: ['Security checklist (Settings)'],
-    summary: `Compares this installation with the recommended security practices. Each practice that applies is marked met, not met or unknown, with what follows and where to change it.`,
+    summary: `Compares this installation with the recommended security practices, and marks each one met, not met or unknown.`,
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
           Each line is a recommended practice, marked <strong>Met</strong>, <strong>Not met</strong>{' '}
-          or <strong>Unknown</strong>. A practice that does not apply is left out: on a copy only this
-          computer can open, nothing is said about other devices. Not meeting one is allowed. The
-          checklist shows what follows from that and changes nothing.
+          or <strong>Unknown</strong>, with a link to where it is changed. Practices that don't apply
+          are left out. For example, a copy only this computer can open has no HTTPS line. Nothing is
+          enforced; not meeting a practice is allowed.
         </p>
         <ul>
           <li>
-            <strong>Sign-in is required when other devices can connect.</strong> Without it, anyone
-            on the network can see and change all of the data.
+            <strong>Sign-in required.</strong> Without it, anyone on the network can see and change all
+            of the data.
           </li>
           <li>
-            <strong>Other devices connect over HTTPS.</strong> Without it, what they send crosses
-            the network unencrypted, passkeys are unavailable, and a data source can be connected only
-            from the server. See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>.
+            <strong>HTTPS for other devices.</strong> Without it, what they send is not encrypted, they
+            cannot use passkeys, and they cannot connect data sources.
+            See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>. A red{' '}
+            <strong>Not met</strong> means HTTPS is set up but can be bypassed: {APP_NAME} also listens on the
+            network directly (<code>FRONTEND_HOST</code> is set to something other than <code>localhost</code>),
+            so devices can skip the proxy.
           </li>
           <li>
-            <strong>This browser opens the server by name.</strong> Browsers allow passkeys only on a
-            name such as <code>luma.local</code>, never on an IP address.
+            <strong>Opened by name.</strong> Passkeys work only when the server is opened by a name such
+            as <code>luma.local</code>, not by an IP address.
           </li>
           <li>
-            <strong>Your vault passphrase meets the strength rule</strong>,{' '}
-            <strong>backups carry the vault as it is now</strong>,{' '}
-            <strong>devices trust the server's certificate</strong> and{' '}
-            <strong>this copy is the latest release</strong> report the same conditions as the
-            matching tasks. A dismissed task still shows here.
+            <strong>Strong vault passphrase</strong>, <strong>Vault is backed up</strong>,{' '}
+            <strong>Server certificate unchanged</strong> and <strong>Latest version</strong> match the
+            tasks of the same kind. A dismissed task still shows here.
           </li>
         </ul>
         <p>
-          Whether the browser opened the server by name, and the vault passphrase and backup lines,
-          depend on who is looking. The rest describe the installation.
+          The name, vault passphrase and backup lines depend on who is looking. The rest are the same
+          for everyone.
         </p>
       </>
     ),

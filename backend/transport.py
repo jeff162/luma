@@ -38,10 +38,11 @@ from backend.runtime_config import app_name
 # the network. Two witnesses, in `reachable_from_network`.
 #
 # Beside it, whether they can open it without HTTPS: the server listening on the network itself rather
-# than only behind a proxy on this machine, or a device actually seen connecting in cleartext.
+# than only behind a proxy on this machine (`wide_bind`), or a device actually seen connecting in cleartext.
 _declared: tuple[bool, bool] | None = None  # (reachable, listens on the network directly)
 _seen_from_network = False
 _seen_plain_http_from_network = False
+_seen_https_from_network = False
 
 
 def _is_loopback_address(host: str) -> bool:
@@ -63,26 +64,50 @@ def declare_listener(*, reachable: bool, direct: bool) -> None:
 
 
 def note_request(request: Request) -> None:
-    """Remember that a device other than this machine got through, and whether it did so in cleartext.
+    """Remember that a device other than this machine got through, and whether it did so over HTTPS.
     It settles the question whatever the configuration says — a proxy somebody put in front by hand, a
     server started on an address the settings do not name — and is forgotten at the next start, when it
     will be seen again if still true."""
-    global _seen_from_network, _seen_plain_http_from_network
-    if _seen_plain_http_from_network or request_is_loopback(request):
+    global _seen_from_network, _seen_plain_http_from_network, _seen_https_from_network
+    if request_is_loopback(request):
         return
     _seen_from_network = True
-    if not request_is_https(request):
+    if request_is_https(request):
+        _seen_https_from_network = True
+    else:
         _seen_plain_http_from_network = True
 
 
-def _checkout_listens_on_network() -> bool:
-    # No launcher: a source checkout, where the start scripts pass these two settings to the servers
-    # they start. The interface's own server counts, since it forwards to this one. Neither is ever
-    # behind TLS of its own, so a wide one is the network reaching plain HTTP.
-    return any(
-        host.strip().lower() != "localhost" and not _is_loopback_address(host.strip())
-        for host in (app_config.value_of("backend_host"), app_config.value_of("frontend_host"))
-    )
+def _is_wide(host: str) -> bool:
+    host = host.strip()
+    return host.lower() != "localhost" and not _is_loopback_address(host)
+
+
+def wide_bind() -> dict | None:
+    """The setting that puts this process's own plain HTTP on the network, as `{setting, value, checkout}`,
+    or None when it listens to this machine only.
+
+    Under the launcher only `FRONTEND_HOST` can, and only in server mode (`desktop._server_bind_host`).
+    With no launcher this is a source checkout, where the start scripts pass both settings to the servers
+    they start; the interface's own server counts, since it forwards to this one. Neither is ever behind
+    TLS of its own."""
+    if _declared is not None:
+        if not _declared[1]:
+            return None
+        return {"setting": "FRONTEND_HOST", "value": app_config.value_of("frontend_host").strip(), "checkout": False}
+    for key, setting in (("backend_host", "BACKEND_HOST"), ("frontend_host", "FRONTEND_HOST")):
+        value = app_config.value_of(key)
+        if _is_wide(value):
+            return {"setting": setting, "value": value.strip(), "checkout": True}
+    return None
+
+
+def seen_plain_http_from_network() -> bool:
+    return _seen_plain_http_from_network
+
+
+def seen_https_from_network() -> bool:
+    return _seen_https_from_network
 
 
 def reachable_from_network() -> bool:
@@ -90,16 +115,12 @@ def reachable_from_network() -> bool:
         return True
     if _declared is not None:
         return _declared[0]
-    return _checkout_listens_on_network()
+    return wide_bind() is not None
 
 
 def plain_http_from_network() -> bool:
     """Whether another device can open this installation without HTTPS."""
-    if _seen_plain_http_from_network:
-        return True
-    if _declared is not None:
-        return _declared[1]
-    return _checkout_listens_on_network()
+    return _seen_plain_http_from_network or wide_bind() is not None
 
 
 def request_is_loopback(request: Request) -> bool:

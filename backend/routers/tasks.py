@@ -208,7 +208,7 @@ def _backup_due_tasks(request: Request | None) -> list[dict]:
                    "The vault was reset after an exposure, so earlier backups no longer restore the data "
                    "provider credentials.")
         else:
-            why = "Your vault passphrase changed after your last backup, so earlier backups open only with the old passphrase."
+            why = "Your vault passphrase changed after your last backup. Earlier backups require the old passphrase."
         tasks.append({
             "id":          "backup_due_vault_change",
             "dismiss_key": f"backup_due_vault_change:{fingerprint}",

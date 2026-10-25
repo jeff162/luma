@@ -35,6 +35,8 @@ export default function SecurityChecklistSection() {
     <Card style={{ padding: 0 }}>
       {items.map((item, index) => {
         const status = STATUS[item.status] || STATUS.unknown
+        // An elevated item undoes protection someone set up, so it stands out from one not set up yet.
+        const tone = item.status === 'not_met' && item.severity === 'elevated' ? 'danger' : status.tone
         return (
           <div
             key={item.id}
@@ -46,7 +48,7 @@ export default function SecurityChecklistSection() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <StatusPill tone={status.tone}>{status.label}</StatusPill>
+              <StatusPill tone={tone}>{status.label}</StatusPill>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{item.title}</span>
             </div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55 }}>

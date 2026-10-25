@@ -15,7 +15,7 @@ from backend import transport
 from backend.db import control_database as cdb
 from backend.db import database
 from backend.routers.tasks import security_tasks
-from backend.services import security_checklist, update_check
+from backend.services import proxy_certificate, security_checklist, update_check
 
 
 def _req(client: str = "127.0.0.1", host: str = "localhost", scheme: str = "http", user: dict | None = None):
@@ -38,10 +38,14 @@ class SecurityChecklistTests(unittest.TestCase):
             (transport, "_declared", None),
             (transport, "_seen_from_network", False),
             (transport, "_seen_plain_http_from_network", False),
+            (transport, "_seen_https_from_network", False),
         ):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # A developer's own Caddy may be answering on this machine; each test says whether one is.
+        self.proxy_running = mock.patch.object(proxy_certificate, "is_running", return_value=False).start()
+        self.addCleanup(mock.patch.stopall)
         database.init_db(data_path)
         cdb.init_control_db()
 
@@ -72,6 +76,32 @@ class SecurityChecklistTests(unittest.TestCase):
         transport.declare_listener(reachable=True, direct=False)
         transport.note_request(_req("192.168.1.10", "luma.local", "http"))
         self.assertEqual(self._items(_req())["https"]["status"], security_checklist.NOT_MET)
+
+    def test_a_wide_bind_beside_a_proxy_in_use_is_a_bypass(self):
+        """HTTPS someone set up, quietly undone: elevated, and pointed at the setting."""
+        transport.declare_listener(reachable=True, direct=True)
+        transport.note_request(_req("192.168.1.10", "luma.local", "https"))
+        item = self._items(_req())["https"]
+        self.assertEqual((item["status"], item["severity"]), (security_checklist.NOT_MET, security_checklist.ELEVATED))
+        self.assertEqual(item["link"], security_checklist.CONFIGURATION_LINK[0])
+
+        transport._seen_https_from_network = False
+        self.proxy_running.return_value = True
+        self.assertEqual(self._items(_req())["https"]["severity"], security_checklist.ELEVATED)
+
+    def test_a_server_on_plain_http_with_no_proxy_is_not_a_bypass(self):
+        transport.declare_listener(reachable=True, direct=True)
+        item = self._items(_req())["https"]
+        self.assertEqual((item["status"], item["severity"]), (security_checklist.NOT_MET, None))
+
+    def test_a_source_checkout_on_the_network_points_at_its_setting(self):
+        values = {"backend_host": "0.0.0.0", "frontend_host": "localhost"}
+        with mock.patch.object(transport.app_config, "value_of", side_effect=values.__getitem__):
+            item = self._items(_req())["https"]
+        self.assertEqual(item["status"], security_checklist.NOT_MET)
+        self.assertIsNone(item["severity"])
+        self.assertEqual(item["link"], security_checklist.CONFIGURATION_LINK[0])
+        self.assertIn("BACKEND_HOST", item["detail"])
 
     def test_a_browser_on_an_address_cannot_use_passkeys(self):
         transport.declare_listener(reachable=True, direct=True)

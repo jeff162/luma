@@ -2,20 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Settings -> Security checklist: this installation's configuration set against the best practices in
-`docs/security-model.md` -> *Best practices*, one item per practice and nothing that is not on that list.
+Settings -> Security checklist. Compares this installation with the practices in
+`docs/security-model.md` -> *Best practices*, one item per practice.
 
-**It compares and refuses nothing.** Each practice is one the operator may decide against for their own
-network, so an item states whether it is met, what follows from how things stand, and where it is
-changed. An item that does not apply here is left out rather than shown as met: on an installation only
-this computer can open, "other devices connect over HTTPS" is not an achievement.
+Nothing here is enforced: each item says whether the practice is met, what that means, and where to change
+it. Items that don't apply are left out, so an installation only this computer can open has no HTTPS item.
 
-**Three of the items depend on who is asking.** Whether this browser opened the app by name is a fact of
-the request, and the vault passphrase and backup items are the viewer's own, as their tasks are.
+The browser-name, vault passphrase and backup items depend on who is viewing.
 
-A condition that is also a task is read from `routers/tasks.security_tasks`, so the checklist and the
-Tasks page never judge it differently. A dismissed task is still reported here, since putting a
-reminder away changes nothing about the condition.
+Items that are also tasks use the task's own check (`routers/tasks.security_tasks`), so the two always
+agree. A dismissed task still shows here.
 """
 
 from fastapi import Request
@@ -29,57 +25,94 @@ MET = "met"
 NOT_MET = "not_met"
 UNKNOWN = "unknown"
 
+# A not-met item that bypasses protection the operator set up, not just one they haven't set up yet.
+ELEVATED = "elevated"
+
+CONFIGURATION_LINK = ("/settings?section=configuration", "Open Startup configuration")
+
 
 def _item(item_id: str, title: str, status: str, detail: str, link: str | None = None,
-          link_label: str | None = None) -> dict:
+          link_label: str | None = None, severity: str | None = None) -> dict:
     return {"id": item_id, "title": title, "status": status, "detail": detail, "link": link,
-            "link_label": link_label}
+            "link_label": link_label, "severity": severity}
 
 
 def _sign_in_item() -> dict | None:
     if not transport.reachable_from_network():
         return None
-    met = auth_required()
+    if auth_required():
+        return _item("sign_in", "Sign-in required", MET,
+                     "This installation is open to other devices on the network, and they have to sign in.")
     return _item(
-        "sign_in", "Sign-in is required when other devices can connect", MET if met else NOT_MET,
-        "Other devices on the network can open this installation, and each has to sign in." if met else
-        "Other devices on the network can open this installation, and anyone who reaches it can see and "
-        "change all of the data.",
-        "/settings?section=signInProtection", "Open Sign-in protection",
+        "sign_in", "Sign-in required", NOT_MET,
+        "This installation is open to other devices on the network.",
+        "/settings?section=signInProtection", "Turn on sign-in",
     )
+
+
+# What going without HTTPS costs another device, said after whichever reason applies.
+def _without_https_costs() -> str:
+    passwords = ", including passwords," if auth_required() else ""
+    return (f"What they send{passwords} is not encrypted, they cannot use passkeys, and they cannot connect "
+            "data sources.")
 
 
 def _https_item() -> dict | None:
+    """Four ways another device can end up without HTTPS, each with its own fix:
+
+    - a source checkout listening on the network: use server mode behind HTTPS instead;
+    - a server with a wide bind and a proxy in use: devices can skip the proxy, so this one is elevated. A
+      proxy is in use if a device has connected over HTTPS since startup, or the proxy answers now;
+    - a server with a wide bind and no proxy: the supported plain-HTTP setup;
+    - nothing set wide, but a device connected without HTTPS, such as through a proxy without TLS."""
     if not transport.reachable_from_network():
         return None
-    if not transport.plain_http_from_network():
+    title = "HTTPS for other devices"
+    wide = transport.wide_bind()
+    if wide and wide["checkout"]:
         return _item(
-            "https", "Other devices connect over HTTPS", MET,
-            f"Other devices reach {app_name()} only through the reverse proxy on this computer.",
+            "https", title, NOT_MET,
+            f"This source checkout listens on the network ({wide['setting']} is {wide['value']}), so other "
+            f"devices connect without HTTPS. {_without_https_costs()} To share {app_name()} with other "
+            "devices, use a downloaded build in server mode behind HTTPS.",
+            *CONFIGURATION_LINK,
         )
-    password = ", sign-in passwords included" if auth_required() else ""
-    return _item(
-        "https", "Other devices connect over HTTPS", NOT_MET,
-        f"Other devices can reach {app_name()} over plain HTTP, so what they send crosses the network "
-        f"unencrypted{password}. Passkeys are unavailable to them, and a data source can be connected only "
-        "from a browser on the server.",
-        "/help/running-a-server", "How to set up HTTPS",
-    )
+    if wide and (transport.seen_https_from_network() or proxy_certificate.is_running()):
+        return _item(
+            "https", title, NOT_MET,
+            f"HTTPS can be bypassed. {app_name()} also listens on the network directly ({wide['setting']} is "
+            f"{wide['value']}), so devices can skip the proxy and connect unencrypted. Set {wide['setting']} "
+            "back to localhost.",
+            *CONFIGURATION_LINK, severity=ELEVATED,
+        )
+    if wide:
+        return _item(
+            "https", title, NOT_MET,
+            f"{app_name()} listens on the network directly ({wide['setting']} is {wide['value']}), so other "
+            f"devices connect without HTTPS. {_without_https_costs()}",
+            "/help/running-a-server", "Set up HTTPS",
+        )
+    if transport.seen_plain_http_from_network():
+        return _item(
+            "https", title, NOT_MET,
+            f"A device has connected without HTTPS since {app_name()} started. {_without_https_costs()}",
+            "/help/running-a-server", "Set up HTTPS",
+        )
+    return _item("https", title, MET, "Other devices connect through the HTTPS proxy on this computer.")
 
 
 def _named_host_item(request: Request) -> dict | None:
     by_address = transport.host_is_address(request)
-    # On this computer the launcher opens the app by name, so the item says something only for a browser
-    # elsewhere or one that has been pointed at an address.
+    # A browser on this computer uses `localhost`, which is a name, so only another device or an address
+    # is worth reporting.
     if not by_address and transport.request_is_loopback(request):
         return None
     if not by_address:
-        return _item("named_host", "This browser opens the server by name", MET,
-                     f"This browser opened {app_name()} by name, which passkeys require.")
+        return _item("named_host", "Opened by name", MET,
+                     "This browser uses the server's name, which passkeys need.")
     return _item(
-        "named_host", "This browser opens the server by name", NOT_MET,
-        f"This browser opened {app_name()} by its IP address. Browsers allow passkeys only on a name, so "
-        "none can be registered or used from here.",
+        "named_host", "Opened by name", NOT_MET,
+        "This browser uses the server's IP address, so passkeys cannot be used. Open it by name instead.",
         "/help/running-a-server", "Running as a server",
     )
 
@@ -88,48 +121,45 @@ def _vault_passphrase_item(request: Request, tasks: dict[str, dict]) -> dict | N
     user = getattr(request.state, "user", None) or {}
     if not user.get("id") or not crypto_service.has_own_passphrase(user["id"]):
         return None
-    title = "Your vault passphrase meets the strength rule"
+    title = "Strong vault passphrase"
     if "vault_passphrase_change" in tasks:
         return _item("vault_passphrase", title, NOT_MET, tasks["vault_passphrase_change"]["description"],
                      "/tasks", "Open Tasks")
     if "vault_passphrase_check" in tasks:
         return _item("vault_passphrase", title, UNKNOWN, tasks["vault_passphrase_check"]["description"],
                      "/tasks", "Open Tasks")
-    return _item("vault_passphrase", title, MET, "Your vault passphrase meets the current strength rule.")
+    return _item("vault_passphrase", title, MET, "Your vault passphrase is strong.")
 
 
 def _backup_item(tasks: dict[str, dict]) -> dict | None:
     if not credentials_exports_detail():
         return None
-    title = "Backups carry the vault as it is now"
+    title = "Vault is backed up"
     due = [task["description"] for task_id, task in tasks.items() if task_id.startswith("backup_due_")]
     if not due:
         return _item("backups", title, MET,
-                     "Nothing about the vault or the data provider credentials has changed since the last "
-                     "backup that carried them.")
+                     "The vault and data provider credentials have not changed since the last backup.")
     return _item("backups", title, NOT_MET, " ".join(due), "/settings?section=backup", "Open Backup / Restore")
 
 
 def _certificate_item(tasks: dict[str, dict]) -> dict | None:
     if not proxy_certificate.has_record():
         return None
-    title = "Devices trust the server's certificate"
+    title = "Server certificate unchanged"
     task = tasks.get("proxy_certificate_changed")
     if not task:
-        return _item("certificate", title, MET,
-                     "The reverse proxy presents the certificate this installation's devices were given.")
+        return _item("certificate", title, MET, "The proxy is using the certificate your devices installed.")
     return _item("certificate", title, NOT_MET, task["description"], task["link"], task["link_label"])
 
 
 def _update_item(tasks: dict[str, dict]) -> dict:
-    title = "This copy is the latest release"
+    title = "Latest version"
     if not update_check.is_enabled():
-        return _item("update", title, UNKNOWN,
-                     "Checking for new versions is off, so whether a newer release exists is not known.",
-                     "/settings?section=about", "Open About")
+        return _item("update", title, UNKNOWN, "Checking for new versions is turned off.",
+                     "/settings?section=about", "Turn it on in About")
     task = tasks.get("update_available")
     if not task:
-        return _item("update", title, MET, "No newer release was found at the last check.")
+        return _item("update", title, MET, "No newer version was found at the last check.")
     return _item("update", title, NOT_MET, task["description"], task["link"], task["link_label"])
 
 
