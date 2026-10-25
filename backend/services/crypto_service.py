@@ -45,7 +45,6 @@ import threading
 import time
 import uuid
 from contextvars import ContextVar
-from importlib.metadata import version as _distribution_version
 from dataclasses import dataclass
 from typing import Callable
 
@@ -56,8 +55,8 @@ from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from zxcvbn import zxcvbn
 
+from backend import password_strength
 from backend.db import control_database as cdb
 from backend.db.database import get_db
 
@@ -103,13 +102,13 @@ PROOF_TTL_SECONDS = 5 * 60
 # is required before any data connection can be configured, whatever the provider or its environment.
 #
 # Two parts. Length is the main lever, for the password-manager reason above. The other is an estimate of
-# how many guesses the passphrase would take (zxcvbn, which runs offline from its own dictionaries), held
-# to its top score — "strong protection from an offline slow-hash attack", which is the attack a slot's
+# how many guesses the passphrase would take (`backend/password_strength.py`, shared with the "Strong"
+# sign-in password policy), held to its top score — "strong protection from an offline slow-hash attack", which is the attack a slot's
 # wrap faces. It catches what length cannot: dictionary words, repeats, keyboard runs and substitutions
 # that make a long passphrase quick to guess. It replaced a composition rule (a minimum count of distinct
 # characters), which NIST SP 800-63B advises against and which a repeated phrase clears.
 VAULT_PRODUCTION_MIN_LEN = 20
-VAULT_MIN_STRENGTH_SCORE = 4
+VAULT_MIN_STRENGTH_SCORE = password_strength.TOP_SCORE
 
 # The version of the rule above. Raise it whenever the rule or its threshold tightens.
 PASSPHRASE_RULE_VERSION = 2
@@ -122,11 +121,7 @@ PASSPHRASE_RULE_VERSION = 2
 # A passphrase can only be judged while it is in hand, so a slot judged under an earlier basis keeps that
 # verdict until its owner next types the passphrase. Meanwhile its owner is asked to (the
 # `vault_passphrase_check` task) and an unencrypted backup leaves it out (`passphrase_export_shortfall`).
-STRENGTH_BASIS = f"rule-{PASSPHRASE_RULE_VERSION}+zxcvbn-{_distribution_version('zxcvbn')}"
-
-# zxcvbn refuses longer input, because its matching cost grows with length, so a longer passphrase is
-# judged on its first this-many characters. A guessable passphrase shows itself well within that.
-_STRENGTH_ESTIMATE_MAX_CHARS = 72
+STRENGTH_BASIS = f"rule-{PASSPHRASE_RULE_VERSION}+zxcvbn-{password_strength.ESTIMATOR_VERSION}"
 
 
 # A vault recovery code's entropy, in raw bytes before base32 encoding. 20 bytes is 160 bits and encodes
@@ -546,8 +541,7 @@ def passphrase_assessment(passphrase: str) -> dict:
     on where a bare refusal is not. The score is reported for a short passphrase too, so a strength meter
     can move while it is still being typed."""
     p = passphrase or ""
-    estimate = zxcvbn(p[:_STRENGTH_ESTIMATE_MAX_CHARS]) if p else {"score": 0, "feedback": {}}
-    feedback = estimate.get("feedback") or {}
+    estimate = password_strength.estimate(p)
     shortfall = None
     if len(p) < VAULT_PRODUCTION_MIN_LEN:
         shortfall = {
@@ -560,8 +554,8 @@ def passphrase_assessment(passphrase: str) -> dict:
         shortfall = {
             "reason": "guessable",
             "message": "the vault passphrase is long enough but too easy to guess",
-            "warning": feedback.get("warning") or "",
-            "suggestions": list(feedback.get("suggestions") or []),
+            "warning": estimate["warning"],
+            "suggestions": estimate["suggestions"],
         }
     return {"score": estimate["score"], "shortfall": shortfall}
 

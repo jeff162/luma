@@ -222,6 +222,8 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             "/api/auth/logout",
             "/api/auth/2fa/verify",
             "/api/auth/change-password",
+            # Answers only a session that is setting a password, which before sign-in has no user yet.
+            "/api/auth/password-strength",
             "/api/auth/identities",
             "/api/auth/select-identity",
             # Signing in with a passkey is the ceremony that *establishes* a session, so its two halves

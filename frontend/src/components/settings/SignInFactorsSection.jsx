@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { api } from '../../lib/api.js'
 import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../../lib/sensitiveFields.js'
 import { Card, Button, FieldIssue, InsetPanel, PasswordInput, PasswordManagerUsername, Tooltip, getFormControlStyle } from '../ui.jsx'
-import { PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall } from '../../lib/passwordPolicy.js'
+import { PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, usePasswordChecks } from '../../lib/passwordPolicy.js'
 import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../../lib/appPasskey.js'
 import { formatDate } from '../../lib/utils.js'
 
@@ -25,12 +25,14 @@ function OwnPasswordPanel({ user, passwordPolicy }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [changed, setChanged] = useState(false)
+  const confirmRef = useRef(null)
+  const check = usePasswordChecks(passwordPolicy, [next])
 
   // `error` holds only what the server said and is cleared by any edit, so a message about the last
   // attempt never reads as a verdict on what is typed now.
   const edited = setter => value => { setError(''); setter(value) }
   const blockingIssue = !current ? 'Enter the current password.'
-    : passwordIssue({ password: next, confirm, policy: passwordPolicy, withConfirm: true })
+    : passwordIssue({ password: next, confirm, check, withConfirm: true })
 
   function close() {
     setOpen(false)
@@ -74,9 +76,13 @@ function OwnPasswordPanel({ user, passwordPolicy }) {
         <InsetPanel as="form" onSubmit={submit} style={{ marginTop: 12 }}>
           <PasswordManagerUsername value={user?.username || ''} />
           <PasswordInput aria-label="Current password" placeholder="Current password" value={current} onChange={edited(setCurrent)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...EXISTING_SECRET_PROPS} />
-          <PasswordInput aria-label="New password" placeholder="New password" value={next} onChange={edited(setNext)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
-          <FieldIssue>{passwordShortfall(next, passwordPolicy)}</FieldIssue>
-          <PasswordInput aria-label="Confirm new password" placeholder="Confirm new password" value={confirm} onChange={edited(setConfirm)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <PasswordInput
+            aria-label="New password" placeholder="New password" value={next} onChange={edited(setNext)} disabled={saving}
+            wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS}
+            suggestion="password" onSuggest={() => { setConfirm(''); confirmRef.current?.focus() }}
+          />
+          <FieldIssue>{check(next).shortfall}</FieldIssue>
+          <PasswordInput ref={confirmRef} aria-label="Confirm new password" placeholder="Confirm new password" value={confirm} onChange={edited(setConfirm)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
           <FieldIssue>{passwordMismatchShown(next, confirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(passwordPolicy)}</div>
           {error && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>}

@@ -326,6 +326,27 @@ class PerimeterOffSessionTests(unittest.TestCase):
             self.assertNotIn("user", client.get("/api/auth/status").json())
 
 
+class StrongPasswordPolicyTests(unittest.TestCase):
+    """"Strong" is the strength estimator's top score, the vault's test, not a character-class rule."""
+
+    def test_strong_refuses_a_guessable_password_that_has_every_character_class(self):
+        with self.assertRaises(ValueError):
+            cdb.validate_password_for_policy("Password1234567!", cdb.PASSWORD_POLICY_STRONG)
+        cdb.validate_password_for_policy("saddle-quartz-ember-tidy", cdb.PASSWORD_POLICY_STRONG)
+
+    def test_the_strength_check_answers_only_someone_setting_a_password(self):
+        with _client_stack() as client:
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
+            self.assertEqual(client.post("/api/auth/password-strength", json={"password": "x"}).status_code, 401)
+
+            client.post("/api/auth/select-identity", json={"user_id": mark["id"]})
+            weak = client.post("/api/auth/password-strength", json={"password": "password123"})
+            self.assertEqual(weak.status_code, 200, weak.text)
+            self.assertFalse(weak.json()["strong"])
+            strong = client.post("/api/auth/password-strength", json={"password": "saddle-quartz-ember-tidy"})
+            self.assertTrue(strong.json()["strong"])
+
+
 class EnableDisableFlowTests(unittest.TestCase):
     def test_enable_claims_admin_and_member_claims_at_login(self):
         with _client_stack() as client:

@@ -10,6 +10,7 @@
 //   * A field set arrives as attributes, with no id left for the browser to key form history on.
 //   * A suggested passphrase lands in the field shown, and the host hears of it only once it has — the
 //     vault dialogs empty and focus their confirm field then, which the user types the words back into.
+//   * A sign-in password is offered with no host callback, and is the shorter suggestion.
 
 import { createRef, useState } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
@@ -85,6 +86,18 @@ describe('PasswordInput', () => {
     await waitFor(() => expect(suggested).toHaveLength(1))
     expect(field.value).toBe(suggested[0])
     expect(field.value.split('-').length).toBeGreaterThanOrEqual(6)
+    expect(field.type).toBe('text')
+  })
+
+  it('offers a shorter sign-in password, with or without a host to tell', async () => {
+    render(<Controlled suggestion="password" />)
+    const field = screen.getByPlaceholderText('Secret')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest a password' }))
+    await waitFor(() => expect(field.value).not.toBe(''))
+    const words = field.value.split('-').length
+    expect(words).toBeGreaterThanOrEqual(4)
+    expect(words).toBeLessThan(6)
     expect(field.type).toBe('text')
   })
 })

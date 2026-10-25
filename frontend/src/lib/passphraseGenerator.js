@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Suggested passphrases: six words drawn uniformly at random from the EFF large word list, joined by
-// hyphens. The list is public, and that costs nothing — the strength is in the draw, log2(7776) ≈ 12.9 bits
-// a word, so six give about 77 bits. Every guess at a vault passphrase has to go through scrypt, which puts
-// that out of reach, and words are what someone unlocking with no password manager can type back reliably.
+// Suggested passphrases and passwords: words drawn uniformly at random from the EFF large word list, joined
+// by hyphens. The list is public, and that costs nothing — the strength is in the draw, log2(7776) ≈ 12.9
+// bits a word. A vault passphrase takes six, about 77 bits: every guess at one has to go through scrypt,
+// which puts that out of reach. A sign-in password takes four, about 52 bits, because guessing it means
+// asking the server, which allows a handful of tries per account every few minutes; four also clear the
+// "Strong" policy's estimator. Words are what someone with no password manager can type back reliably.
 //
 // The list is loaded on first use rather than bundled into the page, since most sessions never ask for one.
 
 export const SUGGESTED_PASSPHRASE_WORDS = 6
+export const SUGGESTED_PASSWORD_WORDS = 4
 export const WORD_LIST_SIZE = 7776
 const SEPARATOR = '-'
 
@@ -50,10 +53,10 @@ export function composePassphrase(words, count = SUGGESTED_PASSPHRASE_WORDS, ran
 // `fits` is the field's own rule (the vault floor, for a vault passphrase). Six words always clear the
 // current floor on length; redrawing covers the distinct-character rule, which an unlucky draw of short
 // words could in principle miss, and does so without skewing the choice among the passphrases that fit.
-export async function suggestPassphrase({ fits = () => true } = {}) {
+export async function suggestPassphrase({ count = SUGGESTED_PASSPHRASE_WORDS, fits = () => true } = {}) {
   const words = await loadWords()
   for (let attempt = 0; attempt < 100; attempt++) {
-    const passphrase = composePassphrase(words)
+    const passphrase = composePassphrase(words, count)
     if (fits(passphrase)) return passphrase
   }
   throw new Error('No suggested passphrase met the requirements.')

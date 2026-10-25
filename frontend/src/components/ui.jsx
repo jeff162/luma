@@ -8,7 +8,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
-import { suggestPassphrase } from '../lib/passphraseGenerator.js'
+import { SUGGESTED_PASSPHRASE_WORDS, SUGGESTED_PASSWORD_WORDS, suggestPassphrase } from '../lib/passphraseGenerator.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 
 /*
@@ -1051,31 +1051,39 @@ export const Input = forwardRef(function Input(
 // throws, the field stays hidden: a failed fetch (locked vault, no secret on file) must not flip the
 // control to "revealed" over an empty box, which would read as "the stored secret is blank".
 //
-// `onSuggest` (optional) offers a generated passphrase above the field, for a field that *chooses* one: it
-// fills the field, shows it, and then calls `onSuggest(value)` so the host can empty and focus its confirm
-// field — typing the words back there is what shows they were taken down, so it is never filled for them.
-// `suggestionFits` is the field's own rule (the vault floor); a draw that misses it is redrawn. The link
-// sits above the field rather than below so it never lands between the field and its confirmation in tab
-// order.
+// `suggestion` or `onSuggest` offers a generated secret above the field, for a field that *chooses* one:
+// it fills the field, shows it, and then calls `onSuggest(value)` where given, so a host with a confirm
+// field can empty and focus it — typing the words back there is what shows they were taken down, so it is
+// never filled for them. `suggestion` says what is suggested: a vault `passphrase` (the default), or a
+// sign-in `password`, which is shorter (`lib/passphraseGenerator.js` says why). `suggestionFits` is the
+// field's own rule (the vault floor); a draw that misses it is redrawn. The link sits above the field
+// rather than below so it never lands between the field and its confirmation in tab order. `label`, where
+// given, is drawn on the same line as the link, so a row of labelled fields keeps its labels level.
+const SUGGESTIONS = {
+  passphrase: { words: SUGGESTED_PASSPHRASE_WORDS, label: 'Suggest a passphrase' },
+  password: { words: SUGGESTED_PASSWORD_WORDS, label: 'Suggest a password' },
+}
+
 export const PasswordInput = forwardRef(function PasswordInput(
-  { as: Field = Input, style, wrapperStyle, disabled = false, onReveal, onSuggest, suggestionFits, onChange,
-    ...rest }, ref,
+  { as: Field = Input, style, wrapperStyle, disabled = false, onReveal, onSuggest, suggestionFits,
+    suggestion, label, onChange, ...rest }, ref,
 ) {
   const [revealed, setRevealed] = useState(false)
   const [revealing, setRevealing] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
+  const offered = (suggestion || onSuggest) ? SUGGESTIONS[suggestion || 'passphrase'] : null
 
   async function suggest() {
     setSuggesting(true)
     try {
-      const value = await suggestPassphrase({ fits: suggestionFits })
+      const value = await suggestPassphrase({ count: offered.words, fits: suggestionFits })
       // Flushed so the host's `onSuggest` runs against what this value renders — a confirm field that only
       // appears once there is a passphrase exists by then, and can take focus.
       flushSync(() => {
         onChange(value)
         setRevealed(true)
       })
-      onSuggest(value)
+      onSuggest?.(value)
     } catch {
       // Nothing to show for it: the field is untouched, and choosing a passphrase by hand still works.
     } finally {
@@ -1098,8 +1106,10 @@ export const PasswordInput = forwardRef(function PasswordInput(
     setRevealed(true)
   }
 
+  // With a line above the field, the sizing goes on the column holding both, so the suggestion link sits
+  // at the field's edge rather than the far side of a wide card.
   const field = (
-    <div style={{ position: 'relative', ...wrapperStyle }}>
+    <div style={{ position: 'relative', ...(offered || label ? null : wrapperStyle) }}>
       <Field
         {...rest}
         ref={ref}
@@ -1124,20 +1134,25 @@ export const PasswordInput = forwardRef(function PasswordInput(
       </button>
     </div>
   )
-  if (!onSuggest) return field
+  if (!offered && !label) return field
   return (
-    <div style={{ display: 'grid', gap: 4 }}>
-      <button
-        type="button"
-        onClick={suggest}
-        disabled={disabled || suggesting}
-        style={{
-          justifySelf: 'end', border: 'none', background: 'none', padding: 0, fontSize: 12, fontWeight: 600,
-          color: disabled ? 'var(--muted)' : 'var(--accent2)', cursor: disabled || suggesting ? 'default' : 'pointer',
-        }}
-      >
-        Suggest a passphrase
-      </button>
+    <div style={{ display: 'grid', gap: 4, ...wrapperStyle }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        {label || <span />}
+        {offered ? (
+          <button
+            type="button"
+            onClick={suggest}
+            disabled={disabled || suggesting}
+            style={{
+              border: 'none', background: 'none', padding: 0, fontSize: 10, fontWeight: 400, whiteSpace: 'nowrap',
+              color: disabled ? 'var(--muted)' : 'var(--accent2)', cursor: disabled || suggesting ? 'default' : 'pointer',
+            }}
+          >
+            {offered.label}
+          </button>
+        ) : null}
+      </div>
       {field}
     </div>
   )

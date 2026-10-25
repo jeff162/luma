@@ -7,7 +7,7 @@ import { PASSKEY_SIGN_IN_UNAVAILABLE, assertSignInPasskey, signInAvailability } 
 import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import {
-  PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall,
+  PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, usePasswordChecks,
 } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import { ServerCertificateLink } from './ServerCertificate.jsx'
@@ -89,9 +89,10 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
   // they are typed, and their button is greyed for the reason shown (`lib/passwordPolicy.js`). Signing in
   // with an existing password is not held to the policy here: the policy may have been tightened since
   // that password was set, and the server is the one to say whether it still opens the account.
+  const check = usePasswordChecks(passwordPolicy, [newPassword, needsBootstrap ? password : ''])
   const passwordStepIssue = awaitingPasswordChange
-    ? passwordIssue({ password: newPassword, confirm: newPasswordConfirm, policy: passwordPolicy, withConfirm: true })
-    : (needsBootstrap && !awaiting2fa) ? passwordIssue({ password, policy: passwordPolicy }) : ''
+    ? passwordIssue({ password: newPassword, confirm: newPasswordConfirm, check, withConfirm: true })
+    : (needsBootstrap && !awaiting2fa) ? passwordIssue({ password, check }) : ''
   // An error is about the attempt that produced it, so editing a password field retires it — otherwise a
   // refusal of the previous value sits beside the corrected one and reads as a verdict on it.
   const edited = setter => value => { setError(''); setter(value) }
@@ -280,8 +281,10 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 placeholder="New password"
                 autoComplete="new-password"
                 style={s.input}
+                suggestion="password"
+                onSuggest={() => { setNewPasswordConfirm(''); newPasswordConfirmRef.current?.focus() }}
               />
-              <FieldIssue style={{ marginTop: -4 }}>{passwordShortfall(newPassword, passwordPolicy)}</FieldIssue>
+              <FieldIssue style={{ marginTop: -4 }}>{check(newPassword).shortfall}</FieldIssue>
               <PasswordInput
                 as={TransientTextInput}
                 ref={newPasswordConfirmRef}
@@ -314,9 +317,10 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 placeholder="Password"
                 autoComplete={needsBootstrap ? 'new-password' : 'current-password'}
                 style={s.input}
+                suggestion={needsBootstrap ? 'password' : undefined}
               />
               {needsBootstrap && (
-                <FieldIssue style={{ marginTop: -4 }}>{passwordShortfall(password, passwordPolicy)}</FieldIssue>
+                <FieldIssue style={{ marginTop: -4 }}>{check(password).shortfall}</FieldIssue>
               )}
               {needsBootstrap && (
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>

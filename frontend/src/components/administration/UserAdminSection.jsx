@@ -7,7 +7,7 @@ import { NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
 import SoleVaultMemberWarning from '../SoleVaultMemberWarning.jsx'
 import { useSoleVaultMember } from '../../lib/useSoleVaultMember.js'
 import { Card, Button, Spinner, FieldIssue, FormLabel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Tooltip } from '../ui.jsx'
-import { passwordIssue, passwordPolicyHelpText, passwordShortfall } from '../../lib/passwordPolicy.js'
+import { passwordIssue, passwordPolicyHelpText, usePasswordChecks } from '../../lib/passwordPolicy.js'
 
 export default function UserAdminSection({ passwordPolicy }) {
   const fieldIdBase = useId()
@@ -75,11 +75,12 @@ export default function UserAdminSection({ passwordPolicy }) {
 
   // What each form would refuse on, checked as it is typed (`lib/passwordPolicy.js`) and shown both under
   // the fields and on the greyed button. A blank password when editing means "keep the current one".
+  const check = usePasswordChecks(passwordPolicy, [form.password, editForm.password])
   const createIssue = !form.username.trim() ? 'Enter a username.'
-    : passwordIssue({ password: form.password, policy: passwordPolicy })
+    : passwordIssue({ password: form.password, check })
   const editIssue = !editForm.username.trim() ? 'Enter a username.'
     : !editForm.display_name.trim() ? 'Enter a display name.'
-      : passwordIssue({ password: editForm.password, policy: passwordPolicy, optional: true })
+      : passwordIssue({ password: editForm.password, check, optional: true })
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -206,8 +207,7 @@ export default function UserAdminSection({ passwordPolicy }) {
             <input id={`${fieldIdBase}-create-display-name`} name="settings-create-user-display-name" value={form.display_name} onChange={e => setForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Password</FormLabel>
-            <PasswordInput aria-label="Password" value={form.password} onChange={value => { setError(''); setForm(prev => ({ ...prev, password: value })) }} style={inputStyle} {...NEW_SECRET_PROPS} />
+            <PasswordInput label={<FormLabel style={{ marginBottom: 0 }}>Password</FormLabel>} aria-label="Password" value={form.password} onChange={value => { setError(''); setForm(prev => ({ ...prev, password: value })) }} style={inputStyle} {...NEW_SECRET_PROPS} suggestion="password" />
           </div>
           <div>
             <FormLabel htmlFor={`${fieldIdBase}-create-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -227,7 +227,7 @@ export default function UserAdminSection({ passwordPolicy }) {
             line with the rest. */}
         <div style={{ padding: '10px 16px', color: 'var(--muted)', fontSize: 12, borderBottom: '1px solid var(--border)', display: 'grid', gap: 4 }}>
           <div>Password policy: {passwordPolicyHelpText(passwordPolicy)}</div>
-          <FieldIssue>{passwordShortfall(form.password, passwordPolicy)}</FieldIssue>
+          <FieldIssue>{check(form.password).shortfall}</FieldIssue>
         </div>
 
         {error && (
@@ -263,8 +263,7 @@ export default function UserAdminSection({ passwordPolicy }) {
                   <input id={`${fieldIdBase}-edit-${user.id}-display-name`} name={`settings-edit-user-${user.id}-display-name`} value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>New password</FormLabel>
-                  <PasswordInput aria-label="New password" value={editForm.password} onChange={value => { setError(''); setEditForm(prev => ({ ...prev, password: value })) }} placeholder="Leave blank to keep current" style={inputStyle} {...NEW_SECRET_PROPS} />
+                  <PasswordInput label={<FormLabel style={{ marginBottom: 0 }}>Password</FormLabel>} aria-label="New password" value={editForm.password} onChange={value => { setError(''); setEditForm(prev => ({ ...prev, password: value })) }} placeholder="Leave blank to keep current" style={inputStyle} {...NEW_SECRET_PROPS} suggestion="password" />
                 </div>
                 <div>
                   <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -284,7 +283,7 @@ export default function UserAdminSection({ passwordPolicy }) {
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {editForm.password ? passwordPolicyHelpText(passwordPolicy) : 'Leave the password field empty to keep the existing password.'}
               </div>
-              <FieldIssue style={{ marginTop: -8 }}>{passwordShortfall(editForm.password, passwordPolicy)}</FieldIssue>
+              <FieldIssue style={{ marginTop: -8 }}>{check(editForm.password).shortfall}</FieldIssue>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
                 <input
                   type="checkbox"

@@ -190,6 +190,9 @@ export const api = {
   resetConfigValue: (key) => request(`/auth/config/${encodeURIComponent(key)}/reset`, { method: 'POST' }),
   savePasswordPolicy: (policy) =>
     request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
+  // Whether a sign-in password being chosen meets the "Strong" policy (`usePasswordChecks`).
+  passwordStrength: (password) =>
+    request('/auth/password-strength', { method: 'POST', body: JSON.stringify({ password }) }),
   // Vault (data-source credential custody). Set/change require the current user; set mints the workspace
   // DEK for the first user. All return { user: <session payload with vault_* flags> }.
   setVaultPassphrase: (passphrase) =>

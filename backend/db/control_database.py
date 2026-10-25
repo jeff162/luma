@@ -15,7 +15,6 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import sqlite3
 import struct
 import time
@@ -26,6 +25,7 @@ import segno
 from contextlib import contextmanager
 from pathlib import Path
 
+from backend import password_strength
 from backend.db.database import DB_PATH, get_db, init_db
 from backend.app_logging import log_info, log_warning
 from backend.runtime_config import app_name, is_frozen, resolve_control_db_path
@@ -616,7 +616,7 @@ def password_policy_label(policy: str | None = None) -> str:
     if normalized == PASSWORD_POLICY_NONE:
         return "No password restrictions"
     if normalized == PASSWORD_POLICY_STRONG:
-        return "Strong password requirements"
+        return "Strong"
     return "8 character minimum"
 
 
@@ -630,16 +630,11 @@ def validate_password_for_policy(password: str, policy: str | None = None):
         if len(password) < 8:
             raise ValueError("password must be at least 8 characters")
         return
-    if len(password) < 16:
-        raise ValueError("strong passwords must be at least 16 characters")
-    checks = [
-        re.search(r"[a-z]", password),
-        re.search(r"[A-Z]", password),
-        re.search(r"[0-9]", password),
-        re.search(r"[^A-Za-z0-9]", password),
-    ]
-    if not all(checks):
-        raise ValueError("strong passwords must include upper, lower, number, and symbol")
+    # "Strong" is the estimator's top score, the same test the vault passphrase is held to
+    # (`backend/password_strength.py`). Length counts through the estimate, not as a rule of its own.
+    estimate = password_strength.estimate(password)
+    if estimate["score"] < password_strength.TOP_SCORE:
+        raise ValueError(" ".join(filter(None, ["This password is too easy to guess.", estimate["warning"]])))
 
 
 def user_count() -> int:

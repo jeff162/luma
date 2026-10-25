@@ -71,7 +71,7 @@ from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_
 from backend.services import app_passkey, attempt_limiter, crypto_service, sign_in_sessions
 from backend.services.exposure_response import REISSUED, SyncInProgress, app_secrets_to_rotate, reissue_all_credentials
 from backend.services.vault_reset import revoke_all_credentials, unfinished
-from backend import transport
+from backend import password_strength, transport
 from backend.authorization import require_admin, require_admin_or_local
 
 
@@ -200,6 +200,10 @@ class OwnPasswordChangeRequest(BaseModel):
 
 class PasswordPolicyRequest(BaseModel):
     policy: str
+
+
+class PasswordStrengthRequest(BaseModel):
+    password: str
 
 
 class HttpsWarningSuppressRequest(BaseModel):
@@ -583,6 +587,23 @@ def get_effective_config(request: Request):
         "env_file_path": str(env_file_path()),
         "env_file_present": env_file_path().exists(),
     }
+
+
+@router.post("/password-strength")
+def password_strength_check(body: PasswordStrengthRequest, request: Request):
+    """Whether a sign-in password being chosen meets the "Strong" policy, asked while it is typed.
+
+    The estimate comes from dictionaries on the server, so the form asks here rather than running a second
+    estimator that would disagree at the margin. Public in the middleware, because two of the forms that
+    set a password come before any session exists: the first account, and the change forced at sign-in.
+    Answered only to someone setting a password at that moment, so it is not an estimator for anyone who
+    can reach the server. Nothing is stored: the same password reaches the server when it is submitted."""
+    session = request.session
+    if not (session.get("user_id") or session.get("pending_password_change_user_id")
+            or (auth_required() and bootstrap_required())):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    estimate = password_strength.estimate(body.password)
+    return {"strong": estimate["score"] >= password_strength.TOP_SCORE, **estimate}
 
 
 @router.post("/password-policy")

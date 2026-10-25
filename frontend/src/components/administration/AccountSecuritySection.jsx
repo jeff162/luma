@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../../lib/api.js'
 import { NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
 import { Card, Button, FieldIssue, FormLabel, InsetPanel, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip } from '../ui.jsx'
-import { PASSWORD_MISMATCH, PASSWORD_POLICIES, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall } from '../../lib/passwordPolicy.js'
+import { PASSWORD_MISMATCH, PASSWORD_POLICIES, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, usePasswordChecks } from '../../lib/passwordPolicy.js'
 
 // Password fields don't need the full card width — cap them so a ~40-50 character entry is visible
 // without the field spanning the whole (wide) settings card.
@@ -154,6 +154,7 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const adminPasswordRef = useRef(null)
+  const adminConfirmRef = useRef(null)
 
   useEffect(() => {
     let cancelled = false
@@ -177,11 +178,12 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
   // as a verdict on what is on screen now — which is how a valid password came to sit beside "does not
   // meet the policy".
   const others = (profiles || []).filter(p => p.id !== claimId)
-  const adminIssue = passwordIssue({ password: adminPassword, confirm: adminConfirm, policy, withConfirm: true })
-  const otherShortfall = id => passwordShortfall(otherPasswords[id], policy)
-  const otherWithIssue = others.find(p => otherShortfall(p.id))
+  const check = usePasswordChecks(policy, [adminPassword, ...others.map(p => otherPasswords[p.id] || '')])
+  const adminIssue = passwordIssue({ password: adminPassword, confirm: adminConfirm, check, withConfirm: true })
+  const otherIssue = id => passwordIssue({ password: otherPasswords[id], check, optional: true })
+  const otherWithIssue = others.find(p => otherIssue(p.id))
   const blockingIssue = !claimId ? 'Choose which user is yours.'
-    : adminIssue || (otherWithIssue ? `Starting password for "${otherWithIssue.name}": ${otherShortfall(otherWithIssue.id)}` : '')
+    : adminIssue || (otherWithIssue ? `Starting password for "${otherWithIssue.name}": ${otherIssue(otherWithIssue.id)}` : '')
   const edited = setter => value => { setError(''); setter(value) }
 
   async function enableWithMigration(e) {
@@ -278,9 +280,13 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
           </div>
         ) : null}
         <PasswordManagerUsername value={claimed?.username || ''} />
-        <PasswordInput ref={adminPasswordRef} aria-label="Your password" value={adminPassword} onChange={edited(setAdminPassword)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
-        <FieldIssue>{passwordShortfall(adminPassword, policy)}</FieldIssue>
-        <PasswordInput value={adminConfirm} onChange={edited(setAdminConfirm)} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+        <PasswordInput
+          ref={adminPasswordRef} aria-label="Your password" value={adminPassword} onChange={edited(setAdminPassword)} disabled={saving}
+          wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS}
+          suggestion="password" onSuggest={() => { setAdminConfirm(''); adminConfirmRef.current?.focus() }}
+        />
+        <FieldIssue>{check(adminPassword).shortfall}</FieldIssue>
+        <PasswordInput ref={adminConfirmRef} value={adminConfirm} onChange={edited(setAdminConfirm)} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
         <FieldIssue>{passwordMismatchShown(adminPassword, adminConfirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
       </div>
@@ -302,8 +308,9 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
                 disabled={saving}
                 style={PASSWORD_FIELD_STYLE}
                 {...NEW_SECRET_PROPS}
+                suggestion="password"
               />
-              <FieldIssue>{otherShortfall(p.id)}</FieldIssue>
+              <FieldIssue>{check(otherPasswords[p.id]).shortfall}</FieldIssue>
             </div>
           ))}
         </div>

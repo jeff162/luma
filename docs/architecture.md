@@ -723,6 +723,12 @@ startup corrects a record that has drifted (`reconcile_workspace_db_path`).
   Perimeter on reuses the same rows with accounts, 2FA, roles and password policy. "Password optional"
   is a workspace property (`enable_auth_mode()` / `disable_auth_mode()`), never per-user, because the
   data is shared. `auth_required()` is the sign-in flag alone.
+- **The password policy is enforced by `validate_password_for_policy` and previewed by the forms.**
+  `none` and `min_8` are judged in the browser as well (`lib/passwordPolicy.js`). `strong` is the
+  estimator in `backend/password_strength.py`, which the vault floor also uses, so the forms ask
+  `POST /auth/password-strength` as a password is typed (`usePasswordChecks`). That route is public in
+  the middleware, because the first account and the change forced at sign-in come before any session
+  exists, and answers only a session that is setting a password.
 - **The session carries identity in both modes.** The tenant middleware (`backend/main.py`) reads
   `session['user_id']`. A perimeter-off session is stamped `pwless` (chosen via `POST
   /auth/select-identity`), and enabling sign-in invalidates `pwless` sessions on their next request.

@@ -4713,6 +4713,14 @@ export const HELP_TOPICS = [
           all users, and it can be tightened or relaxed at any time. This does not affect existing passwords,
           only newly created passwords.
         </p>
+        <p>*needs review*</p>
+        <p>
+          <strong>Strong</strong> requires a password that is hard to guess, judged by the
+          same strength check as the vault passphrase. Length and unrelated words count for more than mixing
+          in capitals, numbers and symbols, so a password like <code>Password1234567!</code> is refused.
+          Every field that sets a password offers <strong>Suggest a password</strong>: four random words
+          that meet every policy, Strong included.
+        </p>
         <p>
           Each user's own password is changed under <strong>Security</strong> on the{' '}
           <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is

@@ -222,6 +222,13 @@ a cookie, and the digest is what stops it also supplying an id a row would accep
 goes through `sign_in_sessions.start`**; one that set `user_id` directly would produce a cookie that is
 refused.
 
+**A sign-in password guards the network door and nothing else.** Guessing it means asking the server,
+which the limits below slow to a handful of tries per account every few minutes, and a copy of the files
+needs no password, since the ledger in it is in the clear. So how strong it must be is the operator's
+policy, and a suggested password is four random words where a vault passphrase is six. **"Strong" is the
+vault's strength estimator at its top score** (`backend/password_strength.py`), so the app has one meaning
+of strong: a character-class rule, which NIST SP 800-63B advises against, accepts `Password1234567!`.
+
 **Every secret a person types is limited against guessing** (`services/attempt_limiter.py`) — sign-in
 passwords, authenticator and 2FA recovery codes, and the vault passphrase and recovery code. The perimeter
 is optional, and a networked deployment is where it has to hold up. Limits are **per account**, because
