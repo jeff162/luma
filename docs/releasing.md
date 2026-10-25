@@ -38,6 +38,10 @@ frontend. `--form` chooses between the two available forms:
 The default is portable if the platform supports it; **macOS is installed-only**, because the
 `.app` lives in Applications and user data goes elsewhere. Inside Luma, **Settings → Startup configuration** reports the directories being used.
 
+**Windows and Linux have no installer; both ship only the portable kit.** So no released build uses the
+Windows user-data directory, and no install has data there. That stops being true the day a Windows
+installer ships.
+
 PyInstaller, the build tool, cannot cross-build.
 
 ## Setting up the build environment
@@ -292,7 +296,9 @@ Three deliberate omissions, all documented in the workflow header:
   Publishing is outward-facing and belongs to whoever is cutting the release. **This is a manual step**
   — until the files are attached to a written release, nothing is downloadable by a visitor, since
   workflow artifacts expire and require a signed-in GitHub account.
-- **No signing.** See the macOS note above.
+- **No signing.** Unsigned builds carry the operating system's warning, and someone who downloads one
+  accepts that. Notarization and code-signing certificates cost money every year, so they wait until the
+  audience makes them worth it. macOS still needs the ad-hoc signature described above.
 
 ### The container image
 

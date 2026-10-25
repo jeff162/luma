@@ -139,14 +139,6 @@ scale — rather than by feature.
 - [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not
   needed yet.** Document-only backups, with each data backup carrying only the documents added since the
   last one. Started when the backup history shows documents as the bulk of a backup.
-- [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
-  unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
-  and every other rejected alternative — is in [`../operations.md`](../operations.md), with building in
-  [`../releasing.md`](../releasing.md) and the mechanism in `architecture.md`. What stays here: **Shape A**
-  (a LAN server) is built, so what is left is the decisions behind it and what has not yet been seen
-  working on a real server — the per-device certificate steps beyond Windows, a sign-in passkey on a
-  `.local` name, a tablet, and macOS as the server; and **Shape B step 3's remainder**, which is only what CI structurally cannot
-  reach and needs a Mac in front of somebody — the Dock lifecycle, Gatekeeper, and the log-file redirect.
 - [i18n-display-formatting.md](i18n-display-formatting.md) — **reduced 2026-09-03 to the number/date
   half, unstarted.** Tier-1 **formatting**, not translation. The ledger-currency setting shipped
   2026-08-08 and its model is in [`../data-model.md`](../data-model.md) → *One ledger currency*. What stays: **Bucket A** (the `en-US`

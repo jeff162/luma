@@ -137,6 +137,8 @@ Server mode takes away what assumed a person at the machine:
   issued for it. A name another machine already answers for refuses the start, so a second
   installation on the network needs its own `MDNS_NAME`. **The address advertised is read once, at
   startup**: a server whose address changes while it runs has to be restarted to advertise the new one.
+- **Sign-in protection stays optional.** Server mode does not require it. Settings → *Security
+  checklist* shows whether other devices can reach the installation and whether sign-in is on.
 
 ### Behind a proxy, or directly
 
@@ -174,6 +176,12 @@ visit only.
 - **The server remembers the first fingerprint it sees.** Caddy mints a new authority if its data
   directory is lost; a changed fingerprint then raises a task that stands until an administrator accepts
   the change, and every device needs the new certificate.
+
+**The certificate comes from the proxy's own authority because a `.local` name cannot have a publicly
+trusted one.** Caddy issues from its own authority for such a name with no configuration; the cost is
+trusting its root once on each device. A name in the network's own DNS does not avoid that step, since it
+cannot get a public certificate either, and it must not end in `.local`. A publicly registered domain
+with a DNS-challenge certificate does avoid it, and needs only a different Caddyfile.
 
 Neither surface appears on an installation with no proxy certificate to hand out.
 
@@ -419,7 +427,3 @@ a destructive restore. See *Open*.
   periodic is wanted. A semantic invariant checker over the cases a structural check cannot see is a
   separate, much larger project.
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)
-- **The macOS Dock lifecycle has never been verified end to end** — the icon appearing without a
-  bounce, Quit and Command-Q shutting down cleanly *and* logging it, and the two death-watches in both
-  directions. CI cannot reach any of it.
-  → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
