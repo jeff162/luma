@@ -351,6 +351,19 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         if (today.month - 1 - m) % 12 in (10, 11):   # November, December
             bank(m * 30 + 13, "Maple & Co. Gifts", "Gifts Given", 145.00 + m * 6, "checking")
 
+    # The hardware store the bank's export filed two ways: some visits were a project, some a repair, and
+    # nothing on the row says which. The amounts overlap and every row is on one account, so no rule can
+    # tell them apart, and the Generate Rules review shows them as a conflict set to resolve.
+    for days_ago, amount in [(64, 89.40), (151, 212.75), (158, 46.10), (318, 134.60)]:
+        bank(days_ago, "Hearthside Hardware", "Home Improvement", amount, "checking")
+    for days_ago, amount in [(29, 58.25), (233, 141.30)]:
+        bank(days_ago, "Hearthside Hardware", "Home Repairs", amount, "checking")
+
+    # A class pass given up a little over a year ago. Its rule suggestion is still pending, and it is the
+    # one a one-year look-back moves into the review's Older view.
+    for days_ago, amount in [(396, 85.00), (431, 85.00), (473, 120.00), (509, 85.00)]:
+        bank(days_ago, "Harbor Yoga Studio", "Fitness Classes", amount, "checking")
+
     # The money coming back. Each is claimed by one of the reimbursements built after the import; until
     # then they are ordinary inflows, which is exactly what they look like to someone who has not
     # recorded the debt.

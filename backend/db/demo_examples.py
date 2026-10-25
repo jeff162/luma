@@ -7,7 +7,7 @@
 the real pipelines. What it
 cannot express that way is anything that is *done to* a transaction afterwards: a split, a receivable
 and its repayment, an attached receipt, a rule carrying an amount range, payments grouped into one
-purchase. Those arrive here, against rows the imports already created.
+purchase, rule suggestions already reviewed. Those arrive here, against rows the imports already created.
 
 **These are examples rather than fixtures.** Someone exploring the demo is reading them to find out what
 a feature is *for*, so each one is a situation with a recognizable shape — a warehouse run that was
@@ -390,6 +390,61 @@ def seed_transaction_tags(conn, tag_ids: dict) -> None:
             )
 
 
+# --- The Generate Rules review, partly worked through -----------------------------------------------
+
+def seed_rule_review(conn) -> None:
+    """One suggestion accepted, one deferred and one discarded, so each settled view of the review has an
+    example and the pending pile still has most of its work left.
+
+    Each is a decision with a reason. The internet bill always files the same way, so it earns a rule. The
+    pharmacy has only a few visits so far, so it waits. The freelance invoices are named for the client,
+    so a rule on the name would miss the next client.
+    """
+    from backend.routers.import_export.core import _get_rule_suggestions, _open_system_review_scope
+    from backend.routers.import_export.rule_suggestion_actions import (
+        RuleSuggestionAcceptRequest,
+        RuleSuggestionStatusRequest,
+        _accept_rule_suggestions,
+        _set_rule_suggestion_status,
+    )
+
+    suggestions = _get_rule_suggestions(_open_system_review_scope, None, conn=conn)["suggestions"]
+
+    def pending(keyword_start: str) -> dict | None:
+        return next(
+            (s for s in suggestions if s["review_status"] == "pending" and s["keyword"].startswith(keyword_start)),
+            None,
+        )
+
+    def status_item(suggestion: dict) -> dict:
+        return {
+            "suggestion_id": suggestion["id"],
+            "source_row_ids": suggestion["source_row_ids"],
+            "merchant_label": suggestion["merchant_label"],
+            "target_category_name": suggestion["target_category_name"],
+            "keyword": suggestion["keyword"],
+        }
+
+    internet = pending("fiberlink")
+    if internet:
+        _accept_rule_suggestions(_open_system_review_scope, RuleSuggestionAcceptRequest(items=[{
+            "suggestion_id": internet["id"],
+            "source_row_ids": internet["source_row_ids"],
+            "merchant_label": internet["merchant_label"],
+            "rule": {
+                "keyword": internet["keyword"],
+                "category_id": internet["target_category_id"],
+                "clean_name": internet["clean_name_suggestion"] or None,
+            },
+        }]), conn=conn)
+    for keyword_start, status in (("lakeview pharmacy", "skipped"), ("brightline design", "discarded")):
+        suggestion = pending(keyword_start)
+        if suggestion:
+            _set_rule_suggestion_status(_open_system_review_scope, RuleSuggestionStatusRequest(
+                items=[status_item(suggestion)], status=status,
+            ), conn=conn)
+
+
 def seed_all(conn, leaves: dict, tag_ids: dict) -> dict:
     """Every example, in dependency order: splits before the reimbursements that claim their parts."""
     seed_split(conn, leaves)
@@ -400,6 +455,7 @@ def seed_all(conn, leaves: dict, tag_ids: dict) -> dict:
     seed_rules(conn, leaves)
     seed_purchase(conn)
     seed_transaction_tags(conn, tag_ids)
+    seed_rule_review(conn)
     return {
         "purchases": conn.execute("SELECT COUNT(*) FROM txn_link WHERE kind = 'purchase'").fetchone()[0],
         "splits": conn.execute("SELECT COUNT(*) FROM txn WHERE is_split = 1").fetchone()[0],

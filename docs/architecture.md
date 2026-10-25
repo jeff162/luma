@@ -118,7 +118,7 @@ requirements, because popovers, inline editors and dismissal rules rebuilt per p
   own `conn` so the whole build is one transaction. The result has real batches, coverage, dedupe
   results, saved data sources and a reconciliation report. What cannot arrive in a file — a split, a
   receivable and its repayment, an attached receipt, a rule with an amount range, a multi-payment
-  purchase — is layered on by `db/demo_examples.py` through the same services the endpoints call. Its tests assert
+  purchase, rule suggestions already accepted, deferred or discarded — is layered on by `db/demo_examples.py` through the same services the endpoints call. Its tests assert
   through the feature (each recurring signal kind fires, a document's text was extracted) rather than by
   row count, because the dataset exists to demonstrate features. It is also what the README screenshots
   are captured from (`npm run screenshots`), so it carries thirteen months of steady, household-sized

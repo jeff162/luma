@@ -389,6 +389,30 @@ class DemoWorkedExampleTests(unittest.TestCase):
         self.assertEqual(len({p["category_id"] for p in parts}), len(parts))
         self.assertTrue(all(p["label"] for p in parts))
 
+    def test_every_rule_review_view_has_an_example(self):
+        """The Generate Rules review splits into views (conflicts, older, accepted, deferred, discarded) that
+        show nothing on a review nobody has touched, so the demo carries one of each."""
+        from backend.routers.import_export.core import _get_rule_suggestions, _open_system_review_scope
+
+        with self._conn() as conn:
+            suggestions = _get_rule_suggestions(_open_system_review_scope, None, conn=conn)["suggestions"]
+            pending = [s for s in suggestions if s["review_status"] == "pending"]
+
+            conflict_sizes = Counter(s["conflict_group_id"] for s in pending if s["conflict_group_id"])
+            self.assertTrue(any(size >= 2 for size in conflict_sizes.values()), "no conflict set")
+
+            a_year_ago = conn.execute("SELECT date('now', '-1 year')").fetchone()[0]
+            self.assertTrue(any(s["latest_txn_date"] < a_year_ago for s in pending), "nothing older than a year")
+
+            statuses = Counter(s["review_status"] for s in suggestions)
+            for status in ("accepted", "skipped", "discarded"):
+                self.assertGreaterEqual(statuses[status], 1, f"no {status} suggestion")
+
+            accepted = next(s for s in suggestions if s["review_status"] == "accepted")
+            self.assertTrue(conn.execute(
+                "SELECT 1 FROM category_rule WHERE id = ? AND deleted_at IS NULL", (accepted["rule_id"],),
+            ).fetchone())
+
     def test_the_ledger_spans_more_than_a_year(self):
         """Year-over-year comparison is on the feature list, and with a single season of data there is
         nothing for it to compare against."""

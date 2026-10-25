@@ -196,18 +196,24 @@ class _ActionEffects:
         }
 
 
-def _run_action(open_scope: _ReviewScopeOpener, perform) -> dict:
+def _run_action(open_scope: _ReviewScopeOpener, perform, conn=None) -> dict:
     """Open the scope, let `perform(conn, scope, effects)` make every write, then persist the review state and
-    answer with its undo payload — all in one transaction, with the recurring rescan settled after commit."""
-    with get_db() as conn:
-        scope = open_scope(conn)
-        effects = _ActionEffects(scope.review_state)
-        extra = perform(conn, scope, effects) or {}
-        undo = effects.undo_payload(scope.review_state)
-        review_summary = summarize_rule_suggestion_review(scope.review_state)
-        scope.save(conn)
-        owe_recurring_rescan(conn, effects.rescan_ids, prior_payee_keys=effects.rescan_prior_keys)
-    settle_owed_rescans()
+    answer with its undo payload — all in one transaction, with the recurring rescan settled after commit.
+
+    With `conn`, the action joins the caller's transaction instead (the demo build), and settling the owed
+    rescan after commit is the caller's job."""
+    if conn is None:
+        with get_db() as own_conn:
+            result = _run_action(open_scope, perform, own_conn)
+        settle_owed_rescans()
+        return result
+    scope = open_scope(conn)
+    effects = _ActionEffects(scope.review_state)
+    extra = perform(conn, scope, effects) or {}
+    undo = effects.undo_payload(scope.review_state)
+    review_summary = summarize_rule_suggestion_review(scope.review_state)
+    scope.save(conn)
+    owe_recurring_rescan(conn, effects.rescan_ids, prior_payee_keys=effects.rescan_prior_keys)
     return {
         "ok": True,
         "undo": undo,
@@ -514,7 +520,7 @@ def _save_accepted(conn, scope, effects: _ActionEffects, item: RuleSuggestionAcc
     ))
 
 
-def _accept_rule_suggestions(open_scope: _ReviewScopeOpener, body: RuleSuggestionAcceptRequest) -> dict:
+def _accept_rule_suggestions(open_scope: _ReviewScopeOpener, body: RuleSuggestionAcceptRequest, *, conn=None) -> dict:
     summary = _empty_summary()
 
     def perform(conn, scope, effects):
@@ -526,10 +532,10 @@ def _accept_rule_suggestions(open_scope: _ReviewScopeOpener, body: RuleSuggestio
                 _accept_pending(conn, scope, effects, item, summary)
         return {"summary": summary}
 
-    return _run_action(open_scope, perform)
+    return _run_action(open_scope, perform, conn)
 
 
-def _set_rule_suggestion_status(open_scope: _ReviewScopeOpener, body: RuleSuggestionStatusRequest) -> dict:
+def _set_rule_suggestion_status(open_scope: _ReviewScopeOpener, body: RuleSuggestionStatusRequest, *, conn=None) -> dict:
     status = (body.status or "").strip().lower()
     if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
         raise HTTPException(status_code=400, detail="Invalid review status")
@@ -563,7 +569,7 @@ def _set_rule_suggestion_status(open_scope: _ReviewScopeOpener, body: RuleSugges
                 keyword=item.keyword,
             ))
 
-    return _run_action(open_scope, perform)
+    return _run_action(open_scope, perform, conn)
 
 
 def _resolve_rule_suggestion_conflict_set(open_scope: _ReviewScopeOpener, body: RuleSuggestionConflictSetRequest) -> dict:

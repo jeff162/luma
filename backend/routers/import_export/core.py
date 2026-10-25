@@ -5193,12 +5193,15 @@ def _parse_owner_ids(owner_ids: Optional[str]) -> list[str]:
     return [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
 
 
-def _get_rule_suggestions(open_scope: _ReviewScopeOpener, owner_ids: Optional[str]) -> dict:
-    with get_db() as conn:
-        scope = open_scope(conn)
-        result = _build_rule_suggestion_response(conn, scope.rows(conn), scope.review_state, _parse_owner_ids(owner_ids))
-        if result.pop("should_persist", False):
-            scope.save(conn)
+def _get_rule_suggestions(open_scope: _ReviewScopeOpener, owner_ids: Optional[str], *, conn=None) -> dict:
+    """With `conn`, the read joins the caller's transaction instead of opening its own (the demo build)."""
+    if conn is None:
+        with get_db() as own_conn:
+            return _get_rule_suggestions(open_scope, owner_ids, conn=own_conn)
+    scope = open_scope(conn)
+    result = _build_rule_suggestion_response(conn, scope.rows(conn), scope.review_state, _parse_owner_ids(owner_ids))
+    if result.pop("should_persist", False):
+        scope.save(conn)
     return result
 
 
