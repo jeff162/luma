@@ -1181,6 +1181,11 @@ def _own_passphrase_slot(user_id: str) -> dict | None:
     return slot if slot_holds_dek(slot) else None
 
 
+def has_own_passphrase(user_id: str) -> bool:
+    """Whether this member opens the vault with a passphrase of their own, the one the strength rule judges."""
+    return _own_passphrase_slot(user_id) is not None
+
+
 def passphrase_needs_change(user_id: str) -> bool:
     """Whether this member's passphrase has been judged under the current basis and failed it."""
     slot = _own_passphrase_slot(user_id)

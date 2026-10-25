@@ -14,7 +14,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { APP_NAME } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
 import { useServerCertificate } from '../lib/serverCertificate.js'
@@ -25,7 +24,7 @@ import SectionListPage, { Subsection, useSectionParam } from '../components/Sect
 import BackupRestoreSection from '../components/administration/BackupRestoreSection.jsx'
 import UserAdminSection from '../components/administration/UserAdminSection.jsx'
 import { AccountSecuritySection } from '../components/administration/AccountSecuritySection.jsx'
-import NetworkAccessSection from '../components/administration/NetworkAccessSection.jsx'
+import SecurityChecklistSection from '../components/administration/SecurityChecklistSection.jsx'
 import { ServerCertificateSection } from '../components/ServerCertificate.jsx'
 import ConfigurationSection from '../components/administration/ConfigurationSection.jsx'
 import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
@@ -182,11 +181,11 @@ export default function Settings() {
           ),
         },
         {
-          key: 'networkAccess',
-          title: 'Network access',
-          description: `How this browser reaches ${APP_NAME}, which devices can open this installation, and what sign-in protection keeps out.`,
-          help: <FeatureExplainer topic="running-a-server" placement="bottom-left" />,
-          content: <NetworkAccessSection authEnabled={authEnabled} />,
+          key: 'securityChecklist',
+          title: 'Security checklist',
+          description: 'This installation compared with the recommended security practices.',
+          help: <FeatureExplainer topic="security-checklist" placement="bottom-left" />,
+          content: <SecurityChecklistSection />,
         },
         // Only where a reverse proxy on the server has a certificate to hand out.
         serverCertificate && {

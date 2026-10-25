@@ -4069,11 +4069,9 @@ export const HELP_TOPICS = [
             password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
           <li>
-            <strong>Network access</strong> states how the browser in use reaches {APP_NAME}: on the
-            same computer, over the network with HTTPS, or over the network without it, and what each
-            means for passwords, passkeys and data sources. It also states whether other devices can
-            open the installation, and so who sign-in protection keeps out.
-            See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>.
+            <strong>Security checklist</strong> compares this installation with the recommended
+            security practices and marks each one met or not met.
+            See <HelpLink to="/help/security-checklist">security checklist</HelpLink>.
           </li>
           <li>
             <strong>Server certificate</strong> appears only on a server that other computers reach over
@@ -4115,7 +4113,7 @@ export const HELP_TOPICS = [
     id: 'running-a-server',
     section: 'administration',
     title: `Running ${APP_NAME} as a server`,
-    surfaces: ['Network access (Settings)', 'Set up HTTPS (Tasks)'],
+    surfaces: ['Set up HTTPS (Tasks)', 'Security checklist (Settings)'],
     summary: `One computer runs ${APP_NAME} and the other computers in the household open it in a browser. The same download does this when started in server mode; a reverse proxy in front of it adds HTTPS, which passkeys and connecting a data source from another device both need.`,
     body: () => (
       <>
@@ -4264,9 +4262,8 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          <strong>Settings &rarr; Network access</strong> states which of these connections the
-          browser in use has, and whether other devices can open the installation at all, which is
-          what decides who sign-in protection keeps out.
+          <strong>Settings &rarr; Security checklist</strong> shows whether other devices can reach
+          the server without HTTPS.
         </p>
 
         <HelpHeading anchor="updating">Updating the server</HelpHeading>
@@ -4276,6 +4273,50 @@ export const HELP_TOPICS = [
           they were.
         </p>
         <pre><code>{'sudo systemctl stop luma\ntar -xzf luma-<version>-linux-x64.tar.gz\nsudo systemctl start luma'}</code></pre>
+      </>
+    ),
+  },
+  {
+    id: 'security-checklist',
+    section: 'administration',
+    title: 'Security checklist',
+    surfaces: ['Security checklist (Settings)'],
+    summary: `Compares this installation with the recommended security practices. Each practice that applies is marked met, not met or unknown, with what follows and where to change it.`,
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          Each line is a recommended practice, marked <strong>Met</strong>, <strong>Not met</strong>{' '}
+          or <strong>Unknown</strong>. A practice that does not apply is left out: on a copy only this
+          computer can open, nothing is said about other devices. Not meeting one is allowed. The
+          checklist shows what follows from that and changes nothing.
+        </p>
+        <ul>
+          <li>
+            <strong>Sign-in is required when other devices can connect.</strong> Without it, anyone
+            on the network can see and change all of the data.
+          </li>
+          <li>
+            <strong>Other devices connect over HTTPS.</strong> Without it, what they send crosses
+            the network unencrypted, passkeys are unavailable, and a data source can be connected only
+            from the server. See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>.
+          </li>
+          <li>
+            <strong>This browser opens the server by name.</strong> Browsers allow passkeys only on a
+            name such as <code>luma.local</code>, never on an IP address.
+          </li>
+          <li>
+            <strong>Your vault passphrase meets the strength rule</strong>,{' '}
+            <strong>backups carry the vault as it is now</strong>,{' '}
+            <strong>devices trust the server's certificate</strong> and{' '}
+            <strong>this copy is the latest release</strong> report the same conditions as the
+            matching tasks. A dismissed task still shows here.
+          </li>
+        </ul>
+        <p>
+          Whether the browser opened the server by name, and the vault passphrase and backup lines,
+          depend on who is looking. The rest describe the installation.
+        </p>
       </>
     ),
   },

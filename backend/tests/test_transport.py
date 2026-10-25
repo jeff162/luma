@@ -59,7 +59,8 @@ class ReachableFromNetworkTests(unittest.TestCase):
     the addresses the start scripts are given, and in any case a device that has actually got through."""
 
     def setUp(self):
-        for name, value in (("_declared_reachable", None), ("_seen_from_network", False)):
+        for name, value in (("_declared", None), ("_seen_from_network", False),
+                            ("_seen_plain_http_from_network", False)):
             patcher = mock.patch.object(transport, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -80,16 +81,37 @@ class ReachableFromNetworkTests(unittest.TestCase):
     def test_the_launcher_outranks_the_settings_it_does_not_read(self):
         """A downloaded copy ignores `BACKEND_HOST`, so one left in its `.env` must not be believed."""
         with self._configured("0.0.0.0"):
-            transport.declare_reachable_from_network(False)
+            transport.declare_listener(reachable=False, direct=False)
             self.assertFalse(transport.reachable_from_network())
+            self.assertFalse(transport.plain_http_from_network())
 
     def test_a_device_that_got_through_settles_it(self):
         """A proxy put in front by hand leaves every setting saying this machine only."""
-        transport.declare_reachable_from_network(False)
+        transport.declare_listener(reachable=False, direct=False)
         transport.note_request(_req("127.0.0.1"))
         self.assertFalse(transport.reachable_from_network())
-        transport.note_request(_req("192.168.1.10"))
+        transport.note_request(_req("192.168.1.10", "https"))
         self.assertTrue(transport.reachable_from_network())
+        self.assertFalse(transport.plain_http_from_network())
+
+    def test_a_server_behind_its_proxy_is_reached_over_https_until_seen_otherwise(self):
+        """Server mode on loopback is reachable only through the proxy; a wide bind is plain HTTP; and a
+        device seen connecting in cleartext settles it whatever was declared."""
+        transport.declare_listener(reachable=True, direct=False)
+        self.assertTrue(transport.reachable_from_network())
+        self.assertFalse(transport.plain_http_from_network())
+        transport.note_request(_req("192.168.1.10", "http"))
+        self.assertTrue(transport.plain_http_from_network())
+
+        transport._seen_plain_http_from_network = False
+        transport.declare_listener(reachable=True, direct=True)
+        self.assertTrue(transport.plain_http_from_network())
+
+    def test_a_checkout_on_a_wide_address_is_plain_http(self):
+        with self._configured("0.0.0.0"):
+            self.assertTrue(transport.plain_http_from_network())
+        with self._configured("127.0.0.1"):
+            self.assertFalse(transport.plain_http_from_network())
 
 
 class PermissibleHttpTests(unittest.TestCase):

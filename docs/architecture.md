@@ -887,7 +887,10 @@ custody*; this section is the mechanism.
   header. Plain HTTP on a networked bind is acceptable only with no sign-in and no provider. This is
   enforced by `SESSION_COOKIE_SECURE`, by `transport.require_protected_link` (which refuses operations
   carrying a provider secret from another device in cleartext), and by a computed "Set up HTTPS" task
-  (`tasks.py`) shown to whoever can act on it.
+  (`tasks.py`) shown to whoever can act on it. The launcher declares what it started (`transport.declare_listener`):
+  whether other devices can reach the installation, and whether they reach its plain HTTP directly. A
+  device seen getting through, in cleartext or not, overrides the declaration until the next start.
+  Settings → *Security checklist* (`services/security_checklist.py`) reads both.
 
 ### Provider connections (the aggregator seam)
 

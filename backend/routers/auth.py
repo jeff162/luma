@@ -388,7 +388,6 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         # uses these to steer HTTPS guidance and gate connect-time actions on real HTTPS availability.
         payload["transport"] = {
             "is_loopback": transport.request_is_loopback(request),
-            "reachable_from_network": transport.reachable_from_network(),
             "scheme": transport.request_scheme(request),
             "is_https": transport.request_is_https(request),
             "https_expected": transport.https_expected(request, perimeter_on=enabled),

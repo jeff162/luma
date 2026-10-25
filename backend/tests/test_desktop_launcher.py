@@ -225,11 +225,18 @@ def test_only_a_server_answers_for_a_network_name_and_withdraws_it_on_the_way_ou
 
 def test_the_launcher_states_whether_other_devices_can_open_what_it_started():
     """A server behind a proxy listens on this machine only and is reached by the whole network, so the
-    bind cannot answer this; the mode does."""
-    with mock.patch.object(desktop.transport, "declare_reachable_from_network") as declare:
+    bind cannot answer whether it is reachable; the mode does. The bind answers whether it is reached
+    directly, over plain HTTP."""
+    with mock.patch.object(desktop.transport, "declare_listener") as declare:
         _launch([], env_server_mode=None)
         _launch(["--server"], env_server_mode=None)
-    assert [call.args for call in declare.call_args_list] == [(False,), (True,)]
+        with mock.patch.object(desktop, "_server_bind_host", return_value="0.0.0.0"):
+            _launch(["--server"], env_server_mode=None)
+    assert [call.kwargs for call in declare.call_args_list] == [
+        {"reachable": False, "direct": False},
+        {"reachable": True, "direct": False},
+        {"reachable": True, "direct": True},
+    ]
 
 
 def test_only_server_mode_can_be_put_on_the_network():

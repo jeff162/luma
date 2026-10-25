@@ -335,6 +335,8 @@ export const api = {
   autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
   // Settings -> About -> Copy details: version, how it runs, platform. Nothing that identifies the machine.
   getInstallationDetails: () => request('/app/installation-details'),
+  // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown, detail, link }.
+  getSecurityChecklist: () => request('/app/security-checklist'),
   // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   // The TLS proxy's root certificate, where a server installation has one: { available } and, when it
   // does, the fingerprint and whether it is the certificate on record. Public — a device needs it before

@@ -93,6 +93,11 @@ def accept(certificate: RootCertificate) -> None:
     set_app_setting(ACCEPTED_FINGERPRINT_KEY, certificate.fingerprint)
 
 
+def has_record() -> bool:
+    """Whether a certificate has been handed out here, which is what makes a change to it matter."""
+    return bool(get_app_setting(ACCEPTED_FINGERPRINT_KEY))
+
+
 def changed_from_record() -> bool:
     """Whether the proxy now presents a different root than the one on record.
 

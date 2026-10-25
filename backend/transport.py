@@ -36,8 +36,12 @@ from backend.runtime_config import app_name
 # from. It is what sign-in protection is described against: on an installation only this machine can
 # open it keeps out the other people who use the machine, and on one the network can open it keeps out
 # the network. Two witnesses, in `reachable_from_network`.
-_declared_reachable: bool | None = None
+#
+# Beside it, whether they can open it without HTTPS: the server listening on the network itself rather
+# than only behind a proxy on this machine, or a device actually seen connecting in cleartext.
+_declared: tuple[bool, bool] | None = None  # (reachable, listens on the network directly)
 _seen_from_network = False
+_seen_plain_http_from_network = False
 
 
 def _is_loopback_address(host: str) -> bool:
@@ -49,34 +53,53 @@ def _is_loopback_address(host: str) -> bool:
     return (getattr(address, "ipv4_mapped", None) or address).is_loopback
 
 
-def declare_reachable_from_network(reachable: bool) -> None:
+def declare_listener(*, reachable: bool, direct: bool) -> None:
     """The launcher's statement of what it started (`backend/desktop.py`): it chose the address, so it
     knows. Server mode is reachable even on a loopback bind, because a proxy on this machine is what
-    the network then reaches and nothing here can see one."""
-    global _declared_reachable
-    _declared_reachable = reachable
+    the network then reaches and nothing here can see one; `direct` is a bind wider than loopback, where
+    the network reaches this process's own plain HTTP."""
+    global _declared
+    _declared = (reachable, direct)
 
 
 def note_request(request: Request) -> None:
-    """Remember that a device other than this machine got through. It settles the question whatever
-    the configuration says — a proxy somebody put in front by hand, a server started on an address the
-    settings do not name — and is forgotten at the next start, when it will be seen again if still true."""
-    global _seen_from_network
-    if not _seen_from_network and not request_is_loopback(request):
-        _seen_from_network = True
+    """Remember that a device other than this machine got through, and whether it did so in cleartext.
+    It settles the question whatever the configuration says — a proxy somebody put in front by hand, a
+    server started on an address the settings do not name — and is forgotten at the next start, when it
+    will be seen again if still true."""
+    global _seen_from_network, _seen_plain_http_from_network
+    if _seen_plain_http_from_network or request_is_loopback(request):
+        return
+    _seen_from_network = True
+    if not request_is_https(request):
+        _seen_plain_http_from_network = True
+
+
+def _checkout_listens_on_network() -> bool:
+    # No launcher: a source checkout, where the start scripts pass these two settings to the servers
+    # they start. The interface's own server counts, since it forwards to this one. Neither is ever
+    # behind TLS of its own, so a wide one is the network reaching plain HTTP.
+    return any(
+        host.strip().lower() != "localhost" and not _is_loopback_address(host.strip())
+        for host in (app_config.value_of("backend_host"), app_config.value_of("frontend_host"))
+    )
 
 
 def reachable_from_network() -> bool:
     if _seen_from_network:
         return True
-    if _declared_reachable is not None:
-        return _declared_reachable
-    # No launcher: a source checkout, where the start scripts pass these two settings to the servers
-    # they start. The interface's own server counts, since it forwards to this one.
-    return any(
-        host.strip().lower() != "localhost" and not _is_loopback_address(host.strip())
-        for host in (app_config.value_of("backend_host"), app_config.value_of("frontend_host"))
-    )
+    if _declared is not None:
+        return _declared[0]
+    return _checkout_listens_on_network()
+
+
+def plain_http_from_network() -> bool:
+    """Whether another device can open this installation without HTTPS."""
+    if _seen_plain_http_from_network:
+        return True
+    if _declared is not None:
+        return _declared[1]
+    return _checkout_listens_on_network()
 
 
 def request_is_loopback(request: Request) -> bool:
@@ -121,6 +144,13 @@ def page_is_secure_context(request: Request) -> bool:
     )
 
 
+def host_is_address(request: Request) -> bool:
+    """Whether the browser opened this page by IP address rather than by name."""
+    host = (request.url.hostname or "").strip("[]")
+    # A hostname made only of digits and dots, or containing a colon, is an address rather than a name.
+    return bool(host) and (":" in host or all(part.isdigit() for part in host.split(".") if part))
+
+
 def passkey_context(request: Request) -> dict:
     """The Relying Party id a ceremony must run under, or why one cannot run here.
 
@@ -130,18 +160,15 @@ def passkey_context(request: Request) -> dict:
     however it is served. Both are reported as stated reasons rather than left to surface as an
     unexplained browser exception, because in both cases the answer is "use a passphrase here".
     """
-    host = (request.url.hostname or "").strip("[]")
-    # A hostname made only of digits and dots, or containing a colon, is an address rather than a name.
-    is_address = bool(host) and (":" in host or all(part.isdigit() for part in host.split(".") if part))
     # The address check comes first because the two reasons differ in whether anything can be done: an
     # address can never host passkeys however it is served, while cleartext is fixed by configuring
     # HTTPS. Reporting the fixable one on a host where the fix would not help sends the user to set up
     # TLS and arrive back at the same refusal.
-    if is_address:
+    if host_is_address(request):
         return {"available": False, "reason": "ip_address_host", "rp_id": None}
     if not page_is_secure_context(request):
         return {"available": False, "reason": "insecure_context", "rp_id": None}
-    return {"available": True, "reason": None, "rp_id": host}
+    return {"available": True, "reason": None, "rp_id": (request.url.hostname or "").strip("[]")}
 
 
 def link_is_protected(request: Request) -> bool:

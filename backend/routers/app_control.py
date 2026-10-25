@@ -28,11 +28,12 @@ from backend import transport
 from backend.authorization import is_admin_or_local, require_admin_or_local
 from backend.db.control_database import auth_required
 from backend.db.database import get_db
+from backend.routers.tasks import security_tasks
 from backend.runtime_config import (
     APP_VERSION, build_stamp, bundled_license_path, checkout_commit, distribution_form, runs_in_container,
     third_party_notices,
 )
-from backend.services import proxy_certificate, update_check
+from backend.services import proxy_certificate, security_checklist, update_check
 from backend.services.storage_summary import storage_summary
 
 router = APIRouter()
@@ -110,6 +111,13 @@ def accept_proxy_certificate():
     except proxy_certificate.ProxyCertificateUnavailable:
         raise HTTPException(status_code=404, detail="No reverse proxy on this server has a certificate to offer.")
     return proxy_certificate.describe()
+
+
+@router.get("/security-checklist", dependencies=[Depends(require_admin_or_local)])
+def read_security_checklist(request: Request):
+    """Settings -> Security checklist (`services/security_checklist.py`). Admin-or-local, as the rest of the
+    Server group is: what it describes is the install and its perimeter."""
+    return {"items": security_checklist.build(request, security_tasks(request))}
 
 
 def bundled_license_available() -> bool:

@@ -32,6 +32,7 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 - [Transport security](#transport-security)
 - [Secrets in backup and export](#secrets-in-backup-and-export)
 - [Recovery and compromise response](#recovery-and-compromise-response)
+- [Best practices](#best-practices)
 - [Obstacles](#obstacles)
 
 ---
@@ -567,6 +568,27 @@ way out.
 **Changing the passphrase and replacing the vault key are not interchangeable** — they retire different
 artifacts, and after a leaked file both are needed. `SECURITY.md` → *What a compromise would mean* is the
 statement of record.
+
+## Best practices
+
+**The practices an installation is compared against**, in Settings → *Security checklist*
+(`services/security_checklist.py`). The checklist reports each one that applies as met or not, and
+refuses nothing: every practice here is one an operator may decide against for their own network.
+Adding a practice means adding it here and to the checklist together, and a practice is added only
+where the server can tell whether it is met.
+
+- **Sign-in is required once other devices can connect.** The perimeter is what keeps non-users out
+  (*Identity and the network perimeter*). Where only its own computer can open the installation, who
+  can reach it is decided by who can use that computer, so the practice is not applied there.
+- **Other devices connect over HTTPS.** Without it the session cookie and every typed secret cross the
+  network readable, and passkeys are unavailable (*Transport security*). Whether another device can
+  connect in cleartext is read from what the launcher started — a bind wider than loopback is the
+  network reaching plain HTTP — and from any such request actually seen.
+- **The server is opened by name.** A browser allows passkeys only on a domain, never on an IP address
+  (*Obstacles*), and without passkeys the password is the only factor most people will use.
+- **The vault passphrase meets the strength rule, backups carry the vault as it is now, devices trust
+  the proxy's current certificate, and the running copy is the latest release.** Each of these is also
+  a task, and the checklist takes its reading from the task so the two never disagree.
 
 ---
 

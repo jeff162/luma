@@ -50,8 +50,8 @@ This document does not repeat a sequence any of those hold. It records what the 
 
 They are the **same application**. What differs is only how uvicorn is launched and whether something
 wraps it. Standalone versus networked is not one of the differences: it is detected per request
-(`security-model.md` → *Transport security*), and Settings → *Network access* states the reading
-for the browser in hand.
+(`security-model.md` → *Transport security*), and Settings → *Security checklist* compares the
+result with the recommended practices (`security-model.md` → *Best practices*).
 
 ## Desktop
 

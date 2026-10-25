@@ -421,6 +421,19 @@ def _connection_tasks(conn) -> list[dict]:
     return tasks
 
 
+def security_tasks(request: Request | None) -> list[dict]:
+    """The tasks Settings -> Security checklist also reports (`services/security_checklist.py`), taken from
+    here so the two never judge one condition differently. Undismissed: the checklist states the
+    condition, and putting the reminder away does not change it."""
+    found = [
+        _vault_passphrase_task(request) or _vault_passphrase_check_task(request),
+        *_backup_due_tasks(request),
+        _proxy_certificate_task(request),
+        _update_available_task(request),
+    ]
+    return [task for task in found if task]
+
+
 def _build_tasks(request: Request | None) -> list[dict]:
     """Every task that currently applies, before dismissal is taken into account."""
     tasks = []

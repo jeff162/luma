@@ -13,7 +13,7 @@ const section = name => ({ default: () => <div>{`${name} body`}</div> })
 vi.mock('../../components/administration/ConfigurationSection.jsx', () => section('configuration'))
 vi.mock('../../components/administration/BackupRestoreSection.jsx', () => section('backup'))
 vi.mock('../../components/administration/ErrorLogSection.jsx', () => section('error log'))
-vi.mock('../../components/administration/NetworkAccessSection.jsx', () => section('network access'))
+vi.mock('../../components/administration/SecurityChecklistSection.jsx', () => section('security checklist'))
 vi.mock('../../components/administration/UserAdminSection.jsx', () => section('user management'))
 vi.mock('../../components/administration/DeveloperOptionsSection.jsx', () => section('developer options'))
 vi.mock('../../components/administration/AccountSecuritySection.jsx', () => ({

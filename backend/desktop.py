@@ -743,7 +743,7 @@ def _run_server(args: argparse.Namespace, arguments: list[str], on_exit: context
                 advertisement.close()
                 return 1
 
-    transport.declare_reachable_from_network(server_mode)
+    transport.declare_listener(reachable=server_mode, direct=not behind_proxy)
     for notice in _unused_address_notices(server_mode):
         print(notice)
 
