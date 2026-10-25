@@ -2082,6 +2082,8 @@ export default function Dashboard() {
   // here so the charts in a frame always agree about it (`lib/trendSpan.js`).
   const [trendSpanPref, setTrendSpanPref] = useUserPreference(TREND_SPAN_PREF_KEY, TREND_SPAN_ALL)
   const keepTrendGrainForDateRef = useRef(undefined)
+  // The date a drilled trend's bar (or its back-step) is about to set, so that change keeps the drill.
+  const keepDrillForDateRef = useRef(undefined)
   const [level, setLevel] = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [selectedCat, setSelectedCat] = useState(null)
@@ -2372,15 +2374,44 @@ export default function Dashboard() {
     setTopCatRows(c)
   }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeFrame, beginSingleTotals])
 
+  // The trend follows the drill: an open group or category charts its own history, in the scope the
+  // detail panels use (`category_id`, with `__group__` for a group), so its bars are the rows the list
+  // beneath them lists. Null at the top level, where the trend is the frame's total.
+  const trendScopeId = level === 'transactions' && selectedCat
+    ? selectedCat.category_id
+    : level === 'categories' && selectedGroup
+      ? `__group__${selectedGroup.group_id}`
+      : null
+  const trendScopeName = trendScopeId
+    ? (level === 'transactions' ? selectedCat.category_name : selectedGroup.group_name)
+    : null
+  const [drillTrend, setDrillTrend] = useState({ key: null, rows: [] })
+  const drillTrendRequestRef = useRef(0)
+  const loadDrillTrend = useCallback(async () => {
+    if (!trendScopeId) return
+    const request = ++drillTrendRequestRef.current
+    const rows = await api.getMonthlyTrend(120, trendScopeId, accountId || undefined, ALL_TIME_START, undefined, tagIds, activeFrame, ownerIds, summaryFilters)
+    if (request === drillTrendRequestRef.current) setDrillTrend({ key: trendScopeId, rows })
+  }, [trendScopeId, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
+  useEffect(() => {
+    if (mode !== 'single') return
+    loadDrillTrend().catch(() => { })
+  }, [mode, loadDrillTrend])
+  // Null while a drilled scope's rows are in flight, so the bars of the scope just left are never drawn
+  // under the new one's name.
+  const trendMonthlyRows = trendScopeId
+    ? (drillTrend.key === trendScopeId ? drillTrend.rows : null)
+    : singleTrendRows
+
   // The trend keys on the *explicit* pick, not the Dashboard default: with no chip it is not tied to a
   // period, so it opens monthly with nothing highlighted, and an explicit "All time" is rangeless and
   // reads the same way.
   const trendGrain = effectiveTrendGrain(trendGrainChoice, filters.date)
   const trendIsSameSpan = trendGrain === TREND_GRAIN_SAME_SPAN
   const trendDataMonths = useMemo(() => {
-    const months = (singleTrendRows || []).map(r => r.month).filter(Boolean).sort()
+    const months = (trendMonthlyRows || []).map(r => r.month).filter(Boolean).sort()
     return { firstMonth: months[0] || null, lastMonth: months[months.length - 1] || null }
-  }, [singleTrendRows])
+  }, [trendMonthlyRows])
   // How much history the chart draws, as a floor on where the *data* starts — see `lib/trendSpan.js`.
   // Both bucket builders take it from `firstMonth`, so one floor governs the calendar grains and the
   // repeated spans alike, and the same-span request asks the server for only the buckets being drawn.
@@ -2398,21 +2429,25 @@ export default function Dashboard() {
     return { firstMonth, lastMonth: trendDataMonths.lastMonth }
   }, [trendDataMonths, trendSpanPref, trendGrain, trendIsSameSpan])
   const spanBuckets = useMemo(
-    () => (trendIsSameSpan ? sameSpanTrendBuckets({ date: filters.date, ...trendSpanMonths }) : []),
-    [trendIsSameSpan, filters.date, trendSpanMonths],
+    // Built only once the scope's months are known, so a drill does not ask for the buckets of the
+    // scope it left.
+    () => (trendIsSameSpan && trendMonthlyRows ? sameSpanTrendBuckets({ date: filters.date, ...trendSpanMonths }) : []),
+    [trendIsSameSpan, trendMonthlyRows, filters.date, trendSpanMonths],
   )
-  const spanKey = spanBuckets.map(b => `${b.rangeStart}:${b.rangeEnd}`).join(',')
+  const spanRanges = spanBuckets.map(b => `${b.rangeStart}:${b.rangeEnd}`).join(',')
+  const spanKey = spanRanges ? `${trendScopeId || ''}|${spanRanges}` : ''
   const spanRequestRef = useRef(0)
   const loadSpanTrend = useCallback(async () => {
     if (!spanKey) return
     const request = ++spanRequestRef.current
-    const ranges = spanKey.split(',').map(pair => {
+    const ranges = spanRanges.split(',').map(pair => {
       const [start, end] = pair.split(':')
       return { start, end }
     })
-    const rows = await api.getRangeTrend(ranges, accountId || undefined, tagIds, activeFrame, ownerIds, summaryFilters)
+    const rows = await api.getRangeTrend(ranges, accountId || undefined, tagIds, activeFrame, ownerIds,
+      { ...summaryFilters, category_id: trendScopeId || undefined })
     if (request === spanRequestRef.current) setSpanTrend({ key: spanKey, rows })
-  }, [spanKey, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
+  }, [spanKey, spanRanges, trendScopeId, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
   useEffect(() => {
     if (mode !== 'single' || dateResolving) return
     loadSpanTrend().catch(() => { })
@@ -2432,9 +2467,10 @@ export default function Dashboard() {
       if (spanTrend.key !== spanKey) return null
       return trimEmptyTrendBuckets(trendChartRows(spanBuckets, (b, i) => Number(spanTrend.rows[i]?.total) || 0))
     }
+    if (!trendMonthlyRows) return null
     const buckets = calendarTrendBuckets({ ...trendSpanMonths, grain: trendGrain, date: filters.date, fallbackMonth: thisM })
-    return trimEmptyTrendBuckets(trendChartRows(buckets, monthlyBucketTotal(singleTrendRows)))
-  }, [trendIsSameSpan, spanTrend, spanKey, spanBuckets, trendSpanMonths, trendGrain, filters.date, singleTrendRows])
+    return trimEmptyTrendBuckets(trendChartRows(buckets, monthlyBucketTotal(trendMonthlyRows)))
+  }, [trendIsSameSpan, spanTrend, spanKey, spanBuckets, trendSpanMonths, trendGrain, filters.date, trendMonthlyRows])
   const [heldTrend, setHeldTrend] = useState([])
   useEffect(() => { if (computedTrend) setHeldTrend(computedTrend) }, [computedTrend])
   const trend = computedTrend ?? heldTrend
@@ -2544,6 +2580,20 @@ export default function Dashboard() {
     // Hold the fetch until the default period resolves, so we don't load all-time and then reload the
     // default. Re-runs when dateResolving flips (the dep) even if the resolved period is also all-time.
     if (dateResolving) return
+    // A bar of a drilled trend moves the period *for* the open group or category, so that pin keeps the
+    // drill and refreshes it in place; any other change returns to the top level.
+    const keep = keepDrillForDateRef.current
+    keepDrillForDateRef.current = undefined
+    if (keep !== undefined && sameDateRange(keep, filters.date) && level !== 'groups') {
+      loadSingleTotals().catch(() => { })
+      if (selectedGroup?.group_id) {
+        const isLatest = beginGroupCategories()
+        api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
+          .then(rows => { if (isLatest()) setCatRows(rows) })
+          .catch(() => { })
+      }
+      return
+    }
     setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null); setOtherDrillDepth(0)
     // A rejection here used to strand the spinner forever, because nothing cleared it: the dashboard sat
@@ -2551,6 +2601,9 @@ export default function Dashboard() {
     // write their state only on success — and the app's own unreachable-backend handling says so when
     // that is the reason.
     loadSingleTotals().catch(() => { }).then(() => setLoading(false))
+    // Keyed on the loader (every filter) and not on the drill it reads: keying on the drill would reset
+    // the very drill the user just made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, loadSingleTotals, dateResolving])
 
   // Recategorizing (here or from a detail panel) changes the aggregates, so refresh the breakdown/trend
@@ -2560,6 +2613,7 @@ export default function Dashboard() {
     if (mode === 'single') {
       loadSingleTotals()
       loadSpanTrend()
+      loadDrillTrend()
       if (selectedGroup?.group_id) {
         const isLatest = beginGroupCategories()
         api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
@@ -2584,7 +2638,7 @@ export default function Dashboard() {
       if (viewIsCashFlow) loadCashFlowTrend()
       else { loadTrendSeries(); loadTrendGroups() }
     }
-  }, [mode, viewIsCashFlow, loadSingleTotals, loadSpanTrend, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets, beginGroupCategories, beginCompareCategories])
+  }, [mode, viewIsCashFlow, loadSingleTotals, loadSpanTrend, loadDrillTrend, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets, beginGroupCategories, beginCompareCategories])
   useEffect(() => {
     window.addEventListener('luma:transactions-changed', refreshTotalsInPlace)
     return () => window.removeEventListener('luma:transactions-changed', refreshTotalsInPlace)
@@ -3030,333 +3084,302 @@ export default function Dashboard() {
                   </FilterConflictNote>
                 )}
 
-                {drillLoading ? <Spinner /> : (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
-                    {/* The diagram wants the full row: it is one wide picture rather than a chart paired
-                        with a legend, and its node labels already carry the names and figures the
-                        breakdown list carries for the pie. */}
-                    {level === 'groups' && viewIsCashFlow && (
-                      <Card style={{ gridColumn: '1 / -1' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}>
-                          <span>Cash flow by</span>
-                          <Select
-                            value={activeSpendingViewBy}
-                            onChange={handleSpendingViewByChange}
-                            options={spendingViewByOptions}
-                            aria-label="Choose dashboard cash-flow breakdown"
+                {/* A drill keeps the current breakdown on screen until the group's categories arrive, so
+                    the page does not collapse around a spinner and spring back. */}
+                {level !== 'transactions' && (
+                  <StaleWhileRefreshing refreshing={drillLoading}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
+                      {/* The diagram wants the full row: it is one wide picture rather than a chart paired
+                          with a legend, and its node labels already carry the names and figures the
+                          breakdown list carries for the pie. */}
+                      {level === 'groups' && viewIsCashFlow && (
+                        <Card style={{ gridColumn: '1 / -1' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}>
+                            <span>Cash flow by</span>
+                            <Select
+                              value={activeSpendingViewBy}
+                              onChange={handleSpendingViewByChange}
+                              options={spendingViewByOptions}
+                              aria-label="Choose dashboard cash-flow breakdown"
+                            />
+                            <FeatureExplainer topic="dashboard-cash-flow" placement="bottom-left" />
+                          </div>
+                          <CashFlowSankey
+                            graph={cashFlowGraph}
+                            depths={cashFlowDepths}
+                            onNodeClick={handleCashFlowNodeClick}
+                            onBack={side => setCashFlowDepths(prev => ({ ...prev, [side]: Math.max((prev[side] || 0) - 1, 0) }))}
                           />
-                          <FeatureExplainer topic="dashboard-cash-flow" placement="bottom-left" />
-                        </div>
-                        <CashFlowSankey
-                          graph={cashFlowGraph}
-                          depths={cashFlowDepths}
-                          onNodeClick={handleCashFlowNodeClick}
-                          onBack={side => setCashFlowDepths(prev => ({ ...prev, [side]: Math.max((prev[side] || 0) - 1, 0) }))}
-                        />
-                      </Card>
-                    )}
-                    {level === 'groups' && !viewIsCashFlow && (() => {
-                      const viewIsCategory = activeSpendingViewBy === SPENDING_VIEW_BY_CATEGORY
-                      const viewIsTag = !!activeTagReport
-                      const allRows = viewIsTag
-                        ? tagSignatureRows
-                        : viewIsCategory
-                          ? coloredTopCatRows
-                          : coloredGroupRows
-                      const listTotal = viewIsTag
-                        ? tagSignatureTotal
-                        : viewIsCategory
-                          ? topCatRows.reduce((s, r) => s + r.total, 0)
-                          : pieGroupTotal
-                      const rowKey = viewIsTag
-                        ? 'signature_id'
-                        : viewIsCategory ? 'category_id' : 'group_id'
-                      const rowName = viewIsTag
-                        ? 'signature_name'
-                        : viewIsCategory ? 'category_name' : 'group_name'
-                      const rowColor = viewIsTag
-                        ? 'signature_color'
-                        : viewIsCategory ? 'category_color' : 'group_color'
-                      const onRealRowClick = viewIsTag
-                        ? (row) => openTagDetail(row, activeTagReport)
-                        : viewIsCategory
-                          ? drillToTransactions
-                          : drillToCategories
+                        </Card>
+                      )}
+                      {level === 'groups' && !viewIsCashFlow && (() => {
+                        const viewIsCategory = activeSpendingViewBy === SPENDING_VIEW_BY_CATEGORY
+                        const viewIsTag = !!activeTagReport
+                        const allRows = viewIsTag
+                          ? tagSignatureRows
+                          : viewIsCategory
+                            ? coloredTopCatRows
+                            : coloredGroupRows
+                        const listTotal = viewIsTag
+                          ? tagSignatureTotal
+                          : viewIsCategory
+                            ? topCatRows.reduce((s, r) => s + r.total, 0)
+                            : pieGroupTotal
+                        const rowKey = viewIsTag
+                          ? 'signature_id'
+                          : viewIsCategory ? 'category_id' : 'group_id'
+                        const rowName = viewIsTag
+                          ? 'signature_name'
+                          : viewIsCategory ? 'category_name' : 'group_name'
+                        const rowColor = viewIsTag
+                          ? 'signature_color'
+                          : viewIsCategory ? 'category_color' : 'group_color'
+                        const onRealRowClick = viewIsTag
+                          ? (row) => openTagDetail(row, activeTagReport)
+                          : viewIsCategory
+                            ? drillToTransactions
+                            : drillToCategories
 
-                      // Page boundaries are precomputed so each level's named-slice count adapts to its own
-                      // pool: deeper Other-pages re-apply the share rule against just what's left in the
-                      // tail, not against the original full list.
-                      const pages = computeSlicePages(allRows)
-                      const safeDepth = Math.min(otherDrillDepth, Math.max(0, pages.length - 1))
-                      const currentPage = pages[safeDepth] || { start: 0, end: allRows.length }
-                      const pageRows = allRows.slice(currentPage.start, currentPage.end)
-                      const remainingRows = allRows.slice(currentPage.end)
-                      const otherTotal = remainingRows.reduce((s, r) => s + r.total, 0)
-                      // The peeled-off "Other (N)" wedge represents the long tail of the current page,
-                      // which is conceptually distinct from the tag-mode natural "Other / Untagged"
-                      // signature (transactions matching no selected tag). Tagging it with `_peeledOther`
-                      // lets the click handler dispatch correctly without a key clash.
-                      const otherSlice = remainingRows.length > 0
-                        ? {
-                          [rowKey]: OTHER_SLICE_KEY,
-                          [rowName]: `Other (${remainingRows.length})`,
-                          [rowColor]: OTHER_SLICE_COLOR,
-                          total: otherTotal,
-                          _peeledOther: true,
+                        // Page boundaries are precomputed so each level's named-slice count adapts to its own
+                        // pool: deeper Other-pages re-apply the share rule against just what's left in the
+                        // tail, not against the original full list.
+                        const pages = computeSlicePages(allRows)
+                        const safeDepth = Math.min(otherDrillDepth, Math.max(0, pages.length - 1))
+                        const currentPage = pages[safeDepth] || { start: 0, end: allRows.length }
+                        const pageRows = allRows.slice(currentPage.start, currentPage.end)
+                        const remainingRows = allRows.slice(currentPage.end)
+                        const otherTotal = remainingRows.reduce((s, r) => s + r.total, 0)
+                        // The peeled-off "Other (N)" wedge represents the long tail of the current page,
+                        // which is conceptually distinct from the tag-mode natural "Other / Untagged"
+                        // signature (transactions matching no selected tag). Tagging it with `_peeledOther`
+                        // lets the click handler dispatch correctly without a key clash.
+                        const otherSlice = remainingRows.length > 0
+                          ? {
+                            [rowKey]: OTHER_SLICE_KEY,
+                            [rowName]: `Other (${remainingRows.length})`,
+                            [rowColor]: OTHER_SLICE_COLOR,
+                            total: otherTotal,
+                            _peeledOther: true,
+                          }
+                          : null
+                        // `pieValue` floors each wedge's geometry at zero so a net-refund bucket (negative
+                        // signed total) can't draw a broken/negative sector; the list and tooltip still show
+                        // the true signed `total`. Same floor-the-geometry-keep-the-number rule as the trend
+                        // charts.
+                        const pieData = (otherSlice ? [...pageRows, otherSlice] : pageRows)
+                          .map(r => ({ ...r, pieValue: Math.max(Number(r.total) || 0, 0) }))
+                        const expansionAvailable = allRows.length > pageRows.length
+                        const listRows = showAllSpendingRows ? allRows : pieData
+                        // A filter can leave nothing in this view (e.g. an income-only include chip on the
+                        // expense view). The header stays so the breakdown can still be switched.
+                        const isEmpty = allRows.length === 0 && !(viewIsTag && tagModeLoading)
+
+                        function handleSliceClick(row) {
+                          if (!row) return
+                          if (row._peeledOther) {
+                            setOtherDrillDepth(d => d + 1)
+                            setShowAllSpendingRows(false)
+                            return
+                          }
+                          onRealRowClick(row)
                         }
-                        : null
-                      // `pieValue` floors each wedge's geometry at zero so a net-refund bucket (negative
-                      // signed total) can't draw a broken/negative sector; the list and tooltip still show
-                      // the true signed `total`. Same floor-the-geometry-keep-the-number rule as the trend
-                      // charts.
-                      const pieData = (otherSlice ? [...pageRows, otherSlice] : pageRows)
-                        .map(r => ({ ...r, pieValue: Math.max(Number(r.total) || 0, 0) }))
-                      const expansionAvailable = allRows.length > pageRows.length
-                      const listRows = showAllSpendingRows ? allRows : pieData
-                      // A filter can leave nothing in this view (e.g. an income-only include chip on the
-                      // expense view). The header stays so the breakdown can still be switched.
-                      const isEmpty = allRows.length === 0 && !(viewIsTag && tagModeLoading)
 
-                      function handleSliceClick(row) {
-                        if (!row) return
-                        if (row._peeledOther) {
-                          setOtherDrillDepth(d => d + 1)
-                          setShowAllSpendingRows(false)
-                          return
-                        }
-                        onRealRowClick(row)
-                      }
-
-                      return (
-                        <>
-                          <Card style={isEmpty ? { gridColumn: '1 / -1' } : undefined}>
-                            <div
-                              style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}
-                              onContextMenu={event => {
-                                if (!activeTagReport) return
-                                event.preventDefault()
-                                setPickerMenuOpen({
-                                  id: activeTagReport.id,
-                                  anchorRect: event.currentTarget.getBoundingClientRect(),
-                                })
-                              }}
-                            >
-                              <span>{viewIsIncome ? 'Income by' : 'Spending by'}</span>
-                              <Select
-                                value={activeSpendingViewBy}
-                                onChange={handleSpendingViewByChange}
-                                options={spendingViewByOptions}
-                                aria-label={viewIsIncome ? 'Choose dashboard income breakdown' : 'Choose dashboard spending breakdown'}
-                              />
-                              <FeatureExplainer topic="dashboard-tag-reports" placement="bottom-left" />
-                              {activeTagReport && (
-                                <button
-                                  type="button"
-                                  title="Manage this tag report"
-                                  onClick={event => {
-                                    const rect = event.currentTarget.getBoundingClientRect()
-                                    setPickerMenuOpen({ id: activeTagReport.id, anchorRect: rect })
-                                  }}
-                                  style={{
-                                    background: 'none', border: 'none',
-                                    color: 'var(--muted)', cursor: 'pointer',
-                                    padding: '0 6px', fontSize: 18, lineHeight: 1,
-                                  }}
-                                >
-                                  ⋯
-                                </button>
-                              )}
-                            </div>
-                            {viewIsTag && tagModeLoading ? (
-                              <div style={{ height: 220, display: 'grid', placeItems: 'center' }}>
-                                <Spinner />
+                        return (
+                          <>
+                            <Card style={isEmpty ? { gridColumn: '1 / -1' } : undefined}>
+                              <div
+                                style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}
+                                onContextMenu={event => {
+                                  if (!activeTagReport) return
+                                  event.preventDefault()
+                                  setPickerMenuOpen({
+                                    id: activeTagReport.id,
+                                    anchorRect: event.currentTarget.getBoundingClientRect(),
+                                  })
+                                }}
+                              >
+                                <span>{viewIsIncome ? 'Income by' : 'Spending by'}</span>
+                                <Select
+                                  value={activeSpendingViewBy}
+                                  onChange={handleSpendingViewByChange}
+                                  options={spendingViewByOptions}
+                                  aria-label={viewIsIncome ? 'Choose dashboard income breakdown' : 'Choose dashboard spending breakdown'}
+                                />
+                                <FeatureExplainer topic="dashboard-tag-reports" placement="bottom-left" />
+                                {activeTagReport && (
+                                  <button
+                                    type="button"
+                                    title="Manage this tag report"
+                                    onClick={event => {
+                                      const rect = event.currentTarget.getBoundingClientRect()
+                                      setPickerMenuOpen({ id: activeTagReport.id, anchorRect: rect })
+                                    }}
+                                    style={{
+                                      background: 'none', border: 'none',
+                                      color: 'var(--muted)', cursor: 'pointer',
+                                      padding: '0 6px', fontSize: 18, lineHeight: 1,
+                                    }}
+                                  >
+                                    ⋯
+                                  </button>
+                                )}
                               </div>
-                            ) : isEmpty ? (
+                              {viewIsTag && tagModeLoading ? (
+                                <div style={{ height: 220, display: 'grid', placeItems: 'center' }}>
+                                  <Spinner />
+                                </div>
+                              ) : isEmpty ? (
+                                <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
+                              ) : (
+                                <ResponsiveContainer width="100%" height={220}>
+                                  <PieChart>
+                                    {/* Static: the sweep-in runs for a second and a half, and it would
+                                        replay on every filter, period and drill-down step. */}
+                                    <Pie data={pieData} dataKey="pieValue" nameKey={rowName}
+                                      cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
+                                      isAnimationActive={false}
+                                      onClick={d => d && handleSliceClick(d)} style={{ cursor: 'pointer' }}>
+                                      {pieData.map((r, i) => <Cell key={i} fill={r[rowColor]} />)}
+                                    </Pie>
+                                    <Tooltip
+                                      // Show the true signed total, not the zero-floored wedge geometry.
+                                      formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                                      contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                                      labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                                      itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+                                    />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                              )}
+                              {!isEmpty && (
+                                <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
+                                  {viewIsTag || viewIsCategory ? 'Click to see transactions' : 'Click to drill down'}
+                                </div>
+                              )}
+                            </Card>
+                            {!isEmpty && <Card>
+                              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
+                                {viewIsTag
+                                  ? (activeTagReport?.name || 'Tags')
+                                  : viewIsCategory ? 'Categories' : 'Groups'}
+                              </div>
+                              <div style={{
+                                // CSS multi-column (not grid) so rows fill down the first column and then
+                                // the next, instead of left→right across each row. column-width keeps it
+                                // responsive: the browser fits as many ~260px columns as the card allows.
+                                columnWidth: 260,
+                                columnGap: 20,
+                              }}>
+                                {listRows.map(r => {
+                                  const isOther = r[rowKey] === OTHER_SLICE_KEY
+                                  return (
+                                    <div key={r[rowKey]} onClick={() => handleSliceClick(r)} style={{
+                                      display: 'flex', alignItems: 'center', gap: 8,
+                                      padding: '5px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                                      minWidth: 0,
+                                      breakInside: 'avoid',
+                                      fontStyle: isOther ? 'italic' : 'normal',
+                                    }}>
+                                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: r[rowColor], flexShrink: 0 }} />
+                                      <span
+                                        title={r[rowName]}
+                                        style={{
+                                          fontSize: 13, flex: 1, minWidth: 0,
+                                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        {r[rowName]}
+                                      </span>
+                                      <div style={{ width: 54, flexShrink: 0 }}>
+                                        <SpendBar value={r.total} total={listTotal} color={r[rowColor]} />
+                                      </div>
+                                      <span style={{ fontSize: 12, fontWeight: 600, minWidth: 68, textAlign: 'right', flexShrink: 0 }}>
+                                        {formatSignedMoneyAmount(r.total)}
+                                      </span>
+                                      <span style={{ color: 'var(--muted)', fontSize: 14, flexShrink: 0 }}>›</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                              {expansionAvailable && (
+                                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                                  <button
+                                    onClick={() => setShowAllSpendingRows(v => !v)}
+                                    style={{
+                                      background: 'none', border: 'none', padding: '4px 8px',
+                                      color: 'var(--accent2)', cursor: 'pointer', fontSize: 13,
+                                    }}
+                                  >
+                                    {showAllSpendingRows
+                                      ? 'Show less'
+                                      : `Show all ${viewIsTag ? 'wedges' : viewIsCategory ? 'categories' : 'groups'}`}
+                                  </button>
+                                </div>
+                              )}
+                            </Card>}
+                          </>
+                        )
+                      })()}
+
+                      {/* Empty when an in-place refresh (recategorizing, a sync) moved the group's last
+                          transactions out; a filter change returns to the top level instead. */}
+                      {level === 'categories' && selectedGroup && (
+                        <>
+                          <Card style={catRows.length === 0 ? { gridColumn: '1 / -1' } : undefined}>
+                            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <CategoryMarker kind="group" />
+                              <span>{selectedGroup.group_name}</span>
+                            </div>
+                            {catRows.length === 0 ? (
                               <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
                             ) : (
-                              <ResponsiveContainer width="100%" height={220}>
-                                <PieChart>
-                                  {/* Static: the sweep-in runs for a second and a half, and it would
-                                      replay on every filter, period and drill-down step. */}
-                                  <Pie data={pieData} dataKey="pieValue" nameKey={rowName}
-                                    cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
-                                    isAnimationActive={false}
-                                    onClick={d => d && handleSliceClick(d)} style={{ cursor: 'pointer' }}>
-                                    {pieData.map((r, i) => <Cell key={i} fill={r[rowColor]} />)}
-                                  </Pie>
-                                  <Tooltip
-                                    // Show the true signed total, not the zero-floored wedge geometry.
-                                    formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
-                                    contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                                    itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                                  />
-                                </PieChart>
-                              </ResponsiveContainer>
-                            )}
-                            {!isEmpty && (
-                              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
-                                {viewIsTag || viewIsCategory ? 'Click to see transactions' : 'Click to drill down'}
-                              </div>
+                              <>
+                                <ResponsiveContainer width="100%" height={220}>
+                                  <PieChart>
+                                    {/* `pieValue` floors wedge geometry at zero so a net-refund category can't
+                                      draw a negative sector; tooltip/list show the true signed total. */}
+                                    <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
+                                      dataKey="pieValue" nameKey="category_name"
+                                      cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
+                                      isAnimationActive={false}
+                                      onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
+                                      {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
+                                    </Pie>
+                                    <Tooltip
+                                      formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                                      contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                                      labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                                      itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+                                    />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                                <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>Click to see transactions</div>
+                              </>
                             )}
                           </Card>
-                          {!isEmpty && <Card>
-                            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
-                              {viewIsTag
-                                ? (activeTagReport?.name || 'Tags')
-                                : viewIsCategory ? 'Categories' : 'Groups'}
-                            </div>
-                            <div style={{
-                              // CSS multi-column (not grid) so rows fill down the first column and then
-                              // the next, instead of left→right across each row. column-width keeps it
-                              // responsive: the browser fits as many ~260px columns as the card allows.
-                              columnWidth: 260,
-                              columnGap: 20,
-                            }}>
-                              {listRows.map(r => {
-                                const isOther = r[rowKey] === OTHER_SLICE_KEY
-                                return (
-                                  <div key={r[rowKey]} onClick={() => handleSliceClick(r)} style={{
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                    padding: '5px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
-                                    minWidth: 0,
-                                    breakInside: 'avoid',
-                                    fontStyle: isOther ? 'italic' : 'normal',
-                                  }}>
-                                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: r[rowColor], flexShrink: 0 }} />
-                                    <span
-                                      title={r[rowName]}
-                                      style={{
-                                        fontSize: 13, flex: 1, minWidth: 0,
-                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                      }}
-                                    >
-                                      {r[rowName]}
-                                    </span>
-                                    <div style={{ width: 54, flexShrink: 0 }}>
-                                      <SpendBar value={r.total} total={listTotal} color={r[rowColor]} />
-                                    </div>
-                                    <span style={{ fontSize: 12, fontWeight: 600, minWidth: 68, textAlign: 'right', flexShrink: 0 }}>
-                                      {formatSignedMoneyAmount(r.total)}
-                                    </span>
-                                    <span style={{ color: 'var(--muted)', fontSize: 14, flexShrink: 0 }}>›</span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                            {expansionAvailable && (
-                              <div style={{ textAlign: 'center', marginTop: 10 }}>
-                                <button
-                                  onClick={() => setShowAllSpendingRows(v => !v)}
-                                  style={{
-                                    background: 'none', border: 'none', padding: '4px 8px',
-                                    color: 'var(--accent2)', cursor: 'pointer', fontSize: 13,
-                                  }}
-                                >
-                                  {showAllSpendingRows
-                                    ? 'Show less'
-                                    : `Show all ${viewIsTag ? 'wedges' : viewIsCategory ? 'categories' : 'groups'}`}
-                                </button>
+                          {catRows.length > 0 && <Card>
+                            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Categories</div>
+                            {coloredCatRows.map(c => (
+                              <div key={c.category_id} onClick={() => drillToTransactions(c)} style={{
+                                display: 'flex', alignItems: 'center', gap: 10,
+                                padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                              }}>
+                                <span style={{ width: 10, height: 10, borderRadius: '50%', background: c.category_color, flexShrink: 0 }} />
+                                <span style={{ fontSize: 14, flex: 1 }}>{c.category_name}</span>
+                                <SpendBar value={c.total} total={catRows.reduce((s, r) => s + r.total, 0)} color={c.category_color} />
+                                <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 52, textAlign: 'right' }}>{c.count} txns</span>
+                                <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatSignedMoneyAmount(c.total)}</span>
+                                <span style={{ color: 'var(--muted)', fontSize: 16 }}>›</span>
                               </div>
-                            )}
+                            ))}
                           </Card>}
                         </>
-                      )
-                    })()}
-
-                    {/* Empty when an in-place refresh (recategorizing, a sync) moved the group's last
-                        transactions out; a filter change returns to the top level instead. */}
-                    {level === 'categories' && selectedGroup && (
-                      <>
-                        <Card style={catRows.length === 0 ? { gridColumn: '1 / -1' } : undefined}>
-                          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <CategoryMarker kind="group" />
-                            <span>{selectedGroup.group_name}</span>
-                          </div>
-                          {catRows.length === 0 ? (
-                            <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
-                          ) : (
-                            <>
-                              <ResponsiveContainer width="100%" height={220}>
-                                <PieChart>
-                                  {/* `pieValue` floors wedge geometry at zero so a net-refund category can't
-                                    draw a negative sector; tooltip/list show the true signed total. */}
-                                  <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
-                                    dataKey="pieValue" nameKey="category_name"
-                                    cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
-                                    isAnimationActive={false}
-                                    onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
-                                    {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
-                                  </Pie>
-                                  <Tooltip
-                                    formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
-                                    contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                                    itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                                  />
-                                </PieChart>
-                              </ResponsiveContainer>
-                              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>Click to see transactions</div>
-                            </>
-                          )}
-                        </Card>
-                        {catRows.length > 0 && <Card>
-                          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Categories</div>
-                          {coloredCatRows.map(c => (
-                            <div key={c.category_id} onClick={() => drillToTransactions(c)} style={{
-                              display: 'flex', alignItems: 'center', gap: 10,
-                              padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
-                            }}>
-                              <span style={{ width: 10, height: 10, borderRadius: '50%', background: c.category_color, flexShrink: 0 }} />
-                              <span style={{ fontSize: 14, flex: 1 }}>{c.category_name}</span>
-                              <SpendBar value={c.total} total={catRows.reduce((s, r) => s + r.total, 0)} color={c.category_color} />
-                              <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 52, textAlign: 'right' }}>{c.count} txns</span>
-                              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatSignedMoneyAmount(c.total)}</span>
-                              <span style={{ color: 'var(--muted)', fontSize: 16 }}>›</span>
-                            </div>
-                          ))}
-                        </Card>}
-                      </>
-                    )}
-
-                    {level === 'transactions' && selectedCat && (
-                      <div style={{ gridColumn: '1 / -1' }}>
-                        <Card style={{ padding: 0, overflow: 'hidden' }}>
-                          {/* A drilled category is in the breakdown because it has spend, so an empty list is
-                            the paged fetch still in flight, not a real empty state — show the spinner. */}
-                          {txnData.length === 0 ? <Spinner /> : (
-                            <>
-                              <TransactionListToolbar rows={txnData} copy={catTxnPaged.copy} title={selectedCat.category_name} bulk={selectedCatBulk} onRefresh={catTxnPaged.reload} refreshing={catTxnPaged.reloading} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
-                              <div style={{ padding: '0 12px' }}>
-                                <BulkEditChrome controller={selectedCatBulk} />
-                              </div>
-                              <TransactionListTable
-                                rows={txnData}
-                                categories={categories}
-                                {...selectedCatBulk.tableProps}
-                                onCategorySave={(txnId, catId, catObj) => {
-                                  const cat = catObj || categories.find(c => c.id === catId)
-                                  applyCategoryChange(txnId, cat, (patch, id) => setTxnData(prev => prev.map(
-                                    x => x.id === id ? { ...x, ...patch } : x)))
-                                }}
-                                onRowsChange={setTxnData}
-                                onTransactionOpenDetail={openTransactionDetail}
-                                onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
-                                columnConfig={categoryTxnColumns}
-                                onColumnConfigChange={setCategoryTxnColumns}
-                                paging={catTxnPaged.paging}
-                                sortState={catTxnPaged.sortState}
-                                onSort={catTxnPaged.onSort}
-                              />
-                            </>
-                          )}
-                        </Card>
-                      </div>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  </StaleWhileRefreshing>
                 )}
 
-                {level === 'groups' && (() => {
+                {(() => {
                   const trendTotal = trend.reduce((s, r) => s + (Number(r.total) || 0), 0)
                   const trendBucketMean = trend.length > 0 ? trendTotal / trend.length : 0
                   // Per elapsed time at the grain on screen, so a part-finished month, quarter or year
@@ -3369,7 +3392,7 @@ export default function Dashboard() {
                   const trendSpan = trendIsSameSpan
                     ? null
                     : seriesDateRange(
-                      (singleTrendRows || []).filter(r => (
+                      (trendMonthlyRows || []).filter(r => (
                         r.month >= trend[0]?.bucketStart && r.month <= trend[trend.length - 1]?.bucketEnd
                       )),
                     )
@@ -3400,10 +3423,12 @@ export default function Dashboard() {
                     // The period's transactions open from the header's "View transactions" button, not a
                     // bar double-click (Recharts bars can't be double-clicked reliably).
                     keepTrendGrainForDateRef.current = date
+                    keepDrillForDateRef.current = date
                     pinDateFromChart(date)
                   }
                   function handleTrendBack() {
                     keepTrendGrainForDateRef.current = previousDate
+                    keepDrillForDateRef.current = previousDate
                     goBackDate()
                   }
                   // The header link opens the transaction drawer for the whole selected period (day-precise
@@ -3419,9 +3444,11 @@ export default function Dashboard() {
                     openPeriodDetail({ start: effectiveDate.start, end: effectiveDate.end, label }, activeFrame)
                   }
                   return (
-                    <Card>
+                    <Card style={trendScopeId ? { marginBottom: 24 } : undefined}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600 }}>Trend</div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>
+                          {trendScopeName ? `Trend · ${trendScopeName}` : 'Trend'}
+                        </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           {/* Clicking a bar re-pins the period, which is a navigation the user did not
                               necessarily read as one — and the FilterBar shows where they are now, not
@@ -3439,7 +3466,8 @@ export default function Dashboard() {
                               ← Back to {describeDateFilter(previousDate)}
                             </Button>
                           )}
-                          {effectiveDate && effectiveDate.start && effectiveDate.end && (
+                          {/* A drill already lists its period's transactions beneath the chart. */}
+                          {!trendScopeId && effectiveDate && effectiveDate.start && effectiveDate.end && (
                             <Button
                               variant="ghost"
                               small
@@ -3477,7 +3505,7 @@ export default function Dashboard() {
                           : `${grainWord} totals ${describeTrendSpan(trendSpanPref)}`}
                         {' · click a bar to focus it · scroll horizontally to pan'}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                      <StaleWhileRefreshing refreshing={computedTrend == null} style={{ display: 'flex', alignItems: 'flex-start' }}>
                         {/* The value axis, held out of the scroll so it stays readable at any pan
                             position. It is a chart rather than hand-drawn labels so that recharts works
                             out the ticks — the same ticks, from the same data and domain, that the plot
@@ -3572,7 +3600,7 @@ export default function Dashboard() {
                                 dataKey="plotted"
                                 radius={[4, 4, 0, 0]}
                                 shape={<ClippedBar />}
-                                name={viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending'}
+                                name={trendScopeName || (viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending')}
                                 isAnimationActive={false}
                               >
                                 {trendData.map((entry, idx) => (
@@ -3592,10 +3620,47 @@ export default function Dashboard() {
                             </BarChart>
                           </div>
                         </div>
-                      </div>
+                      </StaleWhileRefreshing>
                     </Card>
                   )
                 })()}
+
+                {level === 'transactions' && selectedCat && (
+                  <Card style={{ padding: 0, overflow: 'hidden' }}>
+                    {/* Empty only once the fetch has answered: a trend bar can move the period to one
+                      the category had nothing in. */}
+                    {txnData.length === 0 ? (
+                      catTxnPaged.loading
+                        ? <Spinner />
+                        : <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
+                    ) : (
+                      <>
+                        <TransactionListToolbar rows={txnData} copy={catTxnPaged.copy} title={selectedCat.category_name} bulk={selectedCatBulk} onRefresh={catTxnPaged.reload} refreshing={catTxnPaged.reloading} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
+                        <div style={{ padding: '0 12px' }}>
+                          <BulkEditChrome controller={selectedCatBulk} />
+                        </div>
+                        <TransactionListTable
+                          rows={txnData}
+                          categories={categories}
+                          {...selectedCatBulk.tableProps}
+                          onCategorySave={(txnId, catId, catObj) => {
+                            const cat = catObj || categories.find(c => c.id === catId)
+                            applyCategoryChange(txnId, cat, (patch, id) => setTxnData(prev => prev.map(
+                              x => x.id === id ? { ...x, ...patch } : x)))
+                          }}
+                          onRowsChange={setTxnData}
+                          onTransactionOpenDetail={openTransactionDetail}
+                          onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
+                          columnConfig={categoryTxnColumns}
+                          onColumnConfigChange={setCategoryTxnColumns}
+                          paging={catTxnPaged.paging}
+                          sortState={catTxnPaged.sortState}
+                          onSort={catTxnPaged.onSort}
+                        />
+                      </>
+                    )}
+                  </Card>
+                )}
 
                 {level === 'categories' && selectedGroup && groupTxnData.length > 0 && (
                   <Card style={{ padding: 0, overflow: 'hidden' }}>
@@ -3721,43 +3786,45 @@ export default function Dashboard() {
                   />
                 )}
 
-                {drillLoading ? <Spinner /> : (
-                  <Card>
-                    <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, alignItems: 'center' }}>
-                      <span style={{ color: 'var(--text)', fontWeight: 600 }}>
-                        {cmpLevel === 'groups' ? 'By group' : cmpGroup?.group_name}
-                      </span>
-                      <div style={{ display: 'flex', gap: 12, marginLeft: 'auto', fontSize: 11 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 20, height: 4, background: 'var(--accent)', display: 'inline-block', borderRadius: 2 }} />
-                          {periodLabel(periodA)}
+                {/* A drill keeps the current breakdown on screen until the group's figures arrive, so the
+                    page does not collapse around a spinner and spring back. */}
+                <StaleWhileRefreshing refreshing={drillLoading}>
+                    <Card>
+                      <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, alignItems: 'center' }}>
+                        <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                          {cmpLevel === 'groups' ? 'By group' : cmpGroup?.group_name}
                         </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 20, height: 4, background: 'var(--accent)', opacity: 0.35, display: 'inline-block', borderRadius: 2 }} />
-                          {periodLabel(periodB)}
-                        </span>
+                        <div style={{ display: 'flex', gap: 12, marginLeft: 'auto', fontSize: 11 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 20, height: 4, background: 'var(--accent)', display: 'inline-block', borderRadius: 2 }} />
+                            {periodLabel(periodA)}
+                          </span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 20, height: 4, background: 'var(--accent)', opacity: 0.35, display: 'inline-block', borderRadius: 2 }} />
+                            {periodLabel(periodB)}
+                          </span>
+                        </div>
                       </div>
-                    </div>
 
-                    {cmpLevel === 'groups' && coloredCmpGroups.map(g => (
-                      <CompareRow
-                        key={g.group_id}
-                        label={g.group_name} color={g.group_color} kind="group"
-                        a={g.totalA} b={g.totalB} maxVal={cmpMaxGroup}
-                        onClick={() => cmpDrillToCategories(g)}
-                      />
-                    ))}
+                      {cmpLevel === 'groups' && coloredCmpGroups.map(g => (
+                        <CompareRow
+                          key={g.group_id}
+                          label={g.group_name} color={g.group_color} kind="group"
+                          a={g.totalA} b={g.totalB} maxVal={cmpMaxGroup}
+                          onClick={() => cmpDrillToCategories(g)}
+                        />
+                      ))}
 
-                    {cmpLevel === 'categories' && coloredCmpCats.map(c => (
-                      <CompareRow
-                        key={c.category_id}
-                        label={c.category_name} color={c.category_color} kind="category"
-                        a={c.totalA} b={c.totalB} maxVal={cmpMaxCat}
-                        onClick={null}
-                      />
-                    ))}
-                  </Card>
-                )}
+                      {cmpLevel === 'categories' && coloredCmpCats.map(c => (
+                        <CompareRow
+                          key={c.category_id}
+                          label={c.category_name} color={c.category_color} kind="category"
+                          a={c.totalA} b={c.totalB} maxVal={cmpMaxCat}
+                          onClick={null}
+                        />
+                      ))}
+                    </Card>
+                </StaleWhileRefreshing>
               </>
             )}
           </StaleWhileRefreshing>

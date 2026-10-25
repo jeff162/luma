@@ -505,7 +505,9 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           Everything can be drilled into to reach the underlying transactions. Clicking a group opens its categories, clicking a category opens
-          the transactions behind it, and anything filed wrongly can be corrected from there. Using
+          the transactions behind it, and anything filed wrongly can be corrected from there. On the single
+          period report the trend follows the drill, showing the open group or category over time; clicking
+          one of its bars moves the period and keeps the drill. Using
           the dashboard to check the data is as much its purpose as reporting on it.
         </p>
         <p>
