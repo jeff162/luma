@@ -1,7 +1,7 @@
 # Dashboard / reporting — the deferred remainder
 
-**Status: the cash-flow work shipped 2026-08-25 and was disposed 2026-09-02.** Three items remain, and
-none of them has started.
+**Status: the cash-flow work shipped 2026-08-25 and was disposed 2026-09-02.** One item remains, and
+it has not started.
 
 Where the shipped half went:
 
@@ -17,11 +17,6 @@ Where the shipped half went:
   [`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*.
 - **The endpoints** — `/summary/monthly-cash-flow`, the `cash_flow` list view, and why the count is
   deliberately absent — are in [`../architecture.md`](../architecture.md).
-
-**Compare mode has no cash-flow form, deliberately**, and that is a scope boundary rather than an
-oversight: the frame selector is hidden in Compare and a persisted preference is prevented from leaking
-into loaders that have no branch for it. Specifying a two-period cash-flow comparison is open work
-nobody has started.
 
 ---
 
@@ -74,23 +69,3 @@ column.
   choice is cheap to revisit while nothing depends on it. `debit_date` was rejected: the field applies to
   inflows as much as outflows, so it would contradict itself on a credit row, and `debit` already names a
   *direction* here (`category_rule.debit_credit`, the list endpoint's `direction`).
-
-## Trends-tab semantics audit when the tag-report selector lands there
-
-**Context.** The Trends tab's "Total per month" and "Annual totals" bar charts aggregate across all
-series returned by `/summary/monthly-by-group`. Income and expense are filtered in the per-series
-rendering, but the per-month and per-year totals are sums of `r.total` across all rows — which can
-double-count or produce misleading magnitudes depending on which series mix is present.
-
-**Why deferred.** The Trends tab today has no tag-report selector — adding one is what would expose
-this latent issue. The analogous problem was patched on Single mode during Phase 1 (filter to expense
-series before summing); the same fix shape applies to Trends mode but needs to be revisited in the
-context of whatever filter UI Trends mode gets.
-
-**Suggested approach when picked up.**
-
-- Introduce the same Expenses/Income selector (and eventually the tag-report picker) on Trends mode.
-- Derive an `expenseSeriesIds` (or active-selection equivalent) and have `monthlyTotal` and `annualData`
-  filter against it before summing.
-- Possibly add an `Avg` reference line to `Annual totals` (already done for `Total per month` and
-  `Monthly spending by group`).
