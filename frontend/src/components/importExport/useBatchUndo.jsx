@@ -48,14 +48,14 @@ export function useBatchUndo(onAfterUndo) {
           <>
             <EditedTransactionsWarning rows={undoEdited} />
             <div style={{ display: 'flex', gap: 10 }}>
-              <Button small variant="danger" onClick={() => confirmUndo(true)}>Delete all anyway</Button>
-              <Button small variant="ghost" onClick={cancel}>Cancel</Button>
+              <Button variant="danger" onClick={() => confirmUndo(true)}>Delete all anyway</Button>
+              <Button variant="secondary" onClick={cancel}>Cancel</Button>
             </div>
           </>
         ) : (
           <div style={{ display: 'flex', gap: 10 }}>
-            <Button small variant="danger" onClick={() => confirmUndo(false)}>Delete {netCount} transactions</Button>
-            <Button small variant="ghost" onClick={cancel}>Cancel</Button>
+            <Button variant="danger" onClick={() => confirmUndo(false)}>Delete {netCount} transactions</Button>
+            <Button variant="secondary" onClick={cancel}>Cancel</Button>
           </div>
         )}
       </Card>

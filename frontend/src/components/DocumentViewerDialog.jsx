@@ -102,22 +102,22 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
       width="min(920px, 100%)"
       actions={editing ? (
         <>
-          <Button variant="ghost" onClick={cancelEditing}>Cancel</Button>
+          <Button variant="secondary" onClick={cancelEditing}>Cancel</Button>
           <Button onClick={saveEdit}>Save</Button>
         </>
       ) : (
         <>
-          {canEdit ? <Button variant="ghost" onClick={startEditing}>Edit</Button> : null}
+          {canEdit ? <Button variant="secondary" onClick={startEditing}>Edit</Button> : null}
           {/* A plain link, not a fetch-and-save: the browser is already able to stream this to disk,
               and routing it through JavaScript would only add a copy in memory. */}
           <a
             href={api.documentFileUrl(doc.id, { download: true })}
             style={{ textDecoration: 'none' }}
           >
-            <Button variant="ghost">Download</Button>
+            <Button variant="secondary">Download</Button>
           </a>
           <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-            <Button variant="ghost">Open in a new tab</Button>
+            <Button variant="secondary">Open in a new tab</Button>
           </a>
           <Button onClick={onClose}>Close</Button>
         </>

@@ -211,18 +211,18 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       width="min(460px, 100%)"
       actions={
         <>
-          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
               in does not change depending on which surface asked. */}
           {canUsePasskey ? (
             <Tooltip content={passkeyBlocked ? newPassphraseIssue : ''} align="right">
-              <Button small onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
+              <Button onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
                 {passkeyLabel}
               </Button>
             </Tooltip>
           ) : null}
           <Tooltip content={blocked && !busy ? newPassphraseIssue : ''} align="right">
-            <Button small variant={canUsePasskey ? 'ghost' : 'primary'}
+            <Button variant={canUsePasskey ? 'secondary' : 'primary'}
               onClick={submit} disabled={blocked || passkeyBusy}>
               {busy ? 'Working…'
                 : changing ? 'Change passphrase'

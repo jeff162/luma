@@ -118,7 +118,7 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
         width="min(560px, 100%)"
         actions={
           <>
-            <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
             <Button onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Add transaction'}</Button>
           </>
         }
@@ -199,7 +199,7 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
                 {splitParts?.length ? (
                   // The same marker a split row carries in the ledger, and it leads back to the editor
                   // the same way — a split's categories are set in one place whatever surface opened it.
-                  <Button variant="ghost" small onClick={() => setSplitOpen(true)}>
+                  <Button variant="secondary" onClick={() => setSplitOpen(true)}>
                     Split ({splitParts.length})
                   </Button>
                 ) : (
@@ -219,8 +219,7 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
                 )}
                 {splitParts?.length ? null : (
                   <Button
-                    variant="ghost"
-                    small
+                    variant="secondary"
                     onClick={() => setSplitOpen(true)}
                     // There is nothing to divide until an amount is entered, and the editor's whole
                     // interaction model is allocating against that figure.

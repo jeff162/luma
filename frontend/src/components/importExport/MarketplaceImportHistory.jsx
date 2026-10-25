@@ -6,6 +6,8 @@ import { useReconciliationViewer } from '../../contexts/ReconciliationViewerCont
 import { useAmazonImportDetailViewer } from '../../contexts/AmazonImportDetailViewerContext.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import { BatchCoverageCell } from './importPresentational.jsx'
+import { StatusPill } from '../connections/ConnectionStatus.jsx'
+import { Button } from '../ui.jsx'
 import { FOCUSED_CARD_STYLE } from '../../lib/importExport/constants.js'
 import { partitionImportHistory } from '../../lib/importExport/importHistoryWindow.js'
 
@@ -26,24 +28,17 @@ function AmazonReconciliationAction({ batch, count, attention = 0 }) {
   const { open } = useReconciliationViewer()
   const warn = attention > 0
   return (
-    <button
-      type="button"
+    <StatusPill
+      report
+      tone={warn ? 'warning' : 'muted'}
       onClick={() => open({ vendor: 'amazon', batchId: batch.id, title: batch.filename })}
       title={warn
         ? `${attention} order${attention === 1 ? '' : 's'} need review — open the reconciliation report`
         : "Reconcile this import's orders against your card charges"}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, cursor: 'pointer',
-        fontWeight: warn ? 600 : 400,
-        background: warn ? 'color-mix(in srgb, var(--warning) 14%, var(--surface2))' : 'var(--surface2)',
-        color: warn ? 'var(--warning)' : 'var(--muted)',
-        border: warn ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))' : '1px solid var(--border)',
-      }}
     >
-      <span>{count} transaction{count === 1 ? '' : 's'}</span>
-      {warn ? <span>· {attention} to resolve</span> : null}
-      <span style={{ color: warn ? 'var(--warning)' : 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-    </button>
+      {count} transaction{count === 1 ? '' : 's'}
+      {warn ? ` · ${attention} to resolve` : null}
+    </StatusPill>
   )
 }
 
@@ -55,21 +50,9 @@ const VENDOR_ROW_ACTION = {
 // tints it (used for discarded items — a missing orders file).
 function DetailPill({ count, label, title, warn, onClick }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, cursor: 'pointer',
-        fontWeight: warn ? 600 : 400,
-        background: warn ? 'color-mix(in srgb, var(--warning) 14%, var(--surface2))' : 'var(--surface2)',
-        color: warn ? 'var(--warning)' : 'var(--muted)',
-        border: warn ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))' : '1px solid var(--border)',
-      }}
-    >
-      <span>{count} {label}</span>
-      <span style={{ color: warn ? 'var(--warning)' : 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-    </button>
+    <StatusPill report tone={warn ? 'warning' : 'muted'} onClick={onClick} title={title}>
+      {count} {label}
+    </StatusPill>
   )
 }
 
@@ -198,7 +181,7 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
           </div>
 
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-            <button onClick={() => onUndo(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+            <Button size="compact" variant="quiet" tone="danger" onClick={() => onUndo(b)}>Undo</Button>
           </div>
         </div>
 
@@ -215,24 +198,18 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
               {showDetailPills ? <AmazonImportDetailPills batch={b} summary={b.import_summary} /> : null}
               {needsReview > 0 ? (
                 <>
-                  <button
-                    type="button"
+                  <StatusPill
+                    report
+                    tone="review"
                     // Opens on the rows the pill counts; the report's own quick filter turns it off.
                     onClick={() => onOpenLedger({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
                     title="Review the transactions imported from this file"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))', color: 'var(--review-marker-color)', border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))', cursor: 'pointer', fontWeight: 600 }}
                   >
-                    <span>{needsReview} to review</span>
-                    <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onMarkReviewed(b.id)}
-                    title="Mark every transaction in this file reviewed"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
-                  >
+                    {needsReview} to review
+                  </StatusPill>
+                  <Button size="compact" variant="secondary" onClick={() => onMarkReviewed(b.id)} title="Mark every transaction in this file reviewed">
                     ✓ Mark all reviewed
-                  </button>
+                  </Button>
                 </>
               ) : null}
             </div>

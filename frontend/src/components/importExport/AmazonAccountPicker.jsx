@@ -75,10 +75,10 @@ export default function AmazonAccountPicker({
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <Input value={name} onChange={setName} placeholder="Account name"
             aria-label="New account name" style={{ flex: 1 }} />
-          <Button small onClick={create} disabled={saving || !name.trim()}>
+          <Button onClick={create} disabled={saving || !name.trim()}>
             {saving ? 'Creating…' : 'Create'}
           </Button>
-          <Button small variant="ghost" onClick={() => { setCreating(false); setName(defaultName) }}>
+          <Button variant="secondary" onClick={() => { setCreating(false); setName(defaultName) }}>
             Cancel
           </Button>
         </div>

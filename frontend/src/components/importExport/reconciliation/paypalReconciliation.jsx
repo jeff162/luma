@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { api } from '../../../lib/api.js'
-import { Button, COMPACT_ACTION_BTN_STYLE } from '../../ui.jsx'
+import { Button } from '../../ui.jsx'
 import { PAYPAL_FUNDING_COLUMNS_PREF_KEY } from '../../../lib/importExport/constants.js'
 import { TxnCell, TxnStack } from './reconciliationCells.jsx'
 
@@ -50,8 +50,8 @@ function ContestedRivals({ rivals, disabled, onPick }) {
       {rivals.map(paypal => (
         <div key={paypal.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ flex: 1, minWidth: 0 }}><TxnCell txn={paypal} /></div>
-          <Button variant="ghost" disabled={disabled} onClick={() => onPick(paypal)}
-            style={{ ...COMPACT_ACTION_BTN_STYLE, flexShrink: 0, whiteSpace: 'nowrap' }}
+          <Button variant="secondary" disabled={disabled} onClick={() => onPick(paypal)}
+            size="compact" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             title="The bank or card transaction is the other side of this one">Pick this one</Button>
         </div>
       ))}
@@ -179,10 +179,10 @@ function useColumns({ busy, run, openPicker, reportError }) {
     () => api.pairPaypalFunding({ paypal_txn_id: paypal.id, counterpart_txn_id: entry.counterpart.id }),
     'Could not match the transactions')
   const reviewToggle = (entry, markTitle) => (entry.reviewed ? (
-    <Button small variant="ghost" disabled={busy} onClick={() => act('unreview', entry, 'Could not update the review state')}
+    <Button variant="secondary" disabled={busy} onClick={() => act('unreview', entry, 'Could not update the review state')}
       title="Return this row to needing attention">Undo review</Button>
   ) : (
-    <Button small variant="ghost" disabled={busy} onClick={() => act('mark_reviewed', entry, 'Could not update the review state')}
+    <Button variant="secondary" disabled={busy} onClick={() => act('mark_reviewed', entry, 'Could not update the review state')}
       title={markTitle}>Mark reviewed</Button>
   ))
 
@@ -198,7 +198,7 @@ function useColumns({ busy, run, openPicker, reportError }) {
     { key: 'action', label: 'Actions', width: 240, sortable: false, render: (entry) => {
       if (entry.kind === 'matched') {
         return (
-          <Button small variant="ghost" disabled={busy} onClick={() => act('unpair', entry, 'Could not unlink the transactions')}
+          <Button variant="secondary" disabled={busy} onClick={() => act('unpair', entry, 'Could not unlink the transactions')}
             title="Not the same money — put back whatever the match changed; it is not made again">Unlink</Button>
         )
       }
@@ -206,15 +206,15 @@ function useColumns({ busy, run, openPicker, reportError }) {
       // for this column is the answer about the group as a whole.
       if (entry.kind === 'contested') {
         return (
-          <Button small variant="ghost" disabled={busy} onClick={() => act('decline', entry, 'Could not record the choice')}
+          <Button variant="secondary" disabled={busy} onClick={() => act('decline', entry, 'Could not record the choice')}
             title="The transaction is the other side of none of these — it is not offered to them again">Neither</Button>
         )
       }
       if (entry.kind === 'choice') {
         return (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <Button small variant="ghost" disabled={busy} onClick={() => openPair(entry)}>Pick…</Button>
-            <Button small variant="ghost" disabled={busy} onClick={() => act('decline', entry, 'Could not record the choice')}
+            <Button variant="secondary" disabled={busy} onClick={() => openPair(entry)}>Pick…</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => act('decline', entry, 'Could not record the choice')}
               title="None of these is the other side of this PayPal transaction">None of these</Button>
           </div>
         )
@@ -222,7 +222,7 @@ function useColumns({ busy, run, openPicker, reportError }) {
       if (entry.kind === 'unmatched') {
         return (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <Button small variant="ghost" disabled={busy || loadingPicker} onClick={() => openPair(entry)}>Link…</Button>
+            <Button variant="secondary" disabled={busy || loadingPicker} onClick={() => openPair(entry)}>Link…</Button>
             {reviewToggle(entry, 'Acknowledge it — the other account is not tracked here, or nothing is missing')}
           </div>
         )

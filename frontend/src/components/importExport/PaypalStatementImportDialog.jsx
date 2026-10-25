@@ -67,8 +67,8 @@ function AccountChoice({ group, remembered, options, owners, value, busy, onChan
             <Select value={ownerId} onChange={setOwnerId} aria-label="Owner"
               options={[{ value: '', label: 'Owner…' }, ...owners.map(o => ({ value: o.id, label: o.name }))]} />
           ) : null}
-          <Button small onClick={submit} disabled={busy || !name.trim()}>Create</Button>
-          <Button small variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={busy || !name.trim()}>Create</Button>
+          <Button variant="secondary" onClick={() => setCreating(false)}>Cancel</Button>
         </div>
       ) : null}
     </div>
@@ -174,7 +174,7 @@ export function PaypalStatementImportDialog({ files, accounts, onClose, onImport
         <Button onClick={onClose}>Done</Button>
       ) : (
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button onClick={runImport} disabled={!canImport}>{busy ? 'Importing…' : 'Import statements'}</Button>
         </>
       )}

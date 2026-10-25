@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
-import { Spinner } from './ui.jsx'
+import { Spinner, FilterChip, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import TransactionListToolbar from './TransactionListToolbar.jsx'
@@ -29,27 +29,10 @@ import {
 
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
 
-// Toggle pill for the merged-account source filter. Multi-select: "All" clears the set, each source
-// pill toggles its own account in/out.
+// Toggle chip for the merged-account source filter. Multi-select: "All" clears the set, each source
+// chip toggles its own account in/out.
 function SourcePill({ label, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-        borderRadius: 999,
-        padding: '2px 10px',
-        fontSize: 12,
-        cursor: 'pointer',
-        background: active ? 'var(--accent)' : 'var(--surface2)',
-        color: active ? '#fff' : 'var(--text)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {label}
-    </button>
-  )
+  return <FilterChip selected={active} onClick={onClick}>{label}</FilterChip>
 }
 
 export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true, dateStart = null, dateEnd = null }) {
@@ -257,16 +240,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
               {duplicateSummary.matched_sources.length > 0 ? ` (from ${duplicateSummary.matched_sources.join(', ')})` : ''}
               {'. '}
               {duplicateSummary.primary_batch_id ? (
-                <button
-                  type="button"
-                  onClick={openDuplicatesForAccount}
-                  style={{
-                    background: 'none', border: 'none', padding: 0,
-                    color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
-                  }}
-                >
+                <LinkButton onClick={openDuplicatesForAccount} style={{ fontSize: 12, textDecoration: 'underline' }}>
                   View in duplicate report
-                </button>
+                </LinkButton>
               ) : null}
             </div>
           )}

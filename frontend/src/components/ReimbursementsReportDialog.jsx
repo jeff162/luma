@@ -259,7 +259,7 @@ export default function ReimbursementsReportDialog({
       onClose={onClose}
       width="min(700px, 100%)"
       bodyStyle={{ display: 'flex', flexDirection: 'column' }}
-      actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
+      actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       {report === null && !error ? <Spinner /> : null}
       {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
@@ -301,8 +301,7 @@ export default function ReimbursementsReportDialog({
                 {filtered > 0 ? ` · ${filtered} hidden` : ''}
               </span>
               <Button
-                variant="ghost"
-                small
+                variant="secondary"
                 onClick={() => { setOwner(null); setShowDueOnly(false) }}
                 disabled={!owner && !showDueOnly}
               >Show everything</Button>
@@ -560,7 +559,7 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
               {residualSummary(entry.reimbursement)}
             </span>
             {readyToComplete ? (
-              <Button small variant="ghost" disabled={busy} onClick={onComplete}>Mark complete</Button>
+              <Button variant="secondary" disabled={busy} onClick={onComplete}>Mark complete</Button>
             ) : null}
           </div>
           {entry.members.map(member => (

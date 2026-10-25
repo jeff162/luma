@@ -18,7 +18,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api.js'
 import { fingerprintMatches, useServerCertificate } from '../lib/serverCertificate.js'
-import { AppDialog, Button, Input, Select } from './ui.jsx'
+import { AppDialog, Button, Input, Select, LinkButton } from './ui.jsx'
 
 const DOWNLOAD_URL = '/api/app/proxy-certificate/download'
 
@@ -141,7 +141,7 @@ export function ServerCertificatePanel({ certificate, onAccept, checkable = fals
             happened, do not install it.
           </div>
           {onAccept ? (
-            <div><Button small onClick={accept} disabled={accepting}>{accepting ? 'Accepting…' : 'Accept the new certificate'}</Button></div>
+            <div><Button onClick={accept} disabled={accepting}>{accepting ? 'Accepting…' : 'Accept the new certificate'}</Button></div>
           ) : null}
           {error ? <div style={{ color: '#dc2626' }}>{error}</div> : null}
         </div>
@@ -222,22 +222,15 @@ export function ServerCertificateLink() {
   if (!certificate) return null
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        style={{
-          background: 'none', border: 'none', padding: 0, marginTop: 16, cursor: 'pointer',
-          color: 'var(--muted)', fontSize: 12, textDecoration: 'underline', fontFamily: 'inherit',
-        }}
-      >
+      <LinkButton tone="muted" onClick={() => setOpen(true)} style={{ marginTop: 16, fontSize: 12, textDecoration: 'underline' }}>
         Browser warning about this server? Install its certificate
-      </button>
+      </LinkButton>
       {open ? (
         <AppDialog
           title="Install this server's certificate"
           onClose={() => setOpen(false)}
           width="min(560px, 100%)"
-          actions={<Button variant="ghost" small onClick={() => setOpen(false)}>Close</Button>}
+          actions={<Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>}
         >
           <ServerCertificatePanel certificate={certificate} />
         </AppDialog>

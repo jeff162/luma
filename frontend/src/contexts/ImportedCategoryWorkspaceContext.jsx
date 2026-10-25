@@ -406,7 +406,7 @@ export function ImportedCategoryWorkspaceRenderer() {
           width="min(480px, 100%)"
           actions={(
             <>
-              <Button variant="ghost" onClick={ctx.loadOtherDraft}>Load the other arrangement</Button>
+              <Button variant="secondary" onClick={ctx.loadOtherDraft}>Load the other arrangement</Button>
               <Button onClick={ctx.keepMyDraft}>Keep this arrangement</Button>
             </>
           )}

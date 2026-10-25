@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useCallback, useMemo, useState } from 'react'
-import { Button, COMPACT_ACTION_BTN_STYLE, RefreshButton } from '../../ui.jsx'
+import { Button, RefreshButton, FilterChip } from '../../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../../detailShared.jsx'
 import FeatureExplainer from '../../../help/FeatureExplainer.jsx'
 import { RECONCILIATION_REPORTS } from '../../../lib/reconciliationReports.js'
@@ -177,10 +177,6 @@ export function ReconciliationReportDialog({
     )
   } }
 
-  const chromeButtonStyle = {
-    background: 'var(--surface2)', border: '1px solid var(--border)',
-    borderRadius: 6, padding: '4px 10px', cursor: 'pointer', color: 'var(--muted)', fontSize: 13,
-  }
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
       <span onPointerDown={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
@@ -197,8 +193,13 @@ export function ReconciliationReportDialog({
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>{vendor.subtitle}</div>
       </div>
       {onMinimize ? (
-        <button type="button" title="Minimize to nav bar (state is preserved — click the pill to restore)"
-          onClick={onMinimize} onPointerDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>
+        <Button
+          size="compact"
+          variant="secondary"
+          title="Minimize to nav bar (state is preserved — click the pill to restore)"
+          onClick={onMinimize}
+          onPointerDown={e => e.stopPropagation()}
+        >– Minimize</Button>
       ) : null}
     </div>
   )
@@ -221,38 +222,25 @@ export function ReconciliationReportDialog({
           padding: '8px 16px', borderBottom: '1px solid var(--border)',
         }}>
           <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
-          <button
-            type="button"
-            onClick={() => setActiveKind(null)}
-            style={{
-              fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer', flexShrink: 0,
-              background: activeKind === null ? 'var(--accent)' : 'var(--surface2)',
-              color: activeKind === null ? 'white' : 'var(--muted)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            All ({entries.length})
-          </button>
+          <FilterChip selected={activeKind === null} count={entries.length} onClick={() => setActiveKind(null)} style={{ flexShrink: 0 }}>
+            All
+          </FilterChip>
           {kindPills.map(({ kind, count }) => {
             const meta = vendor.kinds[kind]
             const active = activeKind === kind
             const accent = meta.stripe
             return (
-              <button
+              <FilterChip
                 key={kind}
-                type="button"
                 title={meta.help}
+                selected={active}
+                count={count}
+                countTone={accent}
                 onClick={() => setActiveKind(active ? null : kind)}
-                style={{
-                  fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer', flexShrink: 0,
-                  background: active ? accent : `color-mix(in srgb, ${accent} 12%, var(--surface2))`,
-                  color: active ? 'white' : `color-mix(in srgb, ${accent} 75%, var(--text))`,
-                  border: `1px solid color-mix(in srgb, ${accent} 45%, var(--border))`,
-                  fontWeight: active ? 600 : 500,
-                }}
+                style={{ flexShrink: 0 }}
               >
-                {meta.label} ({count})
-              </button>
+                {meta.label}
+              </FilterChip>
             )
           })}
         </div>
@@ -264,14 +252,14 @@ export function ReconciliationReportDialog({
           }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>{selectionSummary.total} selected:</span>
             {vendor.bulkActions.map(action => (
-              <Button key={action.key} small variant="ghost" style={COMPACT_ACTION_BTN_STYLE}
+              <Button key={action.key} variant="secondary" size="compact"
                 disabled={pendingBulk || selectionSummary.counts[action.key] === 0}
                 onClick={() => runBulk(action.key)} title={action.title}>
                 {action.label} ({selectionSummary.counts[action.key]})
               </Button>
             ))}
             <span style={{ flex: 1 }} />
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
+            <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
               Clear
             </Button>
           </div>

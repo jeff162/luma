@@ -37,7 +37,7 @@ import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { DUPLICATE_REPORT_COLUMNS_PREF_KEY } from '../lib/importExport/constants.js'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
-import { Button, COMPACT_ACTION_BTN_STYLE, Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton} from './ui.jsx'
+import { Button, Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton, FilterChip, LinkButton} from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { MatchReport } from './importExport/MatchReport.jsx'
 import { TransactionMatchCell, SourceFileLink } from './importExport/TransactionMatchCell.jsx'
@@ -87,14 +87,6 @@ const SETTLED_KIND_PILLS = [
 
 // Every settled filter shares one tone — the rule pills' blue rather than the review amber — so the group
 // reads as "nothing is being asked of you" before any label is read.
-const settledPillStyle = active => ({
-  fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-  background: active ? 'var(--accent2)' : 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-  color: active ? 'white' : 'var(--accent2)',
-  border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
-  fontWeight: active ? 600 : 500,
-})
-
 // Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected, never
 // imported) carry a backend `review_substate`: 'matched_near_date' (a same-amount twin was found only on
 // a nearby day, not the exact one — the row itself shows how many days) or 'no_match' (no twin anywhere).
@@ -707,17 +699,13 @@ export default function UnifiedDuplicatesDialog({
         </div>
       </div>
       {onMinimize ? (
-        <button
-          type="button"
+        <Button
+          size="compact"
+          variant="secondary"
           title="Minimize to nav bar (state is preserved — click the pill to restore)"
           onClick={onMinimize}
           onPointerDown={e => e.stopPropagation()}
-          style={{
-            background: 'var(--surface2)', border: '1px solid var(--border)',
-            borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-            color: 'var(--muted)', fontSize: 13,
-          }}
-        >– Minimize</button>
+        >– Minimize</Button>
       ) : null}
     </div>
   )
@@ -744,17 +732,9 @@ export default function UnifiedDuplicatesDialog({
               Showing only duplicates for <strong style={{ color: 'var(--text)' }}>{accountFilter.name}</strong>.
             </span>
             {onClearAccountFilter ? (
-              <button
-                type="button"
-                onClick={onClearAccountFilter}
-                onMouseDown={e => e.stopPropagation()}
-                style={{
-                  background: 'none', border: 'none', padding: 0,
-                  color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
-                }}
-              >
+              <LinkButton onClick={onClearAccountFilter} onMouseDown={e => e.stopPropagation()} style={{ fontSize: 12, textDecoration: 'underline' }}>
                 Show all duplicates in this import
-              </button>
+              </LinkButton>
             ) : null}
           </div>
         ) : null}
@@ -767,17 +747,9 @@ export default function UnifiedDuplicatesDialog({
             <span style={{ color: 'var(--muted)' }}>
               Showing only rows <strong style={{ color: 'var(--text)' }}>removed as duplicates after the import</strong>.
             </span>
-            <button
-              type="button"
-              onClick={() => setActiveKindFilter(null)}
-              onMouseDown={e => e.stopPropagation()}
-              style={{
-                background: 'none', border: 'none', padding: 0,
-                color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
-              }}
-            >
+            <LinkButton onClick={() => setActiveKindFilter(null)} onMouseDown={e => e.stopPropagation()} style={{ fontSize: 12, textDecoration: 'underline' }}>
               Show all duplicates in this import
-            </button>
+            </LinkButton>
           </div>
         ) : null}
         {/* One question that settles a whole pile, offered above the list rather than inside it: every
@@ -804,18 +776,14 @@ export default function UnifiedDuplicatesDialog({
         {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.no_match || settledKindTotal > 0 || scopedRemovedCount > 0) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
-            <button
-              type="button"
+            <FilterChip
+              selected={activeRuleFilter === null && activeKindFilter === null}
+              count={scopedEntries.length}
               onClick={() => { setActiveRuleFilter(null); setActiveKindFilter(null) }}
-              style={{
-                fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer', flexShrink: 0,
-                background: (activeRuleFilter === null && activeKindFilter === null) ? 'var(--accent)' : 'var(--surface2)',
-                color: (activeRuleFilter === null && activeKindFilter === null) ? 'white' : 'var(--muted)',
-                border: '1px solid var(--border)',
-              }}
+              style={{ flexShrink: 0 }}
             >
-              All ({scopedEntries.length})
-            </button>
+              All
+            </FilterChip>
             {/* "Show:" and "All" stay fixed; only the rule + kind pills wrap, so wrapped rows line up
                 under the first rule pill (to the right of All) rather than under "Show:" or "All". */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 }}>
@@ -825,21 +793,16 @@ export default function UnifiedDuplicatesDialog({
                           : rule.confidence === 'low'  ? 'var(--warning)'
                           : 'var(--accent2)'
               return (
-                <button
+                <FilterChip
                   key={rule.rule_key}
-                  type="button"
                   title={rule.rule_description}
+                  selected={active}
+                  count={rule.count}
+                  countTone={accent}
                   onClick={() => { setActiveRuleFilter(active ? null : rule.rule_key); setActiveKindFilter(null) }}
-                  style={{
-                    fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-                    background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
-                    color: active ? 'white' : accent,
-                    border: `1px solid color-mix(in srgb, ${accent} 40%, var(--border))`,
-                    fontWeight: active ? 600 : 500,
-                  }}
                 >
-                  {rule.rule_label} ({rule.count})
-                </button>
+                  {rule.rule_label}
+                </FilterChip>
               )
             })}
             {(reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.no_match) ? (
@@ -854,19 +817,14 @@ export default function UnifiedDuplicatesDialog({
               const accent = 'var(--warning)'
               return (
                 <HelpHoverCard key={k.key} topic={k.topic}>
-                  <button
-                    type="button"
+                  <FilterChip
+                    selected={active}
+                    count={count}
+                    countTone={accent}
                     onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
-                    style={{
-                      fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-                      background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
-                      color: active ? 'white' : accent,
-                      border: `1px solid color-mix(in srgb, ${accent} 40%, var(--border))`,
-                      fontWeight: active ? 600 : 500,
-                    }}
                   >
-                    {k.label} ({count})
-                  </button>
+                    {k.label}
+                  </FilterChip>
                 </HelpHoverCard>
               )
             })}
@@ -879,25 +837,27 @@ export default function UnifiedDuplicatesDialog({
               const active = activeKindFilter === k.key
               return (
                 <HelpHoverCard key={k.key} topic={k.topic}>
-                  <button
-                    type="button"
+                  <FilterChip
+                    selected={active}
+                    count={count}
+                    countTone="var(--accent2)"
                     onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
-                    style={settledPillStyle(active)}
                   >
-                    {k.label} ({count})
-                  </button>
+                    {k.label}
+                  </FilterChip>
                 </HelpHoverCard>
               )
             })}
             {scopedRemovedCount > 0 ? (
               <HelpHoverCard topic="removed-as-duplicates">
-                <button
-                  type="button"
+                <FilterChip
+                  selected={activeKindFilter === 'removed'}
+                  count={scopedRemovedCount}
+                  countTone="var(--accent2)"
                   onClick={() => { setActiveKindFilter(activeKindFilter === 'removed' ? null : 'removed'); setActiveRuleFilter(null) }}
-                  style={settledPillStyle(activeKindFilter === 'removed')}
                 >
-                  Removed later ({scopedRemovedCount})
-                </button>
+                  Removed later
+                </FilterChip>
               </HelpHoverCard>
             ) : null}
             </div>
@@ -908,8 +868,8 @@ export default function UnifiedDuplicatesDialog({
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', background: 'color-mix(in srgb, var(--accent) 6%, var(--surface2))' }}>
             <span style={{ fontSize: 12, fontWeight: 600 }}>{selectionSummary.total} selected</span>
             <Button
-              style={COMPACT_ACTION_BTN_STYLE}
-              variant="ghost"
+              size="compact"
+              variant="secondary"
               disabled={pendingBulk || selectionSummary.keep === 0}
               onClick={() => runBulk('keep')}
               title="These are different transactions: keep the new row too, mark the two accounts as distinct, and cascade-clear every other flagged row between the same account pair. Future imports skip the pair."
@@ -917,8 +877,8 @@ export default function UnifiedDuplicatesDialog({
               Keep both ({selectionSummary.keep})
             </Button>
             <Button
-              style={COMPACT_ACTION_BTN_STYLE}
-              variant="ghost"
+              size="compact"
+              variant="secondary"
               disabled={pendingBulk || selectionSummary.reject === 0}
               onClick={() => runBulk('reject')}
               title="The new file's row is a duplicate: discard it and keep the existing transaction."
@@ -926,8 +886,8 @@ export default function UnifiedDuplicatesDialog({
               Discard new ({selectionSummary.reject})
             </Button>
             <Button
-              style={COMPACT_ACTION_BTN_STYLE}
-              variant="ghost"
+              size="compact"
+              variant="secondary"
               disabled={pendingBulk || selectionSummary.replace === 0}
               onClick={() => runBulk('replace')}
               title="The new file's row is the correct record (e.g. correct account, or the posted copy of a pending charge): keep it and remove the existing duplicate. The existing row's renames, notes and tags move to it; categorization follows whichever file was set to use its imported categories."
@@ -935,37 +895,37 @@ export default function UnifiedDuplicatesDialog({
               Replace existing ({selectionSummary.replace})
             </Button>
             <Button
-              style={COMPACT_ACTION_BTN_STYLE}
-              variant="ghost"
+              size="compact"
+              variant="secondary"
               disabled={pendingBulk || selectionSummary.mark_reviewed === 0}
               onClick={() => runBulk('mark_reviewed')}
               title="Acknowledge these already-rejected rows as reviewed — clears them from the needs-attention list without importing them."
             >
               Mark reviewed ({selectionSummary.mark_reviewed})
             </Button>
-            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
+            <Button size="compact" variant="secondary" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
               Import anyway ({selectionSummary.import_anyway})
             </Button>
             {selectionSummary.enrich > 0 ? (
-              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('enrich')} title="Fold each selected row's extra detail into the transaction it matched — additive and reversible.">
+              <Button size="compact" variant="secondary" disabled={pendingBulk} onClick={() => runBulk('enrich')} title="Fold each selected row's extra detail into the transaction it matched — additive and reversible.">
                 Enrich existing ({selectionSummary.enrich})
               </Button>
             ) : null}
             {selectionSummary.unenrich > 0 ? (
-              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('unenrich')}>
+              <Button size="compact" variant="secondary" disabled={pendingBulk} onClick={() => runBulk('unenrich')}>
                 Undo enrich ({selectionSummary.unenrich})
               </Button>
             ) : null}
-            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
+            <Button size="compact" variant="secondary" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
               Restore ({selectionSummary.restore})
             </Button>
             {selectionSummary.unreview > 0 ? (
-              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('unreview')}>
+              <Button size="compact" variant="secondary" disabled={pendingBulk} onClick={() => runBulk('unreview')}>
                 Un-review ({selectionSummary.unreview})
               </Button>
             ) : null}
             <span style={{ flex: 1 }} />
-            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
+            <Button size="compact" variant="secondary" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
           </div>
         ) : null}
 
@@ -1006,20 +966,20 @@ export default function UnifiedDuplicatesDialog({
             { key: 'resolve', label: 'Resolve', width: 210, minWidth: 140, render: (entry) => {
               const a = actionsFor(entry)
               const replace = a.replace ? (
-                <Button variant={replacesPending(entry) ? 'primary' : 'ghost'} style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account, or the posted copy of a pending charge): keep it and remove the existing duplicate. The existing row's renames, notes and tags move to it; categorization follows whichever file was set to use its imported categories.">Replace existing</Button>
+                <Button variant={replacesPending(entry) ? 'primary' : 'secondary'} size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account, or the posted copy of a pending charge): keep it and remove the existing duplicate. The existing row's renames, notes and tags move to it; categorization follows whichever file was set to use its imported categories.">Replace existing</Button>
               ) : null
               return (
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                   {replacesPending(entry) ? replace : null}
-                  {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep both rows. Records the judgement for this pair only, so neither a later import nor a re-scan flags it again — undoable from the toast, and from the Dismissed filter afterwards.">Keep both</Button> : null}
-                  {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
+                  {a.keep ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep both rows. Records the judgement for this pair only, so neither a later import nor a re-scan flags it again — undoable from the toast, and from the Dismissed filter afterwards.">Keep both</Button> : null}
+                  {a.reject ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
                   {replacesPending(entry) ? null : replace}
-                  {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
-                  {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
-                  {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
-                  {a.enrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'enrich')} title="Fold this row's extra detail (memo, counterparty, item title…) into the existing transaction it matched. Additive — nothing already there is overwritten — and reversible. Skips a row that adds nothing new.">Enrich existing</Button> : null}
-                  {a.unenrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unenrich')} title="Remove the detail this row folded into the matched transaction.">Undo enrich</Button> : null}
-                  {a.unreview ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
+                  {a.restore ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
+                  {a.mark_reviewed ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
+                  {a.import_anyway ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
+                  {a.enrich ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'enrich')} title="Fold this row's extra detail (memo, counterparty, item title…) into the existing transaction it matched. Additive — nothing already there is overwritten — and reversible. Skips a row that adds nothing new.">Enrich existing</Button> : null}
+                  {a.unenrich ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'unenrich')} title="Remove the detail this row folded into the matched transaction.">Undo enrich</Button> : null}
+                  {a.unreview ? <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
                 </div>
               )
             } },

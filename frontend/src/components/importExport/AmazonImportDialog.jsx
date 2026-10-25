@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, AppNoticeDialog, Badge, Button, COMPACT_ACTION_BTN_STYLE, Input, InsetPanel, Select, Spinner, Toggle, Tooltip } from '../ui.jsx'
+import { AppDialog, AppNoticeDialog, Badge, Button, IconButton, Input, InsetPanel, Select, Spinner, Toggle, Tooltip } from '../ui.jsx'
 import CategoryPicker from '../CategoryPicker.jsx'
 import AmazonAccountPicker from './AmazonAccountPicker.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
@@ -135,8 +135,8 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
         <div style={{ display: 'flex', gap: 8, marginTop: 8, marginLeft: CARD_LABEL_WIDTH + CARD_BADGE_WIDTH + 20 }}>
           <Input value={newName} onChange={setNewName} placeholder="New account name"
             aria-label="New account name" style={{ flex: 1 }} />
-          <Button small onClick={submitNew} disabled={disabled || !newName.trim()}>Create</Button>
-          <Button small variant="ghost" onClick={() => { setCreating(false); setNewName('') }}>Cancel</Button>
+          <Button onClick={submitNew} disabled={disabled || !newName.trim()}>Create</Button>
+          <Button variant="secondary" onClick={() => { setCreating(false); setNewName('') }}>Cancel</Button>
         </div>
       )}
     </div>
@@ -322,7 +322,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
       width="min(640px, 100%)"
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={loading}>Cancel</Button>
           <Tooltip content={importHint}>
             <Button onClick={run} disabled={!canImport}>
               {loading ? 'Importing…' : `Import ${files.length} file${files.length === 1 ? '' : 's'}`}
@@ -350,17 +350,16 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
               <div key={f.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 {/* Leading, so the controls read as one column against the names rather than sitting out
                     at the panel's edge. The label names the file, since the button no longer follows it. */}
-                <Button
-                  small
-                  variant="ghost"
+                <IconButton
+                  size="compact"
                   title="Remove this file"
                   aria-label={`Remove ${f.name}`}
                   disabled={loading}
                   onClick={() => setFiles(prev => prev.filter(other => other.name !== f.name))}
-                  style={{ ...COMPACT_ACTION_BTN_STYLE, flex: '0 0 auto', color: 'var(--danger)' }}
+                  style={{ flex: '0 0 auto' }}
                 >
                   ×
-                </Button>
+                </IconButton>
                 <div
                   title={f.name}
                   style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -370,7 +369,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
               </div>
             ))}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <Button small variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={demoLoaded}>Add file(s)</Button>
+              <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={demoLoaded}>Add file(s)</Button>
             </div>
           </InsetPanel>
           {scan?.unrecognized_files?.length ? (

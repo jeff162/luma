@@ -14,7 +14,7 @@ import CategoryPicker from '../CategoryPicker.jsx'
 import CategoryDisplay from '../CategoryDisplay.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import WindowedRows from '../WindowedRows.jsx'
-import { Spinner, Tooltip } from '../ui.jsx'
+import { Spinner, Tooltip, Button, IconButton } from '../ui.jsx'
 import { MerchantOriginHoverCard, OriginFieldList } from '../OriginFields.jsx'
 import { getTxnMerchantOriginRows, hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
@@ -170,17 +170,7 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
             )}
             {onOpenMerchantReport ? (
               <Tooltip content="Open merchant spending report">
-                <button
-                  type="button"
-                  aria-label="Open merchant spending report"
-                  onClick={() => onOpenMerchantReport(row)}
-                  style={{
-                    flexShrink: 0, border: '1px solid var(--border)', background: 'var(--surface2)',
-                    color: 'var(--accent2)', borderRadius: 6, width: 18, height: 18, padding: 0,
-                    fontSize: 11, lineHeight: 1, cursor: 'pointer',
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >↗</button>
+                <IconButton size="compact" tone="accent" aria-label="Open merchant spending report" title="" onClick={() => onOpenMerchantReport(row)} style={{ flexShrink: 0 }}>↗</IconButton>
               </Tooltip>
             ) : null}
           </div>
@@ -292,57 +282,25 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
                 </span>
               ) : null}
               {showCategoryActions && row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
-                <button
-                  type="button"
-                  onClick={() => onKeepCategory?.(row)}
-                  disabled={row.keeping}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '2px 8px',
-                    borderRadius: 999,
-                    fontSize: 10.5,
-                    fontWeight: 600,
-                    color: 'var(--text)',
-                    background: 'color-mix(in srgb, var(--surface2) 82%, white 4%)',
-                    border: '1px solid color-mix(in srgb, var(--border) 84%, white 8%)',
-                    cursor: row.keeping ? 'wait' : 'pointer',
-                    opacity: row.keeping ? 0.7 : 1,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
+                <Button size="compact" variant="secondary" onClick={() => onKeepCategory?.(row)} disabled={row.keeping} style={{ whiteSpace: 'nowrap' }}>
                   {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
-                </button>
+                </Button>
               ) : null}
               {showCategoryActions
                 && state.referenceTargetCategoryId
                 && row.category_source !== 'manual'
                 && row.conflicts_with_reference
                 && String(row.target_category_id) !== String(state.referenceTargetCategoryId) ? (
-                <button
-                  type="button"
+                <Button
+                  size="compact"
+                  variant="secondary"
                   onClick={() => onSetRowCategory?.(row, state.referenceTargetCategoryId)}
                   disabled={row.keeping}
                   title={`Recategorize this transaction as ${buildCategoryDisplayLabel(categories, state.referenceTargetCategoryId) || 'the majority category'}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '2px 8px',
-                    borderRadius: 999,
-                    fontSize: 10.5,
-                    fontWeight: 600,
-                    color: 'var(--accent)',
-                    background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                    border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                    cursor: row.keeping ? 'wait' : 'pointer',
-                    opacity: row.keeping ? 0.7 : 1,
-                    whiteSpace: 'nowrap',
-                  }}
+                  style={{ whiteSpace: 'nowrap' }}
                 >
                   Use majority
-                </button>
+                </Button>
               ) : null}
             </>
           )}
@@ -442,13 +400,9 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
                   <div style={{ minWidth: 0, fontSize: 12, fontWeight: 700 }}>
                     Source detail: {pinnedOriginRow.display_name || pinnedOriginRow.merchant_name || pinnedOriginRow.raw_name || 'Unnamed merchant'}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setPinnedOriginRow(null)}
-                    style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
-                  >
+                  <IconButton size="compact" aria-label="Close source detail" onClick={() => setPinnedOriginRow(null)}>
                     ×
-                  </button>
+                  </IconButton>
                 </div>
                 <OriginFieldList rows={getTxnMerchantOriginRows(pinnedOriginRow)} />
               </div>
@@ -472,49 +426,23 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
                     />
                   </div>
                 ) : (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
                     onClick={() => { setBulkEditing(true); setBulkPickerToken(token => token + 1) }}
                     disabled={applyingAll}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '7px 14px',
-                      borderRadius: 8,
-                      fontSize: 12.5,
-                      fontWeight: 600,
-                      color: 'var(--text)',
-                      background: 'color-mix(in srgb, var(--accent) 14%, var(--surface2))',
-                      border: '1px solid color-mix(in srgb, var(--accent) 42%, var(--border))',
-                      cursor: applyingAll ? 'wait' : 'pointer',
-                      boxShadow: '0 1px 0 rgba(255,255,255,0.04), 0 6px 14px rgba(15,23,42,0.12)',
-                      whiteSpace: 'nowrap',
-                    }}
+                    style={{ whiteSpace: 'nowrap' }}
                   >
                     {applyingAll
                       ? 'Applying…'
                       : `Set all ${state.count || state.rows.length} rows to a category…`}
-                  </button>
+                  </Button>
                 )}
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--muted)',
-              cursor: 'pointer',
-              fontSize: 20,
-              lineHeight: 1,
-              padding: 2,
-            }}
-          >
+          <IconButton aria-label="Close" onClick={onClose} style={{ fontSize: 20 }}>
             ×
-          </button>
+          </IconButton>
         </div>
 
         <div style={{ padding: 16, display: 'grid', gap: 12, minHeight: 0, flex: 1, minWidth: 0 }}>

@@ -155,8 +155,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
         ) : null}
 
         <Button
-          small
-          variant="ghost"
+          variant="secondary"
           style={{
             ...cornerTabStyle({ corner: 'top-right', radius: 12 }),
             borderLeft: '1px solid var(--border)',
@@ -185,8 +184,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
               </div>
             </div>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               title="Clears this browser's localStorage and sessionStorage, then reloads the app."
               onClick={() => requestActionConfirm('browser')}
               disabled={!!workingAction}
@@ -203,8 +201,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
               </div>
             </div>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               title="Clears saved user or local-profile preferences stored by the backend, then reloads the app."
               onClick={() => requestActionConfirm('preferences')}
               disabled={!!workingAction}
@@ -221,8 +218,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
               </div>
             </div>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               title="Clears saved CSV data sources and remembered import snapshots in the backend, then reloads the app."
               onClick={() => requestActionConfirm('importMemory')}
               disabled={!!workingAction}
@@ -241,8 +237,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
               </div>
             </div>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               title="Turns sign-in protection off (if on), deletes every user, then reloads the app to the first-run welcome screen."
               onClick={() => requestActionConfirm('profiles')}
               disabled={!!workingAction}
@@ -270,8 +265,7 @@ export default function DeveloperOptionsSection({ authEnabled }) {
             </div>
           </div>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             title="Each member's next unlock with a typed passphrase checks it again."
             onClick={markPassphrasesUnchecked}
             disabled={!!workingAction}

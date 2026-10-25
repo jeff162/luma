@@ -217,7 +217,7 @@ export default function UserAdminSection({ passwordPolicy }) {
             </select>
           </div>
           <Tooltip content={createIssue && !creating ? createIssue : ''} align="right">
-            <Button small type="submit" disabled={creating || !!createIssue}>
+            <Button type="submit" disabled={creating || !!createIssue}>
               {creating ? 'Creating...' : 'Add user'}
             </Button>
           </Tooltip>
@@ -295,16 +295,15 @@ export default function UserAdminSection({ passwordPolicy }) {
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <Tooltip content={editIssue && savingUserId !== user.id ? editIssue : ''} align="right">
                   <Button
-                    small
                     onClick={() => handleSaveUser(user.id)}
                     disabled={savingUserId === user.id || !!editIssue}
                   >
                     {savingUserId === user.id ? 'Saving...' : 'Save changes'}
                   </Button>
                 </Tooltip>
-                <Button small variant="ghost" onClick={cancelEditing}>Cancel</Button>
+                <Button variant="secondary" onClick={cancelEditing}>Cancel</Button>
                 {viewer?.id !== user.id && (
-                  <Button small variant="ghost" onClick={() => setPendingDeleteUser(user)} disabled={deletingUserId === user.id}>
+                  <Button variant="secondary" onClick={() => setPendingDeleteUser(user)} disabled={deletingUserId === user.id}>
                     {deletingUserId === user.id ? 'Deleting...' : 'Delete user'}
                   </Button>
                 )}
@@ -332,7 +331,7 @@ export default function UserAdminSection({ passwordPolicy }) {
               <span style={{ textTransform: 'capitalize' }}>{user.status}</span>
               <span style={{ color: 'var(--muted)' }}>{user.last_login_at || 'Never'}</span>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <Button small variant="ghost" onClick={() => startEditing(user)}>Edit</Button>
+                <Button variant="secondary" onClick={() => startEditing(user)}>Edit</Button>
               </div>
             </div>
           )

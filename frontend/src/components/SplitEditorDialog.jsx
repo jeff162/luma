@@ -37,7 +37,7 @@ import { round2 } from '../lib/manualTransaction.js'
 import { distributeRemainder } from '../lib/splitDistribution.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
-import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input, Tooltip } from './ui.jsx'
+import { AppDialog, Button, Input, Tooltip, IconButton } from './ui.jsx'
 
 // Money reconciles at the cent, and amounts arrive as text the user is mid-way through typing, so the
 // remaining figure is compared against a half-cent rather than zero.
@@ -293,18 +293,15 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
       width="min(600px, 100%)"
       onClose={onClose}
       actions={(
-        // `small` throughout, matching the controls in the body: at this panel width the default
-        // button size reads as the heaviest thing on screen, and the footer is not where the weight
-        // belongs when the arithmetic above it is the point.
         <>
           {txn?.is_split ? (
-            <Button variant="ghost" small onClick={removeSplit} disabled={saving}>Remove split</Button>
+            <Button variant="secondary" onClick={removeSplit} disabled={saving}>Remove split</Button>
           ) : null}
-          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           {/* A disabled button takes no pointer events, so the reason hangs off a wrapper (ui-patterns.md
               → Loading and feedback). */}
           <Tooltip content={saveBlocker} align="right">
-            <Button small onClick={save} disabled={!complete || saving}>Save split</Button>
+            <Button onClick={save} disabled={!complete || saving}>Save split</Button>
           </Tooltip>
         </>
       )}
@@ -378,7 +375,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                 ))}
               </div>
               <div style={{ display: 'flex' }}>
-                <Button variant="ghost" small onClick={applySuggestion}>Use items</Button>
+                <Button variant="secondary" onClick={applySuggestion}>Use items</Button>
               </div>
             </div>
           ) : null}
@@ -450,8 +447,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       textAlign: 'right',
                     }}
                   />
-                  <button
-                    type="button"
+                  <IconButton
                     onClick={() => {
                       if (!removable) return
                       setRemainderUndo(null)
@@ -459,13 +455,10 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       setRows(prev => prev.filter(r => r.key !== row.key))
                     }}
                     aria-label="Remove this category from the split"
+                    aria-disabled={!removable || undefined}
                     title={removable ? 'Remove' : 'A split needs at least two categories'}
-                    style={{
-                      background: 'none', border: 'none', color: 'var(--muted)',
-                      cursor: removable ? 'pointer' : 'default', fontSize: 16,
-                      lineHeight: 1, opacity: removable ? 1 : 0.3, padding: 0,
-                    }}
-                  >×</button>
+                    style={{ fontSize: 16, opacity: removable ? 1 : 0.3, cursor: removable ? 'pointer' : 'default' }}
+                  >×</IconButton>
                 </div>
               )
             })}
@@ -473,8 +466,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                 list, not part of reading the total underneath it. */}
             <div style={{ display: 'flex', paddingTop: 2 }}>
               <Button
-                variant="ghost"
-                style={COMPACT_ACTION_BTN_STYLE}
+                variant="secondary"
+                size="compact"
                 onClick={() => {
                   // A new, empty line is usually the one the remainder is meant for.
                   const added = blankRow()
@@ -520,8 +513,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             {remainderUndo ? (
               <Button
-                variant="ghost"
-                style={COMPACT_ACTION_BTN_STYLE}
+                variant="secondary"
+                size="compact"
                 onClick={undoRemainder}
                 title="Put the previous amounts back"
               >Undo</Button>
@@ -531,8 +524,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                   ? 'Share what is left among the amounts above, in proportion to each'
                   : 'Enter an amount above to share the remainder by'}>
                   <Button
-                    variant="ghost"
-                    style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
+                    variant="secondary"
+                    size="compact" style={{ visibility: balanced ? 'hidden' : 'visible' }}
                     onClick={distributeRemainderAcrossRows}
                     disabled={!distributable}
                   >Distribute remainder</Button>
@@ -541,8 +534,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                   ? 'Add what is left over to the highlighted amount'
                   : 'Click a line above to choose where the remainder goes'}>
                   <Button
-                    variant="ghost"
-                    style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
+                    variant="secondary"
+                    size="compact" style={{ visibility: balanced ? 'hidden' : 'visible' }}
                     onClick={addRemainderToSelected}
                     disabled={!selectedKey}
                   >Add remainder to selected</Button>

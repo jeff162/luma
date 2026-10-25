@@ -3,6 +3,7 @@
 
 import React, { useLayoutEffect, useRef, useState } from 'react'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { IconButton } from './ui.jsx'
 
 // Breathing room kept between the menu and the viewport edge, and between the menu and its anchor.
 const VIEWPORT_MARGIN = 8
@@ -119,27 +120,15 @@ export function ActionMenu({ anchorRect, items = [], onClose, minWidth = 180, al
  */
 export function ActionMenuButton({ onOpen, title = 'More actions', disabled = false, open = false }) {
   return (
-    <button
-      type="button"
-      title={title}
+    <IconButton
       aria-label={title}
       aria-haspopup="menu"
       aria-expanded={open}
       disabled={disabled}
       onClick={event => onOpen(event.currentTarget.getBoundingClientRect())}
-      style={{
-        background: open ? 'var(--surface2)' : 'none',
-        border: '1px solid transparent',
-        borderRadius: 6,
-        color: 'var(--muted)',
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.5 : 1,
-        padding: '0 8px', fontSize: 18, lineHeight: '24px',
-      }}
-      onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = 'var(--surface2)' }}
-      onMouseLeave={e => { e.currentTarget.style.background = open ? 'var(--surface2)' : 'none' }}
+      style={{ padding: '0 8px', fontSize: 18, lineHeight: '24px', ...(open ? { background: 'var(--surface2)' } : null) }}
     >
       ⋯
-    </button>
+    </IconButton>
   )
 }

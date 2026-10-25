@@ -40,7 +40,7 @@ function CopyDetailsButton() {
   }
 
   return (
-    <Button small variant="ghost" onClick={copy}
+    <Button variant="secondary" onClick={copy}
       title="Copy the version, platform and setup as text, to paste into a bug report. Contains no file paths, host names or financial data.">
       {message || 'Copy details'}
     </Button>

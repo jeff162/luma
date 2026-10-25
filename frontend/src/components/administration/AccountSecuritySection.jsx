@@ -221,7 +221,7 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
   }
 
   const cancelButton = (
-    <Button small variant="ghost" type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
+    <Button variant="secondary" type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
   )
 
   // Nothing until the identities arrive: the shared `Spinner` is a page-level block, and the wait is one
@@ -240,7 +240,7 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
         </div>
         {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button small onClick={enablePlain} disabled={saving}>
+          <Button onClick={enablePlain} disabled={saving}>
             {saving ? 'Enabling...' : 'Enable sign-in protection'}
           </Button>
           {cancelButton}
@@ -320,7 +320,7 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
 
       <div style={{ display: 'flex', gap: 8 }}>
         <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
-          <Button small type="submit" disabled={saving || !!blockingIssue}>
+          <Button type="submit" disabled={saving || !!blockingIssue}>
             {saving ? 'Enabling...' : 'Enable sign-in protection'}
           </Button>
         </Tooltip>

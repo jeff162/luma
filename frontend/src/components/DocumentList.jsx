@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
-import { AppConfirmDialog } from './ui.jsx'
+import { AppConfirmDialog, IconButton, LinkButton } from './ui.jsx'
 
 /*
  * A list of documents and everything done to one in place: view, rename, edit its text, and take it away.
@@ -94,10 +94,6 @@ export default function DocumentList({ documents, onChange, detachable = false, 
   )
 }
 
-const ICON_BUTTON_STYLE = {
-  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '0 3px',
-}
-
 function DocumentRow({ doc, startRenaming, onView, onEdit, onRename, onDetach, onDelete }) {
   const name = useTransientTextEdit(doc.filename, { onCommit: onRename })
 
@@ -155,34 +151,22 @@ function DocumentRow({ doc, startRenaming, onView, onEdit, onRename, onDetach, o
         </span>
       ) : null}
       <span style={{ fontSize: 11, color: 'var(--muted)' }}>{formatSize(doc.byte_size)}</span>
-      <button type="button" onClick={() => name.beginEdit()} title="Rename" aria-label={`Rename ${doc.filename}`} style={ICON_BUTTON_STYLE}>
+      <IconButton size="compact" onClick={() => name.beginEdit()} title="Rename" aria-label={`Rename ${doc.filename}`}>
         ✎
-      </button>
+      </IconButton>
       {onEdit ? (
-        <button type="button" onClick={onEdit} title="Edit the text" aria-label={`Edit the text of ${doc.filename}`} style={{ ...ICON_BUTTON_STYLE, fontSize: 12 }}>
+        <LinkButton tone="muted" onClick={onEdit} title="Edit the text" aria-label={`Edit the text of ${doc.filename}`} style={{ fontSize: 12 }}>
           Edit
-        </button>
+        </LinkButton>
       ) : null}
       {onDetach ? (
-        <button
-          type="button"
-          onClick={onDetach}
-          title="Move to stored documents"
-          aria-label={`Move ${doc.filename} to stored documents`}
-          style={{ ...ICON_BUTTON_STYLE, fontSize: 14 }}
-        >
+        <IconButton size="compact" onClick={onDetach} title="Move to stored documents" aria-label={`Move ${doc.filename} to stored documents`}>
           ×
-        </button>
+        </IconButton>
       ) : null}
-      <button
-        type="button"
-        onClick={onDelete}
-        title="Delete permanently"
-        aria-label={`Delete ${doc.filename}`}
-        style={ICON_BUTTON_STYLE}
-      >
+      <IconButton size="compact" tone="danger" onClick={onDelete} title="Delete permanently" aria-label={`Delete ${doc.filename}`}>
         🗑
-      </button>
+      </IconButton>
     </div>
   )
 }

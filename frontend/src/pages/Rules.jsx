@@ -6,7 +6,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { createPortal } from 'react-dom'
-import { Card, PageHeader, Button, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle } from '../components/ui.jsx'
+import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
@@ -170,21 +170,18 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
       <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center', paddingTop: 1 }}>
         {/* Hover to count the transactions this rule matches (lazy, cached); click to open the report. */}
         <Tooltip content={matchTip} openDelay={ROW_HOVER_OPEN_DELAY_MS}>
-          <button
-            type="button"
+          <IconButton
+            size="compact"
+            tone="accent"
             onMouseEnter={armHoverFetch}
             onMouseLeave={cancelHoverFetch}
             onFocus={armHoverFetch}
             onClick={openReport}
             aria-label="Show transactions this rule matches"
-            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '2px 6px', borderRadius: 4 }}
-          >↗</button>
+            title=""
+          >↗</IconButton>
         </Tooltip>
-        <button
-          onClick={() => onEdit(rule.id)}
-          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '2px 6px', borderRadius: 4 }}
-          title="Edit rule"
-        >✎</button>
+        <IconButton size="compact" onClick={() => onEdit(rule.id)} aria-label="Edit rule">✎</IconButton>
         {confirmDel ? (
           <span ref={confirmRef} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <label
@@ -194,21 +191,11 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
               <input type="checkbox" checked={reconcileDel} onChange={e => setReconcileDel(e.target.checked)} />
               revert txns
             </label>
-            <button
-              onClick={() => { setConfirmDel(false); const r = reconcileDel; setReconcileDel(false); onDelete(rule.id, r) }}
-              style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
-            >Del</button>
-            <button
-              onClick={dismissConfirm}
-              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 4, padding: '2px 6px', fontSize: 11, cursor: 'pointer' }}
-            >✕</button>
+            <Button size="compact" onClick={() => { setConfirmDel(false); const r = reconcileDel; setReconcileDel(false); onDelete(rule.id, r) }}>Del</Button>
+            <IconButton size="compact" aria-label="Keep this rule" onClick={dismissConfirm}>✕</IconButton>
           </span>
         ) : (
-          <button
-            onClick={() => setConfirmDel(true)}
-            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, padding: '2px 6px', borderRadius: 4 }}
-            title="Delete rule"
-          >×</button>
+          <IconButton size="compact" onClick={() => setConfirmDel(true)} aria-label="Delete rule">×</IconButton>
         )}
       </div>
     </div>
@@ -313,18 +300,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
     setDeleteReconcile(false)
   }
 
-  const quietHeaderButtonStyle = {
-    background: 'transparent',
-    color: 'var(--muted)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    padding: '5px 11px',
-    fontSize: 12,
-    fontWeight: 500,
-    cursor: working ? 'not-allowed' : 'pointer',
-    opacity: working ? 0.65 : 1,
-  }
-
   return (
     <DetailPanelShell
       {...chrome}
@@ -350,31 +325,18 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
               <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={working} />
               Re-evaluate transactions
             </label>
-            <Button small onClick={handleSave} disabled={working || !draftState.canSave}>
+            <Button onClick={handleSave} disabled={working || !draftState.canSave}>
               {working ? 'Saving…' : 'Save changes'}
             </Button>
-            <Button small variant="ghost" onClick={onCancel} disabled={working}>
+            <Button variant="secondary" onClick={onCancel} disabled={working}>
               Cancel
             </Button>
             {/* Destructive, so it sits at the far end rather than beside Save, and behind a confirm.
                 Deleting from here saves opening the rule, deciding against it, and hunting the same rule
                 down in the list to remove it. */}
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(true)}
-              disabled={working}
-              title="Delete this rule"
-              aria-label="Delete this rule"
-              style={{
-                ...quietHeaderButtonStyle,
-                marginLeft: 4,
-                padding: '5px 9px',
-                fontSize: 14,
-                lineHeight: 1,
-              }}
-            >
+            <IconButton onClick={() => setConfirmDelete(true)} disabled={working} aria-label="Delete this rule" style={{ marginLeft: 4 }}>
               🗑
-            </button>
+            </IconButton>
           </div>
         </div>
       )}
@@ -730,15 +692,6 @@ export default function Rules() {
   const editingRule = editingRuleId ? rules.find(rule => rule.id === editingRuleId) : null
   const showCreateForm = showAdd
   const showAnyEditor = showAdd || !!editingRule
-  const addRuleButtonStyle = {
-    background: showAnyEditor
-      ? 'color-mix(in srgb, var(--surface2) 82%, var(--accent) 6%)'
-      : 'color-mix(in srgb, var(--accent) 88%, black 8%)',
-    boxShadow: showAnyEditor
-      ? '0 8px 18px rgba(0,0,0,0.10)'
-      : '0 10px 22px rgba(0,0,0,0.12)',
-  }
-
   function openCreateForm() {
     setEditingRuleId(null)
     setShowAdd(true)
@@ -795,22 +748,9 @@ export default function Rules() {
             ? 'Review rules suggested from your imported transactions'
             : 'Mark a categorized import as clean to generate rule suggestions'}>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               onClick={() => navigate('/import-export/rule-suggestions', { state: { backTo: '/rules', backLabel: 'Rules' } })}
               disabled={!hasImportedRuleSuggestionWork}
-              style={hasImportedRuleSuggestionWork
-                ? {
-                  background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
-                  border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
-                  boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
-                }
-                : {
-                  background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                  color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
-                  border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                  boxShadow: 'none',
-                }}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <span>Generate rules from imported data</span>
@@ -832,14 +772,9 @@ export default function Rules() {
                 ].filter(Boolean).join('; ')
               : 'Check for drifted amount ranges and rules that compete for the same transaction'}>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               disabled={rules.length < 2 && !checkupCount}
               onClick={() => setFindingsOpen(true)}
-              style={checkupCount ? {
-                background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
-                border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))',
-              } : undefined}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <span>Rule checkup</span>
@@ -848,21 +783,20 @@ export default function Rules() {
             </Button>
           </Tooltip>
           {/* Empty-state-only, like the Categories starter offer: a head start shown only while there
-              are no rules yet. Once any rule exists it's gone (add more via "+ New"). */}
+              are no rules yet. Once any rule exists it's gone (add more via "+New"). */}
           {!loading && rules.length === 0 ? (
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               onClick={() => setShowStarterRules(true)}
               title="Add a curated set of common keyword → category rules"
             >
               Starter rules
             </Button>
           ) : null}
-          {/* "+ New" rather than "Add rule": the page is the noun, and repeating it in the button only
+          {/* "+New" rather than "Add rule": the page is the noun, and repeating it in the button only
               costs header width the controls beside it need. */}
-          <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
-            {showAnyEditor ? 'Cancel' : '+ New'}
+          <Button variant={showAnyEditor ? 'secondary' : 'primary'} onClick={() => (showAnyEditor ? closeForm() : openCreateForm())}>
+            {showAnyEditor ? 'Cancel' : '+New'}
           </Button>
         </PageHeader>
       </div>
@@ -889,13 +823,8 @@ export default function Rules() {
         {/* Structured facet filter — page-local, session-scoped (never touches the app-wide FilterContext). */}
         <div style={{ position: 'relative' }}>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={() => setShowFilter(o => !o)}
-            style={activeFacetCount > 0 ? {
-              background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-              border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
-            } : undefined}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               Filter{activeFacetCount > 0 ? <ActionCountBadge count={activeFacetCount} /> : null}
@@ -924,12 +853,7 @@ export default function Rules() {
             }}
           >
             {chip.text}
-            <button
-              type="button"
-              onClick={chip.remove}
-              title="Remove filter"
-              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
-            >×</button>
+            <IconButton size="compact" aria-label="Remove filter" onClick={chip.remove}>×</IconButton>
           </span>
         ))}
 
@@ -954,8 +878,7 @@ export default function Rules() {
           </label>
           {cleanupBeforeDate ? (
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               disabled={cleanupCount === 0}
               onClick={() => setCleanupOpen(true)}
               title="Review and clean out rules that haven't categorized anything recently"
@@ -978,21 +901,13 @@ export default function Rules() {
               has no affordance on a segmented control, and would have to apply to A–Z for consistency,
               where Z–A has no use at all. If this is ever wanted, give the segment a visible direction
               caret rather than hiding the behaviour in a second click. */}
-          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            {[['alpha', 'A–Z'], ['lastUsed', 'Last used']].map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setSortMode(mode)}
-                style={{
-                  border: 'none', padding: '4px 9px', fontSize: 12, cursor: 'pointer',
-                  background: sortMode === mode ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface)',
-                  color: sortMode === mode ? 'var(--accent2)' : 'var(--muted)',
-                  fontWeight: sortMode === mode ? 600 : 400,
-                }}
-              >{label}</button>
-            ))}
-          </div>
+          <SegmentedToggle
+            size="compact"
+            ariaLabel="Sort rules"
+            value={sortMode}
+            onChange={setSortMode}
+            options={[{ value: 'alpha', label: 'A–Z' }, { value: 'lastUsed', label: 'Last used' }]}
+          />
 
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             {filteredRules.length === rules.length
@@ -1034,7 +949,7 @@ export default function Rules() {
         {loading ? (
             <div style={{ padding: 24 }}><Spinner /></div>
           ) : rules.length === 0 ? (
-            <EmptyState message='No rules yet — click "+ New" to create one' />
+            <EmptyState message='No rules yet — click "+New" to create one' />
           ) : filteredRules.length === 0 ? (
             <EmptyState message="No rules match your search or filters" />
           ) : (
@@ -1113,8 +1028,8 @@ export default function Rules() {
           onClose={() => setCollision(null)}
           actions={(
             <>
-              <Button variant="ghost" onClick={() => setCollision(null)}>Cancel</Button>
-              <Button variant="ghost" onClick={openExistingFromCollision}>Open the other rule</Button>
+              <Button variant="secondary" onClick={() => setCollision(null)}>Cancel</Button>
+              <Button variant="secondary" onClick={openExistingFromCollision}>Open the other rule</Button>
               {(collision.status === 'mergeable' || (collision.fromEdit && collision.status === 'duplicate')) ? (
                 <Button onClick={mergeCollision}>
                   {collision.fromEdit ? (collision.status === 'duplicate' ? 'Remove this rule' : 'Merge & remove this rule') : 'Add to existing rule'}

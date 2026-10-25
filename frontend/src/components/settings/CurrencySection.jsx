@@ -86,7 +86,6 @@ export default function CurrencySection() {
           Amounts show as <strong style={{ color: 'var(--text)' }}>{symbol}1,234.56</strong>
         </span>
         <Button
-          small
           disabled={saving || selected === state.code}
           onClick={() => save(selected)}
         >

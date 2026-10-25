@@ -13,7 +13,7 @@ import {
   FloatingPanelHeader,
   OverlayBackdrop,
   SectionEyebrow,
-  getFormControlStyle,
+  getFormControlStyle, FilterChip, IconButton, LinkButton, SegmentedToggle
 } from './ui.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -157,22 +157,6 @@ function OpSelect({ value, onChange, options, name = '', ariaLabel = '' }) {
   )
 }
 
-function SegButton({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '4px 10px', fontSize: 12, cursor: 'pointer',
-        border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-        background: active ? 'var(--accent)' : 'transparent',
-        color: active ? '#fff' : 'var(--muted)',
-        fontWeight: active ? 500 : 400,
-        borderRadius: 6,
-      }}
-    >{children}</button>
-  )
-}
-
 // Exported so the FilterBar's amount *filter* popover reuses the exact same control (Both/
 // Debits/Credits, Range/Equals) users already know from the rule editor — magnitude compares against
 // |amount|, the debit/credit side applies the sign separately. `strictBounds` offers `>` / `<` beside the
@@ -200,19 +184,24 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange, stri
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>Applies to</span>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <SegButton active={side === 'both'} onClick={() => setSide('both')}>Both</SegButton>
-          <SegButton active={side === 'debit'} onClick={() => setSide('debit')}>Debits</SegButton>
-          <SegButton active={side === 'credit'} onClick={() => setSide('credit')}>Credits</SegButton>
-        </div>
+        <SegmentedToggle
+          size="compact"
+          ariaLabel="Applies to"
+          value={side}
+          onChange={setSide}
+          options={[{ value: 'both', label: 'Both' }, { value: 'debit', label: 'Debits' }, { value: 'credit', label: 'Credits' }]}
+        />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>Mode</span>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <SegButton active={!isEquals} onClick={() => isEquals && toggleEquals()}>Range</SegButton>
-          <SegButton active={isEquals} onClick={() => !isEquals && toggleEquals()}>Equals</SegButton>
-        </div>
+        <SegmentedToggle
+          size="compact"
+          ariaLabel="Mode"
+          value={isEquals ? 'equals' : 'range'}
+          onChange={mode => { if ((mode === 'equals') !== isEquals) toggleEquals() }}
+          options={[{ value: 'range', label: 'Range' }, { value: 'equals', label: 'Equals' }]}
+        />
       </div>
 
       {isEquals ? (
@@ -233,7 +222,7 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange, stri
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
             <NumberInput value={low} onChange={setLow} placeholder="no lower limit" width={110} name="rule-amount-lower-bound" ariaLabel="Rule lower amount" />
             {low != null && (
-              <button onClick={() => setLow(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>×</button>
+              <IconButton size="compact" aria-label="Clear the lower limit" onClick={() => setLow(null)}>×</IconButton>
             )}
           </div>
 
@@ -247,7 +236,7 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange, stri
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
             <NumberInput value={high} onChange={setHigh} placeholder="no upper limit" width={110} name="rule-amount-upper-bound" ariaLabel="Rule upper amount" />
             {high != null && (
-              <button onClick={() => setHigh(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>×</button>
+              <IconButton size="compact" aria-label="Clear the upper limit" onClick={() => setHigh(null)}>×</IconButton>
             )}
           </div>
         </div>
@@ -263,20 +252,9 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange, stri
 function ConditionChip({ label, summary, active, expanded = true, onActivate, onClear, children, containerRef, triggerRef }) {
   if (!active) {
     return (
-      <button
-        ref={triggerRef}
-        onClick={onActivate}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5,
-          padding: '5px 10px', borderRadius: 20, fontSize: 12,
-          border: '1px dashed var(--border)', background: 'transparent',
-          color: 'var(--muted)', cursor: 'pointer', transition: 'all 0.1s',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent2)' }}
-        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--muted)' }}
-      >
+      <FilterChip variant="add" ref={triggerRef} onClick={onActivate}>
         <span style={{ fontSize: 11 }}>＋</span> {label}
-      </button>
+      </FilterChip>
     )
   }
   return (
@@ -299,7 +277,7 @@ function ConditionChip({ label, summary, active, expanded = true, onActivate, on
       >
         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent2)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{label}</span>
         {summary && <span style={{ fontSize: 12, color: 'var(--muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>}
-        <button type="button" onClick={event => { event.stopPropagation(); onClear() }} title={`Remove ${label}`} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
+        <IconButton size="compact" aria-label={`Remove ${label}`} onClick={event => { event.stopPropagation(); onClear() }} style={{ flexShrink: 0 }}>×</IconButton>
       </div>
       {expanded ? <div style={{ padding: '10px 12px' }}>{children}</div> : null}
     </div>
@@ -381,13 +359,7 @@ export function RulePreviewDetail({
               {subtitle ?? `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} where applying this rule would make a change`}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none', border: 'none', color: 'var(--muted)',
-              cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1,
-            }}
-          >×</button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </FloatingPanelHeader>
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {transactions.length === 0 ? (
@@ -442,14 +414,12 @@ export function RulePreviewDetail({
           )}
         </div>
         <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', justifyContent: 'flex-end' }}>
-          <Button small variant="ghost" onClick={onClose}>Close</Button>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
         </div>
       </FloatingPanel>
     </OverlayBackdrop>
   )
 }
-
-const addMatcherTextStyle = { background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }
 
 // One text box in the merchant matcher, with the joiner that ties it to the box above and, for any row
 // after the first, a remove button.
@@ -477,12 +447,7 @@ function MatcherTextRow({ joiner, id, name, ariaLabel, autoFocus, value, placeho
         style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
       />
       {onRemove ? (
-        <button
-          type="button"
-          onClick={onRemove}
-          title="Remove this text"
-          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
-        >×</button>
+        <IconButton size="compact" onClick={onRemove} aria-label="Remove this text" style={{ flexShrink: 0 }}>×</IconButton>
       ) : null}
     </div>
   )
@@ -886,20 +851,15 @@ const RuleForm = forwardRef(function RuleForm({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
           <span style={{ ...sectionHeadStyle, marginBottom: 0 }}>If The Transaction Matches…</span>
           {!matchOnly && changeCount > 0 ? (
-            <button
-              type="button"
+            <Button
+              size="compact"
+              variant="secondary"
               onClick={() => setPreviewDetailOpen(true)}
               title="See the existing transactions this rule would change"
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                border: '1px solid color-mix(in srgb, var(--accent2) 22%, var(--border))',
-                color: 'var(--accent2)', borderRadius: 999, padding: '3px 10px',
-                fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-              }}
+              style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             >
               {changeCount} would change ↗
-            </button>
+            </Button>
           ) : null}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -949,10 +909,10 @@ const RuleForm = forwardRef(function RuleForm({
             {suggestionFields ? null : (
               <div style={{ display: 'flex', gap: 14, marginTop: 7 }}>
                 {(alternatives.length ? alternatives : ['']).length < MAX_CLAUSES ? (
-                  <button type="button" onClick={addAlternative} style={addMatcherTextStyle}>＋ or contains…</button>
+                  <LinkButton onClick={addAlternative} style={{ fontSize: 12 }}>＋ or contains…</LinkButton>
                 ) : null}
                 {filters.length < MAX_CLAUSES ? (
-                  <button type="button" onClick={addFilter} style={addMatcherTextStyle}>＋ and contains…</button>
+                  <LinkButton onClick={addFilter} style={{ fontSize: 12 }}>＋ and contains…</LinkButton>
                 ) : null}
               </div>
             )}
@@ -1218,16 +1178,9 @@ const RuleForm = forwardRef(function RuleForm({
                   style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: changeCount > 0 ? 'pointer' : 'default' }} />
                 Apply this rule now to
               </label>
-              <button
-                onClick={() => setPreviewDetailOpen(true)}
-                style={{
-                  background: 'none', border: 'none', padding: 0,
-                  color: 'var(--accent)', cursor: 'pointer',
-                  fontSize: 13, textDecoration: 'underline', lineHeight: 'inherit',
-                }}
-              >
+              <LinkButton onClick={() => setPreviewDetailOpen(true)} style={{ fontSize: 13, textDecoration: 'underline' }}>
                 {changeCount} matching existing transaction{changeCount !== 1 ? 's' : ''}
-              </button>
+              </LinkButton>
             </div>
           ) : null}
           {hideFooterActions ? (
@@ -1246,7 +1199,7 @@ const RuleForm = forwardRef(function RuleForm({
               {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
               <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
                 {onCancel && (
-                  <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+                  <Button variant="secondary" onClick={onCancel}>Cancel</Button>
                 )}
                 <Button onClick={handleSave} disabled={saving || !canSave}>{saving ? 'Saving…' : saveLabel}</Button>
               </div>

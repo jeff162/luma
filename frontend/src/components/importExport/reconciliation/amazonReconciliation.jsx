@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { api } from '../../../lib/api.js'
-import { Button, Tooltip, COMPACT_ACTION_BTN_STYLE } from '../../ui.jsx'
+import { Button, Tooltip } from '../../ui.jsx'
 import SplitEditorDialog from '../../SplitEditorDialog.jsx'
 import { formatTransactionAmount } from '../../../lib/moneyDisplay.js'
 import { safeExternalUrl } from '../../../lib/utils.js'
@@ -95,7 +95,7 @@ function DuplicateCharges({ charges, disabled, onDiscard }) {
           {c.matched ? (
             <span title="Currently linked to this order" style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>linked</span>
           ) : null}
-          <Button variant="ghost" disabled={disabled} onClick={() => onDiscard(c)} style={{ ...COMPACT_ACTION_BTN_STYLE, flexShrink: 0, whiteSpace: 'nowrap' }} title="Discard this copy — sends it to Trash and keeps the other">Discard</Button>
+          <Button variant="secondary" disabled={disabled} onClick={() => onDiscard(c)} size="compact" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} title="Discard this copy — sends it to Trash and keeps the other">Discard</Button>
         </div>
       ))}
     </div>
@@ -113,8 +113,7 @@ function SplitAction({ order, busy, onOpen }) {
   if (!order.is_split && order.item_count === 1) return null
   return (
     <Button
-      small
-      variant="ghost"
+      variant="secondary"
       disabled={busy}
       onClick={() => onOpen(order)}
       title={order.is_split
@@ -237,9 +236,9 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
   // Acknowledge a row so it drops out of the attention count while staying listed, or un-acknowledge it
   // back in. A reviewed row carries its ✓ status in the Kind cell; here it offers Undo review.
   const reviewToggle = (entry, subject, markTitle) => (entry.reviewed ? (
-    <Button small variant="ghost" disabled={busy} onClick={() => setReviewed(entry, false)} title={`Un-acknowledge — return this ${subject} to the attention count`}>Undo review</Button>
+    <Button variant="secondary" disabled={busy} onClick={() => setReviewed(entry, false)} title={`Un-acknowledge — return this ${subject} to the attention count`}>Undo review</Button>
   ) : (
-    <Button small variant="ghost" disabled={busy} onClick={() => setReviewed(entry, true)} title={markTitle}>Mark reviewed</Button>
+    <Button variant="secondary" disabled={busy} onClick={() => setReviewed(entry, true)} title={markTitle}>Mark reviewed</Button>
   ))
 
   // The manual multi-charge link window for a "No charge found" order: pick the card charge(s) that together
@@ -301,10 +300,10 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       if (entry.kind === 'unaccounted_duplicate') {
         return (
           <div style={{ display: 'flex', gap: 6 }}>
-            <Button small variant="ghost" disabled={busy} onClick={() => mergeGroup(entry)} title="Merge into one: keep the richest copy, fold in any detail the others have, and trash the rest — the survivor stays in the unaccounted list">
+            <Button variant="secondary" disabled={busy} onClick={() => mergeGroup(entry)} title="Merge into one: keep the richest copy, fold in any detail the others have, and trash the rest — the survivor stays in the unaccounted list">
               Merge → keep one
             </Button>
-            <Button small variant="ghost" disabled={busy} onClick={() => markNotDuplicates(entry)} title="These are distinct purchases — keep every copy and never flag this group again">
+            <Button variant="secondary" disabled={busy} onClick={() => markNotDuplicates(entry)} title="These are distinct purchases — keep every copy and never flag this group again">
               Not duplicates
             </Button>
           </div>
@@ -317,7 +316,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
         // attention count.
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <Button small variant="ghost" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
+            <Button variant="secondary" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
               title="Send this charge to Trash — for a duplicate copy the report failed to pair up (recoverable from Settings → Trash)">
               Trash
             </Button>
@@ -334,11 +333,11 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
         return (
           <div style={{ display: 'flex', gap: 6 }}>
             {entry.mergeable ? (
-              <Button small variant="ghost" disabled={busy} onClick={() => mergeGroup(entry)} title="Merge into one: keep the richest copy, fold in any detail the others have, and trash the rest">
+              <Button variant="secondary" disabled={busy} onClick={() => mergeGroup(entry)} title="Merge into one: keep the richest copy, fold in any detail the others have, and trash the rest">
                 Merge → keep one
               </Button>
             ) : null}
-            <Button small variant="ghost" disabled={busy} onClick={() => markNotDuplicates(entry)}
+            <Button variant="secondary" disabled={busy} onClick={() => markNotDuplicates(entry)}
               title="These are distinct purchases, not copies — keep them all and never flag this group again. The order returns to the unmatched path for linking (a charge dated on the order is re-suggested for review).">
               Not duplicates
             </Button>
@@ -348,8 +347,8 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       if (entry.kind === 'matched_review') {
         return (
           <div style={{ display: 'flex', gap: 6 }}>
-            <Button small variant="ghost" disabled={busy} onClick={() => run(() => actionCall('accept', entry), 'Could not link the charges')} title="Link these charges to the order — each is excluded from totals">Accept</Button>
-            <Button small variant="ghost" disabled={busy} onClick={() => run(() => actionCall('dismiss', entry), 'Could not dismiss the suggestion')} title="Not a match — keep this order as no-charge-found and stop suggesting it">Dismiss</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => run(() => actionCall('accept', entry), 'Could not link the charges')} title="Link these charges to the order — each is excluded from totals">Accept</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => run(() => actionCall('dismiss', entry), 'Could not dismiss the suggestion')} title="Not a match — keep this order as no-charge-found and stop suggesting it">Dismiss</Button>
           </div>
         )
       }
@@ -359,7 +358,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       if (entry.kind === 'matched') {
         return (
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-start' }}>
-            <Button small variant="ghost" disabled={busy} onClick={() => run(() => actionCall('unlink', entry), 'Could not unlink the charges')}
+            <Button variant="secondary" disabled={busy} onClick={() => run(() => actionCall('unlink', entry), 'Could not unlink the charges')}
               title="Not this order's charge — detach it (its category is restored) and put the order back to needing a match">
               Unlink
             </Button>
@@ -373,7 +372,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <Tooltip content={unaccounted.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
-            <Button small variant="ghost" disabled={busy || !unaccounted.length} onClick={() => openLink(entry)}>
+            <Button variant="secondary" disabled={busy || !unaccounted.length} onClick={() => openLink(entry)}>
               Link charges…
             </Button>
           </Tooltip>

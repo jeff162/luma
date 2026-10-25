@@ -22,13 +22,14 @@ import { api } from '../lib/api.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
   PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, AppConfirmDialog, SegmentedToggle,
-  getFloatingPanelSurfaceStyle, RefreshButton} from '../components/ui.jsx'
+  RefreshButton, FilterChip, IconButton, LinkButton} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
 import { TransferReviewDialog } from '../components/TransferReviewDialog.jsx'
 import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
 import RecurringAmountMatchDialog from '../components/RecurringAmountMatchDialog.jsx'
+import SplitButton from '../components/SplitButton.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
@@ -37,7 +38,6 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
-import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -146,40 +146,26 @@ function buildLayout(list, selected, sortOrder) {
   return { counts, sections }
 }
 
-// The "Not recurring" split button on detected cards: the main action rejects the detection, and a
-// caret opens the alternative "Mark canceled" (ended) for a series that was real but has stopped.
+// The "Not recurring" split button on detected cards: the main action rejects the detection, and the
+// caret offers "Mark canceled" (ended) for a series that was real but has stopped.
 function NotRecurringSplit({ onSuppress, onEnd }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-  useDismissibleLayer({ open, onClose: () => setOpen(false), refs: [ref] })
-  const seg = {
-    background: 'var(--surface2)', color: 'var(--text)', border: 'none', cursor: 'pointer',
-    fontSize: 12, fontWeight: 500, padding: '4px 10px', lineHeight: 1.5,
-  }
-  const edge = '1px solid color-mix(in srgb, var(--border) 80%, transparent)'
   return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
-      <span style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: edge }}>
-        <button style={seg} onClick={onSuppress}>Not recurring</button>
+    <SplitButton
+      onClick={onSuppress}
+      menuLabel="More options"
+      renderMenu={close => (
         <button
-          aria-label="More options"
-          onClick={() => setOpen(o => !o)}
-          style={{ ...seg, padding: '4px 6px', borderLeft: edge, fontSize: 9 }}
+          type="button"
+          role="menuitem"
+          onClick={() => { close(); onEnd() }}
+          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text)', padding: '6px 10px', borderRadius: 6 }}
         >
-          ▾
+          Mark canceled
         </button>
-      </span>
-      {open && (
-        <div style={{ ...getFloatingPanelSurfaceStyle({ radius: 8 }), position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20, padding: 4, minWidth: 150 }}>
-          <button
-            onClick={() => { setOpen(false); onEnd() }}
-            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text)', padding: '6px 10px', borderRadius: 6 }}
-          >
-            Mark canceled
-          </button>
-        </div>
       )}
-    </span>
+    >
+      Not recurring
+    </SplitButton>
   )
 }
 
@@ -226,27 +212,6 @@ function TransferLegs({ series }) {
         <span>{series.counterpart_account_name || 'Unknown account'}</span>
       </div>
     </div>
-  )
-}
-
-// Quiet, flat card-action button sized to sit alongside the cadence select rather than dominate the
-// card. Local (not the shared Button) because the shared ghost variant carries a drop shadow that can't
-// be toned down per-instance (the variant style wins over a passed style).
-function CardActionButton({ children, onClick, variant = 'default', title }) {
-  const edge = '1px solid color-mix(in srgb, var(--border) 80%, transparent)'
-  const looks = {
-    default: { background: 'var(--surface2)', color: 'var(--text)', border: edge },
-    primary: { background: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' },
-    danger: { background: 'var(--surface2)', color: 'var(--danger)', border: edge },
-  }
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      style={{ fontSize: 12, fontWeight: 500, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', lineHeight: 1.5, ...looks[variant] }}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -317,14 +282,15 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
             ) : (
               <>
                 <span style={{ fontSize: 15.5, fontWeight: 650 }}>{series.display_name}</span>
-                <button
+                <IconButton
+                  size="compact"
                   onClick={startRename}
                   aria-label="Rename series"
                   title="Rename"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0, fontSize: 12, lineHeight: 1, opacity: hover ? 0.7 : 0, transition: 'opacity 0.15s' }}
+                  style={{ opacity: hover ? 0.7 : 0, transition: 'opacity 0.15s' }}
                 >
                   ✎
-                </button>
+                </IconButton>
               </>
             )}
             <StatusBadge series={series} />
@@ -344,17 +310,12 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
               ? <><span style={{ opacity: 0.5 }}>·</span><span>{series.account_name}</span></> : null}
             <span style={{ opacity: 0.5 }}>·</span>
             {canOpen ? (
-              <button
+              <LinkButton
                 onClick={() => onOpenReport(series)}
-                style={{
-                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                  fontSize: 12.5, fontWeight: 600, color: 'var(--accent2)', textDecoration: active ? 'underline' : 'none',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline' }}
-                onMouseLeave={e => { e.currentTarget.style.textDecoration = active ? 'underline' : 'none' }}
+                style={{ fontSize: 12.5, fontWeight: 600, textDecoration: active ? 'underline' : undefined }}
               >
                 {series.occurrence_count} transaction{series.occurrence_count === 1 ? '' : 's'}
-              </button>
+              </LinkButton>
             ) : (
               <span>{series.occurrence_count} transactions</span>
             )}
@@ -399,8 +360,8 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>Kept for history · resumes if it recurs again</span>
             ) : null}
             <span style={{ flex: 1 }} />
-            <CardActionButton onClick={() => onAction('restore', series)}>{ended ? 'Reactivate' : 'Restore'}</CardActionButton>
-            <CardActionButton variant="danger" onClick={() => onAction('delete', series)}>Delete</CardActionButton>
+            <Button size="compact" variant="secondary" onClick={() => onAction('restore', series)}>{ended ? 'Reactivate' : 'Restore'}</Button>
+            <Button size="compact" variant="secondary" tone="danger" onClick={() => onAction('delete', series)}>Delete</Button>
           </>
         ) : (
           <>
@@ -418,9 +379,9 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
               />
             </span>
             {ruleBacked ? null : (
-              <CardActionButton onClick={() => onAction('amountMatch', series)}>
+              <Button size="compact" variant="secondary" onClick={() => onAction('amountMatch', series)}>
                 Amount{series.amount_mode === 'fixed' ? ' ✓' : ''}
-              </CardActionButton>
+              </Button>
             )}
             <span style={{ flex: 1 }} />
             {detected ? (
@@ -429,19 +390,19 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
                   onSuppress={() => onAction('suppress', series)}
                   onEnd={() => onAction('end', series)}
                 />
-                <CardActionButton variant="primary" onClick={() => onAction('confirm', series)}>Confirm</CardActionButton>
+                <Button size="compact" onClick={() => onAction('confirm', series)}>Confirm</Button>
               </>
             ) : (
               <>
-                {ruleBacked ? <CardActionButton onClick={() => onEditRule(series)}>Edit rule</CardActionButton> : null}
+                {ruleBacked ? <Button size="compact" variant="secondary" onClick={() => onEditRule(series)}>Edit rule</Button> : null}
                 {/* Only an auto series has a detector pile to go back to; the other two sources are
                     undone where they were declared (delete, or the rule's own checkbox). */}
                 {series.source === 'auto' && !dormant ? (
-                  <CardActionButton onClick={() => onAction('unconfirm', series)}>Back to suggested</CardActionButton>
+                  <Button size="compact" variant="secondary" onClick={() => onAction('unconfirm', series)}>Back to suggested</Button>
                 ) : null}
-                <CardActionButton onClick={() => onAction('suppress', series)}>Not recurring</CardActionButton>
-                <CardActionButton onClick={() => onAction('end', series)}>Mark ended</CardActionButton>
-                <CardActionButton variant="danger" onClick={() => onAction('delete', series)}>Delete</CardActionButton>
+                <Button size="compact" variant="secondary" onClick={() => onAction('suppress', series)}>Not recurring</Button>
+                <Button size="compact" variant="secondary" onClick={() => onAction('end', series)}>Mark ended</Button>
+                <Button size="compact" variant="secondary" tone="danger" onClick={() => onAction('delete', series)}>Delete</Button>
               </>
             )}
           </>
@@ -476,12 +437,9 @@ function RemovedSection({ excluded, onAddBack }) {
               <span style={{ color: 'var(--muted)', fontSize: 12, flexShrink: 0 }}>
                 {formatDate(txn.date)} · {formatCurrency(txn.amount)}
               </span>
-              <button
-                onClick={() => onAddBack(txn)}
-                style={{ flexShrink: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, fontWeight: 500, padding: '3px 10px' }}
-              >
+              <Button size="compact" variant="secondary" onClick={() => onAddBack(txn)} style={{ flexShrink: 0 }}>
                 Add back
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -516,13 +474,9 @@ function ReportPanel({ series, rows, excluded, total, categories, loading, onClo
               {loading ? 'Loading…' : `${total} matching transaction${total === 1 ? '' : 's'}`}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close matching transactions"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20, lineHeight: 1, padding: 4 }}
-          >
+          <IconButton size="large" onClick={onClose} aria-label="Close matching transactions">
             ×
-          </button>
+          </IconButton>
         </div>
       </div>
       {/* Both boxes stay flex columns so the table's fillHeight still resolves against the panel. */}
@@ -604,7 +558,7 @@ function ManualAddDialog({ onClose, onCreated }) {
       width="min(520px, 100%)"
       actions={
         <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!selected || saving} onClick={create}>
             {saving ? 'Adding…' : 'Add series'}
           </Button>
@@ -680,29 +634,7 @@ function ManualAddDialog({ onClose, onCreated }) {
 }
 
 function FilterPill({ label, count, on, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={on}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '4px 12px', borderRadius: 99,
-        cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
-        border: `1px solid ${on ? 'color-mix(in srgb, var(--accent) 45%, var(--border))' : 'var(--border)'}`,
-        background: on ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'var(--surface)',
-        color: on ? 'var(--accent2)' : 'var(--muted)',
-        opacity: on ? 1 : 0.75,
-      }}
-    >
-      {label}
-      <span style={{
-        fontSize: 11, fontWeight: 700, minWidth: 16, textAlign: 'center', padding: '0 5px', borderRadius: 99,
-        background: on ? 'color-mix(in srgb, var(--accent) 20%, var(--surface))' : 'var(--surface2)',
-        color: on ? 'var(--accent2)' : 'var(--muted)',
-      }}>
-        {count}
-      </span>
-    </button>
-  )
+  return <FilterChip selected={on} count={count} onClick={onClick}>{label}</FilterChip>
 }
 
 // Ends the status pills. Nothing selected shows nothing, so picking one status would otherwise mean unticking
@@ -710,19 +642,16 @@ function FilterPill({ label, count, on, onClick }) {
 // as it comes and goes.
 function DeselectAllPill({ disabled, onClick }) {
   return (
-    <button
-      type="button"
+    <Button
+      size="compact"
+      variant="quiet"
       onClick={disabled ? undefined : onClick}
       aria-disabled={disabled || undefined}
       title={disabled ? 'No statuses are selected' : 'Deselect every status'}
-      style={{
-        padding: '3px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600,
-        border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)',
-        cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.45 : 0.85,
-      }}
+      style={{ opacity: disabled ? 0.45 : 1 }}
     >
       Deselect all
-    </button>
+    </Button>
   )
 }
 
@@ -731,25 +660,7 @@ function SortToggle({ value, onChange }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
       Sort
-      <span style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 99, overflow: 'hidden' }}>
-        {SORT_OPTIONS.map((opt, i) => {
-          const on = value === opt.value
-          return (
-            <button
-              key={opt.value}
-              onClick={() => onChange(opt.value)}
-              style={{
-                fontSize: 12, fontWeight: 600, padding: '3px 10px', cursor: 'pointer', border: 'none',
-                borderLeft: i === 0 ? 'none' : '1px solid var(--border)',
-                background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface))' : 'transparent',
-                color: on ? 'var(--accent2)' : 'var(--muted)',
-              }}
-            >
-              {opt.label}
-            </button>
-          )
-        })}
-      </span>
+      <SegmentedToggle size="compact" ariaLabel="Sort" value={value} onChange={onChange} options={SORT_OPTIONS} />
     </span>
   )
 }
@@ -1307,21 +1218,18 @@ export default function Recurring() {
             titleAdornment={allSeries && allSeries.length > 0 && (
               // The standard report ↗ next to the title opens a transaction report of every recurring row
               // (all series). Toggles closed when it's already the open view.
-              <button
+              <IconButton
+                tone="accent"
+                pressed={!!openSeries?._all}
                 onClick={openAllReport}
                 aria-label="Open a report of all recurring transactions"
                 title={openSeries?._all ? 'Close the recurring transactions report' : 'Open a report of all recurring transactions'}
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent2)',
-                  fontSize: 17, lineHeight: 1, padding: '2px 6px', borderRadius: 6,
-                  opacity: openSeries?._all ? 1 : 0.75,
-                  textDecoration: openSeries?._all ? 'underline' : 'none',
-                }}
-              >↗</button>
+                style={{ fontSize: 17 }}
+              >↗</IconButton>
             )}
           >
-            {/* "+ New" rather than "Add manually": the page names what is created (see ui-patterns). */}
-            <Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button>
+            {/* "+New" rather than "Add manually": the page names what is created (see ui-patterns). */}
+            <Button variant="secondary" onClick={() => setAdding(true)}>+New</Button>
             {reviewHasAny ? (
               // The count is the whole signal for whether there is work, so the zero state has to say
               // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
@@ -1329,8 +1237,7 @@ export default function Recurring() {
               // answered list, so greying it out would strand every answer behind the act of
               // answering the last one.
               <Button
-                small
-                variant="ghost"
+                variant="secondary"
                 onClick={() => { setReviewOpen(true); loadTransferReview() }}
                 title={reviewCount
                   ? `${reviewCount} transfer${reviewCount === 1 ? '' : 's'} could not be matched up: more than one transaction matches it equally well.`
@@ -1341,7 +1248,7 @@ export default function Recurring() {
             ) : null}
             {/* Quiet: import, sync, edits and the app-load catch-up keep detection current, so this is
                 a manual override rather than the page's main action. */}
-            <Button small variant="ghost" onClick={scan} disabled={scanning}>
+            <Button variant="secondary" onClick={scan} disabled={scanning}>
               {scanning ? 'Scanning…' : 'Scan for recurring'}
             </Button>
           </PageHeader>

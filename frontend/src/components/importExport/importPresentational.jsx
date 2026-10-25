@@ -14,6 +14,7 @@ import {
   IMPORTED_CATEGORY_USAGE_SENTENCE,
 } from '../../lib/importExport/constants.js'
 import { coverageSourceLabel, formatCoverageRange } from '../../lib/importExport/importHistoryWindow.js'
+import { StatusPill } from '../connections/ConnectionStatus.jsx'
 
 export function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
@@ -179,35 +180,10 @@ export function ImportedCategoryUsageInline({ showFilter = false, filterDisabled
 // source row expands to the cards it counts) and as plain text where the surrounding control already
 // does (the archive disclosure's own toggle).
 export function HistoryAttentionPill({ tone = 'warning', title = '', onClick = null, children }) {
-  const palette = tone === 'review'
-    ? {
-      background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))',
-      color: 'var(--review-marker-color)',
-      border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))',
-    }
-    : {
-      background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
-      color: 'var(--warning)',
-      border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
-    }
-  const style = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    marginLeft: 4,
-    padding: '1px 7px',
-    borderRadius: 99,
-    fontSize: 11,
-    fontWeight: 600,
-    lineHeight: 1.5,
-    cursor: onClick ? 'pointer' : 'default',
-    ...palette,
-  }
-  if (!onClick) return <span title={title} style={style}>{children}</span>
   return (
-    <button type="button" onClick={onClick} title={title} style={style}>
-      {children}
-    </button>
+    <span style={{ display: 'inline-flex', marginLeft: 4 }}>
+      <StatusPill tone={tone} title={title} onClick={onClick || undefined}>{children}</StatusPill>
+    </span>
   )
 }
 

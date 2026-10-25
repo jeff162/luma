@@ -179,7 +179,7 @@ export function ImportedCategorySettingsDialog({
           </div>
         </div>
         <DialogActions>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
           <Button onClick={handleSave}>Save</Button>
         </DialogActions>
       </FloatingPanel>

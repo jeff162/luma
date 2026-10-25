@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Badge, Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
+import { Badge, Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
@@ -130,10 +130,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
       <FloatingPanel style={{ width: 540, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>⚙️ Create categorization rule</div>
-          <button onClick={onCancel} style={{
-            background: 'none', border: 'none', color: 'var(--muted)',
-            cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
-          }}>×</button>
+          <IconButton size="large" aria-label="Close" onClick={onCancel}>×</IconButton>
         </FloatingPanelHeader>
 
         {loading ? (
@@ -159,8 +156,8 @@ function RuleModal({ prompt, onSave, onCancel }) {
                 ? 'Your changes make this match another rule. Fold them into it? This rule will then be removed.'
                 : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <Button small variant="ghost" onClick={() => setPendingMerge(null)}>Cancel</Button>
-                <Button small onClick={confirmMerge}>Add to existing rule</Button>
+                <Button variant="secondary" onClick={() => setPendingMerge(null)}>Cancel</Button>
+                <Button onClick={confirmMerge}>Add to existing rule</Button>
               </div>
             </div>
           ) : null}
@@ -301,16 +298,8 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 7 }}>
-                <button onClick={() => setShowModal(true)} style={{
-                  flex: 1, background: 'var(--accent)', color: '#fff',
-                  border: 'none', borderRadius: 7, padding: '7px 0',
-                  fontSize: 13, fontWeight: 500, cursor: 'pointer',
-                }}>Create rule</button>
-                <button onClick={onDismiss} style={{
-                  background: 'var(--surface2)', color: 'var(--muted)',
-                  border: '1px solid var(--border)', borderRadius: 7,
-                  padding: '7px 11px', fontSize: 12, cursor: 'pointer',
-                }}>Dismiss</button>
+                <Button onClick={() => setShowModal(true)} style={{ flex: 1 }}>Create rule</Button>
+                <Button variant="secondary" onClick={onDismiss}>Dismiss</Button>
               </div>
             </>
           )}

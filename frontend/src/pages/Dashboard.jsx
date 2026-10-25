@@ -14,7 +14,7 @@ import { applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
-import { ActionMenu } from '../components/ActionMenu.jsx'
+import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
@@ -41,7 +41,7 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle, IconButton, LinkButton } from '../components/ui.jsx'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -552,10 +552,7 @@ function Breadcrumb({ items, onNavigate }) {
         <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {i > 0 && <span style={{ color: 'var(--muted)' }}>›</span>}
           {i < items.length - 1 ? (
-            <button onClick={() => onNavigate(i)} style={{
-              background: 'none', border: 'none', color: 'var(--accent2)',
-              cursor: 'pointer', fontSize: 13, padding: 0,
-            }}>{item}</button>
+            <LinkButton onClick={() => onNavigate(i)} style={{ fontSize: 13 }}>{item}</LinkButton>
           ) : (
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{item}</span>
           )}
@@ -632,13 +629,13 @@ function TagReportBuilder({ availableTags, report = null, onClose, onDisplay, on
         onClose={onClose}
         actions={editingSaved ? (
           <>
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button onClick={handleSaveTags} disabled={!hasSelection || !changed}>Save</Button>
           </>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button variant="ghost" onClick={handleDisplay} disabled={!hasSelection}>Display</Button>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button variant="secondary" onClick={handleDisplay} disabled={!hasSelection}>Display</Button>
             <Button onClick={handleSaveAndDisplay} disabled={!hasSelection}>Save &amp; display</Button>
           </>
         )}
@@ -712,7 +709,7 @@ function SaveTagReportDialog({ zIndex, onCancel, onSave }) {
       onClose={onCancel}
       actions={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
           <Button onClick={() => onSave(trimmed)} disabled={!trimmed}>Save</Button>
         </>
       }
@@ -740,17 +737,13 @@ function DashboardDefaultPeriodGear({ pref, setPref }) {
   useDismissibleLayer({ open, onClose: () => setOpen(false), refs: [btnRef, popRef], closeOnScrollResize: true })
   return (
     <div style={{ position: 'relative' }}>
-      <button
+      <IconButton
         ref={btnRef}
-        type="button"
         onClick={() => setOpen(v => !v)}
         aria-label="Dashboard default period"
         title="Set the Dashboard's default time period"
-        style={{
-          background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)',
-          fontSize: 16, lineHeight: 1, padding: 4, borderRadius: 6,
-        }}
-      >⚙</button>
+        style={{ fontSize: 16 }}
+      >⚙</IconButton>
       {open && (
         <div
           ref={popRef}
@@ -810,29 +803,14 @@ function MissingTagsToast({ reportName, onDismiss, onSuppress }) {
       padding: '12px 14px 10px',
       boxShadow: '0 18px 44px rgba(15, 23, 42, 0.32)',
     }}>
-      <button
-        onClick={onDismiss}
-        title="Dismiss"
-        style={{
-          position: 'absolute', top: 6, right: 8,
-          background: 'none', border: 'none',
-          color: 'var(--muted)', cursor: 'pointer',
-          fontSize: 18, lineHeight: 1, padding: 2,
-        }}
-      >×</button>
+      <IconButton aria-label="Dismiss" onClick={onDismiss} style={{ position: 'absolute', top: 6, right: 8, fontSize: 18 }}>×</IconButton>
       <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.45, marginBottom: 8, paddingRight: 14 }}>
         Some tags in <strong>{reportName}</strong> no longer exist and have been ignored. Use <em>Edit tags…</em> on the report to rebuild it deliberately.
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button
-          onClick={onSuppress}
-          style={{
-            background: 'none', border: 'none', padding: '4px 6px',
-            color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
-          }}
-        >
+        <LinkButton onClick={onSuppress} style={{ padding: '4px 6px', fontSize: 12 }}>
           Don&apos;t remind me again
-        </button>
+        </LinkButton>
       </div>
     </div>
   )
@@ -852,7 +830,7 @@ function RenameTagReportDialog({ initialName, onCancel, onSave }) {
       onClose={onCancel}
       actions={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
           <Button onClick={() => onSave(trimmed)} disabled={!trimmed || trimmed === initialName}>Save</Button>
         </>
       }
@@ -909,13 +887,7 @@ function PeriodPicker({ label, onChange }) {
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
-          <button
-            onClick={applyCustom}
-            style={{
-              background: 'var(--accent)', color: '#fff', border: 'none',
-              borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer',
-            }}
-          >Go</button>
+          <Button size="compact" onClick={applyCustom}>Go</Button>
         </div>
       )}
     </div>
@@ -957,13 +929,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
-          <button
-            onClick={onCustomApply}
-            style={{
-              background: 'var(--accent)', color: '#fff', border: 'none',
-              borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer',
-            }}
-          >Go</button>
+          <Button size="compact" onClick={onCustomApply}>Go</Button>
         </div>
       )}
     </div>
@@ -1746,19 +1712,17 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
                 <CategoryMarker kind={drillGroup ? 'category' : 'group'} />
                 <span>{s.name}</span>
                 {!drillsToCategories && onOpenReport && (
-                  <button
-                    type="button"
+                  <IconButton
+                    size="compact"
+                    tone="accent"
                     onClick={() => onOpenReport(
                       { start: reportWindow.start, end: reportWindow.end, label: reportWindow.label },
                       { kind: 'category', id: s.id, name: s.name },
                     )}
                     aria-label={`Open the transactions behind ${s.name}`}
                     title="Open the transactions behind this total"
-                    style={{
-                      background: 'none', border: 'none', color: 'var(--accent2)', cursor: 'pointer',
-                      fontSize: 11, padding: '3px 5px', borderRadius: 4, flexShrink: 0,
-                    }}
-                  >↗</button>
+                    style={{ flexShrink: 0 }}
+                  >↗</IconButton>
                 )}
               </div>
               <span style={{ textAlign: 'right', fontWeight: 600 }}>
@@ -3207,21 +3171,11 @@ export default function Dashboard() {
                                 />
                                 <FeatureExplainer topic="dashboard-tag-reports" placement="bottom-left" />
                                 {activeTagReport && (
-                                  <button
-                                    type="button"
+                                  <ActionMenuButton
                                     title="Manage this tag report"
-                                    onClick={event => {
-                                      const rect = event.currentTarget.getBoundingClientRect()
-                                      setPickerMenuOpen({ id: activeTagReport.id, anchorRect: rect })
-                                    }}
-                                    style={{
-                                      background: 'none', border: 'none',
-                                      color: 'var(--muted)', cursor: 'pointer',
-                                      padding: '0 6px', fontSize: 18, lineHeight: 1,
-                                    }}
-                                  >
-                                    ⋯
-                                  </button>
+                                    open={pickerMenuOpen?.id === activeTagReport.id}
+                                    onOpen={rect => setPickerMenuOpen({ id: activeTagReport.id, anchorRect: rect })}
+                                  />
                                 )}
                               </div>
                               {viewIsTag && tagModeLoading ? (
@@ -3303,17 +3257,11 @@ export default function Dashboard() {
                               </div>
                               {expansionAvailable && (
                                 <div style={{ textAlign: 'center', marginTop: 10 }}>
-                                  <button
-                                    onClick={() => setShowAllSpendingRows(v => !v)}
-                                    style={{
-                                      background: 'none', border: 'none', padding: '4px 8px',
-                                      color: 'var(--accent2)', cursor: 'pointer', fontSize: 13,
-                                    }}
-                                  >
+                                  <LinkButton onClick={() => setShowAllSpendingRows(v => !v)} style={{ padding: '4px 8px', fontSize: 13 }}>
                                     {showAllSpendingRows
                                       ? 'Show less'
                                       : `Show all ${viewIsTag ? 'wedges' : viewIsCategory ? 'categories' : 'groups'}`}
-                                  </button>
+                                  </LinkButton>
                                 </div>
                               )}
                             </Card>}
@@ -3458,8 +3406,7 @@ export default function Dashboard() {
                               step back over a period the user chose themselves. */}
                           {canGoBackDate && (
                             <Button
-                              variant="ghost"
-                              small
+                              variant="secondary"
                               onClick={handleTrendBack}
                               title={`Return to ${describeDateFilter(previousDate)}`}
                             >
@@ -3469,10 +3416,9 @@ export default function Dashboard() {
                           {/* A drill already lists its period's transactions beneath the chart. */}
                           {!trendScopeId && effectiveDate && effectiveDate.start && effectiveDate.end && (
                             <Button
-                              variant="ghost"
-                              small
+                              variant="secondary"
+                              size="compact"
                               onClick={openSelectedPeriodTransactions}
-                              style={{ padding: '4px 10px', fontSize: 12 }}
                               title="Open the transactions for the selected period"
                             >
                               View transactions ↗
@@ -3682,7 +3628,7 @@ export default function Dashboard() {
                           title="Refresh — re-query the list and drop transactions that no longer match"
                         />
                         <CopyTransactionsButton rows={groupTxnData} {...groupTxnPaged.copy} title={selectedGroup.group_name} tooltip="Copy the transactions shown" />
-                        <Button variant="ghost" small onClick={selectedGroupBulk.toggle}>
+                        <Button variant="secondary" onClick={selectedGroupBulk.toggle}>
                           {selectedGroupBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                         </Button>
                       </div>
@@ -3950,7 +3896,7 @@ export default function Dashboard() {
             onClose={() => setDeleteTargetId(null)}
             actions={
               <>
-                <Button variant="ghost" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
+                <Button variant="secondary" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
                 <Button onClick={() => {
                   handleDeleteTagReport(deleteTargetId)
                   setDeleteTargetId(null)

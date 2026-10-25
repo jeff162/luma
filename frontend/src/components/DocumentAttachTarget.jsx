@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react'
 import { buildPastedHtmlPreview, serializeEditedPreview } from '../lib/pastedHtmlPreview.js'
 import { namePastedFile, pastedTextFile } from '../lib/pastedDocuments.js'
-import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
+import { Button } from './ui.jsx'
 import FileInput from './FileInput.jsx'
 import { PICKER_IDS } from '../lib/filePicker.js'
 
@@ -208,22 +208,22 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
         {reviewing ? (
           <>
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={discardPaste}>Discard</Button>
+            <Button variant="secondary" size="compact" onClick={discardPaste}>Discard</Button>
             {richPaste && !plainMode && (
-              <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={convertToPlainText}>
+              <Button variant="secondary" size="compact" onClick={convertToPlainText}>
                 Convert to plain text
               </Button>
             )}
             {plainMode && (
-              <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={returnToFormatted}>
+              <Button variant="secondary" size="compact" onClick={returnToFormatted}>
                 Discard and return to HTML
               </Button>
             )}
-            <Button small style={COMPACT_ACTION_BTN_STYLE} onClick={attachPaste}>{commitLabel}</Button>
+            <Button size="compact" onClick={attachPaste}>{commitLabel}</Button>
           </>
         ) : (
           <>
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={() => inputRef.current?.click()}>
+            <Button variant="secondary" size="compact" onClick={() => inputRef.current?.click()}>
               Browse…
             </Button>
             {actions}

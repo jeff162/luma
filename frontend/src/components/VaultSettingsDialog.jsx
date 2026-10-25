@@ -253,7 +253,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
       description="How this vault is opened, who else can open it, and the key protecting your data provider credentials."
       onClose={onClose}
       width="min(560px, 100%)"
-      actions={<DialogActions><Button small onClick={onClose}>Done</Button></DialogActions>}
+      actions={<DialogActions><Button onClick={onClose}>Done</Button></DialogActions>}
     >
       <div style={{ display: 'grid', gap: 20 }}>
         <Section
@@ -271,7 +271,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           </p>
           <Row>
             <span>Passphrase</span>
-            <Button variant="ghost" small style={{ marginLeft: 'auto' }} onClick={onChangePassphrase}>
+            <Button variant="secondary" style={{ marginLeft: 'auto' }} onClick={onChangePassphrase}>
               Change
             </Button>
           </Row>
@@ -283,7 +283,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>awaiting approval</span>
               ) : null}
               <Button
-                variant="ghost" small style={{ marginLeft: 'auto' }}
+                variant="secondary" style={{ marginLeft: 'auto' }}
                 disabled={busy === `remove-${pk.slot_id}`}
                 onClick={() => runWithProof(`remove-${pk.slot_id}`,
                   () => api.removeVaultPasskey(pk.slot_id), 'Passkey removed.')}
@@ -301,7 +301,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 style={{ flex: 1, minWidth: 160 }}
                 {...NO_AUTOFILL_PROPS}
               />
-              <Button small disabled={busy === 'add-passkey'} onClick={addPasskey}>
+              <Button disabled={busy === 'add-passkey'} onClick={addPasskey}>
                 {busy === 'add-passkey' ? 'Waiting…' : 'Add a passkey'}
               </Button>
             </Row>
@@ -327,7 +327,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 : 'No recovery code'}
             </span>
             <Button
-              variant="ghost" small style={{ marginLeft: 'auto' }}
+              variant="secondary" style={{ marginLeft: 'auto' }}
               disabled={busy === 'recovery-code'}
               onClick={() => runWithProof('recovery-code', async () => {
                 const result = await api.issueVaultRecoveryCode()
@@ -341,7 +341,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 there is one to remove — "Replace code" is the create control when there is not. */}
             {recoveryCode?.has ? (
               <Button
-                variant="ghost" small disabled={busy === 'discard-recovery-code'}
+                variant="secondary" disabled={busy === 'discard-recovery-code'}
                 onClick={() => setConfirmingDiscard(true)}
               >
                 Remove
@@ -382,7 +382,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                   here, where it would read as an ordinary tidy-up of a list. */}
               {isAdmin && m.user_id !== currentUserId ? (
                 <Button
-                  variant="ghost" small style={{ marginLeft: 'auto' }}
+                  variant="secondary" style={{ marginLeft: 'auto' }}
                   disabled={busy === `revoke-${m.user_id}`}
                   onClick={() => setConfirmingRevoke(m)}
                 >
@@ -407,7 +407,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 asked {formatDate(String(r.requested_at).slice(0, 10))}
               </span>
               <Button
-                small style={{ marginLeft: 'auto' }}
+                style={{ marginLeft: 'auto' }}
                 disabled={busy === `approve-${r.slot_id}`}
                 title={r.replaces_access
                   ? `${r.display_name} already had access and could not open it. Approving restores it `
@@ -427,7 +427,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. This also locks the vault in every other running session."
         >
           <div>
-            <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
+            <Button variant="secondary" disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
               Replace vault key…
             </Button>
           </div>
@@ -443,7 +443,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           help={<FeatureExplainer topic="copied-database" label="About responding to an exposure" placement="bottom-left" />}
         >
           <div>
-            <Button variant="ghost" small disabled={busy === 'reissue'} onClick={() => setConfirmingReissue(true)}>
+            <Button variant="secondary" disabled={busy === 'reissue'} onClick={() => setConfirmingReissue(true)}>
               Replace connection credentials…
             </Button>
           </div>
@@ -478,8 +478,8 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 encrypted from now on, including the credentials just issued.
               </p>
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="ghost" small onClick={onChangePassphrase}>Change passphrase</Button>
-                <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
+                <Button variant="secondary" onClick={onChangePassphrase}>Change passphrase</Button>
+                <Button variant="secondary" disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
                   Replace vault key…
                 </Button>
               </div>

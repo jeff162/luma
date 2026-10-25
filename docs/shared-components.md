@@ -77,10 +77,14 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | `ui.jsx` primitives | `Card`, `Button`, `Select`, `Input`, `Badge`, `Spinner`, `EmptyState`, `Tooltip`, `PageHeader`, `Toggle`, `SelectAllCheckbox`, `CategoryMarker`, and the style helpers `getFormControlStyle` / `getFloatingPanelSurfaceStyle` / `VISUALLY_HIDDEN_STYLE`. | `components/ui.jsx` |
 | `SectionListPage` (+ `useSectionParam`, `Subsection`) | A page of many sections that are each visited occasionally. | `components/SectionListPage.jsx` |
-| `SegmentedToggle` | Switching between peer views of one subject. | `components/ui.jsx` |
+| `SegmentedToggle` | Switching between peer views of one subject; `size="compact"` for a choice that adjusts a list or a form (a sort order, a scope). | `components/ui.jsx` |
 | `AppDialog` / `AppConfirmDialog` / `AppNoticeDialog` / `AppTextEntryDialog` | A dialog that is opened, answered and closed. The body scrolls with the header and actions pinned, so a caller does not cap its own content height. Opened from inside a row or a list, portal it to `<body>`, because it renders where it is mounted. | `components/ui.jsx` |
+| `Button` | Every labelled action. `size="compact"` for one repeated on every row or card, `pressed` for a toggle. | `components/ui.jsx` |
 | `Button`'s `progress` | A long action reporting progress on the button that started it. | `components/ui.jsx` |
-| `COMPACT_ACTION_BTN_STYLE` with `variant="ghost"` | An action repeated on every row. | `components/ui.jsx` |
+| `IconButton` | A control that is only a glyph: trash, edit, copy, the `↗` that opens a report (`tone="accent"`), and a panel's or dialog's close × (`size="large"`). | `components/ui.jsx` |
+| `FilterChip` | A rounded chip that narrows a list, optionally with a count, and the dashed chip that adds another (a tag, a filter, an owner). | `components/ui.jsx` |
+| `LinkButton` | An action that reads as text, sized by the text around it. | `components/ui.jsx` |
+| `SplitButton` | A common action with its alternatives behind a caret. | `components/SplitButton.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
 | `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions. | `components/ActionMenu.jsx` |
@@ -156,7 +160,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `WatchPausedPill` | Marking a watched folder that is switched off, on any surface that lists one. | `components/importExport/WatchPausedPill.jsx` |
 | `ImportNewAccountFields` | The name and type fields for an account created while mapping. | `components/ImportNewAccountFields.jsx` |
 | `SourceAccountChip` / `OutcomeChip` | Reporting what each source account contributed to one import or sync. | `components/importExport/SourceAccountChip.jsx` |
-| `LastSyncSummary` / `StatusPill` | Reporting a connection's last sync. `StatusPill` also carries any at-a-glance state elsewhere: `danger`, `warning`, `accent2`, or `muted` for a state that is neither normal nor wrong. | `components/connections/ConnectionStatus.jsx` |
+| `LastSyncSummary` / `StatusPill` | Reporting a connection's last sync. `StatusPill` also carries any at-a-glance state elsewhere: `danger`, `warning`, `accent2`, `review` for rows waiting to be reviewed, or `muted` for a state that is neither normal nor wrong. With `onClick` and `report` it is a count that opens its report, as on the import cards. | `components/connections/ConnectionStatus.jsx` |
 | `providerSummaryLine` | The one-line status in a provider card's header. | `lib/connectionSummary.js` |
 | `useConnectionOperations` | Anything done to a connection other than configuring it: sync, fetch more history, refresh accounts, remove synced transactions. It owns the vault gating. | `lib/useConnectionOperations.js` |
 | `AccountIdentityPrompt` | Asking whether two accounts are the same real-world account. | `components/importExport/AccountIdentityPrompt.jsx` |

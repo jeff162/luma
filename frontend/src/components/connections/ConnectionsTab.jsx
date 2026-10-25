@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
 import { rosterCardIds } from '../../lib/syncRoster.js'
-import { Card, Button, Spinner, Select, Input, PasswordInput, Tooltip, AppDialog, AppConfirmDialog, AppNoticeDialog, OverlayBackdrop } from '../ui.jsx'
+import { Card, Button, Spinner, Select, Input, PasswordInput, Tooltip, AppDialog, AppConfirmDialog, AppNoticeDialog, OverlayBackdrop, IconButton, LinkButton } from '../ui.jsx'
 import SectionCard from '../SectionCard.jsx'
 import { HoverLines, LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
@@ -144,8 +144,8 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
       width="min(520px, 100%)"
       actions={
         <>
-          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
-          <Button small onClick={submit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
       }
     >
@@ -244,8 +244,8 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose,
       width="min(560px, 100%)"
       actions={
         <>
-          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
-          <Button small onClick={submit} disabled={connecting || !token.trim()}>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={connecting || !token.trim()}>
             {connecting ? 'Connecting…' : 'Connect'}
           </Button>
         </>
@@ -363,7 +363,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
       <div style={box('var(--surface2)', 'var(--border)')}>
         {help}
         <span style={{ color: 'var(--muted)' }}>Data provider credentials are kept in an encrypted vault. Set a passphrase to begin.</span>
-        <Button small onClick={onSet} style={{ marginLeft: 'auto' }}>Set vault passphrase</Button>
+        <Button onClick={onSet} style={{ marginLeft: 'auto' }}>Set vault passphrase</Button>
       </div>
     )
   }
@@ -387,7 +387,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
         <span style={{ color: 'var(--muted)' }}>
           This workspace already has a credential vault. Set your own passphrase to ask for access to it.
         </span>
-        <Button small onClick={onRequest} style={{ marginLeft: 'auto' }}>Request vault access</Button>
+        <Button onClick={onRequest} style={{ marginLeft: 'auto' }}>Request vault access</Button>
       </div>
     )
   }
@@ -404,13 +404,13 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
             top of the prompt. Busy state and wording both come from `useVaultPasskeyUnlock`, shared
             with the passphrase dialog's identical button rather than kept in step by hand. */}
         {vault.hasPasskey ? (
-          <Button small onClick={onUnlockPasskey} disabled={passkeyBusy} style={{ marginLeft: 'auto' }}>
+          <Button onClick={onUnlockPasskey} disabled={passkeyBusy} style={{ marginLeft: 'auto' }}>
             {passkeyLabel}
           </Button>
         ) : null}
         {/* Also disabled: the passphrase dialog opens *over* the passkey prompt, and dismissing one of
             two stacked asks for the same thing is the confusion this whole change is about. */}
-        <Button small variant={vault.hasPasskey ? 'ghost' : 'primary'} onClick={onUnlock}
+        <Button variant={vault.hasPasskey ? 'secondary' : 'primary'} onClick={onUnlock}
           disabled={passkeyBusy}
           style={vault.hasPasskey ? undefined : { marginLeft: 'auto' }}>
           Unlock with a passphrase
@@ -420,7 +420,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
             for Change passphrase, which already lives in Vault settings. Deliberately quiet — most of
             what it opens is free, but the bottom of it is irreversible, and a prominent button beside
             Unlock would be pressed by people who simply mistyped. */}
-        <Button small variant="ghost" onClick={onRecover} disabled={passkeyBusy}>
+        <Button variant="secondary" onClick={onRecover} disabled={passkeyBusy}>
           Can’t open it?
         </Button>
         {/* Only a typed passphrase can be checked against a strength rule that changed since it was last
@@ -450,10 +450,10 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
           Your vault passphrase is considered too easy to guess. Change it to connect data providers or
           include the credentials in a backup.
         </span>
-        <Button small onClick={onSettings} style={{ marginLeft: 'auto' }}>
+        <Button onClick={onSettings} style={{ marginLeft: 'auto' }}>
           {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
         </Button>
-        <Button variant="ghost" small onClick={onLock}>Lock</Button>
+        <Button variant="secondary" onClick={onLock}>Lock</Button>
       </div>
     )
   }
@@ -464,16 +464,16 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
       {/* Opened with a passkey while the passphrase is still unjudged, which is the one way to reach this
           state: the check is a typed unlock, and without this the only route to it was locking first. */}
       {vault.passphraseNeedsCheck ? (
-        <Button small onClick={onCheck} style={{ marginLeft: 'auto' }}>Validate passphrase</Button>
+        <Button onClick={onCheck} style={{ marginLeft: 'auto' }}>Validate passphrase</Button>
       ) : null}
       {/* Reachable only while unlocked, and that is the gate rather than the styling: approving someone
           and replacing the key both need the key in hand. The waiting count rides the button because
           this strip is the only place on the page a pending request would otherwise be visible. */}
-      <Button variant="ghost" small onClick={onSettings}
+      <Button variant="secondary" onClick={onSettings}
         style={vault.passphraseNeedsCheck ? undefined : { marginLeft: 'auto' }}>
         {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
       </Button>
-      <Button variant="ghost" small onClick={onLock}>Lock</Button>
+      <Button variant="secondary" onClick={onLock}>Lock</Button>
       {vault.passphraseNeedsCheck ? (
         <div style={{ flexBasis: '100%', fontSize: 12 }}>
           Your passphrase needs to be validated against the current strength rule. Until then backups will
@@ -1141,7 +1141,7 @@ export default function ConnectionsTab({ onShowHistory }) {
               Finish the steps in the connection window. The rest of the app is paused so a stray click can’t interrupt it.
             </div>
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
-              <Button variant="ghost" small onClick={cancelPlaidLink}>Cancel</Button>
+              <Button variant="secondary" onClick={cancelPlaidLink}>Cancel</Button>
             </div>
           </div>
         </OverlayBackdrop>
@@ -1165,14 +1165,14 @@ export default function ConnectionsTab({ onShowHistory }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {/* Unfiltered, where each card's own button starts at its provider: "a sync brought in less than
               I expected" is as often a question about the whole run as about one connection. */}
-          <Button variant="ghost" small onClick={() => setSyncLogScope({ subjects: [] })}
+          <Button variant="secondary" onClick={() => setSyncLogScope({ subjects: [] })}
             title="What every sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
             Sync log
           </Button>
           <Tooltip content={syncingAny
             ? 'A sync is already running'
             : `Pull new and changed transactions for all ${connectionCount} connection${connectionCount === 1 ? '' : 's'}`}>
-            <Button small onClick={() => syncAll(connected)} disabled={syncingAny}>
+            <Button onClick={() => syncAll(connected)} disabled={syncingAny}>
               {syncingAny ? 'Syncing…' : '↻ Sync now'}
             </Button>
           </Tooltip>
@@ -1295,14 +1295,14 @@ export default function ConnectionsTab({ onShowHistory }) {
                 {/* Configure only where there is something to configure — a provider with no app-level
                     credential would open a dialog with no fields in it. */}
                 {isAdmin && p.requires_app_config !== false
-                  ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
+                  ? <Button variant="secondary" onClick={() => setConfigTarget(p)}>Configure</Button> : null}
                 {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
                     because it differs in kind: Plaid's widget authorizes one institution, while a
                     SimpleFIN setup token claims a bridge that may span several banks and so has no noun
                     to name — that button stays a bare "+ Connect". The provider's own name is not it: it
                     already labels the card this button sits in. Never "account", which means a ledger
                     account everywhere else in the app. */}
-                <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
+                <Button onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
                   {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
                 </Button>
                 {/* Scoped to this provider, since that is what the card it sits in is about — by provider
@@ -1310,7 +1310,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                     to name: a failed connect, and a disconnected connection's record. Offered with no
                     connections at all for the same reason: a first connect that failed is exactly when
                     the log is wanted. The log's own pills widen it to the rest. */}
-                <Button variant="ghost" small onClick={() => setSyncLogScope({ providers: [p.provider] })}
+                <Button variant="secondary" onClick={() => setSyncLogScope({ providers: [p.provider] })}
                   title="What each sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
                   Sync log
                 </Button>
@@ -1353,13 +1353,9 @@ export default function ConnectionsTab({ onShowHistory }) {
                         : 'Sync complete — nothing new'}
                   {/* The cards this run added rows to, in the history where their outcome is kept. */}
                   {syncedCardIds.length ? (
-                    <button
-                      type="button"
-                      onClick={() => onShowHistory?.({ batchIds: syncedCardIds })}
-                      style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
-                    >
+                    <LinkButton onClick={() => onShowHistory?.({ batchIds: syncedCardIds })} style={{ marginLeft: 10, fontSize: 13 }}>
                       View in import history →
-                    </button>
+                    </LinkButton>
                   ) : null}
                 </div>
               ) : null}
@@ -1379,36 +1375,21 @@ export default function ConnectionsTab({ onShowHistory }) {
                               button beside it creates. */}
                           <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />
                           {syncSummary?.suspects > 0 ? (
-                            <button
-                              type="button"
+                            <StatusPill
+                              tone="warning"
                               onClick={() => onShowHistory?.({ connectionIds: [c.id] })}
                               title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review this connection's sync cards`}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 4,
-                                padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                                background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
-                                color: 'var(--warning)',
-                                border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
-                              }}
                             >
                               ⚠ {syncSummary.suspects} to review
-                            </button>
+                            </StatusPill>
                           ) : null}
                           {unmappedByConnection[c.id] > 0 ? (
-                            <button
-                              type="button"
+                            <StatusPill
                               onClick={() => openAccountMap(c)}
                               title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this connection ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 4,
-                                padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                                background: 'color-mix(in srgb, var(--accent2) 12%, var(--surface2))',
-                                color: 'var(--accent2)',
-                                border: '1px solid color-mix(in srgb, var(--accent2) 50%, var(--border))',
-                              }}
                             >
                               {unmappedByConnection[c.id]} to map
-                            </button>
+                            </StatusPill>
                           ) : null}
                           {/* Card maintenance lives behind one "⋯" rather than a row of buttons. These
                               actions are real but rare, and five permanent controls per card meant a
@@ -1428,7 +1409,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                                 confirmed by data arriving, and the effect of an action belongs where the
                                 action was taken. Scoped to this connection alone, and its outcome lands
                                 on the line below rather than sending the user elsewhere to look. */}
-                            <Button variant="ghost" small
+                            <Button variant="secondary"
                               onClick={() => sync(p.provider, { connectionId: c.id })}
                               disabled={ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}
                               title={`Check this connection by pulling anything new from ${c.institution || 'it'} now`}>
@@ -1468,12 +1449,12 @@ export default function ConnectionsTab({ onShowHistory }) {
                                   beside it. Hidden without a stored credential — there is no Item to
                                   re-authorize, so the button could only ever fail. */}
                               {p.provider === 'plaid' && c.has_credential !== false ? (
-                                <Button small disabled={connectDisabled} title={connectTitle}
+                                <Button disabled={connectDisabled} title={connectTitle}
                                   onClick={() => reconnect(c)}>
                                   Reconnect this bank
                                 </Button>
                               ) : null}
-                              <Button variant="ghost" small onClick={() => setDisconnectTarget({
+                              <Button variant="secondary" onClick={() => setDisconnectTarget({
                                 provider: p.provider,
                                 external_id: c.external_id,
                                 institution: c.institution,
@@ -1553,17 +1534,14 @@ export default function ConnectionsTab({ onShowHistory }) {
                                 looked like punctuation rather than a button. Same launcher the Accounts
                                 page uses, opening the same panel: a connection's account list is a place
                                 a user wants to go *look at* the account from. */}
-                            <button
-                              type="button"
+                            <IconButton
+                              size="compact"
+                              tone="accent"
                               onClick={() => openAccountDetail({
                                 id: a.id, name: a.display_name || a.name, mask: a.mask,
                               })}
-                              title={`View ${a.display_name || a.name}`}
-                              style={{
-                                background: 'none', border: 'none', padding: '0 2px', cursor: 'pointer',
-                                color: 'var(--accent2)', fontSize: 11, lineHeight: 1, opacity: 0.75,
-                              }}
-                            >↗</button>
+                              aria-label={`View ${a.display_name || a.name}`}
+                            >↗</IconButton>
                           </div>
                         )) : null}
                         {/* Named in the provider's own words, because that is what the user chose from at
@@ -1621,7 +1599,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           {unconfigured
             .filter(p => isAdmin || p.requires_app_config === false)
             .map(p => (
-              <Button key={p.provider} variant="ghost" small
+              <Button key={p.provider} variant="secondary"
                 onClick={() => (p.requires_app_config === false ? connect(p) : setConfigTarget(p))}>
                 + {providerLabel(p.provider)}
               </Button>

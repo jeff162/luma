@@ -15,7 +15,7 @@ import {
   formatMoneyMagnitude,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { EmptyState } from './ui.jsx'
+import { EmptyState, LinkButton } from './ui.jsx'
 
 /*
  * The single-period cash-flow diagram: what came in on the left, what went out on the right, joined
@@ -180,12 +180,9 @@ export default function CashFlowSankey({ graph, depths = {}, onNodeClick, onBack
         fontSize: 11, color: 'var(--muted)', marginTop: 4,
       }}>
         {backLinks.map(entry => (
-          <button key={entry.side} type="button" onClick={() => onBack(entry.side)} style={{
-            background: 'none', border: 'none', padding: '2px 4px',
-            color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
-          }}>
+          <LinkButton key={entry.side} onClick={() => onBack(entry.side)} style={{ fontSize: 12 }}>
             ‹ {entry.label}
-          </button>
+          </LinkButton>
         ))}
         <span>Click a node to see its transactions</span>
       </div>

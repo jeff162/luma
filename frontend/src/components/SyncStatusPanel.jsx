@@ -150,7 +150,7 @@ export function SyncStatusPanel({ connections = [], syncState = {}, runProviders
               {/* A finished run is reported on the cards it wrote to; this is the way to them from
                   whichever page the sync was started on. Absent when nothing arrived. */}
               {cardIds.length ? (
-                <Button variant="ghost" onClick={() => {
+                <Button variant="secondary" onClick={() => {
                   navigate(`/import-export?tab=history&batch=${cardIds.join(',')}`)
                   onClose()
                 }}>

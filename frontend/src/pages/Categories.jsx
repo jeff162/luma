@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton } from '../components/ui.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -216,7 +216,7 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
         </div>
 
         <DialogActions>
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
           <Button onClick={onConfirm} disabled={!canConfirm || saving}>
@@ -505,7 +505,9 @@ function InlineGroupDraftRow({ onSubmit, onCancel }) {
       onRename={(_, name) => onSubmit(name)}
       onDelete={() => { }}
       trailingContent={
-        <button
+        <IconButton
+          size="compact"
+          aria-label="Cancel"
           onMouseDown={e => {
             e.preventDefault()
             e.stopPropagation()
@@ -515,21 +517,9 @@ function InlineGroupDraftRow({ onSubmit, onCancel }) {
             e.stopPropagation()
             onCancel()
           }}
-          title="Cancel"
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            padding: '1px 2px',
-            borderRadius: 4,
-            flexShrink: 0,
-            lineHeight: 1,
-          }}
         >
           x
-        </button>
+        </IconButton>
       }
     />
   )
@@ -558,7 +548,9 @@ function InlineCategoryDraftRow({ onSubmit, onCancel }) {
       onRename={(_, name) => onSubmit(name)}
       onDelete={() => { }}
       trailingContent={
-        <button
+        <IconButton
+          size="compact"
+          aria-label="Cancel"
           onMouseDown={e => {
             e.preventDefault()
             e.stopPropagation()
@@ -568,21 +560,9 @@ function InlineCategoryDraftRow({ onSubmit, onCancel }) {
             e.stopPropagation()
             onCancel()
           }}
-          title="Cancel"
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            padding: '1px 2px',
-            borderRadius: 4,
-            flexShrink: 0,
-            lineHeight: 1,
-          }}
         >
           x
-        </button>
+        </IconButton>
       }
     />
   )
@@ -1744,8 +1724,7 @@ export default function Categories() {
             deleting one category won't bring it back while others remain. */}
         {!loading && !flatCats.some(cat => cat.parent_id) ? (
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             disabled={addingStarter}
             onClick={async () => {
               setAddingStarter(true)
@@ -1771,8 +1750,7 @@ export default function Categories() {
           ? 'No imported categories are waiting to be grouped'
           : 'Sort imported categories into reporting groups'}>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={openImportedCategoryWorkspace}
             disabled={importedCategoryWork.total === 0}
           >
@@ -1801,23 +1779,9 @@ export default function Categories() {
               }}
             />
             {emptyCleanupCount > 0 ? (
-              <button
-                onClick={() => setPendingEmptyCleanup(true)}
-                title="Delete empty groups and categories"
-                style={{
-                  flexShrink: 0,
-                  whiteSpace: 'nowrap',
-                  background: 'var(--surface2)',
-                  border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
-                  color: 'var(--muted)',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  padding: '9px 12px',
-                  borderRadius: 8,
-                }}
-              >
+              <Button variant="secondary" onClick={() => setPendingEmptyCleanup(true)} title="Delete empty groups and categories" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
                 Delete empty ({emptyCleanupCount})
-              </button>
+              </Button>
             ) : null}
           </div>
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
@@ -1850,7 +1814,7 @@ export default function Categories() {
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                     Select categories, then right-click to choose an action.
                   </div>
-                  <Button small variant="ghost" onClick={cancelBulkSelect} style={{ flexShrink: 0 }}>
+                  <Button variant="secondary" onClick={cancelBulkSelect} style={{ flexShrink: 0 }}>
                     Cancel
                   </Button>
                 </div>
@@ -2082,36 +2046,12 @@ export default function Categories() {
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
                       </span>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                        <button
-                          onClick={() => handleReactivate(cat.id)}
-                          title={`Recover ${cat.name}`}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'var(--muted)',
-                            cursor: 'pointer',
-                            fontSize: 12,
-                            padding: '2px 4px',
-                            borderRadius: 6,
-                          }}
-                        >
+                        <Button size="compact" variant="quiet" onClick={() => handleReactivate(cat.id)} title={`Recover ${cat.name}`}>
                           Recover
-                        </button>
-                        <button
-                          onClick={() => setPendingHardDelete(cat)}
-                          title={`Permanently delete ${cat.name}`}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'var(--muted)',
-                            cursor: 'pointer',
-                            fontSize: 12,
-                            padding: '2px 4px',
-                            borderRadius: 6,
-                          }}
-                        >
+                        </Button>
+                        <Button size="compact" variant="quiet" tone="danger" onClick={() => setPendingHardDelete(cat)} title={`Permanently delete ${cat.name}`}>
                           Delete forever
-                        </button>
+                        </Button>
                       </span>
                     </div>
                   ))}
@@ -2294,15 +2234,7 @@ export default function Categories() {
                               >
                                 <TagGlyph color={tag.color} size={12} />
                                 <span>{tag.name}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleCategoryTag(selected.id, tag, false)}
-                                  title={`Remove ${tag.name}`}
-                                  style={{
-                                    background: 'none', border: 'none', cursor: 'pointer',
-                                    color: 'var(--muted)', fontSize: 14, lineHeight: 1, padding: '0 2px',
-                                  }}
-                                >×</button>
+                                <IconButton size="compact" aria-label={`Remove ${tag.name}`} onClick={() => handleToggleCategoryTag(selected.id, tag, false)}>×</IconButton>
                               </span>
                             ))}
                             {inheritedTags.map(tag => (
@@ -2323,22 +2255,9 @@ export default function Categories() {
                                 <span>{tag.name}</span>
                               </span>
                             ))}
-                            <button
-                              type="button"
-                              onClick={() => setTagPickerOpenForId(isPickerOpen ? null : selected.id)}
-                              style={{
-                                background: 'none',
-                                border: '1px dashed var(--border)',
-                                color: 'var(--accent2)',
-                                borderRadius: 999,
-                                padding: '3px 10px',
-                                fontSize: 12,
-                                cursor: 'pointer',
-                                lineHeight: 1.2,
-                              }}
-                            >
+                            <FilterChip variant="add" onClick={() => setTagPickerOpenForId(isPickerOpen ? null : selected.id)}>
                               + Tag
-                            </button>
+                            </FilterChip>
                             {isPickerOpen && (
                               <TagPickerWithCreate
                                 allTags={availableTags}
@@ -2378,8 +2297,7 @@ export default function Categories() {
                       </div>
                       {showReimbursements ? (
                         <Button
-                          variant="ghost"
-                          small
+                          variant="secondary"
                           onClick={() => setReimbursementsOpen(true)}
                           title="What is still owed back, and what has come back against it"
                         >
@@ -2387,8 +2305,7 @@ export default function Categories() {
                         </Button>
                       ) : null}
                       <Button
-                        variant="ghost"
-                        small
+                        variant="secondary"
                         onClick={matchingBulk.toggle}
                         disabled={!matchingTxnsKey || pagedMatchingTxns.length === 0}
                         title="Select multiple transactions to edit at once"

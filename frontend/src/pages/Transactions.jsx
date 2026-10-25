@@ -12,7 +12,7 @@ import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import AttributeFilterControl from '../components/AttributeFilterControl.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, SearchInput, SelectAllCheckbox, Tooltip, RefreshButton } from '../components/ui.jsx'
+import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, SearchInput, SelectAllCheckbox, Tooltip, RefreshButton, IconButton } from '../components/ui.jsx'
 import { planHidingProbes, hidingNoteText, hidingActionLabel } from '../lib/searchHidingProbe.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -721,8 +721,9 @@ export default function Transactions() {
                 {sourceLabel}
               </span>
               {txn.import_batch_id ? (
-                <button
-                  type="button"
+                <IconButton
+                  size="compact"
+                  tone="accent"
                   onClick={event => {
                     event.stopPropagation()
                     openBatchDetail({
@@ -731,25 +732,11 @@ export default function Transactions() {
                       imported_at: txn.import_batch_imported_at,
                     })
                   }}
-                  title="Open import file report"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--accent2)',
-                    cursor: 'pointer',
-                    fontSize: 11,
-                    padding: '3px 5px',
-                    opacity: 0.75,
-                    lineHeight: 1,
-                    flexShrink: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: 6,
-                  }}
+                  aria-label="Open import file report"
+                  style={{ flexShrink: 0 }}
                 >
                   ↗
-                </button>
+                </IconButton>
               ) : null}
             </span>
           )
@@ -783,19 +770,16 @@ export default function Transactions() {
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {accountStr}
             </span>
-            <button
+            <IconButton
+              size="compact"
+              tone="accent"
               onClick={e => {
                 e.stopPropagation()
                 openDetailPanel('account', { id: txn.account_id, name: txn.account_name, mask: txn.account_mask })
               }}
-              title="View account detail"
-              style={{
-                background: 'none', border: 'none', color: 'var(--accent2)',
-                cursor: 'pointer', fontSize: 11, padding: '3px 5px', opacity: 0.75,
-                lineHeight: 1, flexShrink: 0, display: 'inline-flex', alignItems: 'center',
-                justifyContent: 'center', borderRadius: 6,
-              }}
-            >↗</button>
+              aria-label="View account detail"
+              style={{ flexShrink: 0 }}
+            >↗</IconButton>
           </span>
         )
       }
@@ -844,19 +828,19 @@ export default function Transactions() {
               live; it lists only what is still open, so it empties as things are completed. The count is
               what keeps money in that nothing claims from going unseen, since only money owed raises a
               reminder. */}
-          <Button small variant="ghost" onClick={() => setReimbursementsOpen(true)}>
+          <Button variant="secondary" onClick={() => setReimbursementsOpen(true)}>
             {reimbursements.count ? `Reimbursements (${reimbursements.count})` : 'Reimbursements'}
           </Button>
           {/* Paperwork that arrived before its transaction. Here because this is where transactions arrive;
               the count is what keeps a kept invoice from being forgotten once its charge does. */}
-          <Button small variant="ghost" onClick={() => setStoredDocumentsOpen(true)}>
+          <Button variant="secondary" onClick={() => setStoredDocumentsOpen(true)}>
             {storedDocuments.documents?.length ? `Stored documents (${storedDocuments.documents.length})` : 'Stored documents'}
           </Button>
-          <Button small variant="ghost" onClick={() => setTagsOpen(true)}>Tags</Button>
-          <Button small variant="ghost" onClick={() => setExportOpen(true)}>Export…</Button>
+          <Button variant="secondary" onClick={() => setTagsOpen(true)}>Tags</Button>
+          <Button variant="secondary" onClick={() => setExportOpen(true)}>Export…</Button>
           {/* The ledger is where someone notices a transaction is missing, so this is where adding one
               belongs — beside the list it will appear in, not parked in Settings. */}
-          <Button small variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
+          <Button variant="secondary" onClick={() => setAddingTransaction(true)}>+New</Button>
         </PageHeader>
       </div>
 
@@ -880,18 +864,9 @@ export default function Transactions() {
               active={attributeFilter.active}
               onChange={next => { setAttributeFilter(next); isFirstLoad.current = true }}
             />
-            <button
-              onClick={bulk.toggle}
-              style={{
-                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-                border: `1px solid ${bulkMode ? 'var(--accent)' : 'var(--border)'}`,
-                background: bulkMode ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
-                color: bulkMode ? 'var(--accent2)' : 'var(--muted)',
-                fontWeight: bulkMode ? 500 : 400,
-              }}
-            >
+            <Button size="compact" variant="secondary" pressed={bulkMode} onClick={bulk.toggle}>
               {bulkMode ? '✕ Done' : 'Bulk Edit'}
-            </button>
+            </Button>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, color: 'var(--muted)' }}>
               <CopyTransactionsButton
                 loadRows={loadAllShownTransactions}
@@ -911,8 +886,7 @@ export default function Transactions() {
           actions={
             <>
               <Button
-                small
-                variant="ghost"
+                variant="secondary"
                 onClick={copySelectedTransactions}
                 disabled={bulkSelectedCount === 0 || copying}
                 title="Copy the selected transactions as CSV"
@@ -925,8 +899,7 @@ export default function Transactions() {
                   : 'Several payments for one thing — a deposit and a balance, or an instalment plan'
               }>
                 <Button
-                  small
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() => setLinkingPurchase(selectedRowsForPurchase)}
                   disabled={selection.allMatching || selectedRowsForPurchase.length < 2}
                 >

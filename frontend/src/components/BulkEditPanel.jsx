@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { AppDialog, Button, getFormControlStyle } from './ui.jsx'
+import { AppDialog, Button, FilterChip, SegmentedToggle, getFormControlStyle } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { useTags } from '../lib/useTags.js'
@@ -33,51 +33,15 @@ function TagChips({ tags, selected, onToggle, tone }) {
       {tags.map(tag => {
         const on = selected.has(tag.id)
         return (
-          <button
+          <FilterChip
             key={tag.id}
-            type="button"
+            selected={on}
+            tone={tone === 'remove' ? 'danger' : undefined}
             onClick={() => onToggle(tag.id)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '4px 10px', borderRadius: 999, fontSize: 12, cursor: 'pointer',
-              border: `1px solid ${on ? (tone === 'remove' ? 'var(--danger)' : 'var(--accent)') : 'var(--border)'}`,
-              background: on
-                ? `color-mix(in srgb, ${tone === 'remove' ? 'var(--danger)' : 'var(--accent)'} 16%, var(--surface2))`
-                : 'var(--surface)',
-              color: 'var(--text)',
-            }}
           >
             <span style={{ width: 8, height: 8, borderRadius: 999, background: tag.color || 'var(--muted)' }} />
             {tag.name}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// A two-option segmented control. Used here for the binary review status; kept local since it's the
-// only segmented choice in the panel.
-function SegmentedToggle({ value, onChange, options }) {
-  return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-      {options.map((opt, i) => {
-        const on = value === opt.value
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            style={{
-              padding: '6px 14px', fontSize: 13, cursor: 'pointer', border: 'none',
-              borderLeft: i === 0 ? 'none' : '1px solid var(--border)',
-              background: on ? 'color-mix(in srgb, var(--accent) 18%, var(--surface2))' : 'var(--surface)',
-              color: on ? 'var(--text)' : 'var(--muted)',
-              fontWeight: on ? 600 : 500,
-            }}
-          >
-            {opt.label}
-          </button>
+          </FilterChip>
         )
       })}
     </div>
@@ -136,7 +100,7 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
       draggable
       actions={(
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
           <Button onClick={() => onApply(actions)} disabled={!canApply}>
             {applying ? 'Applying…' : `Apply to ${count}`}
           </Button>
@@ -206,6 +170,8 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
 
       <FieldRow enabled={setReview} onToggle={setSetReview} label="Set review status">
         <SegmentedToggle
+          size="compact"
+          ariaLabel="Review status"
           value={reviewNeedsReview ? 'needs_review' : 'reviewed'}
           onChange={v => setReviewNeedsReview(v === 'needs_review')}
           options={[

@@ -139,7 +139,7 @@ function BackendStoppedDialog() {
       onClose={null}
       width="min(460px, 100%)"
       actions={
-        <Button small onClick={check} disabled={checking}>
+        <Button onClick={check} disabled={checking}>
           {checking ? 'Checking…' : 'Check again'}
         </Button>
       }
@@ -794,14 +794,13 @@ function LocalPreferenceProfileScreen({
             />
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <Button
-                small
                 onClick={() => name.trim() && onCreate(name.trim(), () => setName(''))}
                 disabled={!name.trim() || creating}
               >
                 {creating ? 'Creating…' : 'Create user'}
               </Button>
               {showCancel ? (
-                <Button small variant="ghost" onClick={onCancel} style={{ marginLeft: 'auto' }}>
+                <Button variant="secondary" onClick={onCancel} style={{ marginLeft: 'auto' }}>
                   Cancel
                 </Button>
               ) : null}
@@ -836,25 +835,14 @@ function LocalPreferenceProfileScreen({
                 {APP_NAME} turns your transactions into reports and a searchable history. Add a name, then
                 bring in some data — that is what drives everything else.
               </div>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                pressed={showWelcomeHelp}
                 onClick={() => setShowWelcomeHelp(current => !current)}
-                style={{
-                  flex: '0 0 auto',
-                  background: showWelcomeHelp
-                    ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-                    : 'var(--surface)',
-                  color: showWelcomeHelp ? 'var(--accent2)' : 'var(--text)',
-                  border: `1px solid ${showWelcomeHelp ? 'color-mix(in srgb, var(--accent) 34%, var(--border))' : 'var(--border)'}`,
-                  borderRadius: 999,
-                  padding: '8px 12px',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
+                style={{ flex: '0 0 auto' }}
               >
                 {showWelcomeHelp ? 'Hide overview' : 'What is this?'}
-              </button>
+              </Button>
             </div>
 
             {showWelcomeHelp ? (
@@ -2101,41 +2089,22 @@ export default function App() {
                                     )}
                                   </div>
                                   {authEnabled && (
-                                    <button
-                                      onClick={handleLogout}
-                                      style={{
-                                        width: '100%',
-                                        background: 'none',
-                                        border: '1px solid var(--border)',
-                                        color: 'var(--text)',
-                                        borderRadius: 8,
-                                        padding: '8px 10px',
-                                        cursor: 'pointer',
-                                      }}
-                                    >
+                                    <Button variant="quiet" onClick={handleLogout} style={{ width: '100%' }}>
                                       Sign out
-                                    </button>
+                                    </Button>
                                   )}
                                   {/* Last, because it is the most final thing here — and named for the whole
                               application rather than "Quit", which beside "Sign out" would read as
                               ending the session. Absent unless the backend says stopping would work. */}
                                   {shutdownAvailable && (
-                                    <button
+                                    <Button
+                                      variant="quiet"
                                       onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
-                                      style={{
-                                        width: '100%',
-                                        marginTop: 8,
-                                        background: 'none',
-                                        border: '1px solid var(--border)',
-                                        color: 'var(--muted)',
-                                        borderRadius: 8,
-                                        padding: '8px 10px',
-                                        cursor: 'pointer',
-                                      }}
+                                      style={{ width: '100%', marginTop: 8 }}
                                       title="Stop Luma on this computer"
                                     >
                                       Shut down Luma
-                                    </button>
+                                    </Button>
                                   )}
                                 </div>
                                 )}
@@ -2169,23 +2138,15 @@ export default function App() {
                                     <span style={{ color: 'var(--muted)' }}>
                                       Exploring the sample dataset — imports and connections are disabled.
                                     </span>
-                                    <button
-                                      type="button"
+                                    <Button
+                                      variant="secondary"
+                                      tone="danger"
+                                      size="compact"
                                       onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
-                                      style={{
-                                        marginLeft: 'auto',
-                                        background: 'color-mix(in srgb, var(--danger) 14%, var(--surface))',
-                                        color: 'color-mix(in srgb, var(--danger) 82%, var(--text))',
-                                        border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
-                                        borderRadius: 8,
-                                        padding: '5px 12px',
-                                        fontSize: 12,
-                                        fontWeight: 600,
-                                        cursor: 'pointer',
-                                      }}
+                                      style={{ marginLeft: 'auto' }}
                                     >
                                       Clear demo data
-                                    </button>
+                                    </Button>
                                   </div>
                                 ) : null}
                                 {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}

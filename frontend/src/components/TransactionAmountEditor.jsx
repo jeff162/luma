@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { Button, Input, SegmentedToggle, Tooltip } from './ui.jsx'
+import { Button, Input, SegmentedToggle, Tooltip, IconButton } from './ui.jsx'
 import { DIRECTIONS, round2, signedAmount } from '../lib/manualTransaction.js'
 import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
@@ -82,15 +82,7 @@ export default function TransactionAmountEditor({ txn, onSave }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {amountText}
           {offered && editable ? (
-            <button
-              type="button"
-              onClick={begin}
-              title="Edit amount"
-              style={{
-                background: 'none', border: 'none', color: 'var(--muted)',
-                cursor: 'pointer', fontSize: 13, padding: '2px 4px',
-              }}
-            >✎</button>
+            <IconButton size="compact" onClick={begin} aria-label="Edit amount">✎</IconButton>
           ) : null}
           {offered && !editable ? (
             // A span rather than a disabled <button>: an inert control receives no pointer events, so
@@ -137,8 +129,8 @@ export default function TransactionAmountEditor({ txn, onSave }) {
         {next === null ? 'Enter an amount' : `Will be recorded as ${formatTransactionAmount(next)}`}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Button small onClick={save} disabled={!canSave}>{saving ? 'Saving…' : 'Save'}</Button>
-        <Button small variant="ghost" onClick={cancel} disabled={saving}>Cancel</Button>
+        <Button onClick={save} disabled={!canSave}>{saving ? 'Saving…' : 'Save'}</Button>
+        <Button variant="secondary" onClick={cancel} disabled={saving}>Cancel</Button>
       </div>
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
     </div>

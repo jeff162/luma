@@ -4,7 +4,7 @@
 import { useState, useEffect, useId, useRef } from 'react'
 import { api } from '../lib/api.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { AppDialog, Button, Spinner, getFormControlStyle, AppConfirmDialog } from './ui.jsx'
+import { AppDialog, Button, Spinner, getFormControlStyle, AppConfirmDialog, IconButton } from './ui.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from './TagUi.jsx'
@@ -222,7 +222,7 @@ export default function TagsDialog({ onClose }) {
             />
           </div>
           <div>
-            <Button small type="submit" disabled={creating || !form.name.trim()}>
+            <Button type="submit" disabled={creating || !form.name.trim()}>
               {creating ? 'Saving...' : 'Add tag'}
             </Button>
           </div>
@@ -265,24 +265,9 @@ export default function TagsDialog({ onClose }) {
                 compact
                 align="flex-end"
               />
-              <button
-                type="button"
-                onClick={() => setPendingDeleteTag(tag)}
-                aria-label={`Delete tag ${tag.name}`}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--danger)',
-                  cursor: 'pointer',
-                  fontSize: 18,
-                  lineHeight: 1,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                }}
-              >
+              <IconButton tone="danger" onClick={() => setPendingDeleteTag(tag)} aria-label={`Delete tag ${tag.name}`} style={{ fontSize: 18 }}>
                 ×
-              </button>
+              </IconButton>
             </div>
           ))
         )}

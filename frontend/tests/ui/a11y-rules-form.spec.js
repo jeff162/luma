@@ -73,7 +73,7 @@ async function collectVisibleControlFindings(page) {
 
 test('@a11y rules form exposes labels and stable ids for expanded controls', async ({ page }) => {
   await page.goto('/rules')
-  await page.getByRole('button', { name: '+ New' }).click()
+  await page.getByRole('button', { name: '+New' }).click()
 
   for (const label of ['Amount', 'Owner', 'Account', 'Rename Merchant To']) {
     const toggle = page.getByRole('button', { name: new RegExp(label, 'i') }).first()

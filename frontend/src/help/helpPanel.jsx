@@ -3,6 +3,7 @@
 
 import { Link, useLocation } from 'react-router-dom'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
+import { IconButton, LinkButton } from '../components/ui.jsx'
 
 /*
  * Shared help panel: a topic's title, one-line summary, and "Read more" link to
@@ -29,13 +30,9 @@ export function HelpPopoverPanel({
   // "Read more" opens the full body in the in-place viewer when the host provides one (so it lands
   // above floating panels); otherwise it falls back to routing to the standalone /help page.
   const readMore = onReadMore ? (
-    <button
-      type="button"
-      onClick={onReadMore}
-      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'var(--accent2)' }}
-    >
+    <LinkButton onClick={onReadMore} style={{ fontSize: 12 }}>
       Read more &rarr;
-    </button>
+    </LinkButton>
   ) : (
     <Link
       to={`/help/${entry.id}`}
@@ -52,16 +49,7 @@ export function HelpPopoverPanel({
         {icon}
         <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{entry.title}</div>
         {onClose ? (
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'none', border: 'none',
-              color: 'var(--muted)', cursor: 'pointer',
-              fontSize: 16, lineHeight: 1, padding: 0,
-            }}
-            aria-label={closeLabel}
-          >&times;</button>
+          <IconButton onClick={onClose} aria-label={closeLabel} style={{ fontSize: 16 }}>&times;</IconButton>
         ) : null}
       </div>
       <div style={{ color: 'var(--muted)' }}>{entry.summary}</div>

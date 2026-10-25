@@ -106,8 +106,7 @@ export default function SectionListPage({ title, help, groups, headerSections = 
           {shownHeaderSections.map(section => (
             <Button
               key={section.key}
-              small
-              variant="ghost"
+              variant="secondary"
               onClick={() => select(section.key)}
             >
               {section.title}

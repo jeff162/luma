@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { formatTimestamp } from '../../lib/utils.js'
-import { AppConfirmDialog, AppDialog, Button, Input, Toggle } from '../ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Input, Toggle, IconButton } from '../ui.jsx'
 import { SOURCE_ROW_GRID_COLUMNS, TRUNCATED_CELL_STYLE } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import WatchedFolderDialog from './WatchedFolderDialog.jsx'
@@ -31,11 +31,6 @@ const ROW_GRID = {
 }
 // Matching the bare row actions beside it (Folder / Edit); a `Button` here was visibly heavier than
 // every other control on the row.
-const ROW_ACTION_STYLE = {
-  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-  color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '3px 8px',
-}
-
 // What a source's folder setting amounts to. Whether it is *switched on* is not in here: that rides
 // the label above as a pill, where the cell's truncation cannot clip it.
 function folderSummary(profile) {
@@ -71,7 +66,7 @@ function AmazonSourceEditor({ profile, accounts, onClose, onSaved, onAccountCrea
       width="min(520px, 100%)"
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           {/* The account is required, not optional: a source saved without one takes no file — its
               watched folder parks every export it finds, with no sign here that it would. */}
           <Button onClick={save} disabled={saving || !name.trim() || !accountId}>{saving ? 'Saving…' : 'Save'}</Button>
@@ -165,9 +160,9 @@ export default function AmazonSourcesSection({ batches = [] }) {
           </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" style={ROW_ACTION_STYLE} onClick={() => setEditing({ profile: null })}>
+          <Button size="compact" variant="quiet" onClick={() => setEditing({ profile: null })}>
             + New Amazon source
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -197,16 +192,11 @@ export default function AmazonSourcesSection({ batches = [] }) {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-            <button type="button" style={ROW_ACTION_STYLE} onClick={() => setWatchProfile(profile)}>Folder</button>
-            <button type="button" style={ROW_ACTION_STYLE} onClick={() => setEditing({ profile })}>Edit</button>
-            <button
-              type="button"
-              onClick={() => setPendingDelete(profile)}
-              aria-label={`Delete ${profile.name}`}
-              style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }}
-            >
+            <Button size="compact" variant="quiet" onClick={() => setWatchProfile(profile)}>Folder</Button>
+            <Button size="compact" variant="quiet" onClick={() => setEditing({ profile })}>Edit</Button>
+            <IconButton tone="danger" onClick={() => setPendingDelete(profile)} aria-label={`Delete ${profile.name}`}>
               ×
-            </button>
+            </IconButton>
           </div>
         </div>
       ))}

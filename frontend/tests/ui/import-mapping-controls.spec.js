@@ -554,7 +554,7 @@ test('deleting a data source removes it from the import page immediately', async
     await expect(chooser.getByRole('button', { name: profileName, exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: 'File Sources', exact: true }).click()
-    await managerRow(page, profileName).getByRole('button', { name: '×', exact: true }).click()
+    await managerRow(page, profileName).getByRole('button', { name: `Delete ${profileName}`, exact: true }).click()
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
     // Gone from the source list and from the still-open chooser on the other tab, without a reload.

@@ -11,7 +11,7 @@ import {
 } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import { ServerCertificateLink } from './ServerCertificate.jsx'
-import { FieldIssue, PasswordInput, PasswordManagerUsername, Tooltip } from './ui.jsx'
+import { FieldIssue, PasswordInput, PasswordManagerUsername, Tooltip, Button } from './ui.jsx'
 
 const s = {
   page: {
@@ -47,17 +47,6 @@ const s = {
     padding: '10px 12px',
     fontSize: 14,
     outline: 'none',
-  },
-  button: {
-    width: '100%',
-    background: 'var(--accent)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 10,
-    padding: '11px 14px',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
   },
 }
 
@@ -351,9 +340,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
         {/* Full-width trigger: the tooltip wraps its child only while it has something to say, and its
             default inline wrapper would shrink this full-width button exactly when it greys out. */}
         <Tooltip content={passwordStepIssue && !submitting ? passwordStepIssue : ''} triggerStyle={{ display: 'flex', width: '100%' }}>
-          <button type="submit" disabled={submitting || !!passwordStepIssue} style={{ ...s.button, marginTop: 18, opacity: (submitting || passwordStepIssue) ? 0.7 : 1 }}>
+          <Button type="submit" disabled={submitting || !!passwordStepIssue} style={{ width: '100%', marginTop: 18 }}>
             {buttonLabel}
-          </button>
+          </Button>
         </Tooltip>
         {passkeyOffered && (
           <>
@@ -362,24 +351,24 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>or</div>
               <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
             </div>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={handlePasskeySignIn}
               disabled={passkeyBusy}
-              style={{ ...s.button, marginTop: 10, background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)', opacity: passkeyBusy ? 0.7 : 1 }}
+              style={{ width: '100%', marginTop: 10 }}
             >
               {passkeyBusy ? 'Waiting for the passkey...' : 'Sign in with a passkey'}
-            </button>
+            </Button>
           </>
         )}
         {awaiting2fa && (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={() => { setAwaiting2fa(false); setTwoFactorCode(''); setError('') }}
-            style={{ ...s.button, marginTop: 10, background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)' }}
+            style={{ width: '100%', marginTop: 10 }}
           >
             Back
-          </button>
+          </Button>
         )}
       </form>
       <ServerCertificateLink />

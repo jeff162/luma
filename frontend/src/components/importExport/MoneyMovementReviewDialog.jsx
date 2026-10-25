@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackdrop } from '../ui.jsx'
+import { StatusPill } from '../connections/ConnectionStatus.jsx'
 
 /*
  * Review (and later edit) which PayPal transaction `Type` values are money movement, routing the checked
@@ -77,23 +78,15 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
                   imported/manual category (the rule leaves those alone). The ↗ pill opens a report of both,
                   matching the launch affordance used on import cards. */}
               {onOpenReport ? (
-                <button
-                  type="button"
+                <StatusPill
+                  report
+                  tone="muted"
                   onClick={() => onOpenReport(proposal.type, proposal.already_ruled)}
                   title="Show these transactions"
-                  aria-label={`Show ${proposal.type} transactions`}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, fontSize: 11,
-                    padding: '2px 7px', borderRadius: 99, cursor: 'pointer', whiteSpace: 'nowrap',
-                    background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)',
-                  }}
                 >
-                  <span>
-                    {proposal.count} row{proposal.count === 1 ? '' : 's'}
-                    {proposal.extra_count ? ` · ${proposal.extra_count} not affected` : ''}
-                  </span>
-                  <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                </button>
+                  {proposal.count} row{proposal.count === 1 ? '' : 's'}
+                  {proposal.extra_count ? ` · ${proposal.extra_count} not affected` : ''}
+                </StatusPill>
               ) : (
                 <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                   {proposal.count} row{proposal.count === 1 ? '' : 's'}
@@ -104,7 +97,7 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
           ))}
         </div>
         <DialogActions>
-          <Button variant="ghost" onClick={onClose} disabled={applying}>{editing ? 'Cancel' : 'Not now'}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={applying}>{editing ? 'Cancel' : 'Not now'}</Button>
           <Button onClick={() => onApply?.({ add, remove })} disabled={applying || changeCount === 0}>
             {applying ? 'Applying…' : (changeCount === 0 ? 'No changes' : `Apply (${changeCount} change${changeCount === 1 ? '' : 's'})`)}
           </Button>

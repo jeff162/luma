@@ -4,7 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- shared category-tree row component + tree-traversal helpers used by callers */
 
 import { useEffect, useRef, useState } from 'react'
-import { CategoryMarker, HighlightedText } from './ui.jsx'
+import { CategoryMarker, HighlightedText, Button, IconButton } from './ui.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -48,41 +48,26 @@ function DeleteConfirm({ label, onConfirm, onCancel }) {
       }}
     >
       <span style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</span>
-      <button
+      <Button
+        size="compact"
+        variant="danger"
         onMouseDown={e => {
           e.stopPropagation()
           onConfirm()
         }}
-        style={{
-          background: 'var(--danger)',
-          color: '#fff',
-          border: 'none',
-          borderRadius: 5,
-          padding: '3px 9px',
-          fontSize: 12,
-          cursor: 'pointer',
-          fontWeight: 600,
-        }}
       >
         Delete
-      </button>
-      <button
+      </Button>
+      <Button
+        size="compact"
+        variant="quiet"
         onMouseDown={e => {
           e.stopPropagation()
           onCancel()
         }}
-        style={{
-          background: 'none',
-          border: '1px solid var(--border)',
-          color: 'var(--muted)',
-          borderRadius: 5,
-          padding: '3px 8px',
-          fontSize: 12,
-          cursor: 'pointer',
-        }}
       >
         Cancel
-      </button>
+      </Button>
     </div>
   )
 }
@@ -277,36 +262,12 @@ export function UndoToast({ title, description, onUndo, onDismiss, zIndex = 850 
           {description}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={onUndo}
-            style={{
-              flex: 1,
-              background: 'var(--accent)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 7,
-              padding: '7px 0',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
+          <Button onClick={onUndo} style={{ flex: 1 }}>
             Undo
-          </button>
-          <button
-            onClick={onDismiss}
-            style={{
-              background: 'var(--surface2)',
-              color: 'var(--muted)',
-              border: '1px solid var(--border)',
-              borderRadius: 7,
-              padding: '7px 11px',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
+          </Button>
+          <Button variant="secondary" onClick={onDismiss}>
             Dismiss
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -494,26 +455,17 @@ export function CategoryTreeRow({
       />
       {trailingContent ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{trailingContent}</span> : null}
       {bulkSelectMode || !showDelete ? null : !confirmDelete ? (
-        <button
+        <IconButton
+          size="compact"
+          aria-label="Delete"
           onClick={e => {
             e.stopPropagation()
             setConfirmDelete(true)
           }}
-          title="Delete"
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            padding: '1px 2px',
-            borderRadius: 4,
-            flexShrink: 0,
-            lineHeight: 1,
-          }}
+          style={{ flexShrink: 0 }}
         >
           x
-        </button>
+        </IconButton>
       ) : (
         <DeleteConfirm
           label={`Delete "${cat.name}"?`}

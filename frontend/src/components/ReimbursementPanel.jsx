@@ -17,6 +17,7 @@ import {
   reimbursementCardSummary,
 } from '../lib/reimbursements.js'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
+import { Button } from './ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 /*
@@ -269,20 +270,15 @@ export default function ReimbursementPanel({ txnId, categories, onAddCategory, o
             />
           ) : (
             <div>
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={() => (portions.length > 1 ? setChoosing(true) : choosePortion(portions[0]))}
                 disabled={starting || !portions.length}
-                style={{
-                  fontSize: 12.5, cursor: starting ? 'default' : 'pointer',
-                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6,
-                  padding: '4px 10px', color: 'var(--text)', font: 'inherit',
-                }}
               >
                 {starting ? 'Starting…' : receivableActionLabel({
                   unclaimed: state.unclaimed, receivable: state.receivable, portionCount: portions.length,
                 })}
-              </button>
+              </Button>
             </div>
           )}
         </div>

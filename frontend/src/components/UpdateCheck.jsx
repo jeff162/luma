@@ -45,7 +45,7 @@ export function UpdateCheckControls({ check }) {
           disabled={saving}
           label="Check for a new version automatically"
         />
-        <Button small variant="ghost" disabled={checking} onClick={checkNow}>
+        <Button variant="secondary" disabled={checking} onClick={checkNow}>
           {announceChecking ? 'Checking…' : 'Check now'}
         </Button>
       </div>

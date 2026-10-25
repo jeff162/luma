@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner } from './ui.jsx'
+import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner, IconButton } from './ui.jsx'
 import RuleSummary from './RuleSummary.jsx'
 import { formatDate } from '../lib/utils.js'
 
@@ -67,7 +67,7 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
                   : `${total} rule${total !== 1 ? 's' : ''} haven’t categorized anything in ${windowLabel}. Uncheck any you want to keep.`}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1 }}>×</button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </FloatingPanelHeader>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 8px' }}>
@@ -109,12 +109,11 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
             </label>
           ) : null}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-            <Button small variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
             {total > 0 ? (
-              <Button small
+              <Button
                 onClick={run}
                 disabled={working || selected.size === 0}
-                style={{ background: 'var(--danger)', color: '#fff', border: 'none' }}
               >
                 {working ? 'Trashing…' : `Trash ${selected.size} rule${selected.size !== 1 ? 's' : ''}`}
               </Button>

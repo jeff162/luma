@@ -81,7 +81,7 @@ export default function LinkPurchaseDialog({ rows, onClose, onLinked }) {
       width="min(560px, 100%)"
       actions={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           {plan.mode === 'blocked' ? null : (
             <Button onClick={save} disabled={saving}>
               {saving ? 'Linking…' : (adding ? 'Add payments' : 'Link purchase')}

@@ -8,6 +8,7 @@ import { HELP_TOPICS_BY_ID } from './content.jsx'
 import { HelpNavContext } from './helpNav.jsx'
 import { HELP_BODY_CSS } from './helpBody.js'
 import { scrollToHelpAnchor } from './helpAnchors.js'
+import { IconButton, LinkButton } from '../components/ui.jsx'
 
 /*
  * In-place help viewer. Renders a topic's full body in a portal'd overlay above everything
@@ -122,15 +123,7 @@ export default function HelpTopicDialog({ topicId, onClose }) {
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 10 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1, margin: 0 }}>{entry.title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            style={{
-              background: 'none', border: 'none', color: 'var(--muted)',
-              cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '0 4px',
-            }}
-          >&times;</button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>&times;</IconButton>
         </div>
         <HelpNavContext.Provider value={{ navigate: followLink }}>
           <div className="help-body" ref={bodyRef}><Body /></div>
@@ -139,16 +132,9 @@ export default function HelpTopicDialog({ topicId, onClose }) {
             where the reader is when they want it, and the two ways out share one line. */}
         <div style={{ marginTop: 16, display: 'flex', alignItems: 'baseline', gap: 12 }}>
           {backTitle ? (
-            <button
-              type="button"
-              onClick={goBack}
-              style={{
-                background: 'none', border: 'none', padding: 0,
-                color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
-              }}
-            >
+            <LinkButton onClick={goBack} style={{ fontSize: 12 }}>
               &larr; Back to {backTitle}
-            </button>
+            </LinkButton>
           ) : null}
           <Link
             to="/help"

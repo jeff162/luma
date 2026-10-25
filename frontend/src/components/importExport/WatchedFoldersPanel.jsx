@@ -113,18 +113,9 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
           Watched folders
           <FeatureExplainer topic="watched-folders" placement="bottom-left" />
         </span>
-        <button
-          type="button"
-          onClick={checkNow}
-          disabled={scanning}
-          style={{
-            background: 'none', border: '1px solid var(--border)', borderRadius: 999,
-            color: 'var(--muted)', cursor: scanning ? 'default' : 'pointer',
-            fontSize: 12, padding: '2px 10px', opacity: scanning ? 0.6 : 1,
-          }}
-        >
+        <Button size="compact" variant="secondary" onClick={checkNow} disabled={scanning}>
           {scanning ? 'Checking…' : 'Check now'}
-        </button>
+        </Button>
         <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>
           {status?.last_scan_at ? `Last checked ${formatTimestamp(status.last_scan_at)}` : 'Not checked yet'}
         </span>
@@ -189,11 +180,11 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
                   </div>
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                     {file.state === 'purge_failed' ? null : (
-                      <Button small onClick={() => openInImportFlow(file)} disabled={opening === file.id}>
+                      <Button onClick={() => openInImportFlow(file)} disabled={opening === file.id}>
                         {opening === file.id ? 'Opening…' : 'Import…'}
                       </Button>
                     )}
-                    <Button variant="ghost" small onClick={() => dismiss(file)}>Dismiss</Button>
+                    <Button variant="secondary" onClick={() => dismiss(file)}>Dismiss</Button>
                   </div>
                 </div>
               ))}

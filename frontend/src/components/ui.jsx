@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { createContext, forwardRef, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
@@ -650,7 +650,7 @@ export function AppConfirmDialog({
       dismissOnBackdrop={dismissOnBackdrop}
       actions={(
         <>
-          <Button variant="ghost" onClick={onCancel} disabled={cancelDisabled}>
+          <Button variant="secondary" onClick={onCancel} disabled={cancelDisabled}>
             {cancelLabel}
           </Button>
           <Button variant={confirmVariant} onClick={onConfirm} disabled={confirmDisabled}>
@@ -720,7 +720,7 @@ export function AppTextEntryDialog({
       borderColor={borderColor}
       actions={(
         <>
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             {cancelLabel}
           </Button>
           <Button variant={confirmVariant} onClick={onConfirm} disabled={confirmDisabled}>
@@ -759,11 +759,6 @@ export function AppTextEntryDialog({
   )
 }
 
-// The size a `Button` takes when its caller does not say. A page's or panel's action rows (its header
-// cluster and its footer) provide `small`, so every Save, Cancel and Close across the app is one size
-// without each call site having to remember it. An explicit `small={false}` still opts out.
-const ButtonSizeContext = createContext(false)
-
 export function DialogActions({ children, align = 'end', style, background = 'var(--surface2)' }) {
   const justifyContent = align === 'between'
     ? 'space-between'
@@ -783,7 +778,7 @@ export function DialogActions({ children, align = 'end', style, background = 'va
         ...style,
       }}
     >
-      <ButtonSizeContext.Provider value>{children}</ButtonSizeContext.Provider>
+      {children}
     </div>
   )
 }
@@ -817,7 +812,7 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
         {leftAdornment}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginLeft: 'auto' }}>
-        <ButtonSizeContext.Provider value>{children}</ButtonSizeContext.Provider>
+        {children}
       </div>
     </div>
   )
@@ -832,39 +827,89 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
 // `progress` (a 0–1 fraction) turns the button into its own progress bar for a long action it started: the
 // face fills from the left behind the label, which carries the figures. A running bar is the button busy
 // rather than unavailable, so it keeps its full colour even though it is disabled for the duration.
-export function Button({ children, onClick, onMouseDown, onPointerDown, variant = 'primary', small: smallProp, disabled, style, title,
-  type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress }) {
-  const contextSmall = useContext(ButtonSizeContext)
-  const small = smallProp ?? contextSmall
+//
+// The app's one labelled button. Its look comes only from these props, so a caller's `style` is for
+// placement (margin, flex, width, visibility) and is applied last; a colour passed there would be a
+// variant that nothing else can reuse.
+//   - `variant`: `primary` is the surface's one committing action (Save, Confirm); `secondary` is every
+//     other action; `quiet` is an outlined, unfilled action that should not compete with the data around
+//     it; `danger` is the confirm of something that cannot be undone (`ui-patterns.md` → Confirmation).
+//   - `tone="danger"` reds the label of a `secondary` or `quiet` button: a destructive action that is not
+//     itself the final confirm.
+//   - `pressed` makes it a toggle (`aria-pressed`), drawn in the accent while on.
+//   - `size`: `regular` everywhere by default; `compact` for an action repeated on every row or card, so a
+//     run of them reads as a quiet toolbar rather than as the surface's main verbs.
+// Any other prop (a ref, `aria-expanded`, a hover or context-menu handler) goes to the `<button>`, here and
+// on `IconButton`, `FilterChip` and `LinkButton`, so a control that opens a popover keeps its wiring.
+// Every variant draws a 1px border, transparent where it has none to show, so the two sizes are each one
+// height whichever variant sits beside which.
+//
+// The padding lives in `index.html` with the label's optical centring: a font's text box carries room for
+// accents above the capitals, so a label centred by its box draws low, by a pixel or more in some fonts.
+// Where the browser can trim that box to the capitals and the baseline, the padding grows to keep the
+// button's height. A caller that sizes the button itself (its own padding, height or line height) keeps
+// the untrimmed box, because its numbers were chosen against it.
+const BUTTON_SIZES = {
+  regular: { fontSize: 13, borderRadius: 8 },
+  compact: { fontSize: 12, borderRadius: 6 },
+}
+
+function sizesItself(style) {
+  return !!style && ['padding', 'paddingTop', 'paddingBottom', 'paddingBlock', 'height', 'lineHeight'].some(key => key in style)
+}
+
+function buttonLook(variant, tone, pressed) {
+  if (variant === 'primary') return { background: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' }
+  if (variant === 'danger') return { background: 'var(--danger)', color: '#fff', border: '1px solid var(--danger)' }
+  if (pressed) {
+    return {
+      background: 'color-mix(in srgb, var(--accent) 16%, var(--surface2))',
+      color: 'var(--accent2)',
+      border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))',
+    }
+  }
+  const danger = tone === 'danger'
+  if (variant === 'quiet') {
+    return { background: 'transparent', color: danger ? 'var(--danger)' : 'var(--muted)', border: '1px solid var(--border)' }
+  }
+  return danger
+    ? {
+      background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
+      color: 'var(--danger)',
+      border: '1px solid color-mix(in srgb, var(--danger) 45%, var(--border))',
+    }
+    : {
+      background: 'color-mix(in srgb, var(--surface2) 76%, var(--accent) 8%)',
+      color: 'var(--text)',
+      border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
+    }
+}
+
+export function Button({ children, onClick, onMouseDown, onPointerDown, variant = 'primary', tone, pressed, size = 'regular',
+  disabled, style, title, type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress, ...rest }) {
+  const className = `ui-button ui-button-${size}${sizesItself(style) ? '' : ' ui-button-trim'}`
   const showsProgress = typeof progress === 'number' && Number.isFinite(progress)
-  const base = {
-    padding: small ? '6px 12px' : '9px 16px',
-    borderRadius: 8, border: 'none', cursor: showsProgress ? 'progress' : (disabled ? 'not-allowed' : 'pointer'),
-    fontSize: small ? 13 : 14, fontWeight: 500,
+  const look = {
+    ...BUTTON_SIZES[size],
+    ...buttonLook(variant, tone, pressed),
+    fontWeight: 500,
+    cursor: showsProgress ? 'progress' : (disabled ? 'not-allowed' : 'pointer'),
     // The press itself is quick, so it reads as the button going down under the pointer rather than easing.
     transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.06s, filter 0.06s',
     opacity: disabled && !showsProgress ? 0.5 : 1,
     ...(showsProgress ? { position: 'relative', overflow: 'hidden' } : null),
-    ...style,
-  }
-  const variants = {
-    primary:  { background: 'var(--accent)',  color: '#fff' },
-    ghost:    {
-      background: 'color-mix(in srgb, var(--surface2) 76%, var(--accent) 8%)',
-      color: 'var(--text)',
-      border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
-      boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 8px 18px rgba(0,0,0,0.10)',
-    },
-    danger:   { background: 'var(--danger)',  color: '#fff' },
   }
   return (
     <button
-      // Carries the pressed look (`index.html`), the one state an inline style cannot express. Without it
-      // a click gave no sign of having landed unless the action happened to change the screen.
-      className="ui-button"
+      {...rest}
+      // Carries the pressed look (`index.html`), the one state an inline style cannot express, and the
+      // size's padding with the label's optical centring. Without the pressed look a click gave no sign of
+      // having landed unless the action happened to change the screen.
+      className={className}
       type={type}
       aria-label={ariaLabel}
       aria-busy={ariaBusy ?? (showsProgress || undefined)}
+      aria-pressed={pressed === undefined ? undefined : !!pressed}
       // The DOM attribute, not just the dimmed look and the dropped handlers. Without it the control
       // stays focusable, still announces as enabled to a screen reader, and still submits a form it
       // sits in — so a button that looks unavailable is only unavailable to a mouse. The handlers stay
@@ -873,7 +918,7 @@ export function Button({ children, onClick, onMouseDown, onPointerDown, variant 
       onClick={disabled ? undefined : onClick}
       onMouseDown={disabled ? undefined : onMouseDown}
       onPointerDown={disabled ? undefined : onPointerDown}
-      style={{ ...base, ...variants[variant] }}
+      style={{ ...look, ...style }}
       title={title}
     >
       {showsProgress ? (
@@ -941,21 +986,22 @@ export function RefreshButton({ onRefresh, loading = false, disabled = false, ti
 
   return (
     <Button
-      variant="ghost"
-      small
+      variant="secondary"
       onClick={refresh}
       onPointerDown={onPointerDown}
       disabled={disabled}
       title={title}
       aria-label="Refresh"
       aria-busy={spinning || undefined}
-      style={{ padding: '5px 7px', lineHeight: 0 }}
+      // Shorter than the line of the titles it sits on (17px in a section, 22px on a page), so it reads as
+      // attached to the title rather than as a control standing beside it.
+      style={{ padding: '3px 4px', lineHeight: 0 }}
     >
       <svg
         className={spinning ? 'ui-refresh-icon is-spinning' : 'ui-refresh-icon'}
         aria-hidden="true"
-        width="14"
-        height="14"
+        width="12"
+        height="12"
         viewBox="0 0 16 16"
         fill="none"
         stroke="currentColor"
@@ -972,12 +1018,129 @@ export function RefreshButton({ onRefresh, loading = false, disabled = false, ti
   )
 }
 
-// Compact action-button sizing — the tighter, flatter footprint for a run of repeated ghost actions
-// that should read as a quiet toolbar rather than as the surface's main verb: dense report rows
-// (duplicate detection, Amazon reconciliation) and the per-card maintenance actions on a connection.
-// Pair with `variant="ghost"`; it overrides Button's default padding/font/radius through the caller
-// `style` seam (the variant only owns colour/border/shadow, so size props here win).
-export const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRadius: 6 }
+// A glyph with no label: trash, edit, close, copy, open-report. Bare until hovered, so a row of them
+// stays quieter than the data beside it; the hover fill and the press live in `index.html`, since an
+// inline style cannot express either. The name is required because the glyph is all a screen reader
+// would otherwise get, and it doubles as the hover hint unless `title` says more.
+// `tone="danger"` is for what cannot be undone, as on `Button`; `tone="accent"` is the `↗` that opens a
+// report (`ui-patterns.md` → Status, badges and timestamps); `pressed` makes it a toggle.
+const ICON_BUTTON_SIZES = {
+  regular: { padding: '3px 6px', fontSize: 14, borderRadius: 6 },
+  compact: { padding: '1px 4px', fontSize: 12, borderRadius: 5 },
+  // The × that closes a panel or dialog from its header.
+  large: { padding: '0 5px', fontSize: 21, borderRadius: 6 },
+}
+
+export function IconButton({ children, onClick, onMouseDown, onPointerDown, 'aria-label': ariaLabel, title, size = 'regular',
+  tone, pressed, disabled, style, type = 'button', ...rest }) {
+  return (
+    <button
+      {...rest}
+      className="ui-button ui-icon-button"
+      type={type}
+      aria-label={ariaLabel}
+      aria-pressed={pressed === undefined ? undefined : !!pressed}
+      title={title ?? ariaLabel}
+      disabled={!!disabled}
+      onClick={disabled ? undefined : onClick}
+      onMouseDown={disabled ? undefined : onMouseDown}
+      onPointerDown={disabled ? undefined : onPointerDown}
+      style={{
+        ...ICON_BUTTON_SIZES[size],
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+        border: `1px solid ${pressed ? 'color-mix(in srgb, var(--accent) 55%, var(--border))' : 'transparent'}`,
+        ...(pressed ? { background: 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' } : null),
+        color: tone === 'danger' ? 'var(--danger)' : tone === 'accent' || pressed ? 'var(--accent2)' : 'var(--muted)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
+        transition: 'background 0.15s, color 0.15s, transform 0.06s, filter 0.06s',
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// A rounded chip that narrows a list: a facet value, a status filter, a quick scope. `selected` makes it a
+// toggle (`aria-pressed`); `count` is the number of rows it would show, drawn inside the chip so it is
+// visible before the chip is pressed. `variant="add"` is the dashed chip that opens a picker to add
+// another. `tone="danger"` marks a selection that removes something (tags picked for removal), and
+// `countTone` colours the count where its colour already means something (a finding's kind).
+// A chip that only displays a value is `OwnerChip` or `StatusPill`, not this.
+export function FilterChip({ children, onClick, selected, count, countTone, variant, tone, disabled, title, 'aria-label': ariaLabel, style, ...rest }) {
+  const add = variant === 'add'
+  const hue = tone === 'danger' ? 'var(--danger)' : 'var(--accent)'
+  return (
+    <button
+      {...rest}
+      className="ui-button"
+      type="button"
+      aria-label={ariaLabel}
+      aria-pressed={add || selected === undefined ? undefined : !!selected}
+      title={title}
+      disabled={!!disabled}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap',
+        border: add
+          ? '1px dashed var(--border)'
+          : `1px solid ${selected ? `color-mix(in srgb, ${hue} 50%, var(--border))` : 'var(--border)'}`,
+        background: add ? 'transparent' : selected ? `color-mix(in srgb, ${hue} 14%, var(--surface2))` : 'var(--surface2)',
+        color: add ? 'var(--muted)' : selected ? (tone === 'danger' ? 'var(--danger)' : 'var(--accent2)') : 'var(--text)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background 0.15s, border-color 0.15s, color 0.15s, transform 0.06s, filter 0.06s',
+        ...style,
+      }}
+    >
+      {children}
+      {/* Read as "Label (3)": the drawn count is a separate badge, which a screen reader would run
+          straight into the label. A block-level box is what puts the space between the two. */}
+      {count != null ? <span style={{ ...VISUALLY_HIDDEN_STYLE, display: 'inline-block' }}>{`(${count})`}</span> : null}
+      {count != null ? (
+        <span aria-hidden="true" style={{
+          fontSize: 10.5, fontWeight: 700, minWidth: 16, textAlign: 'center', padding: '0 5px', borderRadius: 99,
+          background: countTone
+            ? `color-mix(in srgb, ${countTone} 22%, var(--surface))`
+            : selected ? 'color-mix(in srgb, var(--accent) 22%, var(--surface))' : 'var(--surface)',
+          color: countTone || (selected ? 'var(--accent2)' : 'var(--muted)'),
+        }}>
+          {count}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+// An action that reads as text: "Read more →", "+ New tag", a count that opens its rows. It takes the
+// size of the text around it, so it sits in a sentence or a label row without changing its line.
+// `tone="muted"` is for a secondary action beside a label rather than an invitation; `tone="danger"` is
+// for one that clears or removes.
+export function LinkButton({ children, onClick, tone, disabled, title, 'aria-label': ariaLabel, style, ...rest }) {
+  const color = tone === 'muted' ? 'var(--muted)' : tone === 'danger' ? 'var(--danger)' : 'var(--accent2)'
+  return (
+    <button
+      {...rest}
+      className="ui-link-button"
+      type="button"
+      aria-label={ariaLabel}
+      title={title}
+      disabled={!!disabled}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        background: 'none', border: 'none', padding: 0, font: 'inherit',
+        color,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
 
 export function Select({ value, onChange, options, style, id, ...rest }) {
   const autoId = useId()  // self-assigned id (caller's wins) clears the "field needs an id/name" check
@@ -1140,17 +1303,9 @@ export const PasswordInput = forwardRef(function PasswordInput(
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
         {label || <span />}
         {offered ? (
-          <button
-            type="button"
-            onClick={suggest}
-            disabled={disabled || suggesting}
-            style={{
-              border: 'none', background: 'none', padding: 0, fontSize: 10, fontWeight: 400, whiteSpace: 'nowrap',
-              color: disabled ? 'var(--muted)' : 'var(--accent2)', cursor: disabled || suggesting ? 'default' : 'pointer',
-            }}
-          >
+          <LinkButton onClick={suggest} disabled={disabled || suggesting} style={{ fontSize: 10, whiteSpace: 'nowrap' }}>
             {offered.label}
-          </button>
+          </LinkButton>
         ) : null}
       </div>
       {field}
@@ -1342,17 +1497,9 @@ export function FilterConflictNote({ children, actionLabel, onAction, style }) {
       <span aria-hidden="true" style={{ color: 'var(--accent2)' }}>ⓘ</span>
       <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
       {actionLabel && onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          style={{
-            background: 'none', border: 'none', padding: 0,
-            color: 'var(--accent2)', cursor: 'pointer', fontSize: 12.5,
-            whiteSpace: 'nowrap', fontWeight: 500,
-          }}
-        >
+        <LinkButton onClick={onAction} style={{ fontSize: 12.5, whiteSpace: 'nowrap', fontWeight: 500 }}>
           {actionLabel}
-        </button>
+        </LinkButton>
       )}
     </div>
   )
@@ -1415,24 +1562,34 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
  *
  * An option may carry a `badge` (a count, usually), with `badgeTone: 'warning'` where the number is
  * the reason to look. The badge belongs on the control rather than the view it names: a count that is
- * only visible once you have switched cannot tell you to switch.
+ * only visible once you have switched cannot tell you to switch. An option's `title` is its hover hint.
+ *
+ * `size="compact"` is for a choice that adjusts a list rather than switching the view (a sort order, a
+ * scope inside a form): smaller, with the chosen option tinted rather than filled, so it stays quieter
+ * than the content it orders.
  */
-export function SegmentedToggle({ value, options, onChange, ariaLabel }) {
+export function SegmentedToggle({ value, options, onChange, ariaLabel, size = 'regular', disabled = false }) {
+  const compact = size === 'compact'
   return (
     <div role="group" aria-label={ariaLabel} style={{
-      display: 'flex', background: 'var(--surface2)',
-      borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
+      display: compact ? 'inline-flex' : 'flex', background: 'var(--surface2)',
+      borderRadius: compact ? 6 : 8, border: '1px solid var(--border)', overflow: 'hidden',
+      opacity: disabled ? 0.5 : 1,
     }}>
-      {options.map(opt => {
+      {options.map((opt, index) => {
         const on = value === opt.value
         const warn = opt.badgeTone === 'warning'
         return (
-          <button key={opt.value} onClick={() => onChange(opt.value)} aria-pressed={on} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
-            background: on ? 'var(--accent)' : 'transparent',
-            color: on ? '#fff' : 'var(--muted)',
-          }}>
+          <button key={opt.value} type="button" onClick={() => onChange(opt.value)} aria-pressed={on} title={opt.title}
+            disabled={disabled} style={{
+              display: 'inline-flex', alignItems: 'center', gap: compact ? 5 : 7,
+              padding: compact ? '3px 10px' : '7px 14px', border: 'none', fontSize: compact ? 12 : 13,
+              borderLeft: compact && index > 0 ? '1px solid var(--border)' : 'none',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              background: on ? (compact ? 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' : 'var(--accent)') : 'transparent',
+              color: on ? (compact ? 'var(--accent2)' : '#fff') : 'var(--muted)',
+              fontWeight: on && compact ? 600 : 400,
+            }}>
             {opt.label}
             {opt.badge != null && opt.badge !== '' ? (
               <span style={{

@@ -69,7 +69,6 @@ export function AccountIdentityPrompt({ pair, onMerge, onMarkDistinct, onDismiss
           ? 'Merge the two accounts. Identical matches between them resolve as duplicates; anything that only looks similar stays for review.'
           : 'These accounts cannot be merged from here — they differ in type or owner, or one is already grouped. Merge them on the Accounts page.'}>
           <Button
-            small
             disabled={disabled || !pair.can_merge}
             onClick={() => run('merge', onMerge)}
           >
@@ -77,16 +76,15 @@ export function AccountIdentityPrompt({ pair, onMerge, onMarkDistinct, onDismiss
           </Button>
         </Tooltip>
         <Button
-          small
-          variant="ghost"
+          variant="secondary"
           disabled={disabled}
           onClick={() => run('distinct', onMarkDistinct)}
           title={`Record that these are different accounts. Clears all ${n} flagged ${n === 1 ? 'row' : 'rows'} between them and stops future imports checking this pair.`}
         >
           {pending === 'distinct' ? 'Saving…' : 'Different accounts — keep both'}
         </Button>
-        <Button small variant="ghost" disabled={disabled} onClick={onDismiss}
-          style={{ marginLeft: 'auto', color: 'var(--muted)' }}
+        <Button variant="quiet" disabled={disabled} onClick={onDismiss}
+          style={{ marginLeft: 'auto' }}
           title="Leave these rows to resolve individually. This will not be asked again for this pair.">
           Not now
         </Button>

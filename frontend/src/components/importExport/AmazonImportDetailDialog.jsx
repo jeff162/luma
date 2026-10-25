@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo, useState } from 'react'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton} from '../ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton, Button, FilterChip} from '../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
@@ -135,10 +135,6 @@ export function AmazonImportDetailDialog({
   const active = CATEGORIES.find(c => c.key === activeKey) || CATEGORIES[0]
   const entries = useMemo(() => (data ? active.rows(data) : []), [data, active])
 
-  const chromeButtonStyle = {
-    background: 'var(--surface2)', border: '1px solid var(--border)',
-    borderRadius: 6, padding: '4px 10px', cursor: 'pointer', color: 'var(--muted)', fontSize: 13,
-  }
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
       <span onPointerDown={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
@@ -154,8 +150,13 @@ export function AmazonImportDetailDialog({
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>What this import did, and which file each row came from.</div>
       </div>
       {onMinimize ? (
-        <button type="button" title="Minimize to nav bar (state is preserved — click the pill to restore)"
-          onClick={onMinimize} onPointerDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>
+        <Button
+          size="compact"
+          variant="secondary"
+          title="Minimize to nav bar (state is preserved — click the pill to restore)"
+          onClick={onMinimize}
+          onPointerDown={e => e.stopPropagation()}
+        >– Minimize</Button>
       ) : null}
     </div>
   )
@@ -177,23 +178,18 @@ export function AmazonImportDetailDialog({
           {CATEGORIES.map(cat => {
             const count = data ? (cat.rows(data)?.length || 0) : 0
             const isActive = cat.key === activeKey
-            const accent = cat.warn ? 'var(--warning)' : 'var(--accent)'
             return (
-              <button
+              <FilterChip
                 key={cat.key}
-                type="button"
                 title={CATEGORY_HELP[cat.key]}
+                selected={isActive}
+                count={count}
+                countTone={cat.warn ? 'var(--warning)' : undefined}
                 onClick={() => setActiveKey(cat.key)}
-                style={{
-                  fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer', flexShrink: 0,
-                  fontWeight: isActive ? 600 : (cat.warn && count > 0 ? 600 : 500),
-                  background: isActive ? accent : `color-mix(in srgb, ${accent} 12%, var(--surface2))`,
-                  color: isActive ? 'white' : `color-mix(in srgb, ${accent} 75%, var(--text))`,
-                  border: `1px solid color-mix(in srgb, ${accent} 45%, var(--border))`,
-                }}
+                style={{ flexShrink: 0 }}
               >
-                {cat.label} ({count})
-              </button>
+                {cat.label}
+              </FilterChip>
             )
           })}
         </div>

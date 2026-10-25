@@ -39,7 +39,7 @@ export default function TransactionListToolbar({ rows, copy = null, title, bulk,
         title={title}
         tooltip="Copy the transactions shown"
       />
-      <Button variant="ghost" small onClick={bulk.toggle}>
+      <Button variant="secondary" onClick={bulk.toggle}>
         {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
       </Button>
     </div>

@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
-import { AppConfirmDialog, AppNoticeDialog, Button, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, Button, IconButton, Spinner, LinkButton } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, NamelessMerchant, getTxnMerchantLabel, getTxnName } from './TransactionRow.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
@@ -419,20 +419,13 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
               minWidth: 220,
             }}
           />
-          <Button small onClick={commitEditingName}>Save</Button>
-          <Button small variant="ghost" onClick={cancelEditingName}>Cancel</Button>
+          <Button onClick={commitEditingName}>Save</Button>
+          <Button variant="secondary" onClick={cancelEditingName}>Cancel</Button>
         </div>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName || <NamelessMerchant txn={detailTxn} />}</div>
-          <button
-            onClick={() => beginEditingName(displayName)}
-            title="Edit merchant name"
-            style={{
-              background: 'none', border: 'none', color: 'var(--muted)',
-              cursor: 'pointer', fontSize: 13, padding: '2px 4px',
-            }}
-          >✎</button>
+          <IconButton size="compact" onClick={() => beginEditingName(displayName)} aria-label="Edit merchant name">✎</IconButton>
           {/* Copy + trash target the single entry-point transaction, so they only belong in editor mode.
               In the merchant-activity report there is no one "this transaction" (the entry row may not
               even be in the visible window), so both would be ambiguous — the report offers a list-level
@@ -440,14 +433,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
           {showEditorCard && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
               <CopyTransactionsButton txn={detailTxn} title="Copy transaction" />
-              <button
-                onClick={() => setTrashConfirmOpen(true)}
-                title="Send transaction to trash"
-                style={{
-                  background: 'none', border: 'none', color: 'var(--muted)',
-                  cursor: 'pointer', fontSize: 13, padding: '2px 4px',
-                }}
-              >🗑</button>
+              <IconButton size="compact" onClick={() => setTrashConfirmOpen(true)} aria-label="Send transaction to trash">🗑</IconButton>
             </div>
           )}
         </div>
@@ -495,29 +481,19 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 24 }}>
               <div style={{ minWidth: 0 }}>
                 {detailTxn.recurring_series_id ? (
-                  <button
-                    type="button"
+                  <LinkButton
                     onClick={() => navigate(`/recurring?series=${detailTxn.recurring_series_id}`)}
                     title="View this recurring series"
                     style={{
-                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                      color: 'var(--accent2)', fontSize: 12.5, fontWeight: 600,
-                      display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%',
+                      fontSize: 12.5, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}
                   >
                     ↻ Part of {detailTxn.recurring_series_name || 'a recurring series'}
-                  </button>
+                  </LinkButton>
                 ) : null}
               </div>
-              <button
-                type="button"
-                onClick={openRuleEditor}
-                style={{
-                  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                  color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '3px 10px', flexShrink: 0,
-                }}
-              >⚙ Rule…</button>
+              <Button size="compact" variant="quiet" onClick={openRuleEditor} style={{ flexShrink: 0 }}>⚙ Rule…</Button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
               <div>
@@ -549,15 +525,12 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                     </span>
                   ) : null}
                   {!detailTxn.is_split ? (
-                    <button
-                      type="button"
+                    <Button
+                      size="compact"
+                      variant="quiet"
                       onClick={() => setSplitEditorOpen(true)}
                       title="Divide this transaction's amount across several categories"
-                      style={{
-                        background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                        color: 'var(--muted)', cursor: 'pointer', fontSize: 11, padding: '2px 8px',
-                      }}
-                    >Split…</button>
+                    >Split…</Button>
                   ) : null}
                   <FeatureExplainer topic="transaction-splits" placement="bottom-left" />
                 </div>
@@ -643,16 +616,9 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   Origin
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setOriginExpanded(v => !v)}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    color: 'var(--accent)', fontSize: 11, padding: 0,
-                  }}
-                >
+                <LinkButton onClick={() => setOriginExpanded(v => !v)} style={{ fontSize: 11 }}>
                   {originExpanded ? 'Show less' : 'Show more'}
-                </button>
+                </LinkButton>
               </div>
               <div style={{ display: 'grid', gap: 6, fontSize: 12 }}>
                 {/* Origin rows come from the shared import-source-field registry so the panel and the

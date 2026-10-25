@@ -64,7 +64,7 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
       onClose={onClose}
       actions={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={save} disabled={saving || !canEdit}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
       }
@@ -88,8 +88,7 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
             {/* Typing stays the primary control: a share the picker cannot walk to, or a path already
                 in hand, should not have to come through it. */}
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               onClick={() => { setFolderBeforeBrowse(folder); setBrowsing(true) }}
               disabled={!canEdit || browsing}
             >

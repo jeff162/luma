@@ -31,7 +31,7 @@ import { CLICKABLE_CHART_EVENTS } from '../lib/chartInteraction.js'
 import { monthLabel } from '../lib/utils.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
-import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
+import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 import { isEditableTarget } from '../lib/uiInteractions.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
@@ -482,31 +482,7 @@ export function detailRangeActiveMonth(mode, selectedMonth) {
 // anchor in every mode; this only changes how wide a window around it the list shows.
 export function DetailRangeControl({ mode, onChange }) {
   return (
-    <div
-      role="group"
-      aria-label="Transaction range"
-      style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden' }}
-    >
-      {DETAIL_RANGE_OPTIONS.map(opt => {
-        const active = opt.value === mode
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            aria-pressed={active}
-            style={{
-              border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 11px', lineHeight: 1.4,
-              background: active ? 'var(--accent)' : 'transparent',
-              color: active ? '#fff' : 'var(--muted)',
-              fontWeight: active ? 600 : 500,
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
+    <SegmentedToggle size="compact" ariaLabel="Transaction range" value={mode} onChange={onChange} options={DETAIL_RANGE_OPTIONS} />
   )
 }
 
@@ -953,13 +929,7 @@ export function DetailPanelShell({
           }}
         >
           <div style={{ flex: 1 }}>{header}</div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none', border: 'none', color: 'var(--muted)',
-              cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1,
-            }}
-          >×</button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </div>
 
         {/* overflow:auto so panels whose total content (header rows + trend chart + selected

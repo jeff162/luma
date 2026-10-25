@@ -12,10 +12,11 @@
 // and callbacks live in ImportTab and arrive as props.
 
 import { useEffect, useMemo, useRef } from 'react'
-import { Button, Card, EmptyState, Tooltip } from '../ui.jsx'
+import { Button, Card, EmptyState, Tooltip, IconButton } from '../ui.jsx'
 import { ActionCountBadge, BatchCoverageCell, HistoryAttentionPill, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { FOCUSED_CARD_STYLE, LANDING_SCROLL_MARGIN } from '../../lib/importExport/constants.js'
 import { SourceAccountChip } from './SourceAccountChip.jsx'
+import { StatusPill } from '../connections/ConnectionStatus.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
@@ -106,8 +107,7 @@ export function ImportHistorySection({
               <div style={{ fontSize: 16, fontWeight: 600, marginRight: 'auto' }}>Import history</div>
               <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
                 <Button
-                  small
-                  variant="ghost"
+                  variant="secondary"
                   onClick={openSystemCategoryWorkspace}
                   disabled={totalSystemCategoryWorkspaceCount === 0}
                 >
@@ -119,8 +119,7 @@ export function ImportHistorySection({
               </Tooltip>
               <Tooltip content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
                 <Button
-                  small
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() => openRuleSuggestionReview()}
                   disabled={!hasSystemRuleSuggestionWork}
                 >
@@ -232,23 +231,15 @@ export function ImportHistorySection({
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={b.filename}>{b.filename}</div>
                                 {summary.importedCount > 0 ? (
-                                  <button
-                                    type="button"
+                                  <IconButton
+                                    size="compact"
+                                    tone="accent"
                                     onClick={() => openBatchDetail(b)}
-                                    title={`View imported transactions from ${batchNoun}`}
-                                    style={{
-                                      background: 'none',
-                                      border: 'none',
-                                      color: 'var(--accent2)',
-                                      cursor: 'pointer',
-                                      fontSize: 11,
-                                      lineHeight: 1,
-                                      padding: 0,
-                                      flexShrink: 0,
-                                    }}
+                                    aria-label={`View imported transactions from ${batchNoun}`}
+                                    style={{ flexShrink: 0 }}
                                   >
                                     ↗
-                                  </button>
+                                  </IconButton>
                                 ) : null}
                               </div>
                             </div>
@@ -414,7 +405,7 @@ export function ImportHistorySection({
                                     undoable file event (it accretes across daily fetches), so it
                                     carries no Undo — synced rows are managed on the ledger instead. */}
                                 {isConnection ? null : (
-                                  <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+                                  <Button size="compact" variant="quiet" tone="danger" onClick={() => handleUndoClick(b)}>Undo</Button>
                                 )}
                               </div>
                             </div>
@@ -452,51 +443,29 @@ export function ImportHistorySection({
                                 borderRadius: 10, padding: '6px 10px',
                               }}>
                             {hasPaypalRecon ? (
-                              <button
-                                type="button"
+                              <StatusPill
+                                report
+                                tone={paypalAttention > 0 ? 'warning' : 'muted'}
                                 onClick={() => openReconciliationViewer({ vendor: 'paypal', batchId: b.id, title: b.filename })}
                                 title={paypalAttention > 0
                                   ? `${paypalAttention} PayPal reconciliation item${paypalAttention === 1 ? '' : 's'} in ${batchNoun} need${paypalAttention === 1 ? 's' : ''} a look — open the PayPal reconciliation`
                                   : `How the PayPal transactions in ${batchNoun} match card and bank transactions`}
-                                style={{
-                                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                                  fontSize: 11, padding: '2px 7px', borderRadius: 99, cursor: 'pointer',
-                                  fontWeight: paypalAttention > 0 ? 600 : 400,
-                                  background: paypalAttention > 0 ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))' : 'var(--surface2)',
-                                  color: paypalAttention > 0 ? 'var(--warning)' : 'var(--muted)',
-                                  border: paypalAttention > 0
-                                    ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))'
-                                    : '1px solid var(--border)',
-                                }}
                               >
-                                <span>{paypalAttention > 0 ? `⚠ ${paypalAttention} to resolve` : 'Reconciliation'}</span>
-                                <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                              </button>
+                                {paypalAttention > 0 ? `⚠ ${paypalAttention} to resolve` : 'Reconciliation'}
+                              </StatusPill>
                             ) : null}
                             {summary.rejectedCount > 0 ? (
-                              <button
-                                type="button"
+                              <StatusPill
+                                report
+                                tone="muted"
                                 // The rows themselves live in the file's own report, beside the
                                 // ones that did arrive — the pill is the count and the way in,
                                 // not a second viewer.
                                 onClick={() => openBatchDetail({ ...b, _view: 'not-imported' })}
                                 title={`View the rows not imported from ${batchNoun}`}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  fontSize: 11,
-                                  padding: '2px 7px',
-                                  borderRadius: 99,
-                                  background: 'var(--surface2)',
-                                  color: 'var(--muted)',
-                                  border: '1px solid var(--border)',
-                                  cursor: 'pointer',
-                                }}
                               >
-                                <span>{summary.rejectedCount} rejected</span>
-                                <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                              </button>
+                                {summary.rejectedCount} rejected
+                              </StatusPill>
                             ) : null}
                             {(() => {
                               // Unified pill: every duplicate the report lists, in one entry point.
@@ -514,8 +483,9 @@ export function ImportHistorySection({
                               const toReview = soft + advisoryReview
                               const hasSoft = toReview > 0
                               return (
-                                <button
-                                  type="button"
+                                <StatusPill
+                                  report
+                                  tone={hasSoft ? 'warning' : 'muted'}
                                   onClick={() => openUnifiedDuplicatesViewer({
                                     source: b,
                                     title: b.filename,
@@ -523,64 +493,26 @@ export function ImportHistorySection({
                                   title={toReview > 0
                                     ? `View duplicate rows from ${batchNoun} — ${toReview} still to review`
                                     : `View duplicate rows from ${batchNoun}`}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 4,
-                                    fontSize: 11,
-                                    padding: '2px 7px',
-                                    borderRadius: 99,
-                                    background: hasSoft
-                                      ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))'
-                                      : 'var(--surface2)',
-                                    color: hasSoft ? 'var(--warning)' : 'var(--muted)',
-                                    border: hasSoft
-                                      ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))'
-                                      : '1px solid var(--border)',
-                                    cursor: 'pointer',
-                                    fontWeight: hasSoft ? 600 : 400,
-                                  }}
                                 >
-                                  <span>
-                                    {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
-                                    {toReview > 0 ? ` (${toReview} to review)` : ''}
-                                  </span>
-                                  <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                                </button>
+                                  {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
+                                  {toReview > 0 ? ` (${toReview} to review)` : ''}
+                                </StatusPill>
                               )
                             })()}
                             {Number(b.needs_review_count || 0) > 0 ? (
                               <>
-                                <button
-                                  type="button"
+                                <StatusPill
+                                  report
+                                  tone="review"
                                   // Opens on the rows the pill counts; the report's own quick filter turns it off.
                                   onClick={() => openBatchDetail({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
                                   title={`Review the transactions imported from ${batchNoun}`}
-                                  style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                                    fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                    background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))',
-                                    color: 'var(--review-marker-color)',
-                                    border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))',
-                                    cursor: 'pointer', fontWeight: 600,
-                                  }}
                                 >
-                                  <span>{b.needs_review_count} to review</span>
-                                  <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => markBatchReviewed(b.id)}
-                                  title={`Mark every transaction in ${batchNoun} reviewed`}
-                                  style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                                    fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                    background: 'var(--surface2)', color: 'var(--muted)',
-                                    border: '1px solid var(--border)', cursor: 'pointer',
-                                  }}
-                                >
+                                  {b.needs_review_count} to review
+                                </StatusPill>
+                                <Button size="compact" variant="secondary" onClick={() => markBatchReviewed(b.id)} title={`Mark every transaction in ${batchNoun} reviewed`}>
                                   ✓ Mark all reviewed
-                                </button>
+                                </Button>
                               </>
                             ) : null}
                               </div>
@@ -689,27 +621,17 @@ export function ImportHistorySection({
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
                           {isManual && row.manualDraftRecord ? (
-                            <button
-                              type="button"
+                            <Button
+                              size="compact"
+                              variant="secondary"
                               onClick={() => {
                                 openManualDraftSaveEditor(getSuggestedDataSourceName({
                                   draftRecord: row.manualDraftRecord || manualDraftRecord,
                                 }))
                               }}
-                              style={{
-                                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                color: 'var(--accent2)',
-                                border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                                borderRadius: 6,
-                                padding: '4px 10px',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                whiteSpace: 'nowrap',
-                              }}
                             >
                               Save as data source
-                            </button>
+                            </Button>
                           ) : null}
                         </div>
                       </div>

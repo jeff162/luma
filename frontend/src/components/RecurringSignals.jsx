@@ -38,7 +38,7 @@
  */
 
 import { useState } from 'react'
-import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
+import { AppDialog, Button, EmptyState, Spinner, FilterChip, IconButton, LinkButton } from './ui.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
@@ -54,25 +54,6 @@ const ANOMALY_KIND_ORDER = ['missed', 'price_change', 'new_series']
 
 function pluralPeriods(n) {
   return n === 1 ? 'period' : 'periods'
-}
-
-// One quiet action, sized to sit several-to-a-row without competing with the signal's own text.
-function SignalAction({ children, onClick, variant = 'default', title }) {
-  const edge = '1px solid color-mix(in srgb, var(--border) 80%, transparent)'
-  const looks = {
-    default: { background: 'var(--surface2)', color: 'var(--text)', border: edge },
-    primary: { background: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' },
-    quiet: { background: 'transparent', color: 'var(--muted)', border: edge },
-  }
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      style={{ fontSize: 11.5, fontWeight: 500, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', lineHeight: 1.5, whiteSpace: 'nowrap', ...looks[variant] }}
-    >
-      {children}
-    </button>
-  )
 }
 
 // What each kind says about itself. Kept as one function rather than five components because the rows
@@ -128,7 +109,7 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
   const actions = []
   if (signal.kind === 'missed') {
     if (signal.presumed_ended) {
-      actions.push(<SignalAction key="end" onClick={() => onSeriesAction('end', signal)} title="Keep the history, stop forecasting it">Mark ended</SignalAction>)
+      actions.push(<Button size="compact" variant="secondary" key="end" onClick={() => onSeriesAction('end', signal)} title="Keep the history, stop forecasting it">Mark ended</Button>)
     }
   } else if (signal.kind === 'price_change') {
     // Offered only where amount actually gates membership. On an ungated series the band is read by
@@ -137,14 +118,14 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
     // those (see `_load_accepted_amounts`).
     if (signal.amount_mode === 'fixed' && priceChangeBand(signal)) {
       actions.push(
-        <SignalAction
+        <Button
           key="accept"
-          variant="primary"
+          size="compact"
           onClick={() => onAcceptPrice(signal)}
           title="Widen this series' matching range to take in the new amount"
         >
           Accept new amount
-        </SignalAction>,
+        </Button>,
       )
     }
     // The one finding that names a charge, so the one place a finding can say the charge does not belong.
@@ -152,36 +133,39 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
     // saying so meant opening the series report and finding the row.
     if (signal.txn_id && signal.series_id) {
       actions.push(
-        <SignalAction
+        <Button
           key="exclude"
+          size="compact"
+          variant="secondary"
           onClick={() => onExcludeCharge(signal)}
           title="This charge is not part of the series. It stays out after future scans."
         >
           Exclude from series
-        </SignalAction>,
+        </Button>,
       )
     }
     // The answer between Dismiss and Exclude: the charge belongs, but the usual amount still stands — a
     // hike the merchant agreed to reverse. The charge stops counting toward what later ones are judged
     // against, so a repeat of it is reported rather than read as the price having settled.
     actions.push(
-      <SignalAction
+      <Button
         key="one-off"
+        size="compact"
         variant="quiet"
         onClick={() => onDismiss(signal, { oneOff: true })}
         title="Hide this finding but keep expecting the usual amount. If this amount comes again, it is reported again."
       >
         Dismiss as one-off
-      </SignalAction>,
+      </Button>,
     )
   } else if (signal.kind === 'new_series') {
-    actions.push(<SignalAction key="confirm" variant="primary" onClick={() => onSeriesAction('confirm', signal)}>Confirm</SignalAction>)
-    actions.push(<SignalAction key="suppress" onClick={() => onSeriesAction('suppress', signal)}>Not recurring</SignalAction>)
+    actions.push(<Button size="compact" key="confirm" onClick={() => onSeriesAction('confirm', signal)}>Confirm</Button>)
+    actions.push(<Button size="compact" variant="secondary" key="suppress" onClick={() => onSeriesAction('suppress', signal)}>Not recurring</Button>)
   }
   actions.push(
-    <SignalAction key="dismiss" variant="quiet" onClick={() => onDismiss(signal)} title={DISMISS_TITLES[signal.kind] || 'Hide this finding; a new one still appears'}>
+    <Button size="compact" variant="quiet" key="dismiss" onClick={() => onDismiss(signal)} title={DISMISS_TITLES[signal.kind] || 'Hide this finding; a new one still appears'}>
       Dismiss
-    </SignalAction>,
+    </Button>,
   )
 
   return (
@@ -198,18 +182,16 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
           <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>
             {headline(signal)}
             {target ? (
-              <button
+              <IconButton
+                size="compact"
+                tone="accent"
                 onClick={() => onOpenSeries(signal)}
                 aria-label="Open this series"
                 title="Show this series’ transactions"
-                style={{
-                  background: 'none', border: 'none', padding: '0 0 0 5px', cursor: 'pointer',
-                  color: 'var(--accent2)', fontSize: 12.5, fontWeight: 700, lineHeight: 1,
-                  textDecoration: active ? 'underline' : 'none',
-                }}
+                style={{ marginLeft: 3 }}
               >
                 ↗
-              </button>
+              </IconButton>
             ) : null}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{describe(signal)}</div>
@@ -217,12 +199,12 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
             <div style={{ fontSize: 11.5, color: 'var(--muted)', opacity: 0.8, marginTop: 2 }}>{subject(signal)}</div>
           ) : null}
           {seriesCard ? (
-            <button
+            <LinkButton
               onClick={() => setDetailsOpen(v => !v)}
               aria-expanded={detailsOpen}
-              style={{ background: 'none', border: 'none', padding: 0, marginTop: 4, cursor: 'pointer', color: 'var(--accent2)', fontSize: 11.5, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              style={{ marginTop: 4, fontSize: 11.5, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
             >Series Details<span style={{ fontSize: 9 }}>{detailsOpen ? '▾' : '▸'}</span>
-            </button>
+            </LinkButton>
           ) : null}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -237,27 +219,7 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
 }
 
 function TabButton({ label, count, on, onClick, tone }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 99,
-        cursor: 'pointer', fontSize: 12, fontWeight: 600,
-        border: `1px solid ${on ? 'color-mix(in srgb, var(--accent) 45%, var(--border))' : 'transparent'}`,
-        background: on ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'transparent',
-        color: on ? 'var(--accent2)' : 'var(--muted)',
-      }}
-    >
-      {label}
-      {count != null ? (
-        <span style={{
-          fontSize: 10.5, fontWeight: 700, minWidth: 15, textAlign: 'center', padding: '0 4px', borderRadius: 99,
-          background: tone ? `color-mix(in srgb, ${tone} 22%, var(--surface))` : 'var(--surface2)',
-          color: tone || 'var(--muted)',
-        }}>{count}</span>
-      ) : null}
-    </button>
-  )
+  return <FilterChip selected={on} count={count} countTone={tone} onClick={onClick}>{label}</FilterChip>
 }
 
 /*
@@ -338,12 +300,9 @@ export function RecurringSignalsView({
 
       {dismissedCount ? (
         <div style={{ marginTop: 12 }}>
-          <button
-            onClick={onShowDismissed}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 12, fontWeight: 600, padding: 0 }}
-          >
+          <LinkButton tone="muted" onClick={onShowDismissed} style={{ fontSize: 12, fontWeight: 600 }}>
             {dismissedCount} dismissed — review
-          </button>
+          </LinkButton>
         </div>
       ) : null}
     </div>
@@ -418,7 +377,7 @@ export function DismissedSignalsDialog({ signals, loading, onRestore, onClose })
       title="Dismissed signals"
       description="Findings you have marked as seen. Restoring one puts it back in the review list."
       onClose={onClose}
-      actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
+      actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       {loading ? (
         <Spinner />
@@ -439,7 +398,7 @@ export function DismissedSignalsDialog({ signals, loading, onRestore, onClose })
                 {SIGNAL_KINDS[s.kind]?.label || s.kind}{s.one_off ? ' (one-off)' : ''} · {describe(s)}
               </div>
             </div>
-            <SignalAction onClick={() => onRestore(s)}>Restore</SignalAction>
+            <Button size="compact" variant="secondary" onClick={() => onRestore(s)}>Restore</Button>
           </div>
         ))
       )}

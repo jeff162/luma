@@ -70,7 +70,7 @@ function ExportTransactionsDialogContent({ onClose }) {
       width="min(720px, 100%)"
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button onClick={exportCsv} disabled={selectedCols.size === 0 || exporting}>Export</Button>
         </>
       )}

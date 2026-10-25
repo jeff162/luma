@@ -7,7 +7,14 @@ arrives when the failure next fires.
 
 **An entry is deleted when its failure is fixed**, and this file goes when the last entry does. Anything
 durable an entry produced — a rule, an invariant, a lesson about how the system behaves — belongs in the
-topic doc that owns it before the entry is removed.
+topic doc that owns it before the entry is removed, and the diagnostics the entry added to its test go
+with it. Entries keep their numbers, because tests and comments cite them by number.
+
+**A fix that was never reproduced on demand gets a sunset date**, because a passing run proves nothing
+about a failure that only fires now and then. The date is chosen from how often the failure used to fire,
+far enough out that it would almost certainly have fired again in the meantime if the fix had missed. If
+the date passes quietly, the entry is deleted; if the failure fires first, the entry is updated and the
+date moves.
 
 **Each entry carries a last-seen date**, bumped whenever its failure fires again. Without one there is no
 way to tell a live failure from one that something else has already fixed — and for an entry whose fix has
@@ -89,93 +96,16 @@ say so directly: an inverted pair with ascending rowids is that, and nothing els
 
 ---
 
-## 2. A row marked reviewed does not settle: the marker returns, or the row leaves the list
-
-**Status: cause identified and fixed (2026-09-19). Kept until a clean run history confirms it, because
-the failure was never reproduced on demand — a recurrence now means the fix did not cover it.**
-
-**Last seen: 2026-09-19** — the fix landed the same day, so quiet time from here is what confirms it.
-
-### Symptom
-
-`frontend/tests/ui/needs-review-marker.spec.js` fails somewhere after the click. Two tails were seen, and
-they are opposites:
-
-- **2026-09-17 — the marker came back.** The marker count was unchanged (23 where 22 was expected) for the
-  full 20-second budget, and the failure screenshot showed the clicked row still carrying its **R**.
-- **2026-09-19 — the row left the list.** The marker assertion *passed* (the marker did clear), and the
-  count label then read `123 transactions` where `124` was expected.
-
-Both failing runs were slow: 25.7s and 27.3s against the ~7s a passing run takes. Once in four full gate
-runs on the first day, once in two on the second.
-
-### The cause
-
-**Two loads of the same query were both committing, and arrival order decided which one the grid kept.**
-
-`load()` in `pages/Transactions.jsx` guarded against out-of-order responses by comparing a key built from
-the resolved filter params. That answers "did the filters change while this was in flight" and is blind to
-the case where they did not: two concurrent loads for one query produce an *identical* key, so both passed
-the check and both called `setData`. Whichever response landed last won.
-
-That single mechanism produces both tails, which is what identified it:
-
-- a duplicate load served **before** the write, settling **after** the row patch → `total=124`, row still
-  `needs_review=1` → the patch is overwritten and the marker comes back;
-- a duplicate load still in flight at click time, served **after** the write commits → `total=123`, row
-  absent → the count falls.
-
-Either needs a slow run to widen the gap between the two responses, which is the one property both
-failures shared. The count label reads `data.total` straight off the last list response and the row patch
-cannot touch it, so a count that moves is a response that *arrived* — that is what ruled out a local edit
-and pointed at the load.
-
-**Where the overlap came from here is React StrictMode, which double-invokes effects in development only**
-— the browser suite runs against the Vite dev server, so it sees two identical list requests about 1 ms
-apart on every load. That is StrictMode working as intended rather than a defect of its own, and a
-production build issues one. The defect it exposed is not dev-only: `useAfterLedgerSync`, the Refresh
-button and `bulk.onReload` all re-load with the filters unchanged and can overlap a load already in
-flight.
-
-### The fix
-
-The guard counts **calls** rather than queries: `loadSeqRef` is incremented per call and compared after
-the await, so any newer call wins whether or not the filters changed. It subsumes what the key was for and
-cannot collide. The durable version of the rule is the comment on that guard in
-`frontend/src/pages/Transactions.jsx`; delete this entry and keep that.
-
-`src/pages/__tests__/TransactionsLoadRace.test.jsx` pins it deterministically: the page is rendered inside
-`StrictMode`, every load is held open, the newest resolves first and the older ones after, and the newest
-must still be what the grid shows. It fails against the old guard.
-
-### What a recurrence would say
-
-The fix missed something, and the instrumentation is still in the spec to say what.
-`instrumentTransactionFetches` wraps the page's own `fetch` through `addInitScript` — test-side only, so
-nothing production-side changes — and **all four post-click assertions** report, not just the first. (The
-2026-09-19 run lost every diagnostic because only the marker assertion was wrapped and the failure landed
-one line lower.) A failure carries:
-
-- **the clicked row's state on the server**, read back through the API by the payee the app's own
-  confirmation named. `needs_review: 0` is a write that landed; `1` is one that did not.
-- **every `/api/transactions` request the page made**, each with the time it was issued *and* the time it
-  settled, both relative to the click — so a response in flight across the click is visible as itself
-  rather than inferred.
-- **what came back**: `total`, the row count, and how many of those rows still need review. Matching a
-  moved count against the `total` of a specific response is what names the culprit response.
-- **what issued each one**: the JS stack at the call, which tells a React effect apart from an event
-  handler apart from a late timer.
-
-Times are `performance.now()` rather than `Date.now()`, deliberately: this host's wall clock steps
-backwards (entry 1 above), and every question here is a question about ordering.
-
----
-
 ## 3. A click on a same-span trend bar does not navigate
 
-**Status: instrumented, waiting on a recurrence.**
+**Status: fixed in the test (2026-10-25). Sunset: 2026-11-22.** Before the fix it fired in roughly one full
+browser run in four, so a month of the suite's usual few runs a week would almost certainly have shown it
+again. If it has not fired by then, delete this entry and the diagnostics in the spec
+(`instrumentTrendClick`, `trendClickReport`), and add the lesson to `agent-profile.md` → *Writing a test*:
+after a chart or a list re-renders with new data, wait for the new content to replace the old rather than
+for the request.
 
-**Last seen: 2026-10-17.**
+**Last seen: 2026-10-25.**
 
 ### Symptom
 
@@ -197,6 +127,14 @@ empties `test-results/` at the start of every run. What was noted from the scree
   the screenshot the new buckets had rendered;
 - there was no back-step button, so the click never re-pinned the period.
 
+A second occurrence (2026-10-25, a full run on 7 workers; it passed in the next full run and in nine
+repeats of the spec), and a third the same way later that day, failed one step earlier, before any
+click: `bar.scrollIntoViewIfNeeded()` reported the bar `firstPlotBar()` had returned as not stable and
+then not attached to the document. That bar was
+found by position (`nth(count / 2)`), so it was one of the bars on screen *before* the same-span
+response, and the chart replaced it while the test was scrolling to it. The click report below did not
+print, because it only covers failures from the click onward.
+
 ### What is suspected, and why it is not proven
 
 The test waits for the same-span *request* to be sent, not for its response, and then measures the bar
@@ -211,8 +149,10 @@ Two ways that loses the click, and the screenshot fits both:
   click position (`lib/chartInteraction.js`), and a click with no active index is ignored. A click in the
   same frame as a redraw can find that state reset.
 
-Waiting for the response before clicking would make the test pass either way, which is why it has not
-been added: it would hide which of the two this is, and the second would be a defect a person can hit.
+The test now waits for the same-span response and then for a bar from the monthly chart to leave the
+page before it finds one, so the first way cannot recur: the chart it measures and clicks has finished
+redrawing. That wait cannot hide the second, which would be a defect a person can hit: a click ignored on
+a settled chart still fails, and the report below says so.
 
 ### What the next occurrence will say
 
@@ -223,7 +163,8 @@ and **the tooltip recharts was showing**. The failure prints all of it from the 
 onward, timed against the bar's mousedown, with the chooser and the date chip as they stand.
 
 - A range-trend response between *bar measured* and the mousedown, the measured bar detached, or a scroll
-  offset that moved: the chart was redrawn under the click. The fix is in the test (wait for the redraw).
+  offset that moved: the chart was redrawn under the click, which the wait above should now prevent, so
+  look first at what else redraws the chart.
 - The measured bar still attached, the scroll unchanged, and no tooltip showing at the click: recharts
   dropped a click on a settled chart. That is a product defect.
 

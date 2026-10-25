@@ -112,16 +112,6 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
   const targetColWidth = catColWidth(['Target category', ...members.map(m => m.target_category_name || 'Uncategorized')], { min: 180 })
   const cols = `42px 46px ${importedColWidth}px ${targetColWidth}px 116px minmax(0, 1fr)`
 
-  const segBtn = (active, tone = 'accent') => {
-    const accent = tone === 'danger' ? 'var(--danger)' : 'var(--accent)'
-    const activeText = tone === 'danger' ? 'var(--danger)' : 'var(--accent2)'
-    return {
-      border: `1px solid ${active ? `color-mix(in srgb, ${accent} 55%, var(--border))` : 'var(--border)'}`,
-      background: active ? `color-mix(in srgb, ${accent} 14%, var(--surface2))` : 'var(--surface2)',
-      color: active ? activeText : 'var(--muted)',
-      borderRadius: 7, padding: '3px 9px', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap',
-    }
-  }
   return (
     <div
       data-rule-suggestion-card=""
@@ -146,20 +136,15 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
           {scopeBits.length ? ` · ${scopeBits.join(' · ')}` : ''}
         </span>
         {onEditMatch ? (
-          <button
-            type="button"
+          <Button
+            size="compact"
+            variant="secondary"
             onClick={() => onEditMatch?.(members)}
-            style={{
-              ...segBtn(false),
-              marginLeft: 7,
-              padding: '2px 7px',
-              fontSize: 10.5,
-              verticalAlign: 'middle',
-            }}
+            style={{ marginLeft: 7, verticalAlign: 'middle' }}
             title="Edit the selection criteria for this conflict set"
           >
             Edit match criteria
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -237,32 +222,27 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
               </div>
               <div style={{ minWidth: 0, justifySelf: 'start' }}>
                 {isWinner ? (
-                  <button
-                    type="button"
-                    onClick={() => onEditRule?.(member.id)}
-                    style={segBtn(false)}
-                    title="Edit this rule (rename, tags, scope)"
-                  >
+                  <Button size="compact" variant="secondary" onClick={() => onEditRule?.(member.id)} title="Edit this rule (rename, tags, scope)">
                     Edit rule
-                  </button>
+                  </Button>
                 ) : !winner ? null : toWinner ? (
-                  <button
-                    type="button"
+                  <Button
+                    size="compact"
+                    variant="secondary"
                     onClick={() => setTarget(member, member.imported_category_id)}
-                    style={segBtn(false)}
                     title={`Revert these to ${importedLabel} instead of ${winnerLabel}`}
                   >
                     ↩ revert
-                  </button>
+                  </Button>
                 ) : (
-                  <button
-                    type="button"
+                  <Button
+                    size="compact"
+                    variant="secondary"
                     onClick={() => setTarget(member, winnerCategoryId)}
-                    style={segBtn(false, 'danger')}
                     title={`Change these to ${winnerLabel}`}
                   >
                     use rule
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -276,8 +256,8 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
             <span style={{ fontSize: 12, color: 'var(--muted)', flex: '1 1 240px' }}>
               Discard if you do not want to build a rule and the existing transactions will keep the categories as assigned above.
             </span>
-            <Button small variant="ghost" onClick={onDefer} disabled={applying}>Defer</Button>
-            <Button small onClick={() => onApply(null)} disabled={applying}>
+            <Button variant="secondary" onClick={onDefer} disabled={applying}>Defer</Button>
+            <Button onClick={() => onApply(null)} disabled={applying}>
               {anyTargetEdited ? 'Discard & Apply Changes' : 'Discard'}
             </Button>
           </div>
@@ -291,10 +271,10 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
               )}
             </span>
             {others.length > 1 && othersKept.length > 0 ? (
-              <button type="button" onClick={changeAllOthersToWinner} style={segBtn(false)}>change all to {winnerLabel}</button>
+              <Button size="compact" variant="secondary" onClick={changeAllOthersToWinner}>change all to {winnerLabel}</Button>
             ) : null}
-            <Button small variant="ghost" onClick={onDefer} disabled={applying}>Defer</Button>
-            <Button small onClick={() => onApply(winnerId)} disabled={applying}>Apply</Button>
+            <Button variant="secondary" onClick={onDefer} disabled={applying}>Defer</Button>
+            <Button onClick={() => onApply(winnerId)} disabled={applying}>Apply</Button>
           </div>
         )}
       </div>

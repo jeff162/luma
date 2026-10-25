@@ -72,7 +72,7 @@ export default function StarterRulesDialog({ onClose, onAdded }) {
       onClose={busy ? undefined : onClose}
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button onClick={addSelected} disabled={noneChecked || busy || total === 0}>
             {busy ? 'Adding…' : `Add ${selected.size} rule${selected.size === 1 ? '' : 's'}`}
           </Button>

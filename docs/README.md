@@ -93,6 +93,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Product intent](ui-patterns.md#product-intent)
 - [Consistency and reuse](ui-patterns.md#consistency-and-reuse)
 - [Page layout](ui-patterns.md#page-layout)
+- [Buttons](ui-patterns.md#buttons)
 - [Tables and lists](ui-patterns.md#tables-and-lists)
 - [Tree views](ui-patterns.md#tree-views)
 - [Editing in place](ui-patterns.md#editing-in-place)
@@ -211,6 +212,5 @@ index in [`backlog/README.md`](backlog/README.md).
 ### [Transient failures under investigation](transient-failures.md)
 
 - [1. Two documents on one transaction list in the wrong order](transient-failures.md#1-two-documents-on-one-transaction-list-in-the-wrong-order)
-- [2. A row marked reviewed does not settle: the marker returns, or the row leaves the list](transient-failures.md#2-a-row-marked-reviewed-does-not-settle-the-marker-returns-or-the-row-leaves-the-list)
 - [3. A click on a same-span trend bar does not navigate](transient-failures.md#3-a-click-on-a-same-span-trend-bar-does-not-navigate)
 - [Not an entry: the cash-flow frame, and the 401 burst behind it](transient-failures.md#not-an-entry-the-cash-flow-frame-and-the-401-burst-behind-it)

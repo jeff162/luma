@@ -18,7 +18,7 @@ import { Link } from 'react-router-dom'
 import { txnMutations } from '../lib/txnMutations.js'
 import { api } from '../lib/api.js'
 import { localIsoDate } from '../lib/utils.js'
-import { Spinner } from './ui.jsx'
+import { Spinner, Button, FilterChip, IconButton, LinkButton } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { TagBadge } from './TagUi.jsx'
@@ -87,20 +87,6 @@ function clearStoredBulkSelection(scopeId) {
 }
 
 // Small text-style buttons (Select all / Clear) used inside the bulk-actions bar.
-function bulkLinkButtonStyle(disabled) {
-  return {
-    border: 'none',
-    background: 'none',
-    padding: 0,
-    fontSize: 12,
-    fontWeight: 600,
-    color: disabled ? 'var(--muted)' : 'var(--accent2)',
-    cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.6 : 1,
-    whiteSpace: 'nowrap',
-  }
-}
-
 // A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
 // saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
 // card labels its editor for that and routes the save through the refinement endpoint.
@@ -1766,20 +1752,9 @@ export default function ImportRuleSuggestionReview({
     const label = getReviewStatusLabel(status)
     const visibleIds = visibleSuggestions.map(suggestion => suggestion.id)
     return (
-      <SuggestionActionButton
-        onClick={() => onClearReviewedSuggestions(status, visibleIds)}
-        style={{
-          padding: '4px 9px',
-          fontSize: 11.5,
-          fontWeight: 600,
-          color: 'var(--muted)',
-          border: '1px solid color-mix(in srgb, var(--border) 70%, white 8%)',
-          background: 'color-mix(in srgb, var(--surface2) 42%, transparent)',
-          boxShadow: 'none',
-        }}
-      >
+      <Button size="compact" variant="quiet" onClick={() => onClearReviewedSuggestions(status, visibleIds)}>
         Clear {label}
-      </SuggestionActionButton>
+      </Button>
     )
   }
 
@@ -1921,31 +1896,17 @@ export default function ImportRuleSuggestionReview({
     }
 
     return (
-      <button
+      <FilterChip
+        variant="add"
         ref={merchantFilterButtonRef}
-        type="button"
         onClick={() => {
           merchantFilterSnapshotRef.current = merchantFilterText
           onMerchantFilterOpenChange(true)
         }}
         disabled={bulkMode}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 12px',
-          borderRadius: 999,
-          border: '1px dashed color-mix(in srgb, var(--border) 78%, white 10%)',
-          background: 'transparent',
-          color: 'var(--muted)',
-          fontSize: 12,
-          lineHeight: 1.2,
-          cursor: bulkMode ? 'not-allowed' : 'pointer',
-          opacity: bulkMode ? 0.5 : 1,
-        }}
       >
         +Merchant filter
-      </button>
+      </FilterChip>
     )
   }
 
@@ -2056,30 +2017,16 @@ export default function ImportRuleSuggestionReview({
     }
 
     return (
-      <button
+      <FilterChip
+        variant="add"
         ref={ownerFilterButtonRef}
-        type="button"
         onClick={() => onOwnerFilterOpenChange(true)}
         disabled={bulkMode}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 12px',
-          borderRadius: 999,
-          border: '1px dashed color-mix(in srgb, var(--border) 78%, white 10%)',
-          background: 'transparent',
-          color: 'var(--muted)',
-          fontSize: 12,
-          lineHeight: 1.2,
-          cursor: bulkMode ? 'not-allowed' : 'pointer',
-          opacity: bulkMode ? 0.5 : 1,
-        }}
       >
         {selectedOwnerIds.length === 1
           ? (availableOwners.find(owner => owner.id === selectedOwnerIds[0])?.name || '+Owner filter')
           : '+Owner filter'}
-      </button>
+      </FilterChip>
     )
   }
 
@@ -2226,37 +2173,19 @@ export default function ImportRuleSuggestionReview({
                 <span style={getRemoveTooltipArrowStyle(hoveredRemoveTooltip.align)} />
               </div>
             ) : null}
-            <button
-              type="button"
+            <IconButton
+              tone="danger"
               aria-label={removeTitle}
+              title=""
               onMouseEnter={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
               onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
               onFocus={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
               onBlur={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
               onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, removeActionStatus)}
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                zIndex: 1,
-                border: '1px solid color-mix(in srgb, var(--danger) 22%, var(--border))',
-                background: 'color-mix(in srgb, var(--surface) 82%, transparent)',
-                color: 'var(--danger)',
-                borderRadius: 999,
-                width: 24,
-                height: 24,
-                padding: 0,
-                fontSize: 13,
-                fontWeight: 700,
-                lineHeight: 1,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
+              style={{ position: 'absolute', top: 10, right: 10, zIndex: 1 }}
             >
               ×
-            </button>
+            </IconButton>
           </>
         ) : null}
         <div style={{
@@ -2377,23 +2306,16 @@ export default function ImportRuleSuggestionReview({
 	              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
 	                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
 	                <span style={{ position: 'relative', display: 'inline-flex' }}>
-	                  <button
-	                    type="button"
+	                  <FilterChip
+	                    variant="add"
 	                    // Open-only: while the picker is open its own outside-click dismissal closes it, so a
 	                    // toggling onClick would close-then-reopen on the same click.
 	                    onClick={editingTagSuggestionId === getSuggestionKey(suggestion.id)
 	                      ? undefined
 	                      : () => beginTagEdit(suggestion)}
-	                    style={{
-	                      display: 'inline-flex', alignItems: 'center', gap: 4,
-	                      padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
-	                      color: 'var(--muted)', background: 'transparent',
-	                      border: '1px dashed color-mix(in srgb, var(--border) 80%, var(--text) 12%)',
-	                      cursor: 'pointer', whiteSpace: 'nowrap',
-	                    }}
 	                  >
 	                    + tag
-	                  </button>
+	                  </FilterChip>
 	                  {editingTagSuggestionId === getSuggestionKey(suggestion.id) ? (
 	                    <TagPickerWithCreate
 	                      allTags={tags}
@@ -2412,14 +2334,13 @@ export default function ImportRuleSuggestionReview({
 	                  return (
                     <span key={tagId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <TagBadge tag={tag} />
-                      <button
-                        type="button"
+                      <IconButton
+                        size="compact"
+                        aria-label={`Remove ${tag.name}`}
                         onClick={() => setSuggestionTag(suggestion, tagId, false)}
-                        title={`Remove ${tag.name}`}
-                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
                       >
                         ×
-                      </button>
+                      </IconButton>
 	                    </span>
 	                  )
 	                })}
@@ -2756,32 +2677,23 @@ export default function ImportRuleSuggestionReview({
                 <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   {selectedCount} of {visibleSuggestions.length} selected
                 </span>
-                <button
-                  type="button"
-                  onClick={() => selectAllScoped()}
-                  style={bulkLinkButtonStyle(false)}
-                >
+                <LinkButton onClick={() => selectAllScoped()} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   Select all
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSuggestionIds([])}
-                  disabled={selectedCount === 0}
-                  style={bulkLinkButtonStyle(selectedCount === 0)}
-                >
+                </LinkButton>
+                <LinkButton onClick={() => setSelectedSuggestionIds([])} disabled={selectedCount === 0} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   Clear
-                </button>
+                </LinkButton>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {bulkActions.map(action => (
-                  <SuggestionActionButton
+                  <Button
                     key={action.key}
+                    variant={action.tone === 'primary' ? 'primary' : 'secondary'}
                     onClick={() => runBulkAction(action)}
                     disabled={selectedCount === 0}
-                    active={action.tone === 'primary'}
                   >
                     {action.label}
-                  </SuggestionActionButton>
+                  </Button>
                 ))}
               </div>
             </div>

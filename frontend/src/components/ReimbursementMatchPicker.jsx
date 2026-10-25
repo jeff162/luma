@@ -100,10 +100,9 @@ export default function ReimbursementMatchPicker({
           {matchAloneHint({ repayment, empty })}
         </span>
         <span style={{ display: 'flex', gap: 6 }}>
-          {onCancel ? <Button variant="ghost" small onClick={onCancel} disabled={busy}>Cancel</Button> : null}
+          {onCancel ? <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button> : null}
           <Button
-            variant={empty ? 'primary' : 'ghost'}
-            small
+            variant={empty ? 'primary' : 'secondary'}
             onClick={() => onTrackAlone?.()}
             disabled={busy}
           >

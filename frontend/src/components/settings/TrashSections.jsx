@@ -158,7 +158,7 @@ function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
       <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
         {amount < 0 ? '+' : ''}{amount.toFixed(2)}
       </div>
-      <Button small onClick={() => onRestore(item.id)} disabled={working === item.id || emptying}>
+      <Button onClick={() => onRestore(item.id)} disabled={working === item.id || emptying}>
         {working === item.id ? 'Restoring…' : 'Restore'}
       </Button>
     </div>
@@ -206,8 +206,7 @@ export function TransactionsTrashSection({ count, onChanged }) {
             Transactions you&apos;ve sent to the trash live here until you restore them or empty the trash.
           </div>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={t.openConfirm}
             disabled={t.emptying || t.loading || t.items.length === 0}
           >
@@ -283,8 +282,7 @@ export function DuplicateTransactionsTrashSection({ count, onChanged }) {
             per-copy Discard), grouped by the file they were imported from. Restore brings a copy back.
           </div>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={t.openConfirm}
             disabled={t.emptying || t.loading || t.items.length === 0}
           >
@@ -388,7 +386,7 @@ export function RulesTrashSection({ onChanged }) {
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
             Rules removed from the Rules page (or by the stale-rule cleanup) can be restored here, or removed for good.
           </div>
-          <Button small variant="ghost" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
+          <Button variant="secondary" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
             {emptying ? 'Emptying…' : 'Empty rules trash'}
           </Button>
         </div>
@@ -407,9 +405,10 @@ export function RulesTrashSection({ onChanged }) {
                   {rule.category_name ? <span style={{ color: 'var(--muted)' }}>→ {rule.category_name}</span> : null}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <Button small variant="ghost" onClick={() => restore(rule.id)} disabled={workingId === rule.id}>Restore</Button>
-                  <Button small variant="ghost" onClick={() => purge(rule.id)} disabled={workingId === rule.id}
-                    style={{ color: 'var(--danger)' }}>Remove</Button>
+                  <Button variant="secondary" onClick={() => restore(rule.id)} disabled={workingId === rule.id}>Restore</Button>
+                  <Button variant="secondary" tone="danger" onClick={() => purge(rule.id)} disabled={workingId === rule.id}>
+                    Remove
+                  </Button>
                 </div>
               </div>
             ))}
@@ -476,7 +475,7 @@ export function BackupHistoryTrashSection({ onChanged }) {
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
             Backup history entries removed on the Backup / Restore page can be restored here.
           </div>
-          <Button small variant="ghost" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
+          <Button variant="secondary" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
             {emptying ? 'Emptying…' : 'Empty backup history trash'}
           </Button>
         </div>
@@ -491,7 +490,7 @@ export function BackupHistoryTrashSection({ onChanged }) {
                 row={row}
                 first={index === 0}
                 actions={(
-                  <Button small onClick={() => restore(row.id)} disabled={workingId === row.id || emptying}>
+                  <Button onClick={() => restore(row.id)} disabled={workingId === row.id || emptying}>
                     {workingId === row.id ? 'Restoring…' : 'Restore'}
                   </Button>
                 )}

@@ -23,8 +23,8 @@
 import { useState, useEffect, useRef, useId } from 'react'
 import { api, saveBlob } from '../../lib/api.js'
 import {
-  Card, Button, COMPACT_ACTION_BTN_STYLE, Spinner, Input, PasswordInput, AppDialog, AppConfirmDialog,
-  PasswordManagerUsername, Tooltip, getFormControlStyle,
+  Card, Button, Spinner, Input, PasswordInput, AppDialog, AppConfirmDialog,
+  PasswordManagerUsername, Tooltip, getFormControlStyle, IconButton
 } from '../ui.jsx'
 import { useTransientTextEdit } from '../../lib/uiInteractions.js'
 import TransientTextInput from '../TransientTextInput.jsx'
@@ -211,38 +211,23 @@ export function BackupRecipients({ onRecipientsChange }) {
               {/* The house style for a repeated per-row action: quiet enough to read as a row control
                   rather than as the surface's verb, which here is generating or adding a key. */}
               <Button
-                style={COMPACT_ACTION_BTN_STYLE}
-                variant="ghost"
+                size="compact"
+                variant="secondary"
                 onClick={() => exportPublicKey(recipient)}
                 title="Save this public key, to add the same key on another install"
               >
                 Export
               </Button>
-              <button
-                type="button"
-                aria-label={`Delete backup key ${recipient.label}`}
-                onClick={() => setPendingDeleteRecipient(recipient)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--danger)',
-                  cursor: 'pointer',
-                  fontSize: 16,
-                  lineHeight: 1,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                }}
-              >
+              <IconButton tone="danger" aria-label={`Delete backup key ${recipient.label}`} onClick={() => setPendingDeleteRecipient(recipient)} style={{ fontSize: 16 }}>
                 ×
-              </button>
+              </IconButton>
             </div>
           ))
         )}
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: 16, borderTop: '1px solid var(--border)' }}>
-          <Button small variant="ghost" onClick={() => setAddOpen(true)}>Add a key</Button>
-          <Button small variant="ghost" onClick={() => setGenerateOpen(true)}>Generate a key pair</Button>
+          <Button variant="secondary" onClick={() => setAddOpen(true)}>Add a key</Button>
+          <Button variant="secondary" onClick={() => setGenerateOpen(true)}>Generate a key pair</Button>
         </div>
       </Card>
     </>
@@ -302,7 +287,7 @@ function AddRecipientDialog({ existingNames, onAdded, onClose }) {
       description="Paste or drop an RSA public key. The matching private key is what will read those backups back, so it has to be one you hold."
       onClose={onClose}
       actions={<>
-        <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button onClick={submit} disabled={saving || nameTaken || !label.trim() || !publicKey.trim()}>
           {saving ? 'Saving…' : 'Add key'}
         </Button>
@@ -471,7 +456,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
       )
     }
     actions = <>
-      <Button variant="ghost" onClick={onClose} disabled={addState === 'adding'}>Cancel</Button>
+      <Button variant="secondary" onClick={onClose} disabled={addState === 'adding'}>Cancel</Button>
       {primary}
     </>
   }
@@ -558,8 +543,8 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
               {generated.fingerprint}
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <Button small onClick={downloadPrivateKey}>Download private key</Button>
-              <Button small variant="ghost" onClick={copyPrivateKey}>{copied ? 'Copied' : 'Copy'}</Button>
+              <Button onClick={downloadPrivateKey}>Download private key</Button>
+              <Button variant="secondary" onClick={copyPrivateKey}>{copied ? 'Copied' : 'Copy'}</Button>
             </div>
           </div>
         )}

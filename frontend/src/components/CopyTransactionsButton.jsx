@@ -9,7 +9,7 @@
 // them once it is open. `total` (the list's full size) lets the dialog turn away a list past the copy limit
 // without fetching it, and `onDownload` offers that list as a file instead.
 
-import { Tooltip } from './ui.jsx'
+import { Tooltip, IconButton } from './ui.jsx'
 import { useTransactionShare } from '../contexts/TransactionShareContext.jsx'
 
 function CopyGlyph({ size = 14 }) {
@@ -36,19 +36,9 @@ export default function CopyTransactionsButton({
 
   return (
     <Tooltip content={label}>
-      <button
-        type="button"
-        onClick={handleClick}
-        aria-label={label}
-        style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          background: 'none', border: 'none', padding: '2px 4px',
-          color: 'var(--muted)', cursor: 'pointer', lineHeight: 1,
-          ...style,
-        }}
-      >
+      <IconButton size="compact" onClick={handleClick} aria-label={label} title="" style={style}>
         <CopyGlyph />
-      </button>
+      </IconButton>
     </Tooltip>
   )
 }

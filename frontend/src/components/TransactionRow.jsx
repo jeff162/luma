@@ -18,7 +18,7 @@ import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
@@ -55,22 +55,6 @@ const splitPartControlStyle = {
   alignItems: 'center',
   gap: 4,
   cursor: 'pointer',
-}
-
-const detailButtonStyle = {
-  background: 'none',
-  border: 'none',
-  color: 'var(--accent2)',
-  cursor: 'pointer',
-  fontSize: 11,
-  padding: '3px 5px',
-  opacity: 0.75,
-  lineHeight: 1,
-  flexShrink: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 6,
 }
 
 // The name a row goes by, or '' when it has none — a wallet's funding deposit or withdrawal has no
@@ -355,7 +339,9 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
       ) : labelSpan}
       {onOpenDetail && showReport && (
         <RowTooltip content="Open merchant spending report">
-          <button
+          <IconButton
+            size="compact"
+            tone="accent"
             // The merchant report and the transaction editor share one panel (TransactionDetail). The
             // `↗` wants the merchant *report* (activity only), so it tags the open payload; the panel
             // reads the marker and drops its single-transaction editor card. The pencil opens the same
@@ -364,8 +350,9 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
             // arrow would be self-referential (a list already scoped to one merchant).
             onClick={e => { e.stopPropagation(); onOpenDetail({ ...txn, _merchantReport: true }) }}
             aria-label="Open merchant spending report"
-            style={{ ...detailButtonStyle, flexShrink: 0 }}
-          >↗</button>
+            title=""
+            style={{ flexShrink: 0 }}
+          >↗</IconButton>
         </RowTooltip>
       )}
     </div>
@@ -1312,11 +1299,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       </div>
       {onOpenDetail && txn.category_name && (
         <RowTooltip content="View category spending history">
-          <button
+          <IconButton
+            size="compact"
+            tone="accent"
             onClick={e => { e.stopPropagation(); onOpenDetail() }}
             aria-label="View category spending history"
-            style={detailButtonStyle}
-          >↗</button>
+            title=""
+          >↗</IconButton>
         </RowTooltip>
       )}
     </div>

@@ -6,6 +6,7 @@ import { api } from '../lib/api.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph, TAG_COLOR_PALETTE } from './TagUi.jsx'
 import { addTagToCache } from '../lib/useTags.js'
+import { Button, LinkButton } from './ui.jsx'
 
 /*
  * Shared tag picker used wherever the user can attach tags — transaction rows,
@@ -231,44 +232,18 @@ export default function TagPickerWithCreate({
               <div style={{ fontSize: 11, color: 'var(--danger)' }}>{createError}</div>
             ) : null}
             <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => { setCreateMode(false); setCreateName(''); setCreateError('') }}
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--muted)', fontSize: 12, padding: '4px 8px',
-                }}
-              >
+              <Button size="compact" variant="quiet" onClick={() => { setCreateMode(false); setCreateName(''); setCreateError('') }}>
                 Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitCreate}
-                disabled={!trimmedName || creating || nameAlreadyTaken}
-                style={{
-                  background: 'var(--accent)', color: '#fff',
-                  border: 'none', borderRadius: 6,
-                  padding: '4px 10px', fontSize: 12,
-                  cursor: trimmedName && !creating && !nameAlreadyTaken ? 'pointer' : 'not-allowed',
-                  opacity: trimmedName && !creating && !nameAlreadyTaken ? 1 : 0.5,
-                }}
-              >
+              </Button>
+              <Button size="compact" onClick={submitCreate} disabled={!trimmedName || creating || nameAlreadyTaken}>
                 {creating ? 'Creating…' : 'Create & add'}
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setCreateMode(true)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--accent2)', fontSize: 13, padding: '4px 0',
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}
-          >
+          <LinkButton onClick={() => setCreateMode(true)} style={{ fontSize: 13, padding: '4px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             + New tag
-          </button>
+          </LinkButton>
         )}
       </div>
     </div>

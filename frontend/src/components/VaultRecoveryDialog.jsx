@@ -114,8 +114,8 @@ export function RecoveryCodeReveal({ code, onDismiss }) {
         {code}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <Button small onClick={copy}>{copied ? 'Copied' : 'Copy code'}</Button>
-        {onDismiss ? <Button small variant="ghost" onClick={onDismiss}>I have saved it</Button> : null}
+        <Button onClick={copy}>{copied ? 'Copied' : 'Copy code'}</Button>
+        {onDismiss ? <Button variant="secondary" onClick={onDismiss}>I have saved it</Button> : null}
       </div>
       {copyError ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{copyError}</div> : null}
     </div>
@@ -244,7 +244,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
         description="The new passphrase protects the same key, so every connection keeps working — nothing was re-encrypted and nothing needs reconnecting."
         onClose={onClose}
         width="min(520px, 100%)"
-        actions={<Button small onClick={onClose}>Done</Button>}
+        actions={<Button onClick={onClose}>Done</Button>}
       >
         <div style={{ display: 'grid', gap: 14 }}>
           <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
@@ -266,7 +266,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
         description="Set a new vault passphrase, then reconnect each connection."
         onClose={onClose}
         width="min(560px, 100%)"
-        actions={<Button small onClick={onClose}>Done</Button>}
+        actions={<Button onClick={onClose}>Done</Button>}
       >
         <div style={{ display: 'grid', gap: 14 }}>
           <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
@@ -330,7 +330,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
       description="The vault protects your data provider credentials. Your transactions and accounts are not encrypted and are never affected by anything on this screen."
       onClose={onClose}
       width="min(560px, 100%)"
-      actions={<Button variant="ghost" small onClick={onClose}>Close</Button>}
+      actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       {preview === null && !error ? <Spinner /> : (
         <div style={{ display: 'grid', gap: 14 }}>
@@ -395,7 +395,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                     {...NEW_SECRET_PROPS}
                   />
                   <div>
-                    <Button small disabled={reenrolBlocked} onClick={reenrol}>
+                    <Button disabled={reenrolBlocked} onClick={reenrol}>
                       {busy === 'reenrol' ? 'Asking…' : 'Ask to be let back in'}
                     </Button>
                   </div>
@@ -439,7 +439,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{shortfall}</div>
               ) : null}
               <div>
-                <Button small disabled={recoverBlocked} onClick={recover}>
+                <Button disabled={recoverBlocked} onClick={recover}>
                   {busy === 'recover' ? 'Opening…' : 'Open the vault'}
                 </Button>
               </div>
@@ -467,7 +467,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {/* 4 — the only destructive rung, kept collapsed. */}
           {!showReset ? (
             <div>
-              <Button variant="ghost" small onClick={() => setShowReset(true)}>
+              <Button variant="secondary" onClick={() => setShowReset(true)}>
                 None of these — rebuild the vault…
               </Button>
             </div>
@@ -544,13 +544,13 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                     click that actually destroys something, and it is genuinely irreversible — which is
                     what the colour is reserved for. */}
                 <Button
-                  small variant="danger"
+                  variant="danger"
                   disabled={busy === 'reset' || confirmPhrase.trim().toUpperCase() !== phrase}
                   onClick={reset}
                 >
                   {busy === 'reset' ? 'Rebuilding…' : 'Rebuild the vault'}
                 </Button>
-                <Button variant="ghost" small disabled={busy === 'reset'} onClick={() => setShowReset(false)}>
+                <Button variant="secondary" disabled={busy === 'reset'} onClick={() => setShowReset(false)}>
                   Cancel
                 </Button>
               </div>

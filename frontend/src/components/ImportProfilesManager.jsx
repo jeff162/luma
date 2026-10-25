@@ -37,7 +37,7 @@ import {
   SOURCE_ROW_GRID_COLUMNS,
   TRUNCATED_CELL_STYLE,
 } from '../lib/importExport/constants.js'
-import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
+import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog, IconButton, LinkButton } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
 import AccountMappingGrid from './importExport/AccountMappingGrid.jsx'
@@ -487,14 +487,13 @@ function ProfileForm({
           </div>
         </div>
         {floating && onCancel ? (
-          <button
-            type="button"
+          <IconButton
             aria-label="Close"
             title="Close (same as Cancel)"
             onPointerDown={e => e.stopPropagation()}
             onClick={onCancel}
-            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
-          >×</button>
+            style={{ flexShrink: 0, fontSize: 18 }}
+          >×</IconButton>
         ) : null}
       </div>
 
@@ -520,8 +519,7 @@ function ProfileForm({
             style={{ display: 'none' }}
           />
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={() => sampleFileInputRef.current?.click()}
           >
             {samplePreview || isNew ? 'Choose template file' : 'Provide template file'}
@@ -970,10 +968,10 @@ function ProfileForm({
         borderRadius: floating ? '0 0 18px 18px' : 0,
         zIndex: floating ? 3 : undefined,
       }}>
-        <Button small onClick={handleSave} disabled={!canSave}>
+        <Button onClick={handleSave} disabled={!canSave}>
           {isNew ? 'Create data source' : 'Save changes'}
         </Button>
-        <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )
@@ -1423,54 +1421,32 @@ export default function ImportProfilesManager({
                           of its own beneath rather than widening the column for every row. */}
                       <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                        <button
-                          onClick={() => setWatchProfile(profile)}
-                          style={{
-                            background: 'none', border: '1px solid var(--border)',
-                            borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
-                            fontSize: 12, padding: '3px 8px',
-                          }}
-                        >
+                        <Button size="compact" variant="quiet" onClick={() => setWatchProfile(profile)}>
                           Folder
-                        </button>
-                        <button
-                          onClick={() => setEditId(profile.id)}
-                          style={{
-                            background: 'none', border: '1px solid var(--border)',
-                            borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
-                            fontSize: 12, padding: '3px 8px',
-                          }}
-                        >
+                        </Button>
+                        <Button size="compact" variant="quiet" onClick={() => setEditId(profile.id)}>
                           Edit
-                        </button>
+                        </Button>
                         {profile.source_kind ? (
                           <span title="This data source is managed by the system and can't be deleted." style={{ color: 'var(--muted)', fontSize: 14, padding: '2px 6px', cursor: 'default' }}>🔒</span>
                         ) : (
-                          <button
-                            onClick={() => setPendingDeleteProfile(profile)}
-                            style={{
-                              background: 'none', border: 'none',
-                              color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px',
-                            }}
-                          >
+                          <IconButton tone="danger" aria-label={`Delete ${profile.name}`} onClick={() => setPendingDeleteProfile(profile)}>
                             ×
-                          </button>
+                          </IconButton>
                         )}
                         </div>
                         {/* Muted like its siblings: it is an ordinary row action, and the accent colour
                             made it read as the row's primary one. */}
                         {profile.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
-                          <button
+                          <Button
+                            size="compact"
+                            variant="quiet"
                             onClick={() => onReviewMoneyMovement(profile.id)}
                             title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
-                            style={{
-                              background: 'none', border: '1px solid var(--border)',
-                              borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
-                              fontSize: 12, padding: '3px 8px', whiteSpace: 'nowrap',
-                            }}
+                            style={{ whiteSpace: 'nowrap' }}
                           >
                             Review transfer classifications
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
                     </>
@@ -1481,16 +1457,13 @@ export default function ImportProfilesManager({
           ))}
           {systemRows}
           {!showAdd ? (
-            <button
+            <LinkButton
+              tone="muted"
               onClick={() => setShowAdd(true)}
-              style={{
-                display: 'block', width: '100%', background: 'none', border: 'none',
-                padding: '10px 16px', textAlign: 'center', cursor: 'pointer',
-                fontSize: 13, color: 'var(--muted)',
-              }}
+              style={{ display: 'block', width: '100%', padding: '10px 16px', textAlign: 'center', fontSize: 13 }}
             >
               + New data source
-            </button>
+            </LinkButton>
           ) : null}
         </div>
         </div>
@@ -1539,7 +1512,7 @@ export default function ImportProfilesManager({
               Imported files remain in history, but this saved data source definition will be removed.
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              <Button variant="ghost" onClick={() => setPendingDeleteProfile(null)} disabled={!!deletingProfileId}>
+              <Button variant="secondary" onClick={() => setPendingDeleteProfile(null)} disabled={!!deletingProfileId}>
                 Cancel
               </Button>
               <Button variant="danger" onClick={() => handleDelete(pendingDeleteProfile.id)} disabled={!!deletingProfileId}>

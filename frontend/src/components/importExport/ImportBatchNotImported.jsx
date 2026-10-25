@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { Button, SearchInput, Spinner } from '../ui.jsx'
+import { Button, SearchInput, Spinner, LinkButton } from '../ui.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
@@ -206,8 +206,7 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
         {NOT_IMPORTED_KINDS.filter(kind => (Number(totals[kind.key]) || 0) > 0).map(kind => (
           <Button
             key={kind.key}
-            variant={kindFilter === kind.key ? 'primary' : 'ghost'}
-            small
+            variant={kindFilter === kind.key ? 'primary' : 'secondary'}
             onClick={() => setKindFilter(current => (current === kind.key ? null : kind.key))}
           >
             {kind.label} ({totals[kind.key]})
@@ -230,13 +229,9 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
             {duplicateCount} further row{duplicateCount === 1 ? ' was' : 's were'} held as duplicates.
           </span>
           {onOpenDuplicates ? (
-            <button
-              type="button"
-              onClick={onOpenDuplicates}
-              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12.5 }}
-            >
+            <LinkButton onClick={onOpenDuplicates} style={{ fontSize: 12.5 }}>
               Review them in the duplicate report ↗
-            </button>
+            </LinkButton>
           ) : null}
         </div>
       ) : null}

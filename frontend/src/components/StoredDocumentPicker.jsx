@@ -5,7 +5,7 @@ import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatTimestamp } from '../lib/utils.js'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
-import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
+import { AppDialog, Button } from './ui.jsx'
 
 /*
  * Choosing a stored document to attach to a transaction.
@@ -44,7 +44,7 @@ export default function StoredDocumentPicker({ documents, onAttach, onClose }) {
         onClose={onClose}
         dismissOnBackdrop
         width="min(560px, 100%)"
-        actions={<Button variant="ghost" onClick={onClose}>Cancel</Button>}
+        actions={<Button variant="secondary" onClick={onClose}>Cancel</Button>}
       >
         {error ? <div style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}
         <div style={{ display: 'grid', gap: 4 }}>
@@ -69,7 +69,7 @@ export default function StoredDocumentPicker({ documents, onAttach, onClose }) {
                 {doc.filename}
               </button>
               <span style={{ fontSize: 11, color: 'var(--muted)' }}>{formatTimestamp(doc.created_at)}</span>
-              <Button small style={COMPACT_ACTION_BTN_STYLE} onClick={() => attach(doc)} aria-label={`Attach ${doc.filename}`}>
+              <Button size="compact" onClick={() => attach(doc)} aria-label={`Attach ${doc.filename}`}>
                 Attach
               </Button>
             </div>

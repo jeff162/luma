@@ -96,7 +96,7 @@ export default function RecurringAmountMatchDialog({ series, suggested = null, o
       width="min(460px, 100%)"
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button variant="primary" onClick={save} disabled={saving || !boundsValid}>Save</Button>
         </>
       )}

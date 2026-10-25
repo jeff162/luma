@@ -214,7 +214,7 @@ export function ImportDetailStorageDialog({ onClose, onChanged }) {
       width={760}
       actions={(
         <>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
           <Button onClick={askToClear} disabled={selected.size === 0}>
             {`Clear detail${selected.size === 0 ? '' : ` · ${sized(selectedBytes)}`}`}
           </Button>
@@ -250,7 +250,7 @@ export function ImportDetailStorageDialog({ onClose, onChanged }) {
             </span>
             {/* Replaces the selection rather than adding to it, so what is ticked afterwards is exactly
                 the set the label names. */}
-            <Button small variant="ghost" onClick={() => setSelected(new Set(olderIds))} disabled={olderIds.length === 0}>
+            <Button variant="secondary" onClick={() => setSelected(new Set(olderIds))} disabled={olderIds.length === 0}>
               Select imports over a year old
             </Button>
           </div>

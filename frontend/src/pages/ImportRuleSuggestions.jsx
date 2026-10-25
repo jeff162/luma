@@ -607,7 +607,7 @@ export default function ImportRuleSuggestions() {
                 ← Back to {backLabel}
               </Link>
               {undoStack.length > 0 && (
-                <Button variant="ghost" small onClick={performUndo}>
+                <Button variant="secondary" onClick={performUndo}>
                   ↩ Undo ({undoStack.length})
                 </Button>
               )}
@@ -734,15 +734,13 @@ export default function ImportRuleSuggestions() {
                                 </div>
                                 <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                                   <Button
-                                    small
                                     onClick={() => replaceConflictingRule(entry)}
                                     disabled={resolvingConflictId === entry.suggestion_id}
                                   >
                                     Replace existing
                                   </Button>
                                   <Button
-                                    small
-                                    variant="ghost"
+                                    variant="secondary"
                                     onClick={() => keepExistingRule(entry)}
                                     disabled={resolvingConflictId === entry.suggestion_id}
                                   >
@@ -767,7 +765,6 @@ export default function ImportRuleSuggestions() {
                                 : 'These rules now categorize differently. Update the transactions they already match?'}
                             </span>
                             <Button
-                              small
                               onClick={recategorizeReconciledMatches}
                               disabled={recategorizingMatches}
                               title="Re-categorizes matches set by import or a rule; leaves manual edits unchanged."
@@ -777,7 +774,7 @@ export default function ImportRuleSuggestions() {
                           </div>
                         ) : null}
                       </div>
-                      <Button variant="ghost" small onClick={() => { setResolveSummary(null); setReconcileApplyNote(null) }}>Dismiss</Button>
+                      <Button variant="secondary" onClick={() => { setResolveSummary(null); setReconcileApplyNote(null) }}>Dismiss</Button>
                     </Card>
                   ) : null}
 

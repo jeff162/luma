@@ -27,7 +27,7 @@
 
 import { useState } from 'react'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from './detailShared.jsx'
-import { Button, EmptyState, Spinner, Tooltip } from './ui.jsx'
+import { Button, EmptyState, Spinner, Tooltip, LinkButton } from './ui.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 
 const PANEL_PREF_KEY = 'ui.recurring.transferReviewPanel'
@@ -75,7 +75,7 @@ function Ambiguity({ item, busy, onPair, onDismiss }) {
             {busy ? 'Working…' : 'Accept'}
           </Button>
         </Tooltip>
-        <Button variant="ghost" disabled={busy} onClick={() => onDismiss(item)}>Dismiss</Button>
+        <Button variant="secondary" disabled={busy} onClick={() => onDismiss(item)}>Dismiss</Button>
       </div>
       <div style={{ ...NOTE, marginTop: 6 }}>
         Recording the pair lets it count towards a series. Dismissing leaves these matched by merchant
@@ -146,14 +146,9 @@ export function TransferReviewDialog({
 
           {hidden.length ? (
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid color-mix(in srgb, var(--border) 60%, transparent)' }}>
-              <button
-                type="button"
-                onClick={() => setShowHidden(v => !v)}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                         color: 'var(--accent2)', fontSize: 12.5, fontWeight: 600 }}
-              >
+              <LinkButton onClick={() => setShowHidden(v => !v)} style={{ fontSize: 12.5, fontWeight: 600 }}>
                 {hidden.length} answered · {showHidden ? 'hide' : 'show'}
-              </button>
+              </LinkButton>
               {showHidden ? (
                 <div style={{ marginTop: 8 }}>
                   {hidden.map(h => (
@@ -167,7 +162,7 @@ export function TransferReviewDialog({
                           {' · '}{h.kind === 'paired' ? 'paired' : 'dismissed'}
                         </span>
                       </span>
-                      <Button variant="ghost" small onClick={() => onRestore(h)}>Undo</Button>
+                      <Button variant="secondary" onClick={() => onRestore(h)}>Undo</Button>
                     </div>
                   ))}
                 </div>

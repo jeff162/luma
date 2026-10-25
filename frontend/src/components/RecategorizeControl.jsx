@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { Button } from './ui.jsx'
+import { Button, IconButton } from './ui.jsx'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 
 // Shared "re-run categorization" control, used by the Rules page and the imported rule-suggestions
@@ -66,25 +66,11 @@ export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categoriz
     }
   }
   const hasPending = pendingCount > 0
-  const style = hasPending
-    ? {
-        background: 'color-mix(in srgb, var(--surface2) 58%, var(--accent) 16%)',
-        border: '1px solid color-mix(in srgb, var(--accent) 36%, var(--border))',
-        boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 10px 22px rgba(0,0,0,0.12)',
-      }
-    : {
-        background: 'color-mix(in srgb, var(--surface2) 88%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--border) 88%, transparent)',
-        boxShadow: 'none',
-        color: 'color-mix(in srgb, var(--muted) 88%, var(--text))',
-      }
   return (
     <Button
-      variant="ghost"
-      small
+      variant="secondary"
       onClick={run}
       disabled={running}
-      style={style}
       title={running ? 'Re-categorizing transactions…' : hasPending
         ? `${pendingCount} transaction${pendingCount === 1 ? '' : 's'} could be re-categorized`
         : 'No transactions currently look eligible for re-categorization'}
@@ -119,10 +105,7 @@ export function RecategorizeResultBanner({ result, onDismiss, style }) {
           ? `↻ ${result} transaction${result === 1 ? '' : 's'} re-categorized.`
           : '↻ No transactions needed re-categorization.'}
       </span>
-      <button
-        onClick={onDismiss}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 16, lineHeight: 1, padding: 0 }}
-      >×</button>
+      <IconButton aria-label="Dismiss" onClick={onDismiss}>×</IconButton>
     </div>
   )
 }

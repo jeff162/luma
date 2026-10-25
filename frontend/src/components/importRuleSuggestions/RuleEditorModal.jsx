@@ -134,8 +134,7 @@ export function RuleEditorModal({
     if (draftOnly) {
       return (
         <Button
-          small
-          variant="ghost"
+          variant="secondary"
           onClick={handleCloseWithDraft}
           disabled={working}
           title="Close — your edits stay on the conflict card; its Apply creates the rule"
@@ -148,7 +147,6 @@ export function RuleEditorModal({
       return (
         <>
           <Button
-            small
             onClick={handleCloseWithDraft}
             disabled={working}
             title="Close — your edits stay on the suggestion card; use the card's Save button when ready"
@@ -156,8 +154,7 @@ export function RuleEditorModal({
             Close
           </Button>
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={handleAccept}
             disabled={working || !draftState.canSave}
             title="Create this rule now and move the suggestion to accepted"
@@ -172,10 +169,10 @@ export function RuleEditorModal({
     const saveLabel = isAccepted ? 'Save' : matchOnly ? 'Save match' : 'Save rule'
     return (
       <>
-        <Button small onClick={saveAction} disabled={working || !draftState.canSave}>
+        <Button onClick={saveAction} disabled={working || !draftState.canSave}>
           {working ? 'Saving…' : saveLabel}
         </Button>
-        <Button small variant="ghost" onClick={cancelAction} disabled={working}>
+        <Button variant="secondary" onClick={cancelAction} disabled={working}>
           Cancel
         </Button>
       </>
@@ -234,26 +231,14 @@ export function RuleEditorModal({
                   : 'Review and refine the proposed rule before saving it.'}
             </div>
             {onOpenMatchingTransactions && matchCount ? (
-              <button
-                type="button"
+              <Button
+                size="compact"
+                variant="secondary"
                 onClick={onOpenMatchingTransactions}
                 title={matchOnly
                   ? (matchingRowsOpen ? 'Hide the current suggestion rows' : 'Show the current suggestion rows as a reference')
                   : (matchingRowsOpen ? 'Hide matching imported transactions' : 'Show matching imported transactions as a reference')}
-                style={{
-                  marginTop: 8,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '3px 8px',
-                  borderRadius: 999,
-                  border: '1px solid var(--border)',
-                  background: 'var(--surface2)',
-                  color: 'var(--muted)',
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
+                style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
                 {matchingRowsOpen
                   ? 'Hide reference rows'
@@ -261,7 +246,7 @@ export function RuleEditorModal({
                     ? `${matchCount} row${matchCount === 1 ? '' : 's'} in this suggestion`
                     : `${matchCount} matching row${matchCount === 1 ? '' : 's'}`}
                 <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-              </button>
+              </Button>
             ) : null}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>

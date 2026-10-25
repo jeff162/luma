@@ -84,15 +84,14 @@ function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
   const [reconcile, setReconcile] = useState(false)
 
   if (!onDelete) {
-    return <Button small variant="ghost" onClick={() => onEditRule(ruleId)}>Edit</Button>
+    return <Button variant="secondary" onClick={() => onEditRule(ruleId)}>Edit</Button>
   }
   if (!confirming) {
     return (
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        <Button small variant="ghost" onClick={() => onEditRule(ruleId)}>Edit</Button>
+        <Button variant="secondary" onClick={() => onEditRule(ruleId)}>Edit</Button>
         <Button
-          small
-          variant="ghost"
+          variant="secondary"
           disabled={busy}
           onClick={() => setConfirming(true)}
           title="Move this rule to the rules trash, where it can be restored"
@@ -112,14 +111,12 @@ function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
         re-evaluate its transactions
       </label>
       <Button
-        small
         disabled={busy}
         onClick={() => onDelete(ruleId, reconcile)}
-        style={{ background: 'var(--danger)', color: '#fff', border: 'none' }}
       >
         Delete rule
       </Button>
-      <Button small variant="ghost" disabled={busy} onClick={() => { setConfirming(false); setReconcile(false) }}>
+      <Button variant="secondary" disabled={busy} onClick={() => { setConfirming(false); setReconcile(false) }}>
         Cancel
       </Button>
     </div>
@@ -308,10 +305,10 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
 function DismissAction({ finding, onDismiss, onRestore, busy, title }) {
   if (!finding.dismissible) return null
   if (finding.dismissed) {
-    return <Button small variant="ghost" disabled={busy} onClick={() => onRestore(finding)}>Restore</Button>
+    return <Button variant="secondary" disabled={busy} onClick={() => onRestore(finding)}>Restore</Button>
   }
   return (
-    <Button small variant="ghost" disabled={busy} onClick={() => onDismiss(finding)} title={title}>
+    <Button variant="secondary" disabled={busy} onClick={() => onDismiss(finding)} title={title}>
       Dismiss
     </Button>
   )
@@ -394,7 +391,6 @@ function RangeDriftCard({ finding, rules, onEditRule, onWiden, onDismiss, onRest
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
             {outside ? (
               <Button
-                small
                 disabled={busy}
                 onClick={() => onWiden(finding)}
                 title="Move the rule’s limit out to this charge and re-apply the rule"
@@ -402,7 +398,7 @@ function RangeDriftCard({ finding, rules, onEditRule, onWiden, onDismiss, onRest
                 Widen to include
               </Button>
             ) : null}
-            <Button small variant="ghost" onClick={() => onEditRule(finding.rule_id)}>Edit</Button>
+            <Button variant="secondary" onClick={() => onEditRule(finding.rule_id)}>Edit</Button>
           </div>
         </div>
       ) : null}
@@ -687,7 +683,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
               Show dismissed{dismissedCount > 0 ? ` (${dismissedCount})` : ''}
             </label>
           ) : null}
-          <Button small variant="ghost" onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Button>
+          <Button variant="secondary" onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Button>
         </div>
     </DetailPanelShell>
   )

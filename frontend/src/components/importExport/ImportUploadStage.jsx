@@ -8,7 +8,7 @@
 // and is what `chooserOpen` toggles. Purely presentational: all state and handlers live in ImportTab.
 
 import TransientTextInput from '../TransientTextInput.jsx'
-import { Spinner } from '../ui.jsx'
+import { Spinner, Button, LinkButton } from '../ui.jsx'
 import FileInput from '../FileInput.jsx'
 import { PICKER_IDS } from '../../lib/filePicker.js'
 import { DataSourcePill } from './importPresentational.jsx'
@@ -107,22 +107,9 @@ export function ImportUploadStage({
                 </button>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => onOpenChooser?.()}
-              style={{
-                background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                border: '1px solid var(--border)',
-                borderRadius: 999,
-                padding: '3px 9px',
-                fontSize: 11,
-                color: 'var(--muted)',
-                cursor: 'pointer',
-                lineHeight: 1.2,
-              }}
-            >
+            <Button size="compact" variant="secondary" onClick={() => onOpenChooser?.()}>
               Change
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -246,21 +233,9 @@ export function ImportUploadStage({
                     )}
                   </div>
                   {onCloseChooser ? (
-                    <button
-                      type="button"
-                      onClick={() => onCloseChooser()}
-                      style={{
-                        justifySelf: 'center',
-                        background: 'none',
-                        border: 'none',
-                        padding: '2px 4px',
-                        fontSize: 12,
-                        color: 'var(--muted)',
-                        cursor: 'pointer',
-                      }}
-                    >
+                    <LinkButton tone="muted" onClick={() => onCloseChooser()} style={{ justifySelf: 'center', padding: '2px 4px', fontSize: 12 }}>
                       Cancel — just drop a file
-                    </button>
+                    </LinkButton>
                   ) : null}
                 </div>
               </div>
@@ -290,21 +265,9 @@ export function ImportUploadStage({
             {!chooserOpen && !hasSelectedSource && !demoLoaded ? (
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 The matching data source is detected automatically or {' '}
-                <button
-                  type="button"
-                  onClick={e => { e.stopPropagation(); onOpenChooser?.() }}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    fontSize: 12,
-                    color: 'var(--accent2)',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                  }}
-                >
+                <LinkButton onClick={e => { e.stopPropagation(); onOpenChooser?.() }} style={{ fontSize: 12, textDecoration: 'underline' }}>
                   choose a data source
-                </button>
+                </LinkButton>
               </div>
             ) : null}
             <FileInput

@@ -10,7 +10,7 @@
 
 import { OutcomeChip, SourceAccountChip } from '../importExport/SourceAccountChip.jsx'
 import { allowanceSummary } from '../../lib/requestAllowance.js'
-import { HOVER_OPEN_DELAY_MS, Tooltip } from '../ui.jsx'
+import { HOVER_OPEN_DELAY_MS, Tooltip, IconButton } from '../ui.jsx'
 import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
 
 // When a connection last succeeded, as an age to read at a glance with the exact moment on hover. The
@@ -53,14 +53,21 @@ export function HoverLines({ lines, children }) {
 // watched folder deliberately switched off. It has no colour of its own precisely so it cannot be read
 // as a problem — the pill's shape is what makes it a state rather than a word in a sentence.
 //
+// `review` is the needs-review marker's gold, for a count of rows waiting to be looked over.
+//
 // `small` is for a pill that sits in a list row rather than on a card: beside a 10px column label or a
 // line of 11px metadata, the full-size pill is the largest thing in the row and reads as the point of
 // it. It stays legible because it keeps its weight; only the type and the padding come down.
-export function StatusPill({ tone = 'accent2', small = false, children, title, onClick }) {
+//
+// With `onClick` the pill is a button; `report` adds the `↗` that says the click opens a report
+// (`ui-patterns.md` → Status, badges and timestamps), as on the import cards' rejected, duplicate and
+// to-review counts.
+export function StatusPill({ tone = 'accent2', small = false, report = false, children, title, onClick }) {
   const color = tone === 'danger' ? 'var(--danger, #dc2626)'
     : tone === 'warning' ? 'var(--warning)'
       : tone === 'muted' ? 'var(--muted)'
-        : 'var(--accent2)'
+        : tone === 'review' ? 'var(--review-marker-color)'
+          : 'var(--accent2)'
   const Tag = onClick ? 'button' : 'span'
   return (
     <Tag
@@ -78,6 +85,7 @@ export function StatusPill({ tone = 'accent2', small = false, children, title, o
       }}
     >
       {children}
+      {report ? <span aria-hidden="true" style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }}>↗</span> : null}
     </Tag>
   )
 }
@@ -198,17 +206,14 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
             then usually holds earlier syncs' rows too. Both are useful; being told which one is open
             is what keeps the count in the drawer from reading as a contradiction of the count here. */}
         {onOpenReport && reportCards.length ? (
-          <button
-            type="button"
+          <IconButton
+            size="compact"
+            tone="accent"
             onClick={onOpenReport}
-            title={reportScoped
+            aria-label={reportScoped
               ? `Review the ${n(reportRows)} transaction${reportRows === 1 ? '' : 's'} from this sync`
               : 'Open the import card this sync added to'}
-            style={{
-              background: 'none', border: 'none', padding: '0 2px', cursor: 'pointer',
-              color: 'var(--accent2)', fontSize: 11, lineHeight: 1, opacity: 0.75,
-            }}
-          >↗</button>
+          >↗</IconButton>
         ) : null}
       </div>
       {chips.length ? (

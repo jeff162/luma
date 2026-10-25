@@ -5,7 +5,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
+import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
@@ -249,31 +249,7 @@ function reconcileAccountOrder(previousRows, nextRows) {
 }
 
 function OwnerFilterPill({ label, count, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '6px 12px',
-        borderRadius: 999,
-        border: `1px solid ${active ? 'color-mix(in srgb, var(--accent) 60%, var(--border))' : 'var(--border)'}`,
-        background: active
-          ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))'
-          : 'var(--surface2)',
-        color: active ? 'var(--accent2)' : 'var(--muted)',
-        fontSize: 12,
-        fontWeight: 600,
-        cursor: 'pointer',
-        boxShadow: active ? '0 6px 14px rgba(15, 23, 42, 0.10)' : 'none',
-      }}
-    >
-      <span>{count}</span>
-      <span style={{ fontWeight: 500 }}>{label}</span>
-    </button>
-  )
+  return <FilterChip selected={active} count={count} onClick={onClick}>{label}</FilterChip>
 }
 
 function controlStyle(extra = {}) {
@@ -538,7 +514,6 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
           {/* The tags cell is free while drafting (tags are added once the account exists), and the
               action track only fits the ⋯ menu, so the submit sits here beside the cancel. */}
           <Button
-            small
             type="submit"
             disabled={creating}
             style={{ justifySelf: 'end', height: ACCOUNT_CONTROL_HEIGHT, padding: '0 12px' }}
@@ -546,26 +521,9 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
             {creating ? 'Adding…' : 'Add'}
           </Button>
 
-          <button
-            type="button"
-            onClick={onCancel}
-            title="Cancel new account"
-            style={{
-              background: 'none',
-              border: '1px solid var(--border)',
-              color: 'var(--muted)',
-              cursor: 'pointer',
-              fontSize: 16,
-              width: 28,
-              height: ACCOUNT_CONTROL_HEIGHT,
-              lineHeight: 1,
-              padding: 0,
-              borderRadius: 6,
-              justifySelf: 'end',
-            }}
-          >
+          <IconButton onClick={onCancel} aria-label="Cancel new account" style={{ width: 28, height: ACCOUNT_CONTROL_HEIGHT }}>
             ×
-          </button>
+          </IconButton>
         </div>
         {ownerError && (
           <div style={{ padding: '0 10px 2px 10px', fontSize: 11, color: 'var(--danger)' }}>
@@ -802,12 +760,11 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
                     boxSizing: 'border-box',
                   })}
                 />
-                <Button small onClick={submitNewOwner} disabled={!newOwnerDraft.trim()} style={{ height: 22, padding: '0 9px', borderRadius: 999, fontSize: 11 }}>
+                <Button onClick={submitNewOwner} disabled={!newOwnerDraft.trim()} style={{ height: 22, padding: '0 9px', borderRadius: 999, fontSize: 11 }}>
                   Add
                 </Button>
                 <Button
-                  small
-                  variant="ghost"
+                  variant="secondary"
                   style={{ height: 22, padding: '0 8px', borderRadius: 999, fontSize: 11 }}
                   onClick={() => {
                     setCreatingOwner(false)
@@ -819,8 +776,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
               </div>
             ) : (
               <Button
-                small
-                variant="ghost"
+                variant="secondary"
                 onClick={() => {
                   setEditingOwnerId(null)
                   setOwnerDraft('')
@@ -865,12 +821,11 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
                 boxSizing: 'border-box',
               })}
             />
-            <Button small onClick={submitNewOwner} disabled={!newOwnerDraft.trim()} style={{ height: 22, padding: '0 9px', borderRadius: 999, fontSize: 11 }}>
+            <Button onClick={submitNewOwner} disabled={!newOwnerDraft.trim()} style={{ height: 22, padding: '0 9px', borderRadius: 999, fontSize: 11 }}>
               Add
             </Button>
             <Button
-              small
-              variant="ghost"
+              variant="secondary"
               style={{ height: 22, padding: '0 8px', borderRadius: 999, fontSize: 11 }}
               onClick={() => {
                 setCreatingOwner(false)
@@ -882,8 +837,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
           </div>
         ) : (
           <Button
-            small
-            variant="ghost"
+            variant="secondary"
             onClick={() => setCreatingOwner(true)}
             style={{
               display: 'inline-flex',
@@ -1487,35 +1441,18 @@ function AccountRow({
               disabled={ownerEditDisabled}
             />
           ) : (
-            <button
-              type="button"
+            <FilterChip
+              variant="add"
+              disabled={ownerEditDisabled}
               onClick={() => {
-                if (ownerEditDisabled) return
                 setOwnerDraft('')
                 setShowOwnerCreate(true)
               }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 'fit-content',
-                maxWidth: '100%',
-                height: ACCOUNT_CONTROL_HEIGHT,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                border: '1px solid var(--border)',
-                borderRadius: 999,
-                padding: '0 9px',
-                fontSize: 11,
-                lineHeight: 1.1,
-                cursor: ownerEditDisabled ? 'default' : 'pointer',
-                whiteSpace: 'nowrap',
-                opacity: ownerEditDisabled ? 0.6 : 1,
-              }}
               title={ownerEditDisabled ? undefined : 'Create and assign owner'}
+              style={{ height: ACCOUNT_CONTROL_HEIGHT, maxWidth: '100%' }}
             >
               Assign owner
-            </button>
+            </FilterChip>
           )}
           {showOwnerCreate && canShowOwnerControls ? (
             <div
@@ -1564,7 +1501,6 @@ function AccountRow({
                 })}
               />
               <Button
-                small
                 onClick={submitCreateOwner}
                 disabled={!ownerDraft.trim() || creatingOwner}
                 style={{ height: 22, padding: '0 9px', borderRadius: 999, fontSize: 11 }}
@@ -1572,8 +1508,7 @@ function AccountRow({
                 {creatingOwner ? 'Adding...' : 'Add'}
               </Button>
               <Button
-                small
-                variant="ghost"
+                variant="secondary"
                 style={{ height: 22, padding: '0 8px', borderRadius: 999, fontSize: 11 }}
                 onClick={() => {
                   setShowOwnerCreate(false)
@@ -2595,10 +2530,10 @@ export default function Accounts() {
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
                 {/* Connections create and feed accounts, so they are reachable from here as well as
                     from the Import page that holds them. */}
-                <Button small variant="ghost" onClick={() => navigate('/import-export?tab=connections')}>
+                <Button variant="secondary" onClick={() => navigate('/import-export?tab=connections')}>
                   Connections
                 </Button>
-                <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
+                <Button onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
                   +New account
                 </Button>
               </div>
@@ -2651,14 +2586,14 @@ export default function Accounts() {
                     boxShadow: '0 14px 36px rgba(0, 0, 0, 0.18)',
                     padding: 6,
                   }}>
-                    <Button small onClick={openCreateAccount}>Add account</Button>
+                    <Button onClick={openCreateAccount}>Add account</Button>
                     {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) && (
                       <>
-                        <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                        <Button variant="secondary" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
                           setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
                           setContextOpen(false)
                         }}>Collapse all groups</Button>
-                        <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                        <Button variant="secondary" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
                           setCollapsedGroups(new Set())
                           setContextOpen(false)
                         }}>Expand all groups</Button>
@@ -2761,18 +2696,15 @@ export default function Accounts() {
                                   render: () => (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
                                       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: 0.3, textTransform: 'uppercase' }}>Tags</span>
-                                      <button
-                                        type="button"
+                                      <Button
+                                        size="compact"
+                                        variant="secondary"
+                                        pressed={tagsEditMode}
                                         onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
                                         title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
-                                        style={{
-                                          background: tagsEditMode ? 'color-mix(in srgb, var(--accent) 16%, var(--surface))' : 'none',
-                                          border: '1px solid var(--border)', borderRadius: 999, padding: '1px 8px',
-                                          fontSize: 11, color: tagsEditMode ? 'var(--accent2)' : 'var(--muted)', cursor: 'pointer',
-                                        }}
                                       >
                                         {tagsEditMode ? 'Done' : 'Edit tags'}
-                                      </button>
+                                      </Button>
                                     </div>
                                   ),
                                 },

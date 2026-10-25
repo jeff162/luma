@@ -29,7 +29,7 @@ import {
 } from '../lib/reimbursements.js'
 import { localIsoDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
-import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
 
 /*
  * The reimbursement editor: what is owed, what came back, and the one decision only the user can make.
@@ -366,7 +366,7 @@ export default function ReimbursementEditorDialog({
           <div>
             {reimbursement && !isDraft && status !== 'completed' ? (
               <Button
-                variant="ghost"
+                variant="secondary"
                 onClick={() => setUnlinking(true)}
                 disabled={saving}
                 title="Keep every transaction exactly as it is, but stop tracking them as one reimbursement"
@@ -380,12 +380,12 @@ export default function ReimbursementEditorDialog({
               Close until a field is edited, Cancel after. Save appears with it, and an *open* record
               keeps Mark complete throughout, because completing is a decision that may be about to be
               made. */}
-          <Button variant="ghost" onClick={onClose} disabled={saving}>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
             {fieldsEdited ? 'Cancel' : 'Close'}
           </Button>
           {reimbursement && !isDraft && status !== 'completed' ? (
             <Button
-              variant={completeIsPrimary ? 'primary' : 'ghost'}
+              variant={completeIsPrimary ? 'primary' : 'secondary'}
               onClick={() => {
                 if (nothingToMove) { confirmComplete(); return }
                 // Pre-picked when the role has one candidate; the panel asks only when it cannot know.
@@ -398,7 +398,7 @@ export default function ReimbursementEditorDialog({
           ) : null}
           {reimbursement && !settledAndUnedited ? (
             <Button
-              variant={completeIsPrimary ? 'ghost' : 'primary'}
+              variant={completeIsPrimary ? 'secondary' : 'primary'}
               onClick={saveFields}
               disabled={saving}
             >{saving ? 'Saving…' : 'Save'}</Button>
@@ -462,7 +462,7 @@ export default function ReimbursementEditorDialog({
 
           {status === 'completed' ? null : (
             <div>
-              <Button variant="ghost" small onClick={openLinkPicker}>Link another transaction…</Button>
+              <Button variant="secondary" onClick={openLinkPicker}>Link another transaction…</Button>
             </div>
           )}
 
@@ -525,8 +525,8 @@ export default function ReimbursementEditorDialog({
               <div style={{ display: 'flex', gap: 6 }}>
                 {/* Labelled for what it does, so it is not a second button reading "Complete" beside
                     the one in the action row that opened this. */}
-                <Button small onClick={confirmComplete} disabled={!completeReady}>Move and complete</Button>
-                <Button variant="ghost" small onClick={() => setCompleteOpen(false)}>Cancel</Button>
+                <Button onClick={confirmComplete} disabled={!completeReady}>Move and complete</Button>
+                <Button variant="secondary" onClick={() => setCompleteOpen(false)}>Cancel</Button>
               </div>
             </div>
           ) : null}
@@ -569,7 +569,7 @@ export default function ReimbursementEditorDialog({
           description="Anything holding money in the Reimbursable group that is not already part of a reimbursement."
           onClose={() => setLinkOpen(false)}
           width="min(520px, 100%)"
-          actions={<Button variant="ghost" onClick={() => setLinkOpen(false)}>Cancel</Button>}
+          actions={<Button variant="secondary" onClick={() => setLinkOpen(false)}>Cancel</Button>}
         >
           {loose.length === 0 && movable.length === 0 ? (
             <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
@@ -623,7 +623,7 @@ export default function ReimbursementEditorDialog({
                           on {row.from.label} · {formatTransactionAmount(row.claim)}
                         </span>
                       </div>
-                      <Button variant="ghost" small onClick={() => setMoving(row)}>Move here</Button>
+                      <Button variant="secondary" onClick={() => setMoving(row)}>Move here</Button>
                     </div>
                   ))}
                 </div>
@@ -706,8 +706,7 @@ function ReminderField({ form, reimbursement, reminderDays, onChange }) {
         ) : null}
         {due ? (
           <Button
-            variant="ghost"
-            small
+            variant="secondary"
             onClick={() => onChange({ reminderMode: 'date', remindOn: pushedTo })}
             title="Push this reminder out and stop it asking for now"
           >Not yet</Button>
@@ -735,7 +734,7 @@ function CompletedNote({ reimbursement, onReopen }) {
       <div>
         {/* Not styled as danger: reopening restores the transaction's allocations exactly, from the
             record completing it stashed. It is the undo, not a second destructive act. */}
-        <Button variant="ghost" small onClick={onReopen}>Reopen</Button>
+        <Button variant="secondary" onClick={onReopen}>Reopen</Button>
       </div>
     </div>
   )
@@ -782,15 +781,9 @@ function MemberRow({ member, isThisRow, onRemove }) {
         {formatTransactionAmount(member.claim)}
       </span>
       {onRemove ? (
-        <button
-          type="button"
-          onClick={onRemove}
-          title="Remove this transaction from the reimbursement"
-          aria-label="Remove this transaction from the reimbursement"
-          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 15, padding: 0 }}
-        >
+        <IconButton onClick={onRemove} aria-label="Remove this transaction from the reimbursement">
           ×
-        </button>
+        </IconButton>
       ) : <span />}
     </div>
   )

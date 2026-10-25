@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnchoredPopupLayout, useDismissiblePopup } from '../lib/uiInteractions.js'
 import { getAccountOptionLabel, selectableAccountOptions } from '../lib/importExport/importAccountMatching.js'
 import ImportNewAccountFields from './ImportNewAccountFields.jsx'
+import { Button } from './ui.jsx'
 
 // Account mapping is one user decision expressed three different ways: use a
 // CSV column, force every imported row into one existing account, or create one
@@ -155,27 +156,18 @@ export default function ImportAccountHandlingPicker({
             {closedLabel}
           </span>
           {showAcceptSuggestion ? (
-            <button
-              type="button"
+            <Button
+              size="compact"
+              variant="secondary"
               onClick={event => {
                 event.stopPropagation()
                 onAcceptSuggestedColumn(suggestedColumn)
               }}
-              style={{
-                flexShrink: 0,
-                fontSize: 11,
-                color: 'var(--accent2)',
-                background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-                border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
-                borderRadius: 999,
-                padding: '2px 7px',
-                cursor: 'pointer',
-                lineHeight: 1.2,
-              }}
               title="Accept suggested account column"
+              style={{ flexShrink: 0 }}
             >
               Accept {suggestedColumn}
-            </button>
+            </Button>
           ) : null}
           {!colAccount && !accountId && !singleAccountNew?.enabled && hint && !showAcceptSuggestion ? (
             <span style={{

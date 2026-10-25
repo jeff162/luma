@@ -12,7 +12,7 @@ import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
 import { EMPTY_AMOUNT_FILTER, amountFilterIsActive } from '../lib/filterParams.js'
-import { CategoryMarker, Button } from './ui.jsx'
+import { CategoryMarker, Button, IconButton, LinkButton } from './ui.jsx'
 import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
@@ -67,18 +67,13 @@ function RowTrailing({ mode, excludable, onExclude }) {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
       {mode === 'include' && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
       {excludable && (
-        <button
-          type="button"
+        <IconButton
+          size="compact"
+          tone={mode === 'exclude' ? 'danger' : undefined}
           onClick={e => { e.stopPropagation(); onExclude() }}
           title={mode === 'exclude' ? 'Excluded (is not) — click to clear' : 'Exclude (is not)'}
           aria-label={mode === 'exclude' ? 'Clear exclusion' : 'Exclude from results'}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1,
-            fontSize: 14, fontWeight: mode === 'exclude' ? 700 : 400,
-            color: mode === 'exclude' ? 'var(--danger)' : 'var(--muted)',
-            opacity: mode === 'exclude' ? 1 : 0.5,
-          }}
-        >≠</button>
+        >≠</IconButton>
       )}
     </span>
   )
@@ -212,19 +207,12 @@ function DatePickerPopover({ onClose }) {
             onChange={e => setCustomEnd(e.target.value)}
             style={{ flex: 1, minWidth: 0, ...inputStyle, padding: '5px 7px' }}
           />
-          <button onClick={applyCustom} style={{
-            background: 'var(--accent)', color: '#fff',
-            border: 'none', borderRadius: 6, padding: '5px 11px', fontSize: 12, fontWeight: 500,
-            cursor: 'pointer', flexShrink: 0,
-          }}>Set</button>
+          <Button size="compact" onClick={applyCustom} style={{ flexShrink: 0 }}>Set</Button>
         </div>
       </div>
       {filters.date && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '8px 14px' }}>
-          <button onClick={() => { clearDate(); onClose() }} style={{
-            background: 'none', border: 'none', color: 'var(--danger)',
-            cursor: 'pointer', fontSize: 13, padding: 0, fontWeight: 500,
-          }}>✕ Clear date filter</button>
+          <LinkButton tone="danger" onClick={() => { clearDate(); onClose() }} style={{ fontSize: 13, fontWeight: 500 }}>✕ Clear date filter</LinkButton>
         </div>
       )}
     </Popover>
@@ -625,10 +613,7 @@ function FilterPopover({ onClose }) {
 
       {filters.selections.length > 0 && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '8px 16px' }}>
-          <button onClick={clearSelections} style={{
-            background: 'none', border: 'none', color: 'var(--danger)',
-            cursor: 'pointer', fontSize: 13, padding: 0,
-          }}>✕ Clear all filters</button>
+          <LinkButton tone="danger" onClick={clearSelections} style={{ fontSize: 13 }}>✕ Clear all filters</LinkButton>
         </div>
       )}
     </Popover>
@@ -659,10 +644,7 @@ function FilterChip({ sel, onRemove, onFlipMode }) {
       {excluded ? <span style={{ fontWeight: 700 }}>≠</span> : null}
       {sel.type === 'tag' && sel.color ? <TagGlyph color={sel.color} size={12} /> : null}
       {sel.label}
-      <button onClick={e => { e.stopPropagation(); onRemove(sel.id) }} style={{
-        background: 'none', border: 'none', color: accent,
-        cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1,
-      }}>×</button>
+      <IconButton size="compact" aria-label={`Remove ${sel.label}`} onClick={e => { e.stopPropagation(); onRemove(sel.id) }}>×</IconButton>
     </span>
   )
 }
@@ -699,16 +681,8 @@ function AmountPopover({ onClose }) {
       />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12,
         borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-        <button
-          onClick={clear}
-          disabled={!active}
-          style={{
-            background: 'none', border: 'none', fontSize: 13, padding: 0,
-            color: active ? 'var(--danger)' : 'var(--muted)',
-            cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5,
-          }}
-        >✕ Clear amount filter</button>
-        <Button small onClick={apply}>Apply</Button>
+        <LinkButton tone="danger" onClick={clear} disabled={!active} style={{ fontSize: 13 }}>✕ Clear amount filter</LinkButton>
+        <Button onClick={apply}>Apply</Button>
       </div>
     </Popover>
   )
@@ -716,19 +690,14 @@ function AmountPopover({ onClose }) {
 
 function FilterButton({ active, count, children, onClick, inapplicable = false, title }) {
   return (
-    <button type="button" onClick={inapplicable ? undefined : onClick} aria-disabled={inapplicable || undefined} title={title} style={{
-      display: 'flex', alignItems: 'center', gap: 6,
-      padding: '6px 12px', borderRadius: 8, cursor: inapplicable ? 'default' : 'pointer', fontSize: 13,
-      border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-      background: active
-        ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-        : 'var(--surface2)',
-      color: active ? 'var(--accent2)' : 'var(--muted)',
-      fontWeight: active ? 500 : 400,
-      whiteSpace: 'nowrap',
-      opacity: inapplicable ? 0.45 : 1,
-      filter: inapplicable ? 'saturate(0.4)' : 'none',
-    }}>
+    <Button
+      variant="secondary"
+      pressed={active}
+      onClick={inapplicable ? undefined : onClick}
+      aria-disabled={inapplicable || undefined}
+      title={title}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', opacity: inapplicable ? 0.45 : 1 }}
+    >
       {children}
       {count > 0 && (
         <span style={{
@@ -737,7 +706,7 @@ function FilterButton({ active, count, children, onClick, inapplicable = false, 
           padding: '1px 6px',
         }}>{count}</span>
       )}
-    </button>
+    </Button>
   )
 }
 
@@ -811,18 +780,7 @@ export default function FilterBar() {
       ))}
 
       {hasAny && (
-        <button onClick={clearAll} style={{
-          marginLeft: 'auto',
-          background: 'color-mix(in srgb, var(--muted) 18%, var(--surface2))',
-          border: '1px solid color-mix(in srgb, var(--muted) 70%, var(--border))',
-          color: 'var(--text)',
-          cursor: 'pointer',
-          fontSize: 12,
-          fontWeight: 500,
-          padding: '4px 10px',
-          borderRadius: 6,
-          flexShrink: 0,
-        }}>Clear all</button>
+        <Button size="compact" variant="secondary" onClick={clearAll} style={{ marginLeft: 'auto', flexShrink: 0 }}>Clear all</Button>
       )}
     </div>
   )

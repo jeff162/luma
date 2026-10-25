@@ -7,7 +7,7 @@
 // keyword. They hold no state beyond local edit-focus restoration; the parent owns all data.
 
 import { useEffect, useRef } from 'react'
-import { Button, Tooltip } from '../ui.jsx'
+import { Button, IconButton, Tooltip } from '../ui.jsx'
 import TransientTextInput from '../TransientTextInput.jsx'
 import {
   getSharedPillCornerRemoveButtonStyle,
@@ -82,36 +82,13 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
   )
 }
 
-// The shared "opens a report" affordance: a small boxed ↗ glyph — the app-wide signal that a count
-// drills into a report (matching the import file cards' rejected-rows / duplicates pattern). Pair it
-// with a plain count label rather than turning the label itself into an underlined link, so every
-// report launcher in the rule-suggestion review reads the same.
+// The "opens a report" affordance in the rule-suggestion review: a `↗` beside a plain count label rather
+// than an underlined count, so every report launcher here reads the same.
 export function ReportArrowButton({ onClick, title = 'Open matching transactions report' }) {
   return (
-    <button
-      type="button"
-      aria-label={title}
-      title={title}
-      onClick={onClick}
-      style={{
-        border: '1px solid var(--border)',
-        background: 'var(--surface2)',
-        color: 'var(--accent2)',
-        borderRadius: 6,
-        width: 18,
-        height: 18,
-        padding: 0,
-        fontSize: 11,
-        lineHeight: 1,
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-      }}
-    >
+    <IconButton size="compact" tone="accent" aria-label={title} onClick={onClick} style={{ flexShrink: 0 }}>
       &#8599;
-    </button>
+    </IconButton>
   )
 }
 
@@ -145,24 +122,7 @@ export function SuggestionStatusBadge({ label, tone, left = 14 }) {
 
 export function SuggestionActionButton({ children, onClick, active = false, disabled = false, style }) {
   return (
-    <Button
-      small
-      variant="ghost"
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      style={{
-        border: `1px solid ${active ? 'color-mix(in srgb, var(--accent) 42%, var(--border))' : 'color-mix(in srgb, var(--border) 72%, white 12%)'}`,
-        background: active
-          ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, var(--surface2)), color-mix(in srgb, var(--accent) 8%, var(--surface)))'
-          : 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 96%, white 4%), color-mix(in srgb, var(--surface2) 84%, var(--surface)))',
-        color: active ? 'var(--accent2)' : 'var(--text)',
-        boxShadow: active
-          ? '0 8px 18px rgba(15, 23, 42, 0.16)'
-          : '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
-        opacity: disabled ? 0.45 : 1,
-        ...style,
-      }}
-    >
+    <Button variant="secondary" pressed={active} onClick={onClick} disabled={disabled} style={style}>
       {children}
     </Button>
   )

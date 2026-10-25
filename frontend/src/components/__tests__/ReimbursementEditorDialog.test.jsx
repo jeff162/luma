@@ -267,7 +267,7 @@ describe('portions of a transaction', () => {
   })
 })
 
-// The primary variant paints the accent flat; ghost blends it at 8% into the surface, so testing for
+// The primary variant paints the accent flat; secondary blends it at 8% into the surface, so testing for
 // the bare token is what tells the two apart — `includes('--accent')` matches both.
 const accent = button => button.style.background === 'var(--accent)'
 

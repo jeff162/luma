@@ -4,7 +4,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
-import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
+import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle, SegmentedToggle } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
@@ -170,27 +170,13 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
                 ▾
               </button>
             </div>
-            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              {['expense', 'income'].map(type => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => setCategoryType(type)}
-                  style={{
-                    background: categoryType === type ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',
-                    color: categoryType === type ? 'var(--accent2)' : 'var(--muted)',
-                    border: `1px solid ${categoryType === type ? 'var(--accent)' : 'var(--border)'}`,
-                    borderRadius: 999,
-                    padding: '4px 10px',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {type === 'expense' ? 'Expense' : 'Income'}
-                </button>
-              ))}
-            </div>
+            <SegmentedToggle
+              size="compact"
+              ariaLabel="Category type"
+              value={categoryType}
+              onChange={setCategoryType}
+              options={[{ value: 'expense', label: 'Expense' }, { value: 'income', label: 'Income' }]}
+            />
           </>
         ) : (
           <select
@@ -245,14 +231,13 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
       ) : null}
       <div style={{ display: 'flex', gap: 6 }}>
         <Button
-          small
           onClick={handleSave}
           disabled={saving || (!creatingNewGroup && !name.trim()) || (creatingNewGroup && !newGroupName.trim())}
           style={{ flex: 1, justifyContent: 'center' }}
         >
           {saving ? 'Saving…' : 'Create'}
         </Button>
-        <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )

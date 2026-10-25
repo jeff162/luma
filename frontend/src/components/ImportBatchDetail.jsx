@@ -33,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
-import { Button, RefreshButton, SearchInput, SegmentedToggle, Spinner } from './ui.jsx'
+import { Button, RefreshButton, SearchInput, SegmentedToggle, Spinner, LinkButton } from './ui.jsx'
 import AttributeFilterControl from './AttributeFilterControl.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -352,7 +352,7 @@ export default function ImportBatchDetail({
               onChange={setAttributeFilter}
             />
             <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
-            <Button variant="ghost" small onClick={bulk.toggle}>
+            <Button variant="secondary" onClick={bulk.toggle}>
               {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
             </Button>
           </div>
@@ -360,15 +360,14 @@ export default function ImportBatchDetail({
           {removedCount > 0 ? (
             <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '7px 12px', border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 6%, var(--surface2))', fontSize: 12.5 }}>
               <span style={{ fontWeight: 600 }}>Removed as duplicates ({removedCount})</span>
-              <button
-                type="button"
+              <LinkButton
                 // Opens on just the removed rows: the report holds every duplicate of the file, and landing on
                 // thousands of import rejects left the ones this line counts nowhere to be found.
                 onClick={() => duplicatesViewer.open({ batchId: batch.id, title: batch.filename, kindFilter: 'removed' })}
-                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12.5 }}
+                style={{ fontSize: 12.5 }}
               >
                 Review or restore in the duplicate report ↗
-              </button>
+              </LinkButton>
               <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
                 <FeatureExplainer topic="removed-as-duplicates" placement="bottom-left" />
               </span>

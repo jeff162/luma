@@ -48,7 +48,7 @@ export function ChargePickerDialog({
       onClose={onCancel}
       actions={(
         <>
-          <Button variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button onClick={() => onConfirm([...selected])} disabled={busy || selected.size === 0}>
             {confirmLabel(selected.size)}
           </Button>

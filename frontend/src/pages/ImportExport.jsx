@@ -17,7 +17,7 @@ import {
   AppConfirmDialog,
   AppNoticeDialog,
   AppTextEntryDialog,
-  OverlayBackdrop,
+  OverlayBackdrop, LinkButton
 } from '../components/ui.jsx'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
@@ -2871,8 +2871,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             <span style={{ color: 'var(--muted)' }}> — {headline}{heldNote}</span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button small onClick={importAnotherFile}>Import another file</Button>
-            <Button small variant="ghost" onClick={() => setLandedImport(null)}>Dismiss</Button>
+            <Button onClick={importAnotherFile}>Import another file</Button>
+            <Button variant="secondary" onClick={() => setLandedImport(null)}>Dismiss</Button>
           </div>
         </div>
         {skipLines.map((line, i) => (
@@ -2902,7 +2902,6 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <Button
-                small
                 disabled={addingStarterCats}
                 onClick={async () => {
                   setAddingStarterCats(true)
@@ -2919,10 +2918,10 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
               >
                 {addingStarterCats ? 'Adding…' : 'Add starter categories'}
               </Button>
-              <Button small variant="ghost" onClick={() => setShowStarterRules(true)}>
+              <Button variant="secondary" onClick={() => setShowStarterRules(true)}>
                 Add starter rules…
               </Button>
-              <Button small variant="ghost" onClick={() => setStarterPromptDismissed(true)}>
+              <Button variant="secondary" onClick={() => setStarterPromptDismissed(true)}>
                 Not now
               </Button>
             </div>
@@ -3183,29 +3182,16 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 0, flexWrap: 'wrap', marginBottom: 12 }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>
                 {preview.filename}
-                <button
-                  type="button"
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  pressed={showMappingSourceChooser}
                   onClick={() => setShowMappingSourceChooser(open => !open)}
                   title="Change data source"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    marginLeft: 2,
-                    padding: '1px 7px',
-                    borderRadius: 999,
-                    border: '1px solid color-mix(in srgb, var(--border) 88%, transparent)',
-                    background: selectedProfile ? 'color-mix(in srgb, var(--accent) 8%, var(--surface2))' : 'color-mix(in srgb, var(--surface2) 88%, var(--surface))',
-                    color: selectedProfile ? 'var(--accent2)' : 'var(--muted)',
-                    fontSize: 10,
-                    fontWeight: selectedProfile ? 600 : 500,
-                    lineHeight: 1.15,
-                    position: 'relative',
-                    top: -7,
-                    cursor: 'pointer',
-                    verticalAlign: 'super',
-                  }}>
+                  style={{ marginLeft: 6 }}
+                >
                   {selectedProfile ? (profiles.find(p => p.id === selectedProfile)?.name || 'Saved data source') : 'temporary draft'}
-                </button>
+                </Button>
               </span>
               <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>
                 {preview.total_rows} rows
@@ -3235,43 +3221,21 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                   ))}
                 </div>
                 <div>
-                  <button
-                    type="button"
-                    onClick={returnToUploadSourceChooser}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      margin: 0,
-                      fontSize: 12,
-                      color: 'var(--muted)',
-                      cursor: 'pointer',
-                    }}
-                  >
+                  <LinkButton tone="muted" onClick={returnToUploadSourceChooser} style={{ fontSize: 12 }}>
                     Start over
-                  </button>
+                  </LinkButton>
                 </div>
               </div>
             ) : null}
 
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 0 }} />
-              <button onClick={() => setShowRaw(v => !v)} style={{
-                background: showRaw ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
-                border: `1px solid ${showRaw ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 6, padding: '5px 10px', fontSize: 12,
-                cursor: 'pointer', color: showRaw ? 'var(--accent2)' : 'var(--muted)',
-                whiteSpace: 'nowrap', flexShrink: 0,
-              }}>
+              <Button size="compact" variant="secondary" pressed={showRaw} onClick={() => setShowRaw(v => !v)} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
                 {showRaw ? '× Close raw file' : '⌗ View raw file'}
-              </button>
-              <button onClick={() => setShowAdvanced(v => !v)} style={{
-                background: 'none', border: 'none', fontSize: 12, cursor: 'pointer',
-                color: showAdvanced ? 'var(--accent2)' : 'var(--muted)',
-                padding: '5px 4px', whiteSpace: 'nowrap', flexShrink: 0,
-              }}>
+              </Button>
+              <LinkButton tone={showAdvanced ? undefined : 'muted'} aria-expanded={showAdvanced} onClick={() => setShowAdvanced(v => !v)} style={{ fontSize: 12, padding: '5px 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                 {showAdvanced ? '▴ Advanced' : '▾ Advanced'}
-              </button>
+              </LinkButton>
             </div>
 
             {headerDetectedBeyondFirstLine && (
@@ -3311,22 +3275,14 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <Button
-                    small
-                    variant="ghost"
+                    variant="secondary"
+                    pressed={showRaw}
                     onClick={() => setShowRaw(v => !v)}
-                    style={showRaw
-                      ? {
-                        background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-                        border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
-                        color: 'var(--accent2)',
-                      }
-                      : undefined}
                   >
                     {showRaw ? 'Hide raw file' : 'Review raw file'}
                   </Button>
                   <Button
-                    small
-                    variant="ghost"
+                    variant="secondary"
                     onClick={() => setShowAdvanced(v => !v)}
                   >
                     {showAdvanced ? 'Hide header controls' : 'Adjust header controls'}
@@ -3705,8 +3661,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span title={!canCreateDataSourceFromCurrentMapping() && !loading ? getCreateDataSourceDisabledReason() : ''}>
                   <Button
-                    small
-                    variant="ghost"
+                    variant="secondary"
                     onClick={() => openManualDraftSaveEditor(
                       getSuggestedDataSourceName({
                         draftRecord: manualDraftRecord || buildCurrentManualDraftRecord(),
@@ -3728,7 +3683,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           {/* The two ways out, pinned under the scrolling mapping so neither is a scroll away. */}
           <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
-              <Button small
+              <Button
                 onClick={runImport}
                 disabled={!canImport() || loading}
                 progress={loading && importRowProgress
@@ -3742,7 +3697,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     : `Import ${importableRowCount} rows`)}
               </Button>
             </span>
-            <Button small variant="ghost" onClick={resetImport}>Cancel</Button>
+            <Button variant="secondary" onClick={resetImport}>Cancel</Button>
           </div>
         </div>
         </OverlayBackdrop>
@@ -3805,10 +3760,10 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                 />
               ) : null}
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <Button small variant="ghost" onClick={cancelTrailingDataReview} disabled={loading}>
+                <Button variant="secondary" onClick={cancelTrailingDataReview} disabled={loading}>
                   Cancel
                 </Button>
-                <Button small onClick={advancePastDataReview} disabled={loading}>
+                <Button onClick={advancePastDataReview} disabled={loading}>
                   Continue
                 </Button>
               </div>

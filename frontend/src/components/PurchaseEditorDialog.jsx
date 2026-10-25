@@ -10,7 +10,7 @@ import {
   purchaseDisplayLabel,
   signedExpectedTotal,
 } from '../lib/purchaseLinks.js'
-import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
 
 /*
  * The multi-payment purchase editor: its payments, its figures, and the repairs — drop a payment that
@@ -139,7 +139,7 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
       width="min(560px, 100%)"
       actions={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>{purchase ? 'Cancel' : 'Close'}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>{purchase ? 'Cancel' : 'Close'}</Button>
           {purchase ? (
             <Button onClick={saveFields} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
           ) : null}
@@ -206,8 +206,7 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
 
           <div>
             <Button
-              variant="ghost"
-              small
+              variant="secondary"
               onClick={() => setUngrouping(true)}
               title="Keep every payment exactly as it is, but stop treating them as one purchase"
             >Ungroup this purchase</Button>
@@ -271,15 +270,9 @@ function PaymentRow({ payment, isThisRow, onRemove }) {
       }}>
         {formatTransactionAmount(payment.amount)}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        title="Remove this payment from the purchase"
-        aria-label="Remove this payment from the purchase"
-        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 15, padding: 0 }}
-      >
+      <IconButton onClick={onRemove} aria-label="Remove this payment from the purchase">
         ×
-      </button>
+      </IconButton>
     </div>
   )
 }

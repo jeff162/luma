@@ -38,6 +38,23 @@
       /* The shared Button (components/ui.jsx) looks pressed while it is held. Its styles are inline, and an
          inline style cannot express :active, so this is the one place that state can live. */
       .ui-button:not(:disabled):active { transform: translateY(1px); filter: brightness(0.9); }
+      /* Button's padding per size (components/ui.jsx). Where the browser supports it, the label's text box
+         is trimmed to the capitals and the baseline, so the capitals sit in the true middle whatever the
+         system font, and the padding grows by what the trim removed to keep each size's height. */
+      .ui-button-regular { padding: 6px 12px; }
+      .ui-button-compact { padding: 3px 9px; }
+      @supports (text-box: trim-both cap alphabetic) {
+        .ui-button-trim { text-box: trim-both cap alphabetic; }
+        .ui-button-trim.ui-button-regular { padding-block: 9px; }
+        .ui-button-trim.ui-button-compact { padding-block: 6px; }
+      }
+      /* IconButton is bare until hovered. Its inline style leaves the background unset except while
+         pressed, so this hover fill shows and a pressed toggle keeps its own. */
+      .ui-icon-button { background: transparent; }
+      .ui-icon-button:not(:disabled):hover { background: color-mix(in srgb, currentColor 14%, transparent); }
+      .ui-link-button:not(:disabled):hover { text-decoration: underline; }
+      /* A browser draws button labels in its own control font rather than the page's. */
+      button { font-family: inherit; }
       /* A Button's progress fill. Tinted from the label colour so it reads on every variant; the width eases
          between polls so the bar advances rather than jumping. */
       .ui-button-progress {

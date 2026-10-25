@@ -69,7 +69,7 @@ function OwnPasswordPanel({ user, passwordPolicy }) {
               : ''}
           </div>
         </div>
-        {!open && <Button small onClick={() => { setChanged(false); setOpen(true) }}>Change password</Button>}
+        {!open && <Button onClick={() => { setChanged(false); setOpen(true) }}>Change password</Button>}
       </div>
 
       {open && (
@@ -88,11 +88,11 @@ function OwnPasswordPanel({ user, passwordPolicy }) {
           {error && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
             <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
-              <Button small type="submit" disabled={saving || !!blockingIssue}>
+              <Button type="submit" disabled={saving || !!blockingIssue}>
                 {saving ? 'Changing...' : 'Change password'}
               </Button>
             </Tooltip>
-            <Button small variant="ghost" type="button" onClick={close} disabled={saving}>Cancel</Button>
+            <Button variant="secondary" type="button" onClick={close} disabled={saving}>Cancel</Button>
           </div>
         </InsetPanel>
       )}
@@ -180,7 +180,7 @@ function SignInPasskeysPanel({ user, onUserChange }) {
                   {passkey.last_used_at ? ` · Last used ${formatDate(passkey.last_used_at)}` : ' · Not used yet'}
                 </div>
               </div>
-              <Button small variant="ghost" disabled={busy} onClick={() => removePasskey(passkey.id)}>
+              <Button variant="secondary" disabled={busy} onClick={() => removePasskey(passkey.id)}>
                 Remove
               </Button>
             </InsetPanel>
@@ -197,7 +197,7 @@ function SignInPasskeysPanel({ user, onUserChange }) {
             aria-label="Passkey name"
             style={inputStyle}
           />
-          <Button small onClick={addPasskey} disabled={busy}>
+          <Button onClick={addPasskey} disabled={busy}>
             {busy ? 'Waiting for the passkey...' : 'Add a passkey'}
           </Button>
         </div>
@@ -342,7 +342,7 @@ export default function SignInFactorsSection({ passwordPolicy }) {
           )}
         </div>
         {!currentUser.two_factor_enabled && !setup && (
-          <Button small onClick={beginSetup} disabled={saving}>Set up 2FA</Button>
+          <Button onClick={beginSetup} disabled={saving}>Set up 2FA</Button>
         )}
       </div>
 
@@ -385,10 +385,10 @@ export default function SignInFactorsSection({ passwordPolicy }) {
             {...ONE_TIME_CODE_PROPS}
           />
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button small type="submit" disabled={saving || setupCode.trim().length < 6}>
+            <Button type="submit" disabled={saving || setupCode.trim().length < 6}>
               {saving ? 'Enabling...' : 'Confirm setup'}
             </Button>
-            <Button small variant="ghost" type="button" onClick={() => { setSetup(null); setSetupCode(''); setError('') }}>
+            <Button variant="secondary" type="button" onClick={() => { setSetup(null); setSetupCode(''); setError('') }}>
               Cancel
             </Button>
           </div>
@@ -412,7 +412,7 @@ export default function SignInFactorsSection({ passwordPolicy }) {
               {...ONE_TIME_CODE_PROPS}
             />
             <div>
-              <Button small type="submit" disabled={saving || disableCode.trim().length < 6}>
+              <Button type="submit" disabled={saving || disableCode.trim().length < 6}>
                 {saving ? 'Disabling...' : 'Disable 2FA'}
               </Button>
             </div>
@@ -433,7 +433,7 @@ export default function SignInFactorsSection({ passwordPolicy }) {
               {...ONE_TIME_CODE_PROPS}
             />
             <div>
-              <Button small type="submit" disabled={saving || regenCode.trim().length < 6}>
+              <Button type="submit" disabled={saving || regenCode.trim().length < 6}>
                 {saving ? 'Regenerating...' : 'Regenerate recovery codes'}
               </Button>
             </div>
@@ -454,10 +454,10 @@ export default function SignInFactorsSection({ passwordPolicy }) {
             ))}
           </div>
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <Button small type="button" onClick={copyRecoveryCodes}>
+            <Button type="button" onClick={copyRecoveryCodes}>
               {copiedCodes ? 'Copied' : 'Copy codes'}
             </Button>
-            <Button small variant="ghost" type="button" onClick={() => { setRecoveryCodes([]); setCopiedCodes(false) }}>
+            <Button variant="secondary" type="button" onClick={() => { setRecoveryCodes([]); setCopiedCodes(false) }}>
               Dismiss codes
             </Button>
           </div>

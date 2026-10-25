@@ -185,8 +185,8 @@ export default function TransactionShareDialog({ mode, txn, rows, loadRows = nul
       onClose={onClose}
       actions={refusing ? (
         <>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button variant={onDownload ? 'ghost' : 'primary'} onClick={handleCopyFirst}>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+          <Button variant={onDownload ? 'secondary' : 'primary'} onClick={handleCopyFirst}>
             Copy first {TRANSACTION_COPY_ROW_LIMIT}
           </Button>
           {onDownload ? (
@@ -202,7 +202,7 @@ export default function TransactionShareDialog({ mode, txn, rows, loadRows = nul
               Couldn’t reach the clipboard — select the text above and copy it manually.
             </span>
           ) : null}
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
           <Button onClick={() => copy(listRows)} disabled={isList && listRows == null}>
             {copyState === 'copied' ? 'Copied ✓' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
           </Button>

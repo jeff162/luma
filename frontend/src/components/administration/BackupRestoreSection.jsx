@@ -270,10 +270,10 @@ export default function BackupRestoreSection() {
   // dialog would otherwise open on top of.
   function ownPassphraseAction(before = () => {}) {
     if (backupNotice?.ownCode === 'passphrase_unchecked') {
-      return <Button small onClick={() => { before(); openVault('check') }}>Validate passphrase</Button>
+      return <Button onClick={() => { before(); openVault('check') }}>Validate passphrase</Button>
     }
     if (backupNotice?.ownCode === 'weak_passphrase') {
-      return <Button small onClick={() => { before(); changePassphrase() }}>Change passphrase</Button>
+      return <Button onClick={() => { before(); changePassphrase() }}>Change passphrase</Button>
     }
     return null
   }
@@ -566,8 +566,8 @@ export default function BackupRestoreSection() {
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Generate a backup</div>
           }
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <Button small variant="ghost" disabled={downloading} onClick={generatePlainBackup}>Generate backup</Button>
-            <Button small variant="ghost" disabled={downloading || enabledRecipients.length === 0} onClick={generateEncryptedBackup}>
+            <Button variant="secondary" disabled={downloading} onClick={generatePlainBackup}>Generate backup</Button>
+            <Button variant="secondary" disabled={downloading || enabledRecipients.length === 0} onClick={generateEncryptedBackup}>
               Generate encrypted backup
             </Button>
           </div>
@@ -645,7 +645,7 @@ export default function BackupRestoreSection() {
           identified during the restore process."
           onClose={() => setRecipientChoice(null)}
           actions={<>
-            <Button variant="ghost" onClick={() => setRecipientChoice(null)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setRecipientChoice(null)}>Cancel</Button>
             <Button onClick={confirmRecipientChoice} disabled={recipientChoice.length === 0}>
               Generate encrypted backup
             </Button>
@@ -888,7 +888,7 @@ export default function BackupRestoreSection() {
                     ) : null}
                     {(unlockOptions.passkeys || []).map(passkey => (
                       <div key={passkey.credential_id}>
-                        <Button small variant="ghost" disabled={restoring} onClick={() => restoreWithPasskey(passkey)}>
+                        <Button variant="secondary" disabled={restoring} onClick={() => restoreWithPasskey(passkey)}>
                           Restore with passkey “{passkey.label}”
                         </Button>
                       </div>
@@ -899,8 +899,7 @@ export default function BackupRestoreSection() {
             )}
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-start' }}>
               <Button
-                small
-                variant={restoreIsCredentials ? 'ghost' : 'danger'}
+                variant={restoreIsCredentials ? 'secondary' : 'danger'}
                 disabled={restoreBlocked}
                 onClick={requestRestore}
               >
@@ -967,7 +966,7 @@ export default function BackupRestoreSection() {
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              <Button variant="ghost" onClick={() => setPendingConfirm(null)}>
+              <Button variant="secondary" onClick={() => setPendingConfirm(null)}>
                 Cancel
               </Button>
               <Button
@@ -1023,7 +1022,7 @@ export default function BackupRestoreSection() {
               Reload the page to continue.
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button small onClick={() => window.location.assign('/')}>
+              <Button onClick={() => window.location.assign('/')}>
                 Reload now
               </Button>
             </div>

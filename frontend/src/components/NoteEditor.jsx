@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import TransientTextInput from './TransientTextInput.jsx'
-import { Button } from './ui.jsx'
+import { Button, LinkButton } from './ui.jsx'
 
 /*
  * Shared transaction-note editor. Both surfaces that edit a note — the right-click note popover
@@ -90,31 +90,18 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
         }}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Button small onClick={() => save(draft.trim() || null)} disabled={saving || !dirty}>
+        <Button onClick={() => save(draft.trim() || null)} disabled={saving || !dirty}>
           {saving ? 'Saving…' : 'Save note'}
         </Button>
         {onCancel ? (
-          <Button small variant="ghost" onClick={cancel}>
+          <Button variant="secondary" onClick={cancel}>
             Cancel
           </Button>
         ) : null}
         {hasNote ? (
-          <button
-            type="button"
-            onClick={() => save(null)}
-            disabled={saving}
-            style={{
-              marginLeft: 'auto',
-              background: 'none',
-              border: 'none',
-              color: 'var(--danger)',
-              fontSize: 12,
-              cursor: saving ? 'default' : 'pointer',
-              padding: '6px 4px',
-            }}
-          >
+          <LinkButton tone="danger" onClick={() => save(null)} disabled={saving} style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 4px' }}>
             Remove
-          </button>
+          </LinkButton>
         ) : null}
       </div>
       {saveError ? (

@@ -96,7 +96,7 @@ export function DismissedDuplicatePairsSection() {
                     {pair.flagged_txn_id ? '' : ' · reopening can only lift the judgement, not restore the finding'}
                   </div>
                 </div>
-                <Button small variant="ghost" disabled={!!workingKey} onClick={() => reopen(pair)}>
+                <Button variant="secondary" disabled={!!workingKey} onClick={() => reopen(pair)}>
                   {workingKey === key ? 'Reopening…' : 'Reopen'}
                 </Button>
               </div>
@@ -198,7 +198,7 @@ export function DistinctAccountPairsSection() {
                     Marked distinct {formatDate(String(pair.asserted_at || '').slice(0, 10)) || 'recently'}.
                   </div>
                 </div>
-                <Button small variant="ghost" disabled={!!workingKey} onClick={() => forget(pair)}>
+                <Button variant="secondary" disabled={!!workingKey} onClick={() => forget(pair)}>
                   {workingKey === key ? 'Forgetting…' : 'Forget'}
                 </Button>
               </div>

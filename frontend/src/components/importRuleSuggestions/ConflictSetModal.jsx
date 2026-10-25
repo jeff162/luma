@@ -5,6 +5,7 @@
 // pure layout: the parent passes the grouped `sections` and a `renderSuggestionCard` callback so the
 // cards render identically to the main list.
 
+import { IconButton } from '../ui.jsx'
 import { ProgressPill } from './suggestionPresentational.jsx'
 
 export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
@@ -56,21 +57,9 @@ export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
               Conflicting category assignments for the same merchant. Pick one or add selection criteria to distinguish them.
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--muted)',
-              cursor: 'pointer',
-              fontSize: 20,
-              lineHeight: 1,
-              padding: 2,
-            }}
-          >
+          <IconButton aria-label="Close" onClick={onClose} style={{ fontSize: 20 }}>
             ×
-          </button>
+          </IconButton>
         </div>
 
         <div style={{ display: 'grid', gap: 18, padding: 20 }}>

@@ -126,9 +126,9 @@ export default function ClaimPortionPicker({
         </span>
         <span style={{ display: 'flex', gap: 6 }}>
           {onCancel ? (
-            <Button variant="ghost" small onClick={onCancel} disabled={busy}>Cancel</Button>
+            <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
           ) : null}
-          <Button small onClick={confirm} disabled={busy || Boolean(problem)}>
+          <Button onClick={confirm} disabled={busy || Boolean(problem)}>
             {busy ? 'Working…' : confirmLabel}
           </Button>
         </span>

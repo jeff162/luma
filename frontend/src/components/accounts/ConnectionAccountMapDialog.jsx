@@ -99,7 +99,7 @@ export default function ConnectionAccountMapDialog({
                 : ''}
             </span>
             <span style={{ display: 'flex', gap: 8 }}>
-              <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+              <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
               <Button onClick={save} disabled={saving || blocked || loading}>
                 {saving ? 'Saving…' : requireAll ? 'Continue' : 'Save mapping'}
               </Button>

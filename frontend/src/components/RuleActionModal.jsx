@@ -14,7 +14,7 @@ import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.j
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
+import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
   const [categories, setCategories] = useState([])
@@ -149,10 +149,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
               ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
               : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')}
           </div>
-          <button onClick={onClose} style={{
-            background: 'none', border: 'none', color: 'var(--muted)',
-            cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
-          }}>×</button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </FloatingPanelHeader>
         <div style={{ maxHeight: 'calc(90vh - 56px)', overflowY: 'auto' }}>
           {loading || !initialValues ? (
@@ -180,8 +177,8 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
                     ? 'This edit makes the rule match another rule. Fold your changes into it? This rule will then be removed.'
                     : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <Button small variant="ghost" onClick={() => setPendingMerge(null)}>Cancel</Button>
-                    <Button small onClick={confirmMerge}>Add to existing rule</Button>
+                    <Button variant="secondary" onClick={() => setPendingMerge(null)}>Cancel</Button>
+                    <Button onClick={confirmMerge}>Add to existing rule</Button>
                   </div>
                 </div>
               ) : null}

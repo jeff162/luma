@@ -4,6 +4,7 @@
 import React from 'react'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { PendingMarker } from '../AmountDisplay.jsx'
+import { IconButton } from '../ui.jsx'
 
 // The shared record cell for a match report (duplicate detection, Amazon reconciliation, …): one
 // transaction rendered as "date · merchant · amount" with its account underneath, plus an optional
@@ -21,12 +22,12 @@ export function SourceFileLink({ filename, batchId, importedAt, dateStart, dateE
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: 'var(--muted)', fontSize: 11 }}>
       <span title={tipParts.join(' — ')} style={{ whiteSpace: 'nowrap' }}>from {short}</span>
       {onDrillThrough && batchId ? (
-        <button
-          type="button"
-          title={`Open ${filename} ledger${dateStart ? ` (${dateStart}…${dateEnd || dateStart})` : ''}`}
+        <IconButton
+          size="compact"
+          tone="accent"
+          aria-label={`Open ${filename} ledger${dateStart ? ` (${dateStart}…${dateEnd || dateStart})` : ''}`}
           onClick={() => onDrillThrough({ batchId, dateStart, dateEnd, filename })}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: 'var(--accent)', fontSize: 12, lineHeight: 1 }}
-        >↗</button>
+        >↗</IconButton>
       ) : null}
     </span>
   )

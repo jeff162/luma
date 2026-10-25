@@ -264,12 +264,12 @@ export function BulkEditChrome({ controller, barStyle, actions = null }) {
               : 'Select transactions to edit, or use the header checkbox to select all.'}
           </span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <Button small onClick={() => setShowPanel(true)} disabled={selectedCount === 0}>Edit…</Button>
-            <Button small variant="ghost" onClick={() => runActions([{ type: 'mark_reviewed' }])} disabled={selectedCount === 0 || applying}>Mark reviewed</Button>
-            <Button small variant="ghost" onClick={() => setPendingTrash(true)} disabled={selectedCount === 0}>Move to trash</Button>
+            <Button onClick={() => setShowPanel(true)} disabled={selectedCount === 0}>Edit…</Button>
+            <Button variant="secondary" onClick={() => runActions([{ type: 'mark_reviewed' }])} disabled={selectedCount === 0 || applying}>Mark reviewed</Button>
+            <Button variant="secondary" onClick={() => setPendingTrash(true)} disabled={selectedCount === 0}>Move to trash</Button>
             {actions}
             {selectedCount > 0 ? (
-              <Button small variant="ghost" onClick={() => selection.clear()}>Clear</Button>
+              <Button variant="secondary" onClick={() => selection.clear()}>Clear</Button>
             ) : null}
           </div>
         </div>

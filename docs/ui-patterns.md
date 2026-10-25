@@ -15,6 +15,7 @@ lookup. Data semantics are in [`data-model.md`](data-model.md).
 - [Product intent](#product-intent)
 - [Consistency and reuse](#consistency-and-reuse)
 - [Page layout](#page-layout)
+- [Buttons](#buttons)
 - [Tables and lists](#tables-and-lists)
 - [Tree views](#tree-views)
 - [Editing in place](#editing-in-place)
@@ -66,7 +67,7 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Layouts are compact.** No large empty regions, oversized cards, or controls heavier than the data
   they edit. Advanced and less-common settings sit below everyday ones.
 - **A label names the effect the user sees**, not the mechanism behind it, and does not repeat what the
-  surrounding text already says. A page's primary create action is `+ New` where the page heading
+  surrounding text already says. A page's primary create action is `+New` where the page heading
   already supplies the noun.
 - **Money words are the app's own.** Money out is **Spent** and money in is **Received**, as the
   manual-entry direction selector names them, so one quantity reads the same on every screen.
@@ -94,17 +95,34 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   a URL parameter wins over the stored value so a deep link lands where it means to.
 - **Header or toolbar.** The header carries what acts on the whole subject (add one, run a pass, open a
   report). A toolbar under it carries what shapes which rows are listed (search, filter, sort).
-- **Action rows use the small button.** A page or panel header's actions and a dialog's or panel's
-  Save, Cancel and Close take `Button`'s `small` size, so the same verbs look the same on every surface.
-  `PageHeader` and `DialogActions` (and so `AppDialog`'s `actions`) apply it to the buttons they hold; a
-  hand-built header or footer passes `small` itself. Buttons inside the body may differ where the
-  content calls for it.
 - **Refresh sits on the title.** `RefreshButton` goes straight after the title of what it reloads:
   `PageHeader` and `AppDialog` take it as `refresh`.
 - **Close is at the upper right** of a panel or dialog header.
 - **Wide data tables scroll; management lists reflow.** A table with hard column minimums scrolls
   horizontally inside its own region while the chrome around it wraps. A list the user navigates and
   drags never grows a horizontal scrollbar: one fluid column absorbs the slack.
+
+## Buttons
+
+- **A button's look comes from its props.** `Button` is styled by `variant`, `tone`, `pressed` and
+  `size`, and a caller's `style` places it (margin, flex, width) rather than colouring it. A need none of
+  the props meets is a deliberate addition to the component, so the next surface gets it too.
+- **One primary per surface.** `primary` is the action that commits what the surface is for (Save,
+  Confirm, Import). Every other action is `secondary`; one that should not compete with the data around
+  it is `quiet`.
+- **Red follows *Confirmation and dismissal*.** `variant="danger"` is the final confirm of something that
+  cannot be undone. `tone="danger"` reds the label of an irreversible action that is not itself that
+  confirm, such as a row's permanent delete.
+- **Two sizes.** `regular` is the default everywhere, so every Save, Cancel and Close is one size. An
+  action repeated on every row or card is `compact`, so a run of them reads as a quiet toolbar rather
+  than as the surface's main verbs.
+- **A toggle shows its state.** A button that switches something on and off takes `pressed`, which draws
+  the accent and sets `aria-pressed`.
+- **A control that is only a glyph is an `IconButton`**: bare until hovered, and named by its
+  `aria-label`, which is all a screen reader gets.
+- **Other button shapes have one component each.** A chip that narrows a list is a `FilterChip`, a choice
+  among peer views is a `SegmentedToggle`, an action that reads as text is a `LinkButton`, and a common
+  action with its alternatives behind a caret is a `SplitButton`.
 
 ## Tables and lists
 
@@ -209,7 +227,7 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   raw flag.
 - **A surface that fetches on open paints once, fully formed.** It renders nothing until its content is
   ready, bounded by `PAINT_GATE_DELAY_MS` so a stalled load still appears.
-- **A press looks pressed.** The shared `Button` has a pressed state and `RefreshButton` always turns.
+- **A press looks pressed.** The shared buttons push in while held and `RefreshButton` always turns.
   On a button the user just clicked, a `Saving…` label is kept wherever nothing else on screen changes
   when the action succeeds.
 - **A disabled control says why.** Wrap it in `Tooltip`, because a disabled button receives no pointer
@@ -233,7 +251,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   narrower badge replaces the broader one.
 - **A count shown at more than one level comes from one function**, so a roll-up cannot disagree with
   the rows under it.
-- **`↗` means "opens a report".** Reuse the glyph rather than restyling the control.
+- **`↗` means "opens a report".** Reuse the glyph rather than restyling the control: an `IconButton` with
+  `tone="accent"` on its own, or a `StatusPill` with `report` where a count opens the rows it counts.
 
 ## Empty states
 

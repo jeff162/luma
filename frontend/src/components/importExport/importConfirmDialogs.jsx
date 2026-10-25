@@ -96,20 +96,20 @@ export function DataSourceMismatchDialog({
               ) : null}
             </div>
             <DialogActions align="center">
-              <Button variant="ghost" onClick={onCloseChooser}>
+              <Button variant="secondary" onClick={onCloseChooser}>
                 Back
               </Button>
             </DialogActions>
           </>
         ) : (
           <DialogActions align="center">
-            <Button variant="ghost" onClick={onChangeDataSource}>
+            <Button variant="secondary" onClick={onChangeDataSource}>
               Change data source
             </Button>
-            <Button variant="ghost" onClick={onConfirm}>
+            <Button variant="secondary" onClick={onConfirm}>
               Continue
             </Button>
-            <Button variant="ghost" onClick={onCancel}>
+            <Button variant="secondary" onClick={onCancel}>
               Cancel
             </Button>
           </DialogActions>
@@ -167,7 +167,7 @@ export function MultipleSourceMatchDialog({
           </div>
         </div>
         <DialogActions align="center">
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
         </DialogActions>
@@ -222,7 +222,7 @@ export function MultiFileSourceChooserDialog({ groups = [], unreadable = [], onP
           ) : null}
         </div>
         <DialogActions align="center">
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
         </DialogActions>
       </FloatingPanel>
     </OverlayBackdrop>
@@ -265,7 +265,7 @@ export function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attac
           </div>
         </div>
         <DialogActions>
-          <Button variant="ghost" onClick={onCancel} disabled={attaching}>
+          <Button variant="secondary" onClick={onCancel} disabled={attaching}>
             Leave separate
           </Button>
           <Button onClick={onConfirm} disabled={attaching}>
@@ -417,7 +417,7 @@ export function PossibleAccountMatchChooserDialog({
         <div style={{ display: 'grid', gap: 8 }}>
           <Tooltip content={needsAccount ? 'Choose which account above this one is' : ''}>
             <Button
-              variant="ghost"
+              variant="secondary"
               disabled={needsAccount}
               onClick={() => onSelect?.('map_existing', selectedId)}
             >
@@ -432,19 +432,19 @@ export function PossibleAccountMatchChooserDialog({
               properly. Don't reintroduce it. */}
           <Tooltip content={needsAccount ? 'Choose which account above to group the new one under' : ''}>
             <Button
-              variant="ghost"
+              variant="secondary"
               disabled={needsAccount}
               onClick={() => onSelect?.('group_with_existing', selectedId)}
             >
               Create new account and group with existing
             </Button>
           </Tooltip>
-          <Button variant="ghost" onClick={() => onSelect?.('keep_separate')}>
+          <Button variant="secondary" onClick={() => onSelect?.('keep_separate')}>
             {candidates.length === 1 ? 'Keep separate' : 'Keep separate from all of these'}
           </Button>
         </div>
         <DialogActions>
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
         </DialogActions>

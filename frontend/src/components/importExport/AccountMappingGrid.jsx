@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Select } from '../ui.jsx'
+import { Select, Button, IconButton } from '../ui.jsx'
 import { PossibleAccountMatchChooserDialog } from './importConfirmDialogs.jsx'
 import AccountMatchSelect from './AccountMatchSelect.jsx'
 import {
@@ -37,17 +37,6 @@ const GRID = '1fr 16px 240px 52px'
 const inputStyle = {
   width: '100%', background: 'var(--surface2)', color: 'var(--text)',
   borderRadius: 6, padding: '4px 6px', fontSize: 12, outline: 'none',
-}
-const iconButtonStyle = {
-  flexShrink: 0, background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-  color: 'var(--muted)', cursor: 'pointer', fontSize: 13, width: 28, height: 28, lineHeight: 1, padding: 0,
-}
-const chipStyle = {
-  justifySelf: 'start', maxWidth: '100%',
-  border: '1px solid color-mix(in srgb, var(--accent2) 28%, var(--border))',
-  background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-  color: 'var(--accent2)', borderRadius: 999, padding: '4px 9px',
-  fontSize: 11, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 }
 const mutedNoteStyle = { fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }
 
@@ -249,12 +238,13 @@ export default function AccountMappingGrid({
                     onClear={clearMapping}
                   />
                   {entry.accountId || entry.missingAccountId ? (
-                    <button type="button" onClick={clearMapping} style={iconButtonStyle} aria-label={`Clear the mapping for ${label}`}>
+                    <IconButton onClick={clearMapping} aria-label={`Clear the mapping for ${label}`} style={{ flexShrink: 0 }}>
                       ×
-                    </button>
+                    </IconButton>
                   ) : (
-                    <button
-                      type="button"
+                    <Button
+                      size="compact"
+                      variant="secondary"
                       // With possible matches, ask before creating: the dialog is where they are shown,
                       // which is what lets "Keep separate" record an assertion about them. With none
                       // there is nothing to show and nothing to assert, so this stays a one-press create.
@@ -267,17 +257,14 @@ export default function AccountMappingGrid({
                           groupWithAccountId: '',
                         })
                       }}
-                      style={{
-                        flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                        borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                        fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
-                      }}
-                    >+New</button>
+                      style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                    >+New</Button>
                   )}
                 </div>
                 {!entry.accountId && suggestionLabel ? (
-                  <button
-                    type="button"
+                  <Button
+                    size="compact"
+                    variant="secondary"
                     // The chip maps; it does not ask. Accepting a suggestion is the one-click path, and
                     // the relationship question belongs to `+New`, where creating a second account for
                     // something Luma may already hold is what deserves the second look.
@@ -289,11 +276,11 @@ export default function AccountMappingGrid({
                       groupWithAccountId: '',
                       skip: false,
                     })}
-                    style={{ ...chipStyle, justifySelf: 'end' }}
+                    style={{ justifySelf: 'end', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={`Map to ${suggestionLabel}`}
                   >
                     Possible match: {suggestionLabel}
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             ) : (
@@ -306,9 +293,9 @@ export default function AccountMappingGrid({
                     <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {materialized.name}{materialized.mask ? ` ···${materialized.mask}` : ''}
                     </span>
-                    <button type="button" onClick={cancelNew} style={iconButtonStyle} aria-label="Map to a different account instead">
+                    <IconButton onClick={cancelNew} aria-label="Map to a different account instead" style={{ flexShrink: 0 }}>
                       ×
-                    </button>
+                    </IconButton>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}>
@@ -336,23 +323,19 @@ export default function AccountMappingGrid({
                       ]}
                       style={{ width: 88, fontSize: 11, padding: '4px 5px' }}
                     />
-                    <button
-                      type="button"
-                      onClick={cancelNew}
-                      style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: 2, flexShrink: 0 }}
-                      aria-label="Cancel creating a new account"
-                    >✕</button>
+                    <IconButton size="compact" onClick={cancelNew} aria-label="Cancel creating a new account" style={{ flexShrink: 0 }}>✕</IconButton>
                   </div>
                 )}
                 {relationshipTarget && relationshipLabel ? (
-                  <button
-                    type="button"
+                  <Button
+                    size="compact"
+                    variant="secondary"
                     onClick={() => openChooser(row, [relationshipTarget])}
-                    style={chipStyle}
+                    style={{ justifySelf: 'start', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={`Change how this relates to ${relationshipLabel}`}
                   >
                     Grouped with {relationshipLabel}
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             )}

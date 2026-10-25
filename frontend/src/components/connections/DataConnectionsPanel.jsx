@@ -115,11 +115,11 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
           <Tooltip content={syncing
             ? 'A sync is already running'
             : `Pull new and changed transactions for all ${allConnections.length} connection${allConnections.length === 1 ? '' : 's'}`}>
-            <Button small onClick={() => syncAll(connected)} disabled={syncing}>
+            <Button onClick={() => syncAll(connected)} disabled={syncing}>
               {syncing ? 'Syncing…' : '↻ Sync now'}
             </Button>
           </Tooltip>
-          <Button variant="ghost" small onClick={() => setSyncLogOpen(true)}
+          <Button variant="secondary" onClick={() => setSyncLogOpen(true)}
             title="What every sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
             Sync log
           </Button>

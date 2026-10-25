@@ -103,10 +103,10 @@ export default function ServerFolderPicker({ path, onPathChange, onDone, onCance
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, color: 'var(--muted)' }}>Start in:</span>
-        <Button small variant="ghost" onClick={() => onPathChange(listing?.parent || '')}
+        <Button variant="secondary" onClick={() => onPathChange(listing?.parent || '')}
           disabled={loading || !listing?.parent}>↑ Up</Button>
         {roots.map(root => (
-          <Button key={root.path} small variant="ghost" onClick={() => onPathChange(root.path)}>
+          <Button key={root.path} variant="secondary" onClick={() => onPathChange(root.path)}>
             {root.label}
           </Button>
         ))}
@@ -187,13 +187,13 @@ export default function ServerFolderPicker({ path, onPathChange, onDone, onCance
           {listing?.truncated ? ' · too many to list them all — type the path instead' : ''}
         </span>
         {hiddenCount > 0 ? (
-          <Button small variant="ghost" onClick={() => setShowHidden(true)}>Show {hiddenCount} hidden</Button>
+          <Button variant="secondary" onClick={() => setShowHidden(true)}>Show {hiddenCount} hidden</Button>
         ) : null}
         <span style={{ flex: 1 }} />
         {/* The dialog has a Cancel of its own, so these say which one they are to anyone who cannot
             see that they sit inside the picker. */}
-        <Button small variant="ghost" onClick={onCancel} aria-label="Cancel choosing a folder">Cancel</Button>
-        <Button small onClick={onDone} aria-label="Done choosing a folder">Done</Button>
+        <Button variant="secondary" onClick={onCancel} aria-label="Cancel choosing a folder">Cancel</Button>
+        <Button onClick={onDone} aria-label="Done choosing a folder">Done</Button>
       </div>
     </div>
   )

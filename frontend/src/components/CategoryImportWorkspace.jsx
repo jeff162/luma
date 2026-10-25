@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Button } from './ui.jsx'
+import { Button, IconButton, SegmentedToggle } from './ui.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
@@ -391,7 +391,7 @@ function GroupCard({
             </div>
           )}
         </div>
-        <button onClick={() => onRemoveGroup(group.id)} style={{ border: '1px solid color-mix(in srgb, var(--muted) 42%, var(--border))', background: 'color-mix(in srgb, var(--surface) 82%, transparent)', color: 'var(--muted)', borderRadius: 999, width: 19, height: 19, padding: 0, fontSize: 11.5, fontWeight: 700, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>×</button>
+        <IconButton size="compact" onClick={() => onRemoveGroup(group.id)} aria-label="Remove group">×</IconButton>
       </div>
       {!collapsed ? (
       <div style={{ padding: '10px', minHeight: 86 }}>
@@ -1421,17 +1421,17 @@ export default function CategoryImportWorkspace({
             <div style={{ display: 'grid', gap: 8, minWidth: 'min(320px, 100%)', justifyItems: 'stretch', flex: '0 0 auto' }}>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                  <Button small variant="ghost" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
+                  <Button variant="secondary" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
                     {saving ? applyPendingLabel : applyLabel}
                   </Button>
-                  {onMinimize ? <Button small variant="ghost" onClick={onMinimize}>Minimize</Button> : null}
-                  <Button small variant="ghost" onClick={onClose}>Close</Button>
+                  {onMinimize ? <Button variant="secondary" onClick={onMinimize}>Minimize</Button> : null}
+                  <Button variant="secondary" onClick={onClose}>Close</Button>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                  <Button small variant="ghost" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
-                  <Button small variant="ghost" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
+                  <Button variant="secondary" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
+                  <Button variant="secondary" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
                 </div>
               </div>
             </div>
@@ -1444,10 +1444,10 @@ export default function CategoryImportWorkspace({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>{sourceHeading}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; if (sourceSelectionInSetAside) restoreSelectedSources(); else moveSelectedSourcesToSetAside() }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>{sourceSelectionInSetAside ? 'restore' : 'set aside'}</button>
-                  <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; setSnapshot(prev => ({ ...prev, selectedSourceIds: [] })); setSelectionAnchor(null) }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>clear selection</button>
+                  <Button size="compact" variant="quiet" onClick={() => { if (sourceSelectionInSetAside) restoreSelectedSources(); else moveSelectedSourcesToSetAside() }} disabled={snapshot.selectedSourceIds.length === 0}>{sourceSelectionInSetAside ? 'restore' : 'set aside'}</Button>
+                  <Button size="compact" variant="quiet" onClick={() => { setSnapshot(prev => ({ ...prev, selectedSourceIds: [] })); setSelectionAnchor(null) }} disabled={snapshot.selectedSourceIds.length === 0}>clear selection</Button>
                   {typeof onDeleteSources === 'function' ? (
-                    <button onClick={deleteSelectedSources} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'color-mix(in srgb, var(--danger) 55%, var(--muted))', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>delete</button>
+                    <Button size="compact" variant="quiet" tone="danger" onClick={deleteSelectedSources} disabled={snapshot.selectedSourceIds.length === 0}>delete</Button>
                   ) : null}
                 </div>
               </div>
@@ -1526,12 +1526,14 @@ export default function CategoryImportWorkspace({
           <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 74%, var(--surface))', border: '1px solid var(--border)' }}>
-                  {['expense', 'income'].map(section => (
-                    <button key={section} onClick={() => setActiveSection(section)} style={{ border: 'none', background: activeSection === section ? 'color-mix(in srgb, var(--surface) 82%, black)' : 'transparent', color: activeSection === section ? 'var(--text)' : 'var(--muted)', borderRadius: 999, padding: '7px 14px', fontSize: 12, fontWeight: activeSection === section ? 700 : 600, cursor: 'pointer', textTransform: 'capitalize' }}>{section}</button>
-                  ))}
-                </div>
-                <button type="button" onClick={() => addGroup(activeSection)} style={{ border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 86%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))', color: 'var(--text)', borderRadius: 999, padding: '8px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 14px rgba(15, 23, 42, 0.12)' }}>+ New group</button>
+                <SegmentedToggle
+                  size="compact"
+                  ariaLabel="Section"
+                  value={activeSection}
+                  onChange={setActiveSection}
+                  options={[{ value: 'expense', label: 'Expense' }, { value: 'income', label: 'Income' }]}
+                />
+                <Button size="compact" variant="secondary" onClick={() => addGroup(activeSection)}>+ New group</Button>
               </div>
             </div>
             <div
@@ -1844,32 +1846,17 @@ export default function CategoryImportWorkspace({
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <button
+                <IconButton
+                  size="compact"
+                  aria-label="Discard this group"
                   onMouseDown={event => {
                     event.preventDefault()
                     event.stopPropagation()
                   }}
                   onClick={() => setFloatingGroupDraft(null)}
-                  style={{
-                    border: '1px solid color-mix(in srgb, var(--muted) 42%, var(--border))',
-                    background: 'color-mix(in srgb, var(--surface) 82%, transparent)',
-                    color: 'var(--muted)',
-                    borderRadius: 999,
-                    width: 20,
-                    height: 20,
-                    padding: 0,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--bg) 60%, transparent)',
-                  }}
                 >
                   <span>×</span>
-                </button>
+                </IconButton>
               </div>
             </div>
             <div style={{ padding: 12 }}>
@@ -1958,14 +1945,14 @@ export default function CategoryImportWorkspace({
                 }}
               >
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() => setDeleteImportedDialog(null)}
                   disabled={deleteImportedSaving}
                 >
                   Cancel
                 </Button>
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   onClick={() => finishDeleteImportedChild()}
                   disabled={deleteImportedSaving}
                 >

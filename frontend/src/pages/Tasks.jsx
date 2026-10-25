@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useFilters } from '../lib/FilterContext.jsx'
-import { Card, PageHeader, Spinner } from '../components/ui.jsx'
+import { Card, PageHeader, Spinner, Button } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import CornerTab from '../components/CornerTab.jsx'
@@ -176,15 +176,9 @@ function DismissedSection({ dismissed, onRestore }) {
             >
               <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{task.title}</span>
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>{task.count}</span>
-              <button
-                onClick={() => onRestore(task)}
-                style={{
-                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6,
-                  cursor: 'pointer', color: 'var(--text)', fontSize: 11.5, fontWeight: 500, padding: '3px 9px',
-                }}
-              >
+              <Button size="compact" variant="secondary" onClick={() => onRestore(task)}>
                 Restore
-              </button>
+              </Button>
             </div>
           ))}
         </div>

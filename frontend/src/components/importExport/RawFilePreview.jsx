@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { preventPressDefaults } from '../../lib/pointerDrag.js'
 
 import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
+import { Button, IconButton } from '../ui.jsx'
 
 export function RawFilePreview({
   rawLines,
@@ -146,11 +147,7 @@ export function RawFilePreview({
           </span>
         </div>
         {onClose ? (
-          <button
-            onPointerDown={e => e.stopPropagation()}
-            onClick={onClose}
-            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
-          >×</button>
+          <IconButton aria-label="Close" onPointerDown={e => e.stopPropagation()} onClick={onClose} style={{ fontSize: 16 }}>×</IconButton>
         ) : null}
       </div>
 
@@ -233,19 +230,16 @@ export function RawFilePreview({
           display: 'flex', justifyContent: 'center', borderRadius: '0 0 10px 10px',
         }}>
           {canLoadMore ? (
-            <button
+            <Button
+              size="compact"
+              variant="secondary"
               onMouseDown={e => e.stopPropagation()}
               onClick={onLoadMore}
               disabled={loadingMore}
-              style={{
-                background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                color: 'var(--text)', cursor: loadingMore ? 'default' : 'pointer',
-                fontSize: 12, padding: '4px 12px',
-              }}
               /* `disabled` on the raw flag so a second press can't queue another page; the label waits for
                  `useBusyIndicator`, since reading the next slice of an already-open file is usually quick
                  enough that "Loading…" would land and leave before it could be read. */
-            >{busyMore ? 'Loading…' : 'Load more'}</button>
+            >{busyMore ? 'Loading…' : 'Load more'}</Button>
           ) : (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>Entire file loaded</span>
           )}

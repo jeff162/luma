@@ -7,7 +7,7 @@ import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import DocumentAttachTarget from './DocumentAttachTarget.jsx'
 import DocumentList from './DocumentList.jsx'
 import StoredDocumentPicker from './StoredDocumentPicker.jsx'
-import { Button, COMPACT_ACTION_BTN_STYLE, Spinner } from './ui.jsx'
+import { Button, Spinner } from './ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 /*
@@ -87,7 +87,7 @@ export default function DocumentsPanel({ txnId, onDocumentsChange }) {
         upload={file => api.attachTransactionDocument(txnId, file)}
         onUploaded={load}
         actions={storedCount > 0 ? (
-          <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} onClick={() => setPicking(true)}>
+          <Button variant="secondary" size="compact" onClick={() => setPicking(true)}>
             Stored documents ({storedCount})
           </Button>
         ) : null}

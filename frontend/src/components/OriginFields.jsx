@@ -7,6 +7,7 @@
 
 import { getTxnFileOriginRows } from '../lib/importSourceFields.js'
 import CopyTransactionsButton from './CopyTransactionsButton.jsx'
+import { Button } from './ui.jsx'
 
 const mutedStyle = { color: 'var(--muted)' }
 
@@ -65,23 +66,9 @@ export function MerchantOriginHoverCard({ txn, onPin = null, copyable = false })
           </div>
         ) : null}
         {onPin ? (
-          <button
-            type="button"
-            onClick={onPin}
-            style={{
-              flexShrink: 0,
-              border: '1px solid var(--border)',
-              borderRadius: 999,
-              background: 'var(--surface2)',
-              color: 'var(--accent2)',
-              padding: '2px 7px',
-              fontSize: 10.5,
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
+          <Button size="compact" variant="secondary" onClick={onPin} style={{ flexShrink: 0 }}>
             Pin
-          </button>
+          </Button>
         ) : null}
       </div>
       {/* Set by the ledger's search when the row matched on text the name does not show — this card is

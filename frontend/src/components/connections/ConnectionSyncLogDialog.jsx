@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, Button, RefreshButton } from '../ui.jsx'
+import { AppDialog, Button, RefreshButton, FilterChip, LinkButton } from '../ui.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
   cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
@@ -467,7 +467,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
       description="Every sync, connect, reconnect and disconnect of a data connection — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider reported along the way."
       onClose={onClose}
       width="min(860px, 100%)"
-      actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
+      actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
       // A filter pill reloads the list too, and that load reaches the icon only through `useBusyIndicator`
       // — a quick one leaves it still, where the old relabelling button twitched on every pill click.
       refresh={<RefreshButton onRefresh={load} loading={loading} />}
@@ -475,11 +475,11 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
       <div style={{ display: 'grid', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
+            <Button variant="secondary" onClick={copyForSupport} disabled={!(entries && entries.length)}
               title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
               {copied ? 'Copied' : 'Copy to clipboard'}
             </Button>
-            <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
+            <Button variant="secondary" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
           </div>
         </div>
         {/* One pill per subject that has rows here, replacing the old "Showing only X" banner rather than
@@ -496,41 +496,31 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
               const on = isOn(c)
               const label = pillLabel(c)
               return (
-                <button
+                <FilterChip
                   key={c.subject}
-                  type="button"
-                  aria-pressed={on}
+                  selected={on}
+                  count={c.count}
                   onClick={() => togglePill(c)}
                   title={on
                     ? `Showing ${label}. Click to stop filtering by it.`
                     : `Show only ${label}${filtered ? ' as well' : ''}.`}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-                    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-                    background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',
-                    color: on ? 'var(--text)' : 'var(--muted)',
-                    fontWeight: on ? 600 : 400,
-                  }}
                 >
+                  {/* The count is rows this log is holding for the subject, not operations ever run: the
+                    log keeps only its retention window, so it is a count of what clicking would show. */}
                   {label}
-                  {/* Rows this log is holding for the subject, not operations ever run: the log keeps only
-                    its retention window, so this is a count of what clicking would show. */}
-                  <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.7 }}>{c.count}</span>
-                </button>
+                </FilterChip>
               )
             })}
             {filtered ? (
-              <button
-                type="button"
+              <LinkButton
                 onClick={() => setScope({ subjects: [], providers: [] })}
                 /* "Clear filters", not "Show all": with every pill selected the list is already showing
                    everything, so a control promising to change that would be describing nothing. What it
                    does in both states is empty the selection. */
-                style={{ background: 'none', border: 'none', padding: '0 4px', color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
+                style={{ padding: '0 4px', fontSize: 12, textDecoration: 'underline' }}
               >
                 Clear filters
-              </button>
+              </LinkButton>
             ) : null}
           </div>
         ) : null}

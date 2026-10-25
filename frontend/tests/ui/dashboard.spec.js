@@ -321,7 +321,7 @@ test('removing a tag from a drilled transaction moves the report behind it', asy
 
   // Leave the breakdown where the other specs expect it: the report here was never saved, but the
   // selection is a persisted preference.
-  await page.getByRole('button', { name: '×' }).last().click()
+  await page.getByRole('button', { name: 'Close', exact: true }).last().click()
   await picker.selectOption({ label: 'group' })
 })
 
@@ -443,11 +443,18 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const today = `${thisMonth}-${String(now.getDate()).padStart(2, '0')}`
   const spanRequest = page.waitForRequest(request => request.url().includes('/summary/range-trend'))
+  const spanResponse = page.waitForResponse(response => response.url().includes('/summary/range-trend'))
+  // A bar from the monthly chart, kept to see the same-span chart replace it (below).
+  const monthlyBar = await (await firstPlotBar()).elementHandle()
   await page.evaluate(() => window.__trendMark('same span chosen', window.__trendChartState()))
   await grain.selectOption('span')
   const ranges = new URL((await spanRequest).url()).searchParams.get('ranges').split(',')
   expect(ranges.at(-1)).toBe(`${thisMonth}-01:${today}`)
   expect(ranges.every(range => range.slice(8, 10) === '01' && Number(range.slice(-2)) <= now.getDate())).toBe(true)
+  // The response redraws the chart with new bars, so a bar found before then is gone by the click
+  // (`docs/transient-failures.md` entry 3). Wait for the monthly bar to leave before taking one.
+  await spanResponse
+  await expect.poll(() => monthlyBar.evaluate(node => node.isConnected)).toBe(false)
 
   // A click in a bar's column selects that exact span, keeps the chooser and its pick, and the back-step
   // keeps it too. The click lands at the top of the plot rather than on the bar: the whole column is the

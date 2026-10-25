@@ -3,7 +3,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Card, PageHeader, Toggle } from '../components/ui.jsx'
+import { Card, PageHeader, Toggle, Button, LinkButton } from '../components/ui.jsx'
 import { HELP_TOPICS, HELP_TOPICS_BY_ID, HELP_SECTIONS } from '../help/content.jsx'
 import { labelForPath } from '../help/navigation.js'
 import { HELP_BODY_CSS } from '../help/helpBody.js'
@@ -134,16 +134,9 @@ export default function Help() {
               "All help topics · Where in the app" row off to the right. */}
           {(backTopicTitle || fromLabel) ? (
             <div style={{ fontSize: 12, marginBottom: 16 }}>
-              <button
-                type="button"
-                onClick={() => (backTopicTitle ? navigate(-1) : navigate(fromPath))}
-                style={{
-                  background: 'none', border: 'none', padding: 0,
-                  color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
-                }}
-              >
+              <LinkButton onClick={() => (backTopicTitle ? navigate(-1) : navigate(fromPath))} style={{ fontSize: 12 }}>
                 &larr; Back to {backTopicTitle || fromLabel}
-              </button>
+              </LinkButton>
             </div>
           ) : null}
           <Card style={{ padding: '20px 24px', lineHeight: 1.6, fontSize: 14 }}>
@@ -172,16 +165,9 @@ export default function Help() {
         </PageHeader>
         {fromLabel ? (
           <div style={{ marginBottom: 16 }}>
-            <button
-              type="button"
-              onClick={() => navigate(fromPath)}
-              style={{
-                background: 'none', border: 'none', padding: 0,
-                color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
-              }}
-            >
+            <LinkButton onClick={() => navigate(fromPath)} style={{ fontSize: 12 }}>
               &larr; Return to {fromLabel}
-            </button>
+            </LinkButton>
           </div>
         ) : null}
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
@@ -204,18 +190,14 @@ export default function Help() {
             label="Show first-use hints"
             style={{ whiteSpace: 'nowrap' }}
           />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={resetHints}
             title="Turn hints back on and reset tracking so hints display again the next time the situation each applies to is reached."
-            style={{
-              background: 'var(--surface2)', border: '1px solid var(--border)',
-              borderRadius: 8, padding: '6px 12px', cursor: 'pointer',
-              color: 'var(--text)', fontSize: 13, whiteSpace: 'nowrap',
-            }}
+            style={{ whiteSpace: 'nowrap' }}
           >
             Reset hints
-          </button>
+          </Button>
         </Card>
 
         {/*
@@ -243,19 +225,16 @@ export default function Help() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 12 }}>
             {HELP_SECTIONS.map(section => (
               HELP_TOPICS.some(t => t.section === section.key) ? (
-                <button
+                <Button
                   key={section.key}
-                  type="button"
+                  size="compact"
+                  variant="secondary"
                   title={section.blurb}
                   onClick={() => scrollToSection(section.key)}
-                  style={{
-                    background: 'var(--surface2)', border: '1px solid var(--border)',
-                    borderRadius: 999, padding: '5px 12px', cursor: 'pointer',
-                    color: 'var(--text)', fontSize: 12.5, whiteSpace: 'nowrap',
-                  }}
+                  style={{ whiteSpace: 'nowrap' }}
                 >
                   {section.label}
-                </button>
+                </Button>
               ) : null
             ))}
           </div>
