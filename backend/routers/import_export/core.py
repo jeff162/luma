@@ -1107,6 +1107,12 @@ def get_rule_suggestion_review_state(snapshot: dict) -> dict:
     return review_state
 
 
+def _review_summary(review_state: dict) -> dict:
+    """The review's stored summary, or one derived from its state when none was stored."""
+    summary = review_state.get("summary")
+    return summary if isinstance(summary, dict) else summarize_rule_suggestion_review(review_state)
+
+
 def _public_rule_suggestion_trash_sets(review_state: dict) -> list[dict]:
     sets = []
     for item in review_state.get("trash_sets") or []:
@@ -4253,21 +4259,100 @@ def get_batch_duplicates_unified(batch_id: str):
         }
 
 
+# A row its batch imported that was later removed as a confirmed duplicate — by a duplicate report's
+# Reject or Replace (possibly another file's: a Replace removes the *older* copy), an account merge, or the
+# Amazon reconciliation. Each keeps `suspect_duplicate_of` pointing at the copy it deferred to, which is
+# exactly what puts it in the batch's duplicate report as a settled entry with Restore — so this is that
+# report's predicate, and a count built on it never names a row the report cannot show.
+_REMOVED_DUPLICATE_WHERE = "rejection_reason = 'duplicate_confirmed' AND suspect_duplicate_of IS NOT NULL"
+
+# Whether a batch (aliased `b`) carried any category of its own — what makes it able to feed the rule
+# suggester at all.
+_HAS_IMPORTED_CATEGORIES_SQL = """EXISTS(
+    SELECT 1
+    FROM   txn t
+    WHERE  t.import_batch_id = b.id
+      AND  t.imported_category IS NOT NULL
+      AND  TRIM(t.imported_category) <> ''
+)"""
+
+
 def removed_duplicate_count(conn, batch_id: str) -> int:
-    """Rows this batch imported that were later removed as confirmed duplicates — by a duplicate report's
-    Reject or Replace (possibly another file's: a Replace removes the *older* copy), an account merge, or
-    the Amazon reconciliation. Each keeps `suspect_duplicate_of` pointing at the copy it deferred to, which
-    is exactly what puts it in this batch's duplicate report as a settled entry with Restore — so the
-    predicate here is that report's, and the count never names a row the report cannot show."""
+    """Rows this batch imported that were later removed as confirmed duplicates (`_REMOVED_DUPLICATE_WHERE`)."""
     return int(conn.execute(
-        """
-        SELECT COUNT(*) FROM txn
-        WHERE  import_batch_id = ?
-          AND  rejection_reason = 'duplicate_confirmed'
-          AND  suspect_duplicate_of IS NOT NULL
-        """,
+        f"SELECT COUNT(*) FROM txn WHERE import_batch_id = ? AND {_REMOVED_DUPLICATE_WHERE}",
         (batch_id,),
     ).fetchone()[0] or 0)
+
+
+def _history_card_counts(conn) -> dict[str, dict[str, int]]:
+    """Every card's live counts, keyed by batch id: a few grouped queries over the whole history rather
+    than several per card. The two over `txn` read only flagged rows, through partial indexes
+    (`idx_txn_needs_review`, `idx_txn_batch_suspect`), so their cost follows how many rows carry a flag
+    rather than how many cards or transactions there are; an old import rarely carries one.
+    The report table is read whole, as the per-card counts it replaced also did between them."""
+    counts: dict[str, dict[str, int]] = {}
+
+    def card(batch_id) -> dict[str, int]:
+        return counts.setdefault(batch_id, {})
+
+    for row in conn.execute("""
+        SELECT import_batch_id AS batch_id, COUNT(*) AS n
+        FROM   txn
+        WHERE  needs_review = 1
+          AND  trashed_at IS NULL
+        GROUP  BY import_batch_id
+    """):
+        card(row["batch_id"])["needs_review_count"] = int(row["n"])
+    for row in conn.execute(f"""
+        SELECT import_batch_id AS batch_id,
+               SUM(CASE WHEN suspect_resolved_at IS NULL AND trashed_at IS NULL THEN 1 ELSE 0 END) AS suspect,
+               SUM(CASE WHEN {_REMOVED_DUPLICATE_WHERE} THEN 1 ELSE 0 END) AS removed
+        FROM   txn
+        WHERE  suspect_duplicate_of IS NOT NULL
+        GROUP  BY import_batch_id
+    """):
+        card(row["batch_id"]).update(
+            suspect_duplicate_count=int(row["suspect"] or 0),
+            removed_duplicate_count=int(row["removed"] or 0),
+        )
+    # Rejected rows still wanting a look count only the two sub-states that ask something: a cross-account
+    # match is settled (the coverage rule made the verdict and the probe only named what it matched), so
+    # counting it would bury the handful that matter under thousands that do not. The list is shared with
+    # the decision about which refusals are worth a record at all (`is_settled_source_restatement`) — a row
+    # this count ignores is one that never needed storing.
+    for row in conn.execute(f"""
+        SELECT batch_id,
+               COUNT(*) AS total,
+               SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END) AS enriched,
+               SUM(CASE WHEN reviewed_at IS NULL
+                         AND review_substate IN ({", ".join("?" * len(ADVISORY_REVIEW_SUBSTATES))})
+                        THEN 1 ELSE 0 END) AS advisory
+        FROM   import_batch_duplicate
+        GROUP  BY batch_id
+    """, ADVISORY_REVIEW_SUBSTATES):
+        card(row["batch_id"]).update(
+            duplicate_row_count=int(row["total"] or 0),
+            enriched_duplicate_count=int(row["enriched"] or 0),
+            advisory_review_count=int(row["advisory"] or 0),
+        )
+    return counts
+
+
+def _accounts_by_card(conn) -> dict[str, list[dict]]:
+    """Each completed card's per-account entries, in the order its card lists them."""
+    by_card: dict[str, list[dict]] = {}
+    for row in conn.execute("""
+        SELECT iba.batch_id, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
+               COALESCE(a.name, a.display_name, iba.csv_value) AS account_name
+        FROM   import_batch_account iba
+        JOIN   import_batch b ON b.id = iba.batch_id AND b.status = 'completed'
+        LEFT JOIN account a ON a.id = iba.account_id
+        ORDER  BY iba.batch_id, iba.was_skipped, iba.csv_value
+    """):
+        entry = dict(row)
+        by_card.setdefault(entry.pop("batch_id"), []).append(entry)
+    return by_card
 
 
 # The file ledger's "Removed as duplicates (N)" line. Only the count: the rows themselves are reviewed —
@@ -4714,7 +4799,7 @@ def list_batches():
         # tolerable: the *rendered* history is bounded per source by the client's recency window and its
         # by-year archive. Re-bounding the fetch itself waits on the consumers that read this list as an
         # aggregate over all history — see docs/scale-and-limits.md -> Obstacles.
-        batches = conn.execute("""
+        batches = conn.execute(f"""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count,
                    -- Rows this import corrected rather than added (a source revising an amount between
@@ -4744,13 +4829,7 @@ def list_batches():
                    -- imported_at is when the card was created, which a monthly card stops tracking
                    -- after its first sync of the month.
                    conn.last_synced_at AS connection_last_synced_at,
-                   EXISTS(
-                       SELECT 1
-                       FROM   txn t
-                       WHERE  t.import_batch_id = b.id
-                         AND  t.imported_category IS NOT NULL
-                         AND  TRIM(t.imported_category) <> ''
-                   ) AS has_imported_categories
+                   {_HAS_IMPORTED_CATEGORIES_SQL} AS has_imported_categories
             FROM   import_batch b
             LEFT JOIN csv_import_profile p ON p.id = b.profile_id
             LEFT JOIN connection conn ON conn.id = b.connection_id
@@ -4761,6 +4840,8 @@ def list_batches():
         # Lazy import: amazon.py imports from this module, so a top-level import would be circular.
         from .amazon import BATCH_SOURCE_KIND, reconciliation_attention_count, unmatched_parked_order_count
 
+        card_counts = _history_card_counts(conn)
+        accounts_by_card = _accounts_by_card(conn)
         result = []
         for b in batches:
             d = dict(b)
@@ -4773,9 +4854,7 @@ def list_batches():
             # span of its own (every row it received was refused).
             d["sync_period"] = snapshot.get("sync_period") or None
             review_state = get_rule_suggestion_review_state(snapshot)
-            summary = review_state.get("summary")
-            if not isinstance(summary, dict):
-                summary = summarize_rule_suggestion_review(review_state)
+            summary = _review_summary(review_state)
 
             d["has_imported_categories"] = bool(d.get("has_imported_categories"))
             d["use_imported_categories"] = bool(d.get("use_imported_categories"))
@@ -4799,58 +4878,21 @@ def list_batches():
             d["unknown_source_fallback"] = bool(snapshot.get(UNKNOWN_SOURCE_FALLBACK_KEY))
             d["single_account_new"] = safe_json_dict(snapshot.get("single_account_new"))
 
-            accs = conn.execute("""
-                SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
-                       COALESCE(a.name, a.display_name, iba.csv_value) AS account_name
-                FROM   import_batch_account iba
-                LEFT JOIN account a ON a.id = iba.account_id
-                WHERE  iba.batch_id = ?
-                ORDER BY iba.was_skipped, iba.csv_value
-            """, (b["id"],)).fetchall()
-            d["accounts"] = [dict(a) for a in accs]
+            d["accounts"] = accounts_by_card.get(b["id"], [])
+            counts = card_counts.get(b["id"], {})
             # Enrich-on-duplicate state for the file card's "Enrich existing transactions from this
             # source" toggle: how many duplicate rows the batch recorded, and how many have folded
             # their detail into the transaction they matched.
-            dup_counts = conn.execute("""
-                SELECT COUNT(*) AS total,
-                       COALESCE(SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS enriched
-                FROM   import_batch_duplicate
-                WHERE  batch_id = ?
-            """, (b["id"],)).fetchone()
-            d["duplicate_row_count"] = int(dup_counts["total"] or 0)
-            d["enriched_duplicate_count"] = int(dup_counts["enriched"] or 0)
-            # Rejected rows still wanting a look, for the card's "to review" suffix. Only the two
-            # sub-states that ask something: a cross-account match is settled (the coverage rule made the
-            # verdict and the probe only named what it matched), so counting it here would bury the
-            # handful that matter under thousands that do not. The list is shared with the decision about
-            # which refusals are worth a record at all (`is_settled_source_restatement`) — a row this
-            # count ignores is one that never needed storing.
-            d["advisory_review_count"] = int(conn.execute(f"""
-                SELECT COUNT(*) AS n
-                FROM   import_batch_duplicate
-                WHERE  batch_id = ?
-                  AND  reviewed_at IS NULL
-                  AND  review_substate IN ({", ".join("?" * len(ADVISORY_REVIEW_SUBSTATES))})
-            """, (b["id"], *ADVISORY_REVIEW_SUBSTATES)).fetchone()["n"] or 0)
+            d["duplicate_row_count"] = counts.get("duplicate_row_count", 0)
+            d["enriched_duplicate_count"] = counts.get("enriched_duplicate_count", 0)
+            # Rejected rows still wanting a look, for the card's "to review" suffix.
+            d["advisory_review_count"] = counts.get("advisory_review_count", 0)
             # Settled like an import-time reject, so the card's duplicates pill counts it with those: it is
             # what makes the report — and its Restore — reachable from a card whose only duplicates were
             # decided after the import.
-            d["removed_duplicate_count"] = removed_duplicate_count(conn, b["id"])
-            d["suspect_duplicate_count"] = int(conn.execute("""
-                SELECT COUNT(*) AS n
-                FROM   txn
-                WHERE  import_batch_id = ?
-                  AND  suspect_duplicate_of IS NOT NULL
-                  AND  suspect_resolved_at  IS NULL
-                  AND  trashed_at           IS NULL
-            """, (b["id"],)).fetchone()["n"] or 0)
-            d["needs_review_count"] = int(conn.execute("""
-                SELECT COUNT(*) AS n
-                FROM   txn
-                WHERE  import_batch_id = ?
-                  AND  needs_review = 1
-                  AND  trashed_at    IS NULL
-            """, (b["id"],)).fetchone()["n"] or 0)
+            d["removed_duplicate_count"] = counts.get("removed_duplicate_count", 0)
+            d["suspect_duplicate_count"] = counts.get("suspect_duplicate_count", 0)
+            d["needs_review_count"] = counts.get("needs_review_count", 0)
             # Amazon marketplace batches carry an actionable-reconciliation count (a duplicate to merge, or a
             # split suggestion to accept/dismiss) so the card can warn without opening the report.
             if d.get("source_kind") == BATCH_SOURCE_KIND:
@@ -4895,6 +4937,28 @@ def list_batches():
                 d["paypal_recon_rows"] = card["rows"]
                 d["paypal_recon_attention_ids"] = card["attention_ids"]
         return result
+
+
+@router.get("/rule-suggestion-work")
+def get_rule_suggestion_work():
+    """Whether any import feeds the rule suggester, and how many suggestions are pending across them —
+    for a page that shows only those two facts and so should not fetch the whole history to sum them.
+    An import feeds it when marked to use its categories and it actually carried some. The Import page
+    sums the same figures from the history it already holds (`lib/importExport/ruleSuggestionWork.js`),
+    so the two must agree on that rule."""
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT b.config_snapshot
+            FROM   import_batch b
+            WHERE  b.status = 'completed'
+              AND  b.use_imported_categories = 1
+              AND  {_HAS_IMPORTED_CATEGORIES_SQL}
+        """).fetchall()
+    pending = 0
+    for row in rows:
+        summary = _review_summary(get_rule_suggestion_review_state(safe_json_dict(row["config_snapshot"])))
+        pending += int(summary.get("pending_count") or 0)
+    return {"has_work": bool(rows), "pending_count": pending}
 
 
 @router.get("/batches/detail-storage")

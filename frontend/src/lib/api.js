@@ -1082,6 +1082,7 @@ export const api = {
   getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),
   saveCategoryWorkspaceDraft: (draft, baseRevision = 0) => request('/import-export/category-workspace-draft', { method: 'PUT', body: JSON.stringify({ draft, base_revision: baseRevision }) }),
   listBatches:      ()      => request('/import-export/batches'),
+  getRuleSuggestionWork: () => request('/import-export/rule-suggestion-work'),
   // The maintenance screen over what each import stored beyond its transactions. The preview states
   // what the confirmation promises and the clear reports what it did — both counted server-side, so
   // the sentence and the write cannot disagree.

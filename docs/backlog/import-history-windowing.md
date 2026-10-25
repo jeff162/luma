@@ -14,12 +14,14 @@ card's stored detail keeps and why each survivor has to survive.
 
 Paging that hides rows with no way to load them recreates the lossy cap under a new name, which is why
 this waited on the archive. It is no longer blocked there, but it is blocked on something larger:
-**five consumers read `GET /import-export/batches` as an aggregate over all history**, not as a page of
+**four consumers read `GET /import-export/batches` as an aggregate over all history**, not as a page of
 it, and paging the endpoint under them turns a complete answer into a first-page one. They are
 enumerated in [`../scale-and-limits.md`](../scale-and-limits.md) → *Obstacles*; the
 data-source manager's known-template-hash set is the one that becomes wrong rather than merely stale.
 Give each an endpoint that answers its own question, then change the list's response shape (array → a
-paged envelope) and budget for the remaining callers on the Import page.
+paged envelope) and budget for the remaining callers on the Import page. The Connections panel's rollup
+sits on the Import page, which holds the whole history anyway, so moving it before the paging only adds a
+second fetch that must be refreshed with the first; it moves with the paging.
 
 ## Pointers
 

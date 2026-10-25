@@ -24,7 +24,6 @@ import { formatRuleMatcher } from '../lib/ruleMatcher.js'
 import { formatDate, localIsoDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
-import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
 import {
   RAIL_LETTERS, emptyRulesFacets, activeRulesFacetCount, filterRules,
   buildSectionedRuleItems, presentSectionLetters, ruleSectionLetter, sectionHeaderIndexByLetter,
@@ -440,9 +439,9 @@ export default function Rules() {
   const [categories, setCategories] = useState([])
   const [owners,     setOwners]     = useState([])
   const [accounts,   setAccounts]   = useState([])
-  // Recent import batches, fetched only to drive the "Generate rules from imported data" entry button's
-  // pending-suggestion count and dim state — the review itself lives on the Import route.
-  const [batches,    setBatches]    = useState([])
+  // Whether any import feeds rule suggestions and how many are pending: the "Generate rules from imported
+  // data" button's count and dim state. The review itself lives on the Import route.
+  const [ruleSuggestionWork, setRuleSuggestionWork] = useState(null)
   const [loading,    setLoading]    = useState(true)
   const sessionInit = useRef(loadRulesSession()).current
   const [search,     setSearch]     = useState(sessionInit.search || '')
@@ -520,13 +519,13 @@ export default function Rules() {
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
-  useEffect(() => { api.listBatches().then(setBatches).catch(() => setBatches([])) }, [])
+  useEffect(() => { api.getRuleSuggestionWork().then(setRuleSuggestionWork).catch(() => setRuleSuggestionWork(null)) }, [])
 
   // Persist the search + facets for the session (survives navigation, resets on next app launch).
   useEffect(() => { saveRulesSession({ search, facets }) }, [search, facets])
 
-  const importedRuleSuggestionCount = countPendingRuleSuggestions(batches)
-  const hasImportedRuleSuggestionWork = hasRuleSuggestionWork(batches)
+  const importedRuleSuggestionCount = ruleSuggestionWork?.pending_count || 0
+  const hasImportedRuleSuggestionWork = !!ruleSuggestionWork?.has_work
 
   // Leaf category ids per parent group, so a selected *group* facet expands to match any rule assigning a
   // leaf under it.

@@ -3929,6 +3929,14 @@ def init_db(db_path: str | None = None):
             "CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_review"
             " ON import_batch_duplicate(batch_id) WHERE review_substate IS NOT NULL AND reviewed_at IS NULL"
         )
+        # The import history's duplicate counts per card, taken in one grouped pass over the whole history
+        # (`_history_card_counts`), and the removed-duplicates count of one card. Partial, so the pass reads
+        # only rows that ever matched a duplicate rather than every imported row; its needs-review
+        # counterpart is served by idx_txn_needs_review above.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_txn_batch_suspect"
+            " ON txn(import_batch_id) WHERE suspect_duplicate_of IS NOT NULL"
+        )
         _create_recon_epoch_triggers(conn)
         _bump_recon_epoch(conn)
         _create_purchase_link_prune_trigger(conn)

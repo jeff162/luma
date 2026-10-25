@@ -74,6 +74,11 @@ If the list gets slow, memoize the card render first, so that one edit stops re-
 
 - **The history fetch is unbounded** (`list_batches`). That is tolerable because cardinality is one row
   per imported file, not per transaction.
+- **A card's counts are taken for the whole history at once**: a few grouped queries, the ones over
+  `txn` reading only flagged rows through partial indexes, so an old import with nothing left to look at
+  costs next to nothing.
+- **A page that needs only a total gets its own endpoint** rather than summing the history: the Rules
+  page's rule-suggestion count reads `GET /import-export/rule-suggestion-work`.
 - **The rendered history is bounded per source**: an expanded data source shows its recent cards and
   files the rest into a by-year archive (`lib/importExport/importHistoryWindow.js`). The window is per
   source because a global one lets an actively fed source push a quiet one's cards out of view.
@@ -90,7 +95,9 @@ If the list gets slow, memoize the card render first, so that one edit stops re-
   it is showing a slice (`data-model.md` → *Rejected rows*).
 
 Revisit the unbounded fetch when watched folders are in real use: unattended imports add cards at a
-rate no longer limited by how often someone sits down to import.
+rate no longer limited by how often someone sits down to import. Measured 2026-10-24 on a real ledger
+with no watched folders: 59 cards from four months of imports, about 9 ms per load, and a response that
+grows by about 2.3 KB per card.
 
 ## A watched folder is listed often and read rarely
 
@@ -270,8 +277,7 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **A bound is safe only once what falls outside it is reachable.** Paging a list before its archive
   exists hides rows with no way back to them.
 - **Paging `GET /import-export/batches` breaks the callers that read it as an aggregate over all
-  history.** Each would answer from the first page: the Rules page's pending rule-suggestion count, the
-  Connections tab's per-connection rollup, the import-storage dialog's per-source attribution, the
+  history.** Each would answer from the first page: the Connections tab's per-connection rollup, the import-storage dialog's per-source attribution, the
   rule-suggestions page's lookup of a batch and its source's other batches, and the data-source
   manager's per-source totals and known template hashes. The hash set guards against re-importing a
   file, so it would become wrong and not merely stale. Each needs its own endpoint first.

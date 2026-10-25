@@ -25,7 +25,11 @@ from backend.db.database import (
     set_current_db_path,
 )
 from backend.routers.import_export import run_import
-from backend.routers.import_export.core import get_batch_removed_duplicates, list_batches
+from backend.routers.import_export.core import (
+    get_batch_removed_duplicates,
+    get_rule_suggestion_work,
+    list_batches,
+)
 from backend.services.duplicate_detection import restore_rejected_duplicate
 
 
@@ -210,6 +214,107 @@ class ImportBatchListingTests(unittest.IsolatedAsyncioTestCase):
                 restore_rejected_duplicate(conn, "removed")
             card = next(b for b in list_batches() if b["id"] == batch_id)
             self.assertEqual(card["removed_duplicate_count"], 0, "a restored row is an ordinary transaction again")
+
+    async def test_each_card_counts_only_its_own_flagged_rows(self):
+        # The counts are taken for the whole history in one grouped pass, so a mistake there lands a
+        # figure on the wrong card, or counts a row its predicate excludes, without failing anything else.
+        # Two cards with different figures in every count pin both.
+        first = self._insert_completed_batch("first.csv", "2026-03-01T09:00:00")
+        second = self._insert_completed_batch("second.csv", "2026-04-01T09:00:00")
+        account_id = self._insert_account("Checking")
+        trashed = "2026-04-02T00:00:00Z"
+        with self._use_db_path(), get_db() as conn:
+            def txn(batch, *, needs_review=0, suspect=False, resolved=False, removed=False, is_trashed=False):
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, is_pending,
+                                     import_batch_id, needs_review, suspect_duplicate_of, suspect_resolved_at,
+                                     rejection_reason, trashed_at)
+                    VALUES (?, ?, ?, 5, 'Corner Cafe', 'Corner Cafe', '2026-03-14', 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), account_id, SHARED_OWNER_ID, batch, needs_review,
+                     "other" if suspect or removed else None, trashed if resolved else None,
+                     "duplicate_confirmed" if removed else None, trashed if removed or is_trashed else None),
+                )
+
+            def report_row(batch, number, *, enriched=False, substate=None, reviewed=False):
+                conn.execute(
+                    """
+                    INSERT INTO import_batch_duplicate (batch_id, row_number, reason, enriched_at, review_substate,
+                                                        reviewed_at)
+                    VALUES (?, ?, 'duplicate', ?, ?, ?)
+                    """,
+                    (batch, number, trashed if enriched else None, substate, trashed if reviewed else None),
+                )
+
+            for _ in range(3):
+                txn(first, needs_review=1)
+            txn(first, needs_review=1, is_trashed=True)          # trashed: not counted as needing review
+            txn(first, suspect=True)
+            txn(first, suspect=True, resolved=True)              # resolved: no longer a suspect
+            txn(first, removed=True)
+            txn(second, needs_review=1)
+            for _ in range(2):
+                txn(second, suspect=True)
+            txn(second, suspect=True, is_trashed=True)           # trashed: no longer a suspect
+            for _ in range(3):
+                txn(second, removed=True)
+            report_row(first, 1, enriched=True)
+            report_row(first, 2, substate="no_match")
+            report_row(first, 3, substate="no_match", reviewed=True)   # reviewed: nothing left to ask
+            report_row(second, 1, substate="matched_near_date")
+            report_row(second, 2, substate="matched_near_date")
+            report_row(second, 3, substate="cross_account")      # settled: not an advisory sub-state
+            report_row(second, 4, enriched=True)
+            report_row(second, 5, enriched=True)
+        with self._use_db_path():
+            cards = {b["id"]: b for b in list_batches()}
+        keys = ("needs_review_count", "suspect_duplicate_count", "removed_duplicate_count",
+                "duplicate_row_count", "enriched_duplicate_count", "advisory_review_count")
+        self.assertEqual({key: cards[first][key] for key in keys}, dict(zip(keys, (3, 1, 1, 3, 1, 1))))
+        self.assertEqual({key: cards[second][key] for key in keys}, dict(zip(keys, (1, 2, 3, 5, 2, 2))))
+
+    async def test_rule_suggestion_work_agrees_with_the_history_it_summarizes(self):
+        # The Rules page reads these two figures from their own endpoint while the Import page sums them
+        # from the history; both must apply the same rule — only an import marked to use its categories
+        # that actually carried some feeds the suggester.
+        account_id = self._insert_account("Checking")
+
+        def batch(name, *, use_categories, carries_categories, pending):
+            batch_id = self._insert_completed_batch(name, "2026-03-01T09:00:00")
+            snapshot = {"rule_suggestion_review": {"summary": {"pending_count": pending}}}
+            with self._use_db_path(), get_db() as conn:
+                conn.execute(
+                    "UPDATE import_batch SET use_imported_categories = ?, config_snapshot = ? WHERE id = ?",
+                    (int(use_categories), json.dumps(snapshot), batch_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, is_pending,
+                                     import_batch_id, imported_category)
+                    VALUES (?, ?, ?, 5, 'Corner Cafe', 'Corner Cafe', '2026-03-14', 0, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), account_id, SHARED_OWNER_ID, batch_id,
+                     "Dining" if carries_categories else None),
+                )
+
+        with self._use_db_path():
+            self.assertEqual(get_rule_suggestion_work(), {"has_work": False, "pending_count": 0})
+        batch("not-marked.csv", use_categories=False, carries_categories=True, pending=7)
+        batch("no-categories.csv", use_categories=True, carries_categories=False, pending=11)
+        with self._use_db_path():
+            self.assertEqual(get_rule_suggestion_work(), {"has_work": False, "pending_count": 0})
+        batch("feeds-a.csv", use_categories=True, carries_categories=True, pending=2)
+        batch("feeds-b.csv", use_categories=True, carries_categories=True, pending=3)
+        with self._use_db_path():
+            work = get_rule_suggestion_work()
+            history = list_batches()
+        self.assertEqual(work, {"has_work": True, "pending_count": 5})
+        # The Import page's rule (`lib/importExport/ruleSuggestionWork.js`) over the same history.
+        self.assertEqual(work["pending_count"], sum(
+            b["rule_suggestion_review"]["pending_count"] for b in history
+            if b["use_imported_categories"] and b["has_imported_categories"]
+        ))
 
 
 if __name__ == "__main__":
