@@ -30,7 +30,7 @@ export const EXCLUDE_KEYS = FILTER_FACETS.map(facet => facet.exclude)
 // feed's singular `category_id`.
 export const INCLUDE_KEYS = [...FILTER_FACETS.map(facet => facet.include), 'category_id']
 
-// The ledger's amount popover (magnitude bounds + debit/credit side via `direction`) and the recurring
+// The FilterBar's amount filter (magnitude bounds + debit/credit side via `direction`) and the recurring
 // filter are narrowing intents too — like an include facet, an amount/recurring filter that yields
 // nothing is genuine emptiness, so they count toward "intent to preserve" but are never *dropped* by a
 // probe (only the subtractive date/exclude constraints are).

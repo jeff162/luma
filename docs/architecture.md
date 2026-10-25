@@ -83,7 +83,7 @@ The backend uses explicit SQL and feature-oriented router modules rather than an
 - **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import
 - **`frontend/src/components/`:** shared UI and interaction building blocks
 - **`frontend/src/lib/api.js`:** the one API wrapper the frontend uses
-- **`frontend/src/lib/FilterContext.jsx`:** shared date/account/owner/group filtering state
+- **`frontend/src/lib/FilterContext.jsx`:** shared date, amount and chip filtering state
 - **`frontend/src/lib/filterParams.js`:** the one translation of the filter chips into API parameters
   (the frontend half of the facet registry — see `data-model.md` → *One facet registry, both halves*)
 - **`frontend/src/lib/AppSessionContext.jsx`:** bootstrap/session metadata (the active preference
@@ -222,7 +222,8 @@ shapes: `null` (unset, falls back to a page's registered default), the `{start:n
 - **Shared filter facets:** every axis the FilterBar exposes — account (by id or by type), group,
   category, owner, payee, tag, attribute — is declared once in `services/transaction_facets.py` and consumed by every faceted
   endpoint through a `TransactionFacets` dependency and `append_facets`. Facets AND with each other;
-  values within one facet OR. Rationale and invariants: `data-model.md` → *One facet registry, both
+  values within one facet OR. The FilterBar's amount filter reaches the same endpoints through
+  `AmountFilter` / `append_amount_filter`. Rationale and invariants: `data-model.md` → *One facet registry, both
   halves* and *Attributes — filtering by what a row is*.
 
 - **Scope by account type:** besides a single owner or account, a rule can scope by account type

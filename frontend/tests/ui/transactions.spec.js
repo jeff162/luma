@@ -95,6 +95,9 @@ test('the export dialog works on a copy of the page filter', async ({ page }) =>
   await dialog.getByRole('button', { name: /Filters?/ }).click()
   await dialog.getByRole('button', { name: 'Categories' }).click()
   await expect(dialog.getByRole('button', { name: 'Categories' }).locator('xpath=../..')).toBeInViewport({ ratio: 1 })
+  // The open popover can sit over the dialog's footer, so it is closed before Cancel is reached.
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByRole('button', { name: 'Categories' })).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Cancel' }).click()
 
   await expect(pageChip).toHaveCount(1)

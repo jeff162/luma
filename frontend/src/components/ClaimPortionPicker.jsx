@@ -33,7 +33,7 @@ const optionStyle = (selected, disabled) => ({
   fontSize: 12.5, textAlign: 'left', width: '100%', font: 'inherit',
   cursor: disabled ? 'default' : 'pointer',
   padding: '4px 10px', borderRadius: 6,
-  // The selected treatment `AmountFilterControl` uses for its own toggles, so a chosen portion here reads
+  // The selected background the FilterBar's buttons use, so a chosen portion here reads
   // the same as a chosen option anywhere else in the app.
   background: selected ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
   border: `1px solid ${selected ? 'color-mix(in srgb, var(--accent) 30%, var(--border))' : 'var(--border)'}`,

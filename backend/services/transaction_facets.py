@@ -24,9 +24,11 @@ callers that need the set as data — the bulk endpoint's allowlist derives from
 it, and the guard in `tests/test_transaction_facets.py` asserts every endpoint accepts every facet, so an
 omission fails loudly instead of quietly widening a result.
 
-What deliberately stays out: parameters that are not facets — `view`, `direction`, `ids`, the amount
-bounds, `quick_filter`, `recurring_series_id` — remain per-endpoint, because they genuinely differ in
-meaning and reach from one surface to the next.
+The amount filter (`AmountFilter`, `append_amount_filter`) sits beside the facets because the FilterBar
+shows it too, so every endpoint that takes the facets takes it as well. It is not a facet: it has no
+include/exclude pair and no chip. What deliberately stays out: `view`, `ids`, `quick_filter`,
+`recurring_series_id` remain per-endpoint, because they genuinely differ in meaning and reach from one
+surface to the next.
 """
 
 from dataclasses import dataclass, fields as dataclass_fields
@@ -404,6 +406,63 @@ def append_facets(clauses: list, params: list, facets: TransactionFacets | dict 
             if member:
                 clauses.append(facet.negate(member[0]) if exclude else member[0])
                 params.extend(member[1])
+
+
+# --- Amount ----------------------------------------------------------------------------------------
+
+@dataclass
+class AmountFilter:
+    """The FilterBar's amount filter, as one FastAPI dependency: a side and a magnitude range.
+
+    The parameter names are the ones the list feed already takes, so a Dashboard drill passes the same
+    keys to a summary and to the list behind it.
+    """
+
+    direction: Optional[str] = Query(None, description="debit | credit")
+    amount_min: Optional[float] = Query(None, description="Lower amount-magnitude bound; compares against ABS(amount). Pair with amount_min_op.")
+    amount_max: Optional[float] = Query(None, description="Upper amount-magnitude bound; compares against ABS(amount). Pair with amount_max_op.")
+    amount_min_op: Optional[str] = Query(">=", description="Lower-bound comparator: '>=' (default) or '>'.")
+    amount_max_op: Optional[str] = Query("<=", description="Upper-bound comparator: '<=' (default) or '<'.")
+
+    def as_params(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in dataclass_fields(self)}
+
+
+AMOUNT_PARAM_NAMES: frozenset[str] = frozenset(f.name for f in dataclass_fields(AmountFilter))
+
+
+def append_amount_filter(clauses: list, params: list, amount: AmountFilter | dict | None) -> None:
+    """Append the amount filter's side and magnitude bounds to a WHERE being assembled.
+
+    Mirrors the category-rule amount condition: bounds compare against ABS(amount) and the debit/credit
+    side applies separately, so "credit, >= $50" resolves to amount <= -50. Comparators are whitelisted
+    to the two the UI offers per bound so they can be interpolated. Under split expansion `t.amount` is
+    the part's, so a report compares each allocation, which is what it counts.
+
+    The isinstance guards absorb a direct (non-HTTP) call, where an unset `Query(...)` default or an
+    omitted `Depends()` arrives as a FieldInfo or Depends object rather than None (bool is excluded
+    because it is not a bound).
+    """
+    if isinstance(amount, AmountFilter):
+        values = amount.as_params()
+    elif isinstance(amount, dict):
+        values = amount
+    else:
+        return
+    direction = values.get("direction")
+    if direction == "debit":
+        clauses.append("t.amount > 0")
+    elif direction == "credit":
+        clauses.append("t.amount < 0")
+    amount_min, amount_max = values.get("amount_min"), values.get("amount_max")
+    if isinstance(amount_min, (int, float)) and not isinstance(amount_min, bool):
+        op = ">" if str(values.get("amount_min_op")) == ">" else ">="
+        clauses.append(f"ABS(t.amount) {op} ?")
+        params.append(float(amount_min))
+    if isinstance(amount_max, (int, float)) and not isinstance(amount_max, bool):
+        op = "<" if str(values.get("amount_max_op")) == "<" else "<="
+        clauses.append(f"ABS(t.amount) {op} ?")
+        params.append(float(amount_max))
 
 
 def append_totals_exclusion(

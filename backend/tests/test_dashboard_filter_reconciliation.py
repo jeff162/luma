@@ -1,11 +1,12 @@
 """
-An include chip that names an `exclude_from_totals` group or category brings its rows into the dashboard.
+Every Dashboard surface reports the same figure under the FilterBar's chips and amount filter, and the drill
+list (`/transactions?view=...`) lists the rows behind it.
 
-Totals leave out money movement, but `group: Transfers` is a scope the user asked for, so every summary
-counts it — and the drill list (`/transactions?view=...`) lists the same rows, so a figure and the rows
-behind it still agree. Only the group and category include facets name a scope: a tag chip on an
-excluded row selects it without naming it, and the row stays out. See docs/data-model.md → *Reporting
-assumptions*.
+Two rules are exercised through that check. An include chip that names an `exclude_from_totals` group or
+category brings its rows in: totals leave out money movement, but `group: Transfers` is a scope the user
+asked for. Only the group and category include facets name a scope, so a tag chip on an excluded row
+leaves it out (docs/data-model.md → *Reporting assumptions*). The amount filter's side and bounds narrow
+every surface alike, which is what makes "money out of the Reimbursable group" readable as a report.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from backend.routers.transactions import (
     spending_by_group,
     spending_by_tag_signature,
 )
-from backend.services.transaction_facets import TransactionFacets
+from backend.services.transaction_facets import AmountFilter, TransactionFacets
 
 MONTH = "2026-05"
 
@@ -48,7 +49,7 @@ def _call(handler, **kwargs):
     return handler(**kwargs)
 
 
-class NamedExcludedScopeTests(unittest.TestCase):
+class DashboardFilterReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "named-excluded-scope.db"
@@ -72,6 +73,7 @@ class NamedExcludedScopeTests(unittest.TestCase):
 
             card_txn = self._txn(conn, self.card_payment, 100.0)
             self._txn(conn, self.savings, 40.0)
+            self._txn(conn, self.savings, -25.0)
             self._txn(conn, groceries, 30.0)
 
             self.tag = self._id()
@@ -119,46 +121,56 @@ class NamedExcludedScopeTests(unittest.TestCase):
         )
         return txn_id
 
-    def _totals(self, facets: TransactionFacets) -> dict:
-        """The spending figure each dashboard surface reports for the month under `facets`."""
+    def _totals(self, facets: TransactionFacets, **amount_kwargs) -> dict:
+        """The spending figure each dashboard surface reports for the month under `facets` and an amount filter."""
+        amount_values = dict(direction=None, amount_min=None, amount_max=None, amount_min_op=">=", amount_max_op="<=")
+        amount_values.update(amount_kwargs)
+        amount = AmountFilter(**amount_values)
         window = dict(date_start=f"{MONTH}-01", date_end=f"{MONTH}-31")
+        summary = dict(facets=facets, amount=amount)
         with self._use_db_path():
             month_row = lambda rows, key: sum(r[key] for r in rows if r.get("month") == MONTH)  # noqa: E731
-            listed = _call(list_transactions, facets=facets, view="spending", limit=0, **window)
+            listed = _call(list_transactions, facets=facets, view="spending", limit=0, **amount_values, **window)
             return {
-                "by-group": sum(r["total"] for r in _call(spending_by_group, facets=facets, **window)),
-                "by-category": sum(r["total"] for r in _call(spending_by_category, facets=facets, **window)),
+                "by-group": sum(r["total"] for r in _call(spending_by_group, **summary, **window)),
+                "by-category": sum(r["total"] for r in _call(spending_by_category, **summary, **window)),
                 "by-tag-signature": sum(
-                    r["total"] for r in _call(spending_by_tag_signature, facets=facets, **window)
+                    r["total"] for r in _call(spending_by_tag_signature, **summary, **window)
                 ),
                 "monthly-trend": month_row(
-                    _call(monthly_trend, facets=facets, view="spending", months=120, **window), "total",
+                    _call(monthly_trend, **summary, view="spending", months=120, **window), "total",
                 ),
                 "range-trend": sum(
                     r["total"] for r in _call(
-                        range_trend, facets=facets, view="spending", ranges=f"{MONTH}-01:{MONTH}-31",
+                        range_trend, **summary, view="spending", ranges=f"{MONTH}-01:{MONTH}-31",
                     )
                 ),
-                "monthly-cash-flow": month_row(_call(monthly_cash_flow, facets=facets, **window), "outflow"),
-                "monthly-by-group": month_row(_call(monthly_by_group, facets=facets, months=240), "total"),
+                "monthly-cash-flow": month_row(_call(monthly_cash_flow, **summary, **window), "outflow"),
+                "monthly-by-group": month_row(_call(monthly_by_group, **summary, months=240), "total"),
                 "drill list": sum(r["amount"] for r in listed["transactions"]),
             }
 
-    def _assert_every_surface(self, facets: TransactionFacets, expected: float):
-        totals = self._totals(facets)
+    def _assert_every_surface(self, facets: TransactionFacets, expected: float, **amount_kwargs):
+        totals = self._totals(facets, **amount_kwargs)
         self.assertEqual(totals, {surface: expected for surface in totals})
 
     def test_unnamed_excluded_group_stays_out(self):
         self._assert_every_surface(TransactionFacets(), 30.0)
 
     def test_group_chip_brings_its_excluded_rows_in(self):
-        self._assert_every_surface(TransactionFacets(group_ids=self.transfers), 140.0)
+        self._assert_every_surface(TransactionFacets(group_ids=self.transfers), 115.0)
 
     def test_category_chip_brings_only_that_leaf_in(self):
         self._assert_every_surface(TransactionFacets(category_ids=self.card_payment), 100.0)
 
     def test_tag_chip_does_not_name_a_scope(self):
         self._assert_every_surface(TransactionFacets(tag_ids=self.tag), 0.0)
+
+    def test_money_out_drops_the_money_coming_back(self):
+        self._assert_every_surface(TransactionFacets(group_ids=self.transfers), 140.0, direction="debit")
+
+    def test_amount_bounds_narrow_every_surface(self):
+        self._assert_every_surface(TransactionFacets(group_ids=self.transfers), 100.0, amount_min=50.0)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 
 import { useState } from 'react'
 import { api, downloadUrl } from '../lib/api.js'
-import { selectionsToParams } from '../lib/filterParams.js'
+import { amountFilterIsActive, amountFilterParams, selectionsToParams } from '../lib/filterParams.js'
 import { FilterProvider, useFilters } from '../lib/FilterContext.jsx'
 import FilterBar from './FilterBar.jsx'
 import { AppDialog, Button, Card } from './ui.jsx'
@@ -14,14 +14,14 @@ import { DEFAULT_EXPORT_COLS, EXPORT_COLUMNS } from '../lib/importExport/constan
  * The CSV export, opened from the Transactions page: pick a filter and columns, then download.
  *
  * The page's filter is "what am I looking at now"; an export is "what slice of history do I want a copy
- * of". So the dialog starts from a *copy* of the page's date and chips, in a FilterProvider of its own:
+ * of". So the dialog starts from a *copy* of the page's date, chips and amount, in a FilterProvider of its own:
  * adjusting the export never disturbs the filter the rest of the app reads.
  */
 export default function ExportTransactionsDialog({ onClose }) {
   const { filters, getRawDate } = useFilters()
   // Read once, when the provider mounts — which is what makes it a copy.
   return (
-    <FilterProvider initialDate={getRawDate()} initialSelections={filters.selections}>
+    <FilterProvider initialDate={getRawDate()} initialSelections={filters.selections} initialAmount={filters.amount}>
       <ExportTransactionsDialogContent onClose={onClose} />
     </FilterProvider>
   )
@@ -49,6 +49,7 @@ function ExportTransactionsDialogContent({ onClose }) {
         date_start: date?.start || undefined,
         date_end: date?.end || undefined,
         ...selectionsToParams(filters.selections),
+        ...amountFilterParams(filters.amount),
       }))
       onClose()
     } catch (err) {
@@ -78,7 +79,7 @@ function ExportTransactionsDialogContent({ onClose }) {
         <FilterBar />
       </Card>
       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-        {date || filters.selections.length > 0
+        {date || filters.selections.length > 0 || amountFilterIsActive(filters.amount)
           ? 'Only transactions matching the filter above will be exported.'
           : 'No filter set — all transactions will be exported.'}
       </div>

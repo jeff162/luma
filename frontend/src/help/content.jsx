@@ -509,8 +509,10 @@ export const HELP_TOPICS = [
           the dashboard to check the data is as much its purpose as reporting on it.
         </p>
         <p>
-          The filter and period at the top of the page remain in effect when switching between the Dashboard
+          The period, amount and filter at the top of the page remain in effect when switching between the Dashboard
           and Transaction pages so that switching between the views displays the same set of transactions.
+          The <strong>💲 Amount</strong> filter limits the reports to money paid out (debits), money received
+          (credits) or a range of amounts.
         </p>
         <p>
           Categories{' '}
@@ -617,9 +619,9 @@ export const HELP_TOPICS = [
           and more &mdash; see{' '}
           <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>.
           The amount search can be used to create more complex filters than a single value. There are a
-          set of pre-defined quick filters for common tasks to display only transactions which <HelpLink to="/help/reviewing-transactions">need review</HelpLink> or
+          set of pre-defined quick filters for common tasks to display only transactions which <HelpLink to="/help/reviewing-transactions">need review</HelpLink>
           or categorization, as well as selecting by other properties. The &#9662; selector picks a filter, clicking turns it on and
-          off.  The filter bar and time period at the to of the page are also active. All of these combine
+          off.  The filter bar and time period at the top of the page are also active. All of these combine
           to select what is visible.
         </p>
         <p>
@@ -778,7 +780,7 @@ export const HELP_TOPICS = [
           part of the name. A search holds one keyword, and only at the very start:
           <code> +5.00 merchant:city water</code> is not an amount and a merchant, but one piece of text
           searched for as written. To narrow by a name and an amount together on the Transactions page,
-          put the name in the search box and the amount in the <strong>💲 Amount</strong> filter beside it.
+          put the name in the search box and the amount in the <strong>💲 Amount</strong> filter at the top of the page.
         </p>
         <p>A keyword whose value cannot be read that way, such as <code>date:soon</code>, finds nothing.</p>
 
@@ -805,8 +807,8 @@ export const HELP_TOPICS = [
           every amount from $77.00 to $77.99 (never $770), <code>77.4</code> those from $77.40 to $77.49,
           and <code>77.45</code> that amount alone. A dollar sign and thousands separators are fine
           (<code>$1,250.00</code>), and parentheses read as a minus, the way a statement writes a payment:
-          <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter beside the
-          Transactions search box.
+          <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter at the top of
+          the page.
         </p>
 
         <HelpHeading anchor="not-searched">What is not searched</HelpHeading>
@@ -1438,8 +1440,9 @@ export const HELP_TOPICS = [
         <p>
           Adding an excluded group or category to the filter brings it back into the dashboard reports,
           which gives a report on just the transfers or just the reimbursable expenses. Tag, account and
-          payee filters do not. A transfer between two accounts in the ledger nets to zero in that report,
-          since both sides are counted.
+          payee filters do not. Both directions are counted, so a transfer between two accounts in the
+          ledger nets to zero and reimbursable expenses net to what is still owed. Setting the
+          <strong> 💲 Amount</strong> filter to debits shows just the money paid out.
         </p>
 
       </>

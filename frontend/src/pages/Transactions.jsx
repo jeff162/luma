@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { downloadMatchingTransactions, fetchAllMatchingTransactions } from '../lib/allMatchingTransactions.js'
-import { selectionsToParams } from '../lib/filterParams.js'
+import { amountFilterParams, selectionsToParams } from '../lib/filterParams.js'
 import { txnMutations, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
@@ -38,7 +38,6 @@ import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import { useReimbursementCount } from '../lib/useReimbursementCount.js'
 import { sessionStore } from '../lib/browserStorage.js'
-import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
@@ -107,18 +106,14 @@ function loadTransactionsSessionState() {
   if (!parsed) return null
   return {
     quickFilter: typeof parsed.quickFilter === 'string' ? parsed.quickFilter : '',
-    // The amount filter is a page-local slice (like quickFilter) — session-scoped so it survives
-    // navigation but resets on next launch. normalizeAmountFilter drops an inactive/no-op draft.
-    amountFilter: normalizeAmountFilter(parsed.amountFilter),
     sortState: normalizeTransactionSortState(parsed.sortState),
     attributeFilter: normalizeAttributeFilter(parsed.attributeFilter),
   }
 }
 
-function saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter }) {
+function saveTransactionsSessionState({ quickFilter, sortState, attributeFilter }) {
   sessionStore.setJson(TXN_SESSION_STATE_STORAGE_KEY, {
     quickFilter: quickFilter || '',
-    amountFilter: normalizeAmountFilter(amountFilter),
     sortState: normalizeTransactionSortState(sortState),
     attributeFilter: normalizeAttributeFilter(attributeFilter),
   })
@@ -153,19 +148,6 @@ function normalizeColumnConfig(cfg) {
 
 function getInitialSortDirection(columnKey) {
   return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
-}
-
-// Translate the page-local amount filter into transaction-endpoint params. The debit/credit side maps
-// to the existing `direction` sign predicate; the magnitude bounds + per-bound comparators pass through.
-function amountFilterParams(f) {
-  if (!f) return {}
-  return {
-    amount_min: f.low != null ? f.low : undefined,
-    amount_max: f.high != null ? f.high : undefined,
-    amount_min_op: f.low != null ? f.lowOp : undefined,
-    amount_max_op: f.high != null ? f.highOp : undefined,
-    direction: f.side && f.side !== 'both' ? f.side : undefined,
-  }
 }
 
 function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = false } = {}) {
@@ -237,7 +219,6 @@ export default function Transactions() {
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
   // Page-local amount filter (ledger only — never the shared FilterBar/Dashboard). Bounds compare
   // against |amount|; side rides the `direction` param so the sign applies separately. See amountParams.
-  const [amountFilter, setAmountFilter] = useState(() => initialSessionStateRef.current?.amountFilter || null)
   // Right-click row menu + its note/tag/trash/rule editors — the same shared controller the report
   // lists use via TransactionListTable, so the ledger and the reports never fork this interaction.
   // The ledger owns its paginated list, so reconcile flows back here: note/tag patch the row in
@@ -338,9 +319,9 @@ export default function Transactions() {
       // squatted on `category_id` and silently won.)
       require_all_attribute_ids: activeAttribute,
       quick_filter: debouncedQuickFilter || undefined,
-      ...amountFilterParams(amountFilter),
+      ...amountFilterParams(filters.amount),
     }
-  }, [filters, getRawDate, activeAttribute, debouncedQuickFilter, amountFilter])
+  }, [filters, getRawDate, activeAttribute, debouncedQuickFilter])
 
 
   useEffect(() => {
@@ -365,8 +346,8 @@ export default function Transactions() {
   }, [quickFilter])
 
   useEffect(() => {
-    saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter })
-  }, [quickFilter, amountFilter, sortState, attributeFilter])
+    saveTransactionsSessionState({ quickFilter, sortState, attributeFilter })
+  }, [quickFilter, sortState, attributeFilter])
 
   // One page of the list by position, in the list's own filter and sort. The filter is the same object bulk
   // edit resolves "select all matching" from, so the two cannot disagree about which rows are listed.
@@ -889,10 +870,6 @@ export default function Transactions() {
               aria-label="Search transactions"
               title="Matches names, imported text, category, account, date, amount, and the text inside attached documents. -42.10 is money paid out, +42.10 money received. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or doc:brake pads."
               wrapperStyle={{ width: 180 }}
-            />
-            <AmountFilterControl
-              value={amountFilter}
-              onChange={f => { setAmountFilter(f); isFirstLoad.current = true }}
             />
             <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           </div>

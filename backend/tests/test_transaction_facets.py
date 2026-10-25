@@ -35,6 +35,7 @@ from backend.routers.transactions import (
     _BULK_FILTER_KEYS, _build_transaction_filter, list_payee_names, list_transactions,
 )
 from backend.services.transaction_facets import (
+    AMOUNT_PARAM_NAMES,
     FACET_PARAM_NAMES,
     FACETS,
     TransactionFacets,
@@ -75,6 +76,16 @@ class FacetCoverageTests(unittest.TestCase):
                 self.assertIn(path, spec["paths"], f"{path} is not a route any more")
                 accepted = {p["name"] for p in spec["paths"][path]["get"].get("parameters", [])}
                 missing = sorted(FACET_PARAM_NAMES - accepted)
+                self.assertEqual(missing, [], f"{path} does not accept: {missing}")
+
+    def test_every_faceted_endpoint_accepts_the_amount_filter(self):
+        # The FilterBar's amount filter narrows the same surfaces its chips do, so an endpoint missing it
+        # reports a figure its drill list does not match.
+        spec = self._spec()
+        for path in FACETED_ENDPOINTS:
+            with self.subTest(path=path):
+                accepted = {p["name"] for p in spec["paths"][path]["get"].get("parameters", [])}
+                missing = sorted(AMOUNT_PARAM_NAMES - accepted)
                 self.assertEqual(missing, [], f"{path} does not accept: {missing}")
 
     def test_bulk_allowlist_covers_every_facet(self):

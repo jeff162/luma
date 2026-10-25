@@ -9,10 +9,13 @@
  */
 
 import { createContext, useContext, useState, useCallback } from 'react'
+import { normalizeAmountFilter } from './filterParams.js'
 
 const DEFAULT_FILTERS = {
   date: null,
   selections: [],
+  // The amount filter (`lib/filterParams.js`): a side and a magnitude range, or null.
+  amount: null,
 }
 
 // How many prior periods "back" can walk. The Dashboard trend re-pins the date on every bar click, so a
@@ -44,8 +47,8 @@ export function describeDateFilter(date) {
 
 const FilterContext = createContext(null)
 
-export function FilterProvider({ children, initialDate = null, initialSelections = [] }) {
-  const [filters, setFilters] = useState({ date: initialDate, selections: initialSelections })
+export function FilterProvider({ children, initialDate = null, initialSelections = [], initialAmount = null }) {
+  const [filters, setFilters] = useState({ date: initialDate, selections: initialSelections, amount: initialAmount })
   // A page-scoped *default* period (currently only the Dashboard registers one). `filters.date` is the
   // user's explicit pick; when it's unset, a registered default is what `getDate()` falls back to — so
   // "unset" can mean different things per page (a Dashboard default vs. all-time on Transactions)
@@ -170,6 +173,7 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   }
 
   function clearSelections() { setFilters(f => ({ ...f, selections: [] })) }
+  function setAmount(amount) { setFilters(f => ({ ...f, amount: normalizeAmountFilter(amount) })) }
   function clearAll()        { setDateHistory([]); setFilters(DEFAULT_FILTERS) }
 
   return (
@@ -177,7 +181,7 @@ export function FilterProvider({ children, initialDate = null, initialSelections
       filters, setDate, pinDateFromChart, clearDate, getDate, getRawDate, dateIsDefault, setDefaultDate,
       goBackDate, canGoBackDate, previousDate,
       addSelection, addSelections, removeSelection, removeSelections, clearSelections, clearAll,
-      setSelectionMode, toggleSelectionMode,
+      setSelectionMode, toggleSelectionMode, setAmount,
       dateApplies, setDateApplies,
     }}>
       {children}

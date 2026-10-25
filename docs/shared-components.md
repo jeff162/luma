@@ -9,10 +9,9 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `FilterContext` / `FilterBar` | The app-wide date, account, owner and group filter. | `lib/FilterContext.jsx`, `components/FilterBar.jsx` |
-| `selectionsToParams` | Turning the filter chips into API parameters. A new filter axis is one row in `FILTER_FACETS` and one in the backend registry (`data-model.md` → *One facet registry, both halves*). | `lib/filterParams.js` |
+| `FilterContext` / `FilterBar` | The app-wide date, amount and chip filter. | `lib/FilterContext.jsx`, `components/FilterBar.jsx` |
+| `selectionsToParams` / `amountFilterParams` | Turning the filter chips and the amount filter into API parameters. A new filter axis is one row in `FILTER_FACETS` and one in the backend registry (`data-model.md` → *One facet registry, both halves*). | `lib/filterParams.js` |
 | `AttributeFilterControl` | A toolbar control that narrows a transaction list to one kind of transaction. | `components/AttributeFilterControl.jsx` |
-| `AmountFilterControl` | An amount filter in a toolbar. | `components/AmountFilterControl.jsx` |
 | `SearchInput` | The search box of a page or panel. | `components/ui.jsx` |
 
 ## Transaction lists

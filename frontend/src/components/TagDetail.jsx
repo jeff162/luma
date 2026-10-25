@@ -38,6 +38,8 @@ export default function TagDetail({
   dateStart,
   dateEnd,
   filterTagIds,
+  ownerIds,
+  filters = {},
   categories = [],
   onClose,
   forceFloating = false,
@@ -61,19 +63,24 @@ export default function TagDetail({
   // slice (no signature tags) that reduces to "none of the report's tags." Because require_all is
   // independent of the OR `tag_ids`, the active filter's own tag_ids still applies on top. These params
   // resolve exactly the slice's rows, so they drive both the paged fetch and "select all matching".
+  // `filters` is the rest of the Dashboard's filter (chips and amount), as the wedge's figure had it; a
+  // chip's tag excludes join the report's own.
   const fetchParams = useMemo(() => {
     const otherReportTags = (reportTagIds || []).filter(id => !signatureTagIds.includes(id))
+    const excludeTagIds = [filters.exclude_tag_ids, ...otherReportTags].filter(Boolean).join(',')
     return {
+      ...filters,
+      ...(ownerIds ? { owner_ids: ownerIds } : {}),
       ...(dateStart ? { date_start: dateStart } : {}),
       ...(dateEnd ? { date_end: dateEnd } : {}),
       ...(accountId ? { account_id: accountId } : {}),
       ...(filterTagIds ? { tag_ids: filterTagIds } : {}),
       ...(signatureTagIds.length ? { require_all_tag_ids: signatureTagIds.join(',') } : {}),
-      ...(otherReportTags.length ? { exclude_tag_ids: otherReportTags.join(',') } : {}),
+      exclude_tag_ids: excludeTagIds || undefined,
       ...(view ? { view } : {}),
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- signatureKey/reportTagsKey subsume the arrays
-  }, [signatureKey, reportTagsKey, view, accountId, dateStart, dateEnd, filterTagIds])
+  }, [signatureKey, reportTagsKey, view, accountId, dateStart, dateEnd, filterTagIds, ownerIds, filters])
 
   const activeKey = signature ? JSON.stringify(fetchParams) : null
   const loadPage = useCallback((offset, limit, sort) => (

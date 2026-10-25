@@ -9,7 +9,7 @@ import {
 import { api } from '../lib/api.js'
 import { CLICKABLE_CHART_EVENTS, clickedDataIndex } from '../lib/chartInteraction.js'
 import { CHART_PALETTE } from '../lib/chartPalette.js'
-import { selectionsOfType, selectionsToParams } from '../lib/filterParams.js'
+import { amountFilterParams, selectionsOfType, selectionsToParams } from '../lib/filterParams.js'
 import { applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
@@ -1925,10 +1925,14 @@ export default function Dashboard() {
   // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
   // narrow the whole dashboard, not just bits of it. Keys match both the summary opts and the list params.
   // Taken as "every other facet" rather than listed: the list this replaces had not been told about
-  // the attribute filter, so those chips narrowed the ledger and left the Dashboard's totals alone.
+  // the attribute filter, so those chips narrowed the ledger and left the Dashboard's totals alone. The
+  // FilterBar's amount filter rides along for the same reason.
   const summaryFilters = useMemo(
-    () => Object.fromEntries(Object.entries(facetParams).filter(([key]) => key !== 'tag_ids' && key !== 'owner_ids')),
-    [facetParams],
+    () => ({
+      ...Object.fromEntries(Object.entries(facetParams).filter(([key]) => key !== 'tag_ids' && key !== 'owner_ids')),
+      ...amountFilterParams(filters.amount),
+    }),
+    [facetParams, filters.amount],
   )
 
   // Picker resolution is hoisted ahead of the tag-mode fetch effect so the effect's
@@ -2336,6 +2340,8 @@ export default function Dashboard() {
         dateStart,
         dateEnd,
         filterTagIds: tagIds || null,
+        ownerIds: ownerIds || null,
+        filters: summaryFilters,
       },
     ])
   }
@@ -3258,35 +3264,43 @@ export default function Dashboard() {
                       )
                     })()}
 
+                    {/* Empty when an in-place refresh (recategorizing, a sync) moved the group's last
+                        transactions out; a filter change returns to the top level instead. */}
                     {level === 'categories' && selectedGroup && (
                       <>
-                        <Card>
+                        <Card style={catRows.length === 0 ? { gridColumn: '1 / -1' } : undefined}>
                           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
                             <CategoryMarker kind="group" />
                             <span>{selectedGroup.group_name}</span>
                           </div>
-                          <ResponsiveContainer width="100%" height={220}>
-                            <PieChart>
-                              {/* `pieValue` floors wedge geometry at zero so a net-refund category can't
-                                draw a negative sector; tooltip/list show the true signed total. */}
-                              <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
-                                dataKey="pieValue" nameKey="category_name"
-                                cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
-                                isAnimationActive={false}
-                                onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
-                                {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
-                              </Pie>
-                              <Tooltip
-                                formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
-                                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                              />
-                            </PieChart>
-                          </ResponsiveContainer>
-                          <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>Click to see transactions</div>
+                          {catRows.length === 0 ? (
+                            <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
+                          ) : (
+                            <>
+                              <ResponsiveContainer width="100%" height={220}>
+                                <PieChart>
+                                  {/* `pieValue` floors wedge geometry at zero so a net-refund category can't
+                                    draw a negative sector; tooltip/list show the true signed total. */}
+                                  <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
+                                    dataKey="pieValue" nameKey="category_name"
+                                    cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
+                                    isAnimationActive={false}
+                                    onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
+                                    {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
+                                  </Pie>
+                                  <Tooltip
+                                    formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                                    contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                                    labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                                    itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+                                  />
+                                </PieChart>
+                              </ResponsiveContainer>
+                              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>Click to see transactions</div>
+                            </>
+                          )}
                         </Card>
-                        <Card>
+                        {catRows.length > 0 && <Card>
                           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Categories</div>
                           {coloredCatRows.map(c => (
                             <div key={c.category_id} onClick={() => drillToTransactions(c)} style={{
@@ -3301,7 +3315,7 @@ export default function Dashboard() {
                               <span style={{ color: 'var(--muted)', fontSize: 16 }}>›</span>
                             </div>
                           ))}
-                        </Card>
+                        </Card>}
                       </>
                     )}
 
@@ -3793,6 +3807,8 @@ export default function Dashboard() {
           dateStart={entry.dateStart || undefined}
           dateEnd={entry.dateEnd || undefined}
           filterTagIds={entry.filterTagIds || undefined}
+          ownerIds={entry.ownerIds || undefined}
+          filters={entry.filters}
           categories={categories}
           forceFloating={detailTxns.length + detailPeriods.length + detailTagSignatures.length > 1}
           stackIndex={detailTxns.length + detailPeriods.length + index}

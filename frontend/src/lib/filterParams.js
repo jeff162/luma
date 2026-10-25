@@ -68,3 +68,32 @@ export function selectionsToParams(selections) {
   }
   return params
 }
+
+/*
+ * The FilterBar's amount filter: a debit/credit side and a magnitude range, shaped like the rule editor's
+ * amount condition. It is one value beside the chips rather than a chip, and it reaches the same
+ * endpoints the chips do (`AmountFilter` in `services/transaction_facets.py`).
+ */
+export const EMPTY_AMOUNT_FILTER = { low: null, lowOp: '>=', high: null, highOp: '<=', side: 'both' }
+
+// A bare `both` with no bounds constrains nothing, so it is not worth carrying as a filter.
+export function amountFilterIsActive(f) {
+  return !!f && (f.low != null || f.high != null || (f.side && f.side !== 'both'))
+}
+
+// What to store: an active filter, or null.
+export function normalizeAmountFilter(f) {
+  return amountFilterIsActive(f) ? { ...EMPTY_AMOUNT_FILTER, ...f } : null
+}
+
+/** The amount filter as API parameters, `undefined` where unset, like `selectionsToParams`. */
+export function amountFilterParams(f) {
+  if (!f) return {}
+  return {
+    amount_min: f.low != null ? f.low : undefined,
+    amount_max: f.high != null ? f.high : undefined,
+    amount_min_op: f.low != null ? f.lowOp : undefined,
+    amount_max_op: f.high != null ? f.highOp : undefined,
+    direction: f.side && f.side !== 'both' ? f.side : undefined,
+  }
+}

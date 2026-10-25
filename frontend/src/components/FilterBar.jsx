@@ -11,7 +11,9 @@ import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
          startOfYear, endOfYear } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
-import { CategoryMarker } from './ui.jsx'
+import { EMPTY_AMOUNT_FILTER, amountFilterIsActive } from '../lib/filterParams.js'
+import { CategoryMarker, Button } from './ui.jsx'
+import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
@@ -669,6 +671,49 @@ function FilterChip({ sel, onRemove, onFlipMode }) {
 // open: a change made there would do nothing here and then surface unannounced on the next view that reads
 // it. It is not `disabled`, though, because a disabled button shows no `title`, and the tooltip is the only
 // place the reason is given.
+// The amount filter's popover: the rule editor's amount condition (Both/Debits/Credits and a range),
+// plus a per-bound `>` / `<` that rules do not offer. Edits are a draft until Apply, so dismissing the
+// popover leaves the filter in force unchanged.
+function AmountPopover({ onClose }) {
+  const { filters, setAmount } = useFilters()
+  const [draft, setDraft] = useState(() => ({ ...EMPTY_AMOUNT_FILTER, ...filters.amount }))
+  const active = amountFilterIsActive(filters.amount)
+
+  function apply() {
+    setAmount(draft)
+    onClose()
+  }
+  function clear() {
+    setAmount(null)
+    onClose()
+  }
+
+  return (
+    <Popover onClose={onClose} style={{ padding: 14, minWidth: 300 }}>
+      <AmountCondition
+        low={draft.low} lowOp={draft.lowOp}
+        high={draft.high} highOp={draft.highOp}
+        side={draft.side}
+        onChange={setDraft}
+        strictBounds
+      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12,
+        borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+        <button
+          onClick={clear}
+          disabled={!active}
+          style={{
+            background: 'none', border: 'none', fontSize: 13, padding: 0,
+            color: active ? 'var(--danger)' : 'var(--muted)',
+            cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5,
+          }}
+        >✕ Clear amount filter</button>
+        <Button small onClick={apply}>Apply</Button>
+      </div>
+    </Popover>
+  )
+}
+
 function FilterButton({ active, count, children, onClick, inapplicable = false, title }) {
   return (
     <button type="button" onClick={inapplicable ? undefined : onClick} aria-disabled={inapplicable || undefined} title={title} style={{
@@ -699,6 +744,7 @@ function FilterButton({ active, count, children, onClick, inapplicable = false, 
 export default function FilterBar() {
   const { filters, removeSelection, clearAll, dateApplies, toggleSelectionMode, getDate, dateIsDefault } = useFilters()
   const [showDate,   setShowDate]   = useState(false)
+  const [showAmount, setShowAmount] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
 
   // A view that stops reading the date (the Dashboard's Trends tab) closes an open date picker as well, so
@@ -710,7 +756,9 @@ export default function FilterBar() {
   const effectiveDate = getDate()
   const hasDate       = !!filters.date
   const hasSelections = filters.selections.length > 0
-  const hasAny        = hasDate || hasSelections
+  const amount        = filters.amount
+  const hasAmount     = amountFilterIsActive(amount)
+  const hasAny        = hasDate || hasSelections || hasAmount
 
   return (
     <div style={{
@@ -723,7 +771,7 @@ export default function FilterBar() {
           active={hasDate}
           inapplicable={!dateApplies}
           title={dateApplies ? undefined : 'The date filter does not apply to this view.'}
-          onClick={() => { setShowDate(v => !v); setShowFilter(false) }}
+          onClick={() => { setShowDate(v => !v); setShowAmount(false); setShowFilter(false) }}
         >
           📅 {dateIsDefault
             ? <span style={{ color: 'var(--muted)' }}>{effectiveDate.preset || 'Default'} <span style={{ opacity: 0.7 }}>· default</span></span>
@@ -734,9 +782,24 @@ export default function FilterBar() {
 
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <FilterButton
+          active={hasAmount}
+          onClick={() => { setShowAmount(v => !v); setShowDate(false); setShowFilter(false) }}
+        >
+          💲 Amount
+          {hasAmount && (
+            <span style={{ opacity: 0.85 }}>
+              · {amountConditionSummary(amount.low, amount.lowOp, amount.high, amount.highOp, amount.side)}
+            </span>
+          )}
+        </FilterButton>
+        {showAmount && <AmountPopover onClose={() => setShowAmount(false)} />}
+      </div>
+
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <FilterButton
           active={hasSelections}
           count={hasSelections ? filters.selections.length : 0}
-          onClick={() => { setShowFilter(v => !v); setShowDate(false) }}
+          onClick={() => { setShowFilter(v => !v); setShowDate(false); setShowAmount(false) }}
         >
           🔍 Filter
         </FilterButton>

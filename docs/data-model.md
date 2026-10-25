@@ -575,9 +575,15 @@ Adding an axis is a row in each.
 The registry exists because an endpoint that has not learned a facet does not fail; it answers
 unfiltered, and a total stops matching the list it drills into.
 
-- `_BULK_FILTER_KEYS` on the bulk endpoint is built from `FACET_PARAM_NAMES`. A facet missing there
-  would widen the set a bulk action resolves past the count on screen.
-- `tests/test_transaction_facets.py` asserts every faceted endpoint accepts every facet.
+- `_BULK_FILTER_KEYS` on the bulk endpoint is built from `FACET_PARAM_NAMES` and `AMOUNT_PARAM_NAMES`.
+  A key missing there would widen the set a bulk action resolves past the count on screen.
+- `tests/test_transaction_facets.py` asserts every faceted endpoint accepts every facet and the amount
+  filter.
+- **The amount filter travels with the facets but is not one.** The FilterBar's amount filter (a
+  debit/credit side and a magnitude range, `AmountFilter` / `append_amount_filter`) has no chip and no
+  include/exclude pair, so it is its own dependency, taken by every endpoint that takes the facets.
+  Reports compare each split part's amount, because that is what they count; the unscoped ledger
+  compares the whole transaction.
 - **A facet may be named in more than one way, and the ways OR.** The payee facet takes whole names
   (`payees`) and fragments (`payee_contains`) as variants of one facet, because two facets would AND.
   The fragment is compared against the name the row shows, so a row is never returned for a raw

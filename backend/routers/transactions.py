@@ -26,6 +26,8 @@ from backend.services.txn_trash import restore_txns, trash_txns
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
+    AMOUNT_PARAM_NAMES,
+    AmountFilter,
     FACET_PARAM_NAMES,
     PAYEE_LABEL_SQL,
     TransactionFacets,
@@ -33,6 +35,7 @@ from backend.services.transaction_facets import (
     UNCATEGORIZED_EXPENSE_CATEGORY_ID,
     UNCATEGORIZED_INCOME_CATEGORY_ID,
     account_membership,
+    append_amount_filter,
     append_facets,
     append_totals_exclusion,
     coerce_facets,
@@ -921,24 +924,10 @@ def _build_transaction_filter(
     _append_require_all_attributes_filter(
         clauses, params, require_all_attribute_ids=require_all_attribute_ids,
     )
-    if direction == "debit":
-        clauses.append("t.amount > 0")
-    elif direction == "credit":
-        clauses.append("t.amount < 0")
-    # Amount-magnitude filter (the Transactions ledger's amount popover). Mirrors the category-rule
-    # amount condition: bounds compare against ABS(amount) while the debit/credit *side* is applied
-    # separately through `direction` above — so "credit, >= $50" resolves to amount <= -50. Comparators
-    # are whitelisted to the two the UI offers per bound (>=/> and <=/<) so they can be interpolated safely.
-    # isinstance numeric guard mirrors the other filters: a direct (non-HTTP) call leaves an unset Query
-    # default as a truthy FieldInfo, which `is not None` wouldn't catch (bool excluded — it's not a bound).
-    if isinstance(amount_min, (int, float)) and not isinstance(amount_min, bool):
-        op = ">" if str(amount_min_op) == ">" else ">="
-        clauses.append(f"ABS(t.amount) {op} ?")
-        params.append(float(amount_min))
-    if isinstance(amount_max, (int, float)) and not isinstance(amount_max, bool):
-        op = "<" if str(amount_max_op) == "<" else "<="
-        clauses.append(f"ABS(t.amount) {op} ?")
-        params.append(float(amount_max))
+    append_amount_filter(clauses, params, {
+        "direction": direction, "amount_min": amount_min, "amount_max": amount_max,
+        "amount_min_op": amount_min_op, "amount_max_op": amount_max_op,
+    })
     if view == "spending":
         clauses.append(
             "(COALESCE(c.category_type, pc.category_type) = 'expense' "
@@ -1974,12 +1963,12 @@ def trash_transaction(txn_id: str):
 # closed — it is rejected as unknown if sent, and if the client stops sending it the selection silently
 # *widens* past the count the user is looking at. That is not hypothetical; `needs_review` was once
 # missing and "mark the 28 rows needing review" resolved to the whole ledger. Adding a facet now reaches
-# bulk automatically; only the non-facet filters below still have to be named by hand.
-_BULK_FILTER_KEYS = FACET_PARAM_NAMES | {
+# bulk automatically, as does the FilterBar's amount filter; only the page-local filters below still have
+# to be named by hand.
+_BULK_FILTER_KEYS = FACET_PARAM_NAMES | AMOUNT_PARAM_NAMES | {
     "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id",
     "source_account_ids", "category_id", "require_all_tag_ids", "require_all_attribute_ids",
-    "direction", "view", "search", "quick_filter", "needs_review",
-    "amount_min", "amount_max", "amount_min_op", "amount_max_op", "recurring_only",
+    "view", "search", "quick_filter", "needs_review", "recurring_only",
 }
 
 # Filters the builder understands but bulk refuses on purpose, named separately so the error can say
@@ -2427,6 +2416,7 @@ def spending_by_category(
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     exclude_income:     bool          = Query(False, description="omit income categories from results"),
     exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
@@ -2445,6 +2435,7 @@ def spending_by_category(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
     append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     if exclude_income:
@@ -2502,6 +2493,7 @@ def spending_by_tag_signature(
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     exclude_income:     bool          = Query(False, description="omit income categories from results"),
     exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
@@ -2527,6 +2519,7 @@ def spending_by_tag_signature(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
     append_totals_exclusion(clauses, params, facets, group_alias="p")
     if exclude_income:
         clauses.append("((t.category_id IS NULL AND t.amount > 0) OR "
@@ -2594,6 +2587,7 @@ def spending_by_group(
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
@@ -2610,6 +2604,7 @@ def spending_by_group(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
     append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     with get_db() as conn:
@@ -2648,6 +2643,7 @@ def spending_by_category_in_group(
     group_id:    str           = Query(...),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
@@ -2678,6 +2674,7 @@ def spending_by_category_in_group(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -2724,7 +2721,7 @@ def spending_by_category_in_group(
 #       * spending  -> filter to expense-side transactions, SUM
 #       * income    -> filter to income-side transactions, -SUM
 #       * cash_flow -> all transactions, -SUM (positive = net inflow)
-def _trend_scope(category_id, payee, account_id, facets, source_account_ids, view):
+def _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view):
     if payee:
         clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
@@ -2787,6 +2784,7 @@ def _trend_scope(category_id, payee, account_id, facets, source_account_ids, vie
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
 
     needs_category_join = bool(category_id) or (not payee)
     join_sql = (
@@ -2811,6 +2809,7 @@ def monthly_trend(
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
@@ -2822,7 +2821,7 @@ def monthly_trend(
     facets = coerce_facets(facets) or TransactionFacets()
     # Payee detail drawers want the merchant's full visible history by default, so the rolling month
     # window is suppressed for a payee scope unless the caller supplied an explicit date filter.
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, source_account_ids, view)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -2905,6 +2904,7 @@ def range_trend(
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     view:        str           = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
@@ -2925,7 +2925,7 @@ def range_trend(
     if len(spans) > RANGE_TREND_MAX_RANGES:
         raise HTTPException(status_code=400, detail=f"at most {RANGE_TREND_MAX_RANGES} ranges")
 
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, source_account_ids, view)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view)
     # The overall bounds let the date index prune before the per-range join does its work.
     clauses.append("t.date >= ?")
     params.append(min(s for s, _ in spans))
@@ -2996,6 +2996,7 @@ def monthly_cash_flow(
     months:      int           = Query(24, le=240),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
@@ -3014,6 +3015,7 @@ def monthly_cash_flow(
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
     # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every
     # other such frame governs it too — and it is the *only* exclusion axis the design allows.
     # See docs/data-model.md -> "Reporting assumptions" -> "Cash flow".
@@ -3081,6 +3083,7 @@ def monthly_by_group(
     months:      int           = Query(24, le=240),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
+    amount:      AmountFilter = Depends(),
     group_id:    Optional[str] = Query(None),
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
@@ -3095,6 +3098,7 @@ def monthly_by_group(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_amount_filter(clauses, params, amount)
     append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     if group_id == UNCATEGORIZED_EXPENSE_CATEGORY_ID:

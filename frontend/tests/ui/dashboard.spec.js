@@ -490,3 +490,30 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   await expect(grain).toHaveValue('month')
   await expect(grain.locator('option')).toHaveText(['Monthly', 'Quarterly', 'Yearly'])
 })
+
+// The amount filter lives in the shared FilterBar: set on the Dashboard, it narrows the summary requests
+// and is still in force on the Transactions page. The figures it produces are the backend's to prove
+// (backend/tests/test_dashboard_filter_reconciliation.py); this checks that the control reaches both pages.
+test('the filter bar amount filter narrows the dashboard and carries over to transactions', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+
+  // Anchored on the icon: the ledger's Amount column header is also a button named Amount.
+  const amountButton = page.getByRole('button', { name: /^💲 Amount/ })
+  await amountButton.click()
+  await page.getByRole('button', { name: 'Debits', exact: true }).click()
+  const summaryRequest = page.waitForRequest(request => (
+    request.url().includes('/transactions/summary/') && request.url().includes('direction=debit')
+  ))
+  await page.getByRole('button', { name: 'Apply' }).click()
+  await summaryRequest
+  await expect(amountButton).toContainText('debit')
+
+  const ledgerRequest = page.waitForRequest(request => (
+    /\/api\/transactions\?/.test(request.url()) && request.url().includes('direction=debit')
+  ))
+  await page.getByRole('link', { name: 'Transactions' }).click()
+  await ledgerRequest
+  await expect(amountButton).toContainText('debit')
+})

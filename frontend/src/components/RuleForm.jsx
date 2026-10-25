@@ -173,7 +173,7 @@ function SegButton({ active, onClick, children }) {
   )
 }
 
-// Exported so the Transactions ledger's amount *filter* popover reuses the exact same control (Both/
+// Exported so the FilterBar's amount *filter* popover reuses the exact same control (Both/
 // Debits/Credits, Range/Equals) users already know from the rule editor — magnitude compares against
 // |amount|, the debit/credit side applies the sign separately. `strictBounds` offers `>` / `<` beside the
 // inclusive comparators; only the filter passes it, because a rule stores bare inclusive bounds.
