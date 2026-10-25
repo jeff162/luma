@@ -136,6 +136,11 @@ requirements, because popovers, inline editors and dismissal rules rebuilt per p
   `_wipe_user_data_tables`, the wipe restore uses, then re-seeds the group skeleton. It touches only the
   tenant data DB; identities and credentials are untouched.
 
+- **Loading and clearing are sign-in-protection-off actions; the status is not.** Turning protection on
+  leaves loaded demo data in place, still blocking every path that brings data in, so
+  `GET /auth/demo-data` answers in both modes and the banner shows. With protection on it reports
+  nothing to load, and the banner's Clear stays visible but disabled, naming why.
+
 ## Data flow
 
 1. A page reads global filters from `FilterContext`

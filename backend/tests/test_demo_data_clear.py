@@ -175,6 +175,25 @@ class DemoDataClearTests(unittest.TestCase):
             # Loaded → no longer loadable (tenant has data).
             self.assertEqual(demo_data_status(), {"loaded": True, "loadable": False})
 
+    def test_status_answers_while_sign_in_protection_is_on(self):
+        # Demo data loaded before protection was turned on stays loaded and keeps imports blocked, so the
+        # status has to answer a signed-in session then too. Loading and clearing stay protection-off.
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
+            load_demo_data(conn, scope_id="demo-profile")
+        control_database.enable_auth_mode()
+        with self._use_db_path():
+            self.assertEqual(demo_data_status(), {"loaded": True, "loadable": False})
+            with self.assertRaises(HTTPException) as ctx:
+                clear_demo_data_endpoint()
+        self.assertEqual(ctx.exception.status_code, 400)
+        with get_db(str(self.db_path)) as conn:
+            self.assertTrue(is_demo_data_loaded(conn))
+
+    def test_status_offers_no_load_while_sign_in_protection_is_on(self):
+        control_database.enable_auth_mode()
+        with self._use_db_path():
+            self.assertEqual(demo_data_status(), {"loaded": False, "loadable": False})
+
     def test_restore_blocked_while_demo_loaded(self):
         with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")

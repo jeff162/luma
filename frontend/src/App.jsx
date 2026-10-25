@@ -59,7 +59,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog, AppDialog, Button, Toggle } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Toggle, Tooltip } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -1712,8 +1712,8 @@ export default function App() {
   }
 
   // Demo-data status follows the active tenant/profile; it drives the global demo strip and is the
-  // signal that imports/connections are paused. Errors (e.g. auth mode, where the endpoint 400s) just
-  // mean "no demo".
+  // signal that imports/connections are paused. It answers with sign-in protection on as well, since demo
+  // data loaded before protection was turned on is still there. An error just means "no demo".
   //
   // This and the currency lookup below wait for a session subject: both endpoints need one, and a request
   // sent before the identity bootstrap finishes answers 401, which the shell reads as a lost session and
@@ -2138,15 +2138,21 @@ export default function App() {
                                     <span style={{ color: 'var(--muted)' }}>
                                       Exploring the sample dataset — imports and connections are disabled.
                                     </span>
-                                    <Button
-                                      variant="secondary"
-                                      tone="danger"
-                                      size="compact"
-                                      onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
-                                      style={{ marginLeft: 'auto' }}
-                                    >
-                                      Clear demo data
-                                    </Button>
+                                    {/* Clearing wipes the tenant, so like loading it is only offered with sign-in
+                                        protection off; with it on the button stays, greyed, and says why. */}
+                                    <span style={{ marginLeft: 'auto' }}>
+                                      <Tooltip content={authEnabled ? 'Turn sign-in protection off to clear the demo data' : ''}>
+                                        <Button
+                                          variant="secondary"
+                                          tone="danger"
+                                          size="compact"
+                                          disabled={authEnabled}
+                                          onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
+                                        >
+                                          Clear demo data
+                                        </Button>
+                                      </Tooltip>
+                                    </span>
                                   </div>
                                 ) : null}
                                 {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
