@@ -24,9 +24,11 @@
 
 // Groups are the parent categories (parent_id === null) in the flat category list; leaves carry
 // parent_id = their group's id. A group/leaf is only *shown* by the spending report when it counts
-// toward totals (not exclude_from_totals) and matches the active income/expense view — so an exclude
-// on an already-omitted row (a transfer/card-payment category, or the other view's groups) is a no-op
-// for the report and must not raise a false note.
+// toward totals and matches the active income/expense view — so an exclude on an already-omitted row
+// (a transfer/card-payment category, or the other view's groups) is a no-op for the report and must
+// not raise a false note. A leaf counts when its group is not exclude_from_totals (the group's flag
+// wins, as on the server) or when an include chip names the leaf or its group, which is the server's
+// named-scope exemption (`append_totals_exclusion`).
 export function computeReportSpendingConflicts({
   reportKind,             // 'group' | 'category' | 'tag' | null/other
   view,                   // 'income' | 'expense'
@@ -63,12 +65,22 @@ export function computeReportSpendingConflicts({
   const excludes = selList.filter(s => s && s.mode === 'exclude')
   if (excludes.length === 0) return []
 
+  const namedIds = type => new Set(selList.filter(s => s?.type === type && s.mode !== 'exclude').map(s => s.id))
+  const namedGroupIds = namedIds('group')
+  const namedLeafIds = namedIds('category')
   const byId = new Map((categories || []).map(c => [c.id, c]))
   const groupType = g => g?.category_type || 'expense'
-  const isShownGroup = g => !!g && g.parent_id == null && !g.exclude_from_totals && groupType(g) === view
+  const leafCounts = (leaf, group) =>
+    !group.exclude_from_totals || namedGroupIds.has(group.id) || namedLeafIds.has(leaf.id)
   const isShownLeaf = leaf => {
-    if (!leaf || leaf.parent_id == null || leaf.exclude_from_totals) return false
-    return isShownGroup(byId.get(leaf.parent_id))
+    if (!leaf || leaf.parent_id == null) return false
+    const group = byId.get(leaf.parent_id)
+    return !!group && groupType(group) === view && leafCounts(leaf, group)
+  }
+  const isShownGroup = g => {
+    if (!g || g.parent_id != null || groupType(g) !== view) return false
+    if (!g.exclude_from_totals || namedGroupIds.has(g.id)) return true
+    return (categories || []).some(c => c.parent_id === g.id && namedLeafIds.has(c.id))
   }
 
   // Which groups / leaf categories the report currently breaks down.

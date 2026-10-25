@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../reportFilterConflicts.js'
 
 // Flat category fixture: two expense groups + one income group, each with leaves, plus a
-// transfers group flagged exclude_from_totals (which the spending report never shows).
+// transfers group flagged exclude_from_totals (which the spending report shows only when a chip names it).
 const categories = [
   { id: 'g-food', parent_id: null, category_type: 'expense', exclude_from_totals: 0, name: 'Food' },
   { id: 'c-groceries', parent_id: 'g-food', category_type: null, exclude_from_totals: 0, name: 'Groceries' },
@@ -44,6 +44,14 @@ describe('computeReportSpendingConflicts — category report', () => {
   it('does not flag an exclude_from_totals category the report never shows', () => {
     const out = computeReportSpendingConflicts({ ...base, selections: [exclude('category', 'c-cardpay', 'Card Payment')] })
     expect(out).toEqual([])
+  })
+
+  it('flags a leaf of an exclude_from_totals group an include chip brought into the report', () => {
+    const out = computeReportSpendingConflicts({
+      ...base,
+      selections: [include('group', 'g-transfer', 'Transfers'), exclude('category', 'c-cardpay', 'Card Payment')],
+    })
+    expect(out).toEqual([{ facet: 'category', id: 'c-cardpay', label: 'Card Payment' }])
   })
 
   it('does not flag an income category while viewing the expense report', () => {

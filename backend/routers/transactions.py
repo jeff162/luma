@@ -34,6 +34,7 @@ from backend.services.transaction_facets import (
     UNCATEGORIZED_INCOME_CATEGORY_ID,
     account_membership,
     append_facets,
+    append_totals_exclusion,
     coerce_facets,
     facets_from,
     like_contains_pattern,
@@ -955,9 +956,7 @@ def _build_transaction_filter(
         # this one, because a drill from a cash-flow node has to list exactly the rows that node's
         # figure was computed from. Pending rows go for the same reason: every summary endpoint leaves
         # them out, so a drill that kept them would list rows its figure never counted.
-        clauses.append(
-            "COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) = 0"
-        )
+        append_totals_exclusion(clauses, params, facets_from(facet_kwargs), group_alias="pc")
         clauses.append("t.is_pending = 0")
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
@@ -2433,8 +2432,7 @@ def spending_by_category(
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
-    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
-               "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params  = []
     if date_start and date_end:
         clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
@@ -2447,6 +2445,7 @@ def spending_by_category(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     if exclude_income:
         clauses.append(
@@ -2515,8 +2514,7 @@ def spending_by_tag_signature(
     # spending_by_category exactly (is_pending / trashed / exclude_from_totals + exclude_income/expense +
     # the shared facet filters incl. exclusions) so all three "Spending by" modes reconcile to one total.
     sel_ids = [i.strip() for i in selected_tag_ids.split(",") if i.strip()]
-    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
-               "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params: list = []
     if date_start and date_end:
         clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
@@ -2529,6 +2527,7 @@ def spending_by_tag_signature(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_totals_exclusion(clauses, params, facets, group_alias="p")
     if exclude_income:
         clauses.append("((t.category_id IS NULL AND t.amount > 0) OR "
                        "COALESCE(c.category_type, p.category_type) != 'income')")
@@ -2598,8 +2597,7 @@ def spending_by_group(
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
-    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
-               "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params  = []
     if date_start and date_end:
         clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
@@ -2612,6 +2610,7 @@ def spending_by_group(
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     with get_db() as conn:
         # Category rollups read the split-expansion seam: a split transaction contributes one row
@@ -2783,9 +2782,7 @@ def _trend_scope(category_id, payee, account_id, facets, source_account_ids, vie
             # (transfers etc.) are removed. Detail-panel scopes (category_id) keep
             # showing their own activity unfiltered so the user can still see what
             # is in an excluded category when they ask for it explicitly.
-            clauses.append(
-                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"
-            )
+            append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
@@ -3011,16 +3008,16 @@ def monthly_cash_flow(
     clauses = [
         "t.is_pending = 0",
         "t.trashed_at IS NULL",
-        # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every
-        # other such frame governs it too — and it is the *only* exclusion axis the design allows.
-        # See docs/data-model.md -> "Reporting assumptions" -> "Cash flow".
-        "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
     ]
     params: list = []
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
+    # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every
+    # other such frame governs it too — and it is the *only* exclusion axis the design allows.
+    # See docs/data-model.md -> "Reporting assumptions" -> "Cash flow".
+    append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -3093,12 +3090,12 @@ def monthly_by_group(
         "t.trashed_at IS NULL",
         "t.date >= date('now', ? || ' months')",
         "strftime('%Y-%m', t.date) IS NOT NULL",
-        "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
     ]
     params = [f"-{months}"]
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     append_facets(clauses, params, facets)
+    append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     if group_id == UNCATEGORIZED_EXPENSE_CATEGORY_ID:
         clauses.extend(["t.category_id IS NULL", "t.amount > 0"])

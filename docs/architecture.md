@@ -170,7 +170,8 @@ each write.
   scope is a negative contribution. A `view` parameter (`spending` | `income` | `cash_flow`) chooses the
   frame when no category/payee scope is given; for a category scope the sign is flipped for income-type
   categories so received income reads positive. The cross-cutting frames exclude categories marked
-  `exclude_from_totals`.
+  `exclude_from_totals` unless a group or category include chip names them (see `data-model.md` →
+  *Reporting assumptions*).
 
 - **Day-precise range totals:** `/summary/range-trend` is `monthly-trend`'s population and sign (one
   shared scope builder) totalled over caller-supplied inclusive date ranges — one row per range in the
@@ -187,8 +188,8 @@ each write.
   so a correct count would need a second read of the source.
 
 - **List filtering:** `/transactions` accepts the same `view`; `cash_flow` applies no category-type
-  clause but still drops `exclude_from_totals` categories, so a drill from a cash-flow node lists the
-  rows its figure came from. `tag_ids` matches on a row's *effective* tags (see *Transaction tags*).
+  clause but still drops `exclude_from_totals` categories (with the same named-chip exemption), so a
+  drill from a cash-flow node lists the rows its figure came from. `tag_ids` matches on a row's *effective* tags (see *Transaction tags*).
 
 - **Bulk edit:** `POST /transactions/bulk` applies field changes to a selection in one transaction. The
   selection is an explicit id list or `{mode:'filter', filter, exclude_ids}`; filter mode resolves rows

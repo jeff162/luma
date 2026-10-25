@@ -515,7 +515,7 @@ export const HELP_TOPICS = [
         <p>
           Categories{' '}
           <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not included
-          in any of the dashboard reports.
+          in any of the dashboard reports unless the group or category is added to the filter.
         </p>
       </>
     ),
@@ -1434,6 +1434,12 @@ export const HELP_TOPICS = [
           The built-in <strong>Reimbursable</strong> group is also excluded from totals. This cannot
           be turned off for this group. This is used as part
           of <HelpLink to="/help/reimbursable-expenses">the reimbursable expense workflow</HelpLink>.
+        </p>
+        <p>
+          Adding an excluded group or category to the filter brings it back into the dashboard reports,
+          which gives a report on just the transfers or just the reimbursable expenses. Tag, account and
+          payee filters do not. A transfer between two accounts in the ledger nets to zero in that report,
+          since both sides are counted.
         </p>
 
       </>

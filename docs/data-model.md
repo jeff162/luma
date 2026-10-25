@@ -2285,7 +2285,11 @@ When the schema changes:
 - `exclude_from_totals` is honored by every cross-cutting summary and chart. **A scope the user named
   explicitly is the exception**: a drill into one group or category shows that group's own activity
   unfiltered, so `/summary/by-category-in-group` applies no exclusion and the trend endpoints apply it
-  only when no `category_id` scopes them. Asking for an excluded category's figures is not the same as
+  only when no `category_id` scopes them. A group or category include chip names a scope the same way,
+  so its rows count in every summary even when it is excluded: `group: Transfers` reports the transfers.
+  Tag, account and payee chips select rows without naming what they are filed under, so they do not.
+  `append_totals_exclusion` is the one implementation, shared by every summary and the list feed's
+  `view` drill so the two still agree. Asking for an excluded category's figures is not the same as
   asking for a total
 - pending rows are left out of totals
 - **A group's total equals the sum of its category slices.** It holds because a leaf's type always

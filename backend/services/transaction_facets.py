@@ -406,6 +406,37 @@ def append_facets(clauses: list, params: list, facets: TransactionFacets | dict 
                 params.extend(member[1])
 
 
+def append_totals_exclusion(
+    clauses: list, params: list, facets: TransactionFacets | dict | None, *, group_alias: str,
+) -> None:
+    """Drop `exclude_from_totals` categories from a cross-cutting summary, unless a chip names them.
+
+    A total leaves out money movement, but a group or category the user includes by name is a scope
+    they asked for, so its rows count even when it is excluded: `group: Transfers` reports the
+    transfers rather than nothing. Only the group and category include facets name a scope. A tag,
+    account or payee chip selects rows without naming what they are filed under, and an exclude chip
+    only removes rows.
+
+    Every summary and the list feed's dashboard drill call this one function, so a drill lists the rows
+    its figure counted. The leaf category is joined as `c`; the group alias differs between the summary
+    endpoints (`p`) and the list feed (`pc`). See docs/data-model.md → *Reporting assumptions*.
+    """
+    facets = coerce_facets(facets)
+    values = facets.as_params() if facets else {}
+    category_ids = split_ids(values.get('category_ids'), ',')
+    group_ids = split_ids(values.get('group_ids'), ',')
+    exempt = []
+    if category_ids:
+        exempt.append(f"c.id IN ({','.join('?' * len(category_ids))})")
+    if group_ids:
+        exempt.append(f"c.parent_id IN ({','.join('?' * len(group_ids))})")
+    clauses.append(
+        f"(COALESCE({group_alias}.exclude_from_totals, c.exclude_from_totals, 0) = 0"
+        + "".join(f" OR {sql}" for sql in exempt) + ")"
+    )
+    params.extend(category_ids + group_ids)
+
+
 def _facet_membership(facet: Facet, values: dict, *, exclude: bool) -> Optional[tuple[str, list]]:
     """One facet's selection in one mode as a single membership, its variants ORed in."""
     parts = []
