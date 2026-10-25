@@ -998,9 +998,10 @@ export default function Categories() {
     })
   }
 
+  // The synthetic Unassigned income group is drawn in the list but has no row to update.
   async function persistGroupOrder(sectionType, ids) {
     await Promise.all(
-      ids.map((id, index) => api.updateCategory(id, {
+      ids.filter(id => id !== SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID).map((id, index) => api.updateCategory(id, {
         parent_id: null,
         category_type: sectionType,
         sort_order: index,
