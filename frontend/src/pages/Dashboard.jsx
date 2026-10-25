@@ -3107,6 +3107,9 @@ export default function Dashboard() {
                         .map(r => ({ ...r, pieValue: Math.max(Number(r.total) || 0, 0) }))
                       const expansionAvailable = allRows.length > pageRows.length
                       const listRows = showAllSpendingRows ? allRows : pieData
+                      // A filter can leave nothing in this view (e.g. an income-only include chip on the
+                      // expense view). The header stays so the breakdown can still be switched.
+                      const isEmpty = allRows.length === 0 && !(viewIsTag && tagModeLoading)
 
                       function handleSliceClick(row) {
                         if (!row) return
@@ -3120,7 +3123,7 @@ export default function Dashboard() {
 
                       return (
                         <>
-                          <Card>
+                          <Card style={isEmpty ? { gridColumn: '1 / -1' } : undefined}>
                             <div
                               style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}
                               onContextMenu={event => {
@@ -3162,6 +3165,8 @@ export default function Dashboard() {
                               <div style={{ height: 220, display: 'grid', placeItems: 'center' }}>
                                 <Spinner />
                               </div>
+                            ) : isEmpty ? (
+                              <EmptyState message={viewIsIncome ? 'No income for this selection' : 'No spending for this selection'} />
                             ) : (
                               <ResponsiveContainer width="100%" height={220}>
                                 <PieChart>
@@ -3183,11 +3188,13 @@ export default function Dashboard() {
                                 </PieChart>
                               </ResponsiveContainer>
                             )}
-                            <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
-                              {viewIsTag || viewIsCategory ? 'Click to see transactions' : 'Click to drill down'}
-                            </div>
+                            {!isEmpty && (
+                              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
+                                {viewIsTag || viewIsCategory ? 'Click to see transactions' : 'Click to drill down'}
+                              </div>
+                            )}
                           </Card>
-                          <Card>
+                          {!isEmpty && <Card>
                             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
                               {viewIsTag
                                 ? (activeTagReport?.name || 'Tags')
@@ -3246,7 +3253,7 @@ export default function Dashboard() {
                                 </button>
                               </div>
                             )}
-                          </Card>
+                          </Card>}
                         </>
                       )
                     })()}

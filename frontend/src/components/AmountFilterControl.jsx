@@ -6,9 +6,9 @@
 
 /*
  * The Transactions ledger's amount filter: a compact toolbar button that opens a popover holding the
- * shared `AmountCondition` control (the same Both/Debits/Credits + Range/Equals + per-bound comparator
- * users know from the rule editor). This is a *page-local* filter — like the ledger search, it narrows
- * only the ledger and never touches the shared FilterBar / Dashboard. Magnitude bounds compare against
+ * shared `AmountCondition` control (the same Both/Debits/Credits + Range/Equals users know from the
+ * rule editor, plus a per-bound `>` / `<` that rules do not offer). This is a *page-local* filter — like
+ * the ledger search, it narrows only the ledger and never touches the shared FilterBar / Dashboard. Magnitude bounds compare against
  * |amount|; the debit/credit side rides the backend `direction` param, so the sign applies separately.
  */
 
@@ -96,6 +96,7 @@ export default function AmountFilterControl({ value, onChange }) {
             high={draft.high} highOp={draft.highOp}
             side={draft.side}
             onChange={setDraft}
+            strictBounds
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12,
             borderTop: '1px solid var(--border)', paddingTop: 10 }}>

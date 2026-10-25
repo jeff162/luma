@@ -174,9 +174,10 @@ function SegButton({ active, onClick, children }) {
 }
 
 // Exported so the Transactions ledger's amount *filter* popover reuses the exact same control (Both/
-// Debits/Credits, Range/Equals, per-bound comparator) users already know from the rule editor —
-// magnitude compares against |amount|, the debit/credit side applies the sign separately.
-export function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
+// Debits/Credits, Range/Equals) users already know from the rule editor — magnitude compares against
+// |amount|, the debit/credit side applies the sign separately. `strictBounds` offers `>` / `<` beside the
+// inclusive comparators; only the filter passes it, because a rule stores bare inclusive bounds.
+export function AmountCondition({ low, lowOp, high, highOp, side, onChange, strictBounds = false }) {
   const isEquals = low != null && high != null && low === high
   function setLow(v) { onChange({ low: v, lowOp, high, highOp, side }) }
   function setLowOp(op) { onChange({ low, lowOp: op, high, highOp, side }) }
@@ -226,7 +227,9 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>
               {low != null ? 'Lower' : <span style={{ opacity: 0.5 }}>Lower</span>}
             </span>
-            <OpSelect value={lowOp ?? '>='} onChange={setLowOp} options={['>=', '>']} name="rule-amount-lower-operator" ariaLabel="Rule lower amount operator" />
+            {strictBounds
+              ? <OpSelect value={lowOp ?? '>='} onChange={setLowOp} options={['>=', '>']} name="rule-amount-lower-operator" ariaLabel="Rule lower amount operator" />
+              : <span style={{ fontSize: 13, color: 'var(--muted)' }}>&gt;=</span>}
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
             <NumberInput value={low} onChange={setLow} placeholder="no lower limit" width={110} name="rule-amount-lower-bound" ariaLabel="Rule lower amount" />
             {low != null && (
@@ -238,7 +241,9 @@ export function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>
               {high != null ? 'Upper' : <span style={{ opacity: 0.5 }}>Upper</span>}
             </span>
-            <OpSelect value={highOp ?? '<='} onChange={setHighOp} options={['<=', '<']} name="rule-amount-upper-operator" ariaLabel="Rule upper amount operator" />
+            {strictBounds
+              ? <OpSelect value={highOp ?? '<='} onChange={setHighOp} options={['<=', '<']} name="rule-amount-upper-operator" ariaLabel="Rule upper amount operator" />
+              : <span style={{ fontSize: 13, color: 'var(--muted)' }}>&lt;=</span>}
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
             <NumberInput value={high} onChange={setHigh} placeholder="no upper limit" width={110} name="rule-amount-upper-bound" ariaLabel="Rule upper amount" />
             {high != null && (
@@ -519,9 +524,7 @@ const RuleForm = forwardRef(function RuleForm({
     const absAmount = Math.abs(transactionData.amount)
     return {
       amtLow: absAmount,
-      amtLowOp: '>=',
       amtHigh: absAmount,
-      amtHighOp: '<=',
       amtSide: transactionData.amount > 0 ? 'debit' : 'credit',
     }
   }
@@ -532,17 +535,13 @@ const RuleForm = forwardRef(function RuleForm({
     if (initialAmountMin != null || initialAmountMax != null) {
       return {
         amtLow: initialAmountMin,
-        amtLowOp: initialValues.amount_min_op ?? '>=',
         amtHigh: initialAmountMax,
-        amtHighOp: initialValues.amount_max_op ?? '<=',
         amtSide: initialValues.debit_credit ?? 'both',
       }
     }
     return {
       amtLow: null,
-      amtLowOp: '>=',
       amtHigh: null,
-      amtHighOp: '<=',
       amtSide: 'both',
     }
   }
@@ -611,9 +610,7 @@ const RuleForm = forwardRef(function RuleForm({
     setFilters(prev => prev.filter((_, i) => i !== index))
   }
   const [amtLow, setAmtLow] = useState(initialAmount.amtLow)
-  const [amtLowOp, setAmtLowOp] = useState(initialAmount.amtLowOp)
   const [amtHigh, setAmtHigh] = useState(initialAmount.amtHigh)
-  const [amtHighOp, setAmtHighOp] = useState(initialAmount.amtHighOp)
   const [amtSide, setAmtSide] = useState(initialAmount.amtSide)
   const [ownerId, setOwnerId] = useState(initialValues.ownerId ?? initialValues.owner_id ?? '')
   const [accountId, setAccountId] = useState(initialValues.accountId ?? initialValues.account_id ?? '')
@@ -673,9 +670,7 @@ const RuleForm = forwardRef(function RuleForm({
       amtLow == null && amtHigh == null
     ) {
       setAmtLow(transactionDefaults.amtLow)
-      setAmtLowOp(transactionDefaults.amtLowOp)
       setAmtHigh(transactionDefaults.amtHigh)
-      setAmtHighOp(transactionDefaults.amtHighOp)
       setAmtSide(transactionDefaults.amtSide)
       setTransactionDefaultsApplied(true)
     }
@@ -777,9 +772,9 @@ const RuleForm = forwardRef(function RuleForm({
     getDraftState,
   }), [getDraftState])
 
-  function handleAmtChange({ low, lowOp, high, highOp, side }) {
-    setAmtLow(low); setAmtLowOp(lowOp ?? '>=')
-    setAmtHigh(high); setAmtHighOp(highOp ?? '<=')
+  function handleAmtChange({ low, high, side }) {
+    setAmtLow(low)
+    setAmtHigh(high)
     setAmtSide(side ?? 'both')
   }
 
@@ -846,7 +841,7 @@ const RuleForm = forwardRef(function RuleForm({
     }
   }
 
-  const amtSummary = amountConditionSummary(amtLow, amtLowOp, amtHigh, amtHighOp, amtSide)
+  const amtSummary = amountConditionSummary(amtLow, '>=', amtHigh, '<=', amtSide)
   const selectedCategoryName = getCategoryDisplayLabel(categories, catId)
   // Read-only action labels for the bottom rule summary (editing happens in the sections above).
   const actionSummaryLabels = [
@@ -991,8 +986,8 @@ const RuleForm = forwardRef(function RuleForm({
             onClear={() => { setAmtLow(null); setAmtHigh(null); setAmtSide('both'); setAmtOpen(false) }}
           >
             <AmountCondition
-              low={amtLow} lowOp={amtLowOp}
-              high={amtHigh} highOp={amtHighOp}
+              low={amtLow}
+              high={amtHigh}
               side={amtSide}
               onChange={handleAmtChange}
             />

@@ -85,13 +85,6 @@ scale — rather than by feature.
   "explain this" mode that outlines the controls on a page that have help topics and opens the topic on a
   click, declared per control so it points at the real screen rather than a mockup; recorded with the
   post-data guided tour from the onboarding rework, which would sequence over the same declarations.
-- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **reduced 2026-09-03 to the parked
-  include case.** The exclude note shipped 2026-07-28 and its behavior — `FilterConflictNote`, the
-  like-for-like and view/totals-aware boundaries, and both symmetric tag-report cases — is in
-  the header comment of `frontend/src/lib/reportFilterConflicts.js`. What stays: whether an **include** chip
-  on a group/category report deserves the same note. It is deliberately not flagged today (a transaction
-  has one category, so an include is ordinary focusing) and the behavior is correct without it; it is held
-  for a larger tag-report pass rather than a one-off.
 - [import-history-windowing.md](import-history-windowing.md) — **reduced again 2026-10-09; the
   per-source window, the by-year archive, the move onto transaction coverage and the stored-detail
   maintenance screen are all built.** The retention story — the silent global

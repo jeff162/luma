@@ -1,8 +1,7 @@
 # Saved tag reports — follow-ups
 
 **Status: deferred, not started (migrated from `TODO.md` 2026-07-30).** Four independent
-enhancements to the dashboard tag-report feature. Related: `tag-report-exclude-warning.md`
-(a separate small note for the report view).
+enhancements to the dashboard tag-report feature.
 
 ## Settings-page mirror of the report manager
 
