@@ -102,6 +102,14 @@ const DISMISS_TITLES = {
 function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, renderSeries }) {
   const tone = SIGNAL_KINDS[signal.kind]?.tone || 'var(--accent2)'
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // Whether the open transactions are the ones expanding the details opened, so collapsing them closes
+  // only those. Once that panel closes or moves to another series, it is no longer this row's to close.
+  const [openedTransactions, setOpenedTransactions] = useState(false)
+  const [wasActive, setWasActive] = useState(active)
+  if (active !== wasActive) {
+    setWasActive(active)
+    if (!active) setOpenedTransactions(false)
+  }
   // The series' current state — its cadence, amount setting, range and dates — is what a finding is
   // judged against, so it is one click away rather than a trip to the Series view.
   const seriesCard = signal.series_id && renderSeries ? renderSeries(signal.series_id) : null
@@ -200,7 +208,19 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
           ) : null}
           {seriesCard ? (
             <LinkButton
-              onClick={() => setDetailsOpen(v => !v)}
+              onClick={() => {
+                // Opening the details also opens the series' transactions, which is what the reader is
+                // usually after, and collapsing them closes the transactions again if that is how they
+                // opened. Opening a series toggles, so it is called only when that flips the right way.
+                if (!detailsOpen && !active) {
+                  onOpenSeries(signal)
+                  setOpenedTransactions(true)
+                } else if (detailsOpen && openedTransactions && active) {
+                  onOpenSeries(signal)
+                  setOpenedTransactions(false)
+                }
+                setDetailsOpen(v => !v)
+              }}
               aria-expanded={detailsOpen}
               style={{ marginTop: 4, fontSize: 11.5, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
             >Series Details<span style={{ fontSize: 9 }}>{detailsOpen ? '▾' : '▸'}</span>

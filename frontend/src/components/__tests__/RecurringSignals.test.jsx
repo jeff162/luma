@@ -104,6 +104,48 @@ describe('RecurringSignals', () => {
     expect(onOpenSeries).toHaveBeenCalledWith(PRICE)
   })
 
+  describe('Series Details and the series’ transactions', () => {
+    // Opening a series toggles, so each call here flips the panel: a call made in the wrong state closes
+    // transactions the user opened, or reopens ones they closed.
+    function setup() {
+      const onOpenSeries = vi.fn()
+      const props = { signals: [PRICE], counts: { price_change: 1 }, dismissedCount: 0, kind: 'all',
+        renderSeries: () => <div>card</div>, onOpenSeries,
+        onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(), onShowDismissed: vi.fn(),
+        onAcceptPrice: vi.fn(), onExcludeCharge: vi.fn() }
+      const { rerender } = render(<RecurringSignalsView {...props} />)
+      const setActive = (id) => rerender(<RecurringSignalsView {...props} activeSeriesId={id} />)
+      return { onOpenSeries, setActive, details: screen.getByRole('button', { name: /Series Details/ }) }
+    }
+
+    it('opens them with the details and closes them with it', async () => {
+      const { onOpenSeries, setActive, details } = setup()
+      await userEvent.click(details)
+      expect(onOpenSeries).toHaveBeenCalledWith(PRICE)
+      setActive('s1')
+      await userEvent.click(details)
+      expect(onOpenSeries).toHaveBeenCalledTimes(2)
+    })
+
+    it('leaves them alone when they were already open', async () => {
+      const { onOpenSeries, setActive, details } = setup()
+      setActive('s1')
+      await userEvent.click(details)
+      await userEvent.click(details)
+      expect(onOpenSeries).not.toHaveBeenCalled()
+    })
+
+    it('leaves them alone once they closed or were reopened another way', async () => {
+      const { onOpenSeries, setActive, details } = setup()
+      await userEvent.click(details)
+      setActive('s1')
+      setActive(null)  // closed from the panel
+      setActive('s1')  // reopened from the card's count
+      await userEvent.click(details)
+      expect(onOpenSeries).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('shows no arrow when the finding names nothing that can be opened', () => {
     // A finding with no series id has nothing to point at, and an arrow that did nothing would be worse.
     renderSection({ signals: [{ ...PRICE, series_id: undefined }] })
