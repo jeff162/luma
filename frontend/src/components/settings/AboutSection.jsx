@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../../lib/appConfig.js'
 import { describeBrowser, installationDetailsAsText } from '../../lib/installationDetails.js'
 import { Button, Card } from '../ui.jsx'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../../lib/useBusyIndicator.js'
 import { useUpdateCheck } from '../../lib/useUpdateCheck.js'
 import { UpdateCheckControls, UpdateCheckStatus } from '../UpdateCheck.jsx'
 
@@ -79,6 +80,10 @@ function AboutRow({ label, value, help = '' }) {
 // anchors: nothing is fetched from anywhere until the user clicks.
 export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, thirdPartyNoticesScope, canManageEnvironment }) {
   const updateCheck = useUpdateCheck()
+  // Paint gate: the update-check status adds the Version caption and the controls, which push the panel
+  // down when they land late. A load that runs long or fails still paints, without them.
+  const loadSlow = useBusyIndicator(updateCheck.loading, { delayMs: PAINT_GATE_DELAY_MS })
+  if (updateCheck.loading && !loadSlow) return null
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>

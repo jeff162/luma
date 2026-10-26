@@ -9,6 +9,8 @@ import { api } from './api.js'
 
 export function useUpdateCheck() {
   const [status, setStatus] = useState(null)
+  // True until the first read settles, either way.
+  const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
@@ -18,6 +20,7 @@ export function useUpdateCheck() {
     api.getUpdateCheck()
       .then(result => { if (!cancelled) setStatus(result) })
       .catch(() => { })
+      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [])
 
@@ -47,5 +50,5 @@ export function useUpdateCheck() {
     }
   }
 
-  return { status, checking, saving, notice, setEnabled, checkNow }
+  return { status, loading, checking, saving, notice, setEnabled, checkNow }
 }
