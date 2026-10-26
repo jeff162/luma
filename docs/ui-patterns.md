@@ -176,6 +176,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   form shows the figure that will be recorded before saving.
 - **Row actions live in the row's `⋯` menu** (`ActionMenu`), with the destructive item last and
   separated.
+- **A right-click menu is a shortcut, not the only path.** Each action it offers is also reachable from
+  something on screen, such as a button or the `⋯` menu, because a right-click menu is invisible and the
+  visible control is what tells the user the action exists. A selection convenience, such as Select all
+  scoped to one group, can live only in the right-click menu.
 
 ## Transaction lists
 
