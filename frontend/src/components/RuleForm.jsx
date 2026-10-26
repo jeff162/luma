@@ -23,7 +23,7 @@ import { useTags } from '../lib/useTags.js'
 import PillGridTable from './PillGridTable.jsx'
 import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
 import { formatDate } from '../lib/utils.js'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { OriginFieldList } from './OriginFields.jsx'
 import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -300,7 +300,7 @@ export function RulePreviewDetail({
   title = 'Transactions Affected by This Rule',
   subtitle,
 }) {
-  const [savedColumns, setSavedColumns] = useUserPreference(RULE_PREVIEW_COLUMNS_PREF_KEY, [])
+  const [savedColumns, setSavedColumns] = useDeviceLayoutPreference(RULE_PREVIEW_COLUMNS_PREF_KEY, [])
   const [columns, setColumns] = useState(() => normalizeRulePreviewColumnConfig(savedColumns, RULE_PREVIEW_DEFAULT_COLUMNS))
 
   useEffect(() => {

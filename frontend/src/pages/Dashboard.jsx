@@ -41,7 +41,8 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle, IconButton, LinkButton } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle, IconButton, LinkButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
+import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -1244,6 +1245,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
   const { value: splitValue, dragging: draggingSplit, setLive: setSplitLive, commit: commitSplit, reset: resetSplit } =
     useDeferredPreference(DASHBOARD_TRENDS_SPLIT_PREF_KEY, TRENDS_SPLIT_DEFAULT)
   const splitRowRef = useRef(null)
+  const coarsePointer = useCoarsePointer()
   useEffect(() => {
     if (!draggingSplit) return undefined
     const onMove = event => {
@@ -1619,13 +1621,20 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
           title="Drag to resize · double-click to reset"
           onPointerDown={event => { preventPressDefaults(event); setSplitLive(leftFr) }}
           onDoubleClick={resetSplit}
-          style={{ cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch', touchAction: 'none' }}
+          style={{
+            position: 'relative',
+            // A touch grip reaches past the 16px gap into both charts, so the layout does not move.
+            margin: coarsePointer ? `0 ${-(TOUCH_GRIP_WIDTH - 16) / 2}px` : 0,
+            cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch', touchAction: 'none',
+          }}
         >
-          <div style={{
-            width: 4, height: 44, borderRadius: 3,
-            background: draggingSplit ? 'var(--accent)' : 'var(--border)',
-            transition: 'background 0.15s',
-          }} />
+          {coarsePointer ? <TouchResizeMark /> : (
+            <div style={{
+              width: 4, height: 44, borderRadius: 3,
+              background: draggingSplit ? 'var(--accent)' : 'var(--border)',
+              transition: 'background 0.15s',
+            }} />
+          )}
         </div>
 
         <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>

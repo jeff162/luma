@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef } from 'react'
 import PillTableHeader from './PillTableHeader.jsx'
+import { dividerIsDraggable, moveDivider } from '../lib/columnDividers.js'
 import { preventPressDefaults, startPointerDrag } from '../lib/pointerDrag.js'
 
 // The committed grid template is published as this CSS variable on the table root; the header and
@@ -115,15 +116,7 @@ export default function PillGridTable({
     function onMove(event) {
       if (!resizeState.current) return
       const { key, startX, startColumns } = resizeState.current
-      const nextColumns = startColumns.map(column => ({ ...column }))
-      const currentIndex = nextColumns.findIndex(column => column.key === key)
-      if (currentIndex === -1) return
-      const currentColumn = nextColumns[currentIndex]
-      const currentMinWidth = Number(currentColumn.minWidth || 44)
-      const currentStartWidth = Number(currentColumn.width || 0)
-      const movement = event.clientX - startX
-      const nextCurrentWidth = Math.max(currentMinWidth, Math.min(640, currentStartWidth + movement))
-      currentColumn.width = nextCurrentWidth
+      const nextColumns = moveDivider(startColumns, key, event.clientX - startX)
 
       // Live preview via the DOM only — no React state, so nothing re-renders during the drag.
       liveResizeRef.current = nextColumns
@@ -342,7 +335,7 @@ export default function PillGridTable({
       ...column,
       sortable: typeof onSort === 'function' ? column.sortable !== false : false,
       draggable: typeof onColumnsChange === 'function' ? column.draggable !== false : false,
-      resizable: typeof onColumnsChange === 'function' ? column.resizable !== false : false,
+      resizable: typeof onColumnsChange === 'function' && dividerIsDraggable(columns, index),
       cellPadding: column.cellPadding ?? getHeaderPillCellPadding(index, columns.length),
       contentPadding: column.contentPadding ?? '0 9px',
     })),

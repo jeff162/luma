@@ -2265,6 +2265,13 @@ shared state: the category workspace draft (`system_category_workspace_draft`), 
 (`system_dashboard_tag_reports`) and the ledger currency. Which report a user has open
 (`ui.dashboard.spendingViewBy`) is per user.
 
+**Column layouts are also per kind of screen**, because widths that fit a desktop do not fit a tablet. A
+table's order and widths are saved under `<key>@<device>`, where the device is the primary pointer and
+the screen size, shorter side first, plus the orientation on a touch screen (`@mouse-1080x1920`,
+`@touch-810x1080-portrait`). It is the screen and not the window, so resizing a window keeps its layout.
+Each save also writes the plain `<key>`, the latest layout from any device, which a screen with no layout
+of its own starts from (`useDeviceLayoutPreference`). Every other preference is shared across devices.
+
 A restore clears everyone's remembered page (`ui.startupRoute`), so each person's next sign-in lands on
 the dashboard (`preferences.forget_startup_routes`). Otherwise the person restoring would return to the
 restore page, and everyone else to the page they had open when the backup was taken.

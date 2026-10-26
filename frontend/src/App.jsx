@@ -59,7 +59,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog, AppDialog, Button, Toggle, Tooltip } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -385,6 +385,12 @@ const GLOBAL_SCROLLBAR_STYLES = `
   .nav-resize-handle:hover::after,
   .nav-resize-handle.is-resizing::after {
     opacity: 0.55;
+  }
+  @media (pointer: coarse) {
+    .nav-resize-handle {
+      right: -${TOUCH_GRIP_WIDTH / 2}px;
+      width: ${TOUCH_GRIP_WIDTH}px;
+    }
   }
 `
 
@@ -2117,7 +2123,9 @@ export default function App() {
                                     aria-orientation="vertical"
                                     aria-label="Resize navigation pane"
                                     title="Drag to resize · double-click to reset"
-                                  />
+                                  >
+                                    <TouchResizeMark />
+                                  </div>
                                 )}
                               </nav>
                               <div style={s.main}>

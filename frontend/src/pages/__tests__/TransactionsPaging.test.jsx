@@ -34,7 +34,7 @@ vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => filterContext 
 vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
 // Stable per call, as the real hook is.
 const preference = [null, () => {}]
-vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => preference }))
+vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => preference, useDeviceLayoutPreference: () => preference }))
 vi.mock('../../lib/useStoredDocuments.js', () => ({ useStoredDocuments: () => ({ documents: [], refresh: vi.fn() }) }))
 vi.mock('../../lib/useReimbursementCount.js', () => ({ useReimbursementCount: () => ({ count: 0, reload: vi.fn() }) }))
 

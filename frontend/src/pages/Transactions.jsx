@@ -26,7 +26,7 @@ import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransac
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
@@ -240,7 +240,7 @@ export default function Transactions() {
   // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
   // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
   // load effect / localStorage — the setter persists straight through the context.
-  const [storedCols, setStoredCols] = useUserPreference(TXN_COLUMNS_PREF_KEY, null)
+  const [storedCols, setStoredCols] = useDeviceLayoutPreference(TXN_COLUMNS_PREF_KEY, null)
   const cols = useMemo(() => normalizeColumnConfig(storedCols) || defaultColumnConfig(), [storedCols])
   const [sortState, setSortState] = useState(() => initialSessionStateRef.current?.sortState || DEFAULT_TRANSACTION_SORT)
   const [showSourceInCategorySlot, setShowSourceInCategorySlot] = useState(false)

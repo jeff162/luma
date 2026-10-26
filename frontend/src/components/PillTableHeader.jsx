@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { useLayoutEffect, useRef, useState } from 'react'
+import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { DRAG_SOURCE_STYLE } from '../lib/pointerDrag.js'
+import { TOUCH_GRIP_WIDTH, TouchResizeMark } from './ui.jsx'
 
-// Pill table headers keep sort, move, and resize on one shared surface.
-// Resize belongs to the column on the left of a divider so dragging it changes
-// that column's width without silently reallocating space into its neighbor.
+// Pill table headers keep sort, move, and resize on one shared surface. A column's `resizable` puts a
+// grip on its right edge; dragging it moves that one divider (`lib/columnDividers.js`).
 export default function PillTableHeader({
   columns,
   gridTemplateColumns,
@@ -17,6 +19,17 @@ export default function PillTableHeader({
   style,
   overlay = null,
 }) {
+  const coarsePointer = useCoarsePointer()
+  const headerRef = useRef(null)
+  // On a touch screen each grip straddles its divider, taking half its width from each neighbouring
+  // column, and marks the divider where it meets the header's bottom border. Hosts set their own header
+  // padding, so the mark measures how far below the grip that border sits.
+  const [borderOffset, setBorderOffset] = useState(0)
+  useLayoutEffect(() => {
+    if (!coarsePointer || !headerRef.current) return
+    setBorderOffset(parseFloat(window.getComputedStyle(headerRef.current).paddingBottom) || 0)
+  }, [coarsePointer, style])
+
   // The resize grip lives on a column's right edge. Shared by the plain and custom-render branches so a
   // custom-rendered column (e.g. one with an action button in its header) is resizable like any other.
   function resizeHandle(col) {
@@ -28,22 +41,25 @@ export default function PillTableHeader({
         title={col.resizeRightTitle || `Drag to resize ${col.label || col.key}`}
         style={{
           position: 'absolute',
-          right: 0,
+          right: coarsePointer ? -TOUCH_GRIP_WIDTH / 2 : 0,
           top: 0,
           bottom: 0,
-          width: edgeWidth,
+          width: coarsePointer ? TOUCH_GRIP_WIDTH : edgeWidth,
+          zIndex: 1,
           border: 'none',
           background: 'transparent',
           padding: 0,
           cursor: 'col-resize',
           touchAction: 'none',
         }}
-      />
+      >
+        <TouchResizeMark top={`calc(100% + ${borderOffset + 0.5}px)`} />
+      </button>
     )
   }
 
   return (
-    <div style={{
+    <div ref={headerRef} style={{
       // Positions `overlay` (the reorder drop marker); a sticky `style` overrides it and positions it too.
       position: 'relative',
       display: 'grid',

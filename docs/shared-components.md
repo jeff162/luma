@@ -92,6 +92,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 | `startPointerDrag` + `useDropZone` | Dragging an item onto a target, by mouse or by finger. | `lib/pointerDrag.js` |
 | `trackPointer` | A handle that follows a press: a splitter, a resize grip, a panel header. | `lib/pointerDrag.js` |
+| `TouchResizeMark` + `TOUCH_GRIP_WIDTH` | A resize grip's mark and width on a touch screen. | `components/ui.jsx` |
 | `SoleVaultMemberWarning` (+ `useSoleVaultMember`) | A confirmation that deletes a user, which resets the vault when they are its last member. | `components/SoleVaultMemberWarning.jsx`, `lib/useSoleVaultMember.js` |
 | `FileInput` (+ `PICKER_IDS`) | Every `<input type="file">`, so each purpose's picker reopens in the folder it last used. A save goes through `chooseSaveFile` and `saveUrlToFile`. | `components/FileInput.jsx`, `lib/filePicker.js`, `lib/api.js` |
 
@@ -184,6 +185,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | Help registry + `FeatureExplainer` / `ContextualExplainer` / `HelpLink` | In-app help: a topic in the registry, a `?` beside what it explains, and a tip for a recognized situation. | `help/content.jsx`, `help/FeatureExplainer.jsx`, `help/ContextualExplainer.jsx`, `help/HelpLink.jsx` |
 | `useUserPreference` | A UI preference kept per user. | `lib/UserPreferencesContext.jsx` |
+| `useDeviceLayoutPreference` | Table column geometry, kept per user and per kind of screen. `useColumnPreference` and `useTransactionTableLayout` are built on it. | `lib/UserPreferencesContext.jsx`, `lib/deviceLayout.js` |
 | `localStore` / `sessionStore` | Browser storage, because a bare `window.localStorage` throws where the browser blocks site data. | `lib/browserStorage.js` |
 | `downloadUrl` | Saving a file the server generates, so an error status reaches a handler. | `lib/api.js` |
 | `saveBlob` | Saving content the app produced itself. | `lib/api.js` |

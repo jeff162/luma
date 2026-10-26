@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo } from 'react'
-import { useUserPreference } from './UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference } from './UserPreferencesContext.jsx'
 
 const BASE_TRANSACTION_TABLE_COLUMNS = [
   { key: 'date', width: 96 },
@@ -71,7 +71,7 @@ export function useTransactionTableLayout({
     () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount, showSourceAccount }),
     [showAccount, showCategory, showSourceAccount],
   )
-  const [stored, setStored] = useUserPreference(preferenceKey, null)
+  const [stored, setStored] = useDeviceLayoutPreference(preferenceKey, null)
   const columns = useMemo(
     () => normalizeTransactionTableColumnConfig(stored, { showCategory, showAccount, showSourceAccount }) || defaultColumns,
     [stored, showCategory, showAccount, showSourceAccount, defaultColumns],

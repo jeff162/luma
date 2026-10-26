@@ -4,7 +4,8 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
+import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -646,6 +647,7 @@ export default function Categories() {
   const [storedCollapsedGroups, setStoredCollapsedGroups] = useUserPreference(GROUP_PREF_KEY, EMPTY_COLLAPSE_STATE)
   const [categorySearch, setCategorySearch] = useState('')
   const [leftPanelWidth, setLeftPanelWidth] = useState(null)
+  const coarsePointer = useCoarsePointer()
   // The same column-layout preference every other transaction table uses (its own key, so this list is
   // tuned separately). Single-source-of-truth by construction: no local mirror or load/save effects,
   // which once formed a feedback cycle that made the column divider jitter.
@@ -2067,12 +2069,18 @@ export default function Categories() {
           onPointerDown={startResizeDivider}
           title="Drag to resize panels"
           style={{
+            position: 'relative',
+            zIndex: 1,
             minHeight: 0,
+            // A touch grip reaches past the gap into both panels, so the layout does not move.
+            margin: coarsePointer ? `0 ${-(TOUCH_GRIP_WIDTH - 8) / 2}px` : 0,
             cursor: 'col-resize',
             background: 'transparent',
             touchAction: 'none',
           }}
-        />
+        >
+          <TouchResizeMark />
+        </div>
 
         <div style={{ position: 'relative', minHeight: 0, minWidth: 0 }}>
           <div

@@ -10,6 +10,7 @@ import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 import { SUGGESTED_PASSPHRASE_WORDS, SUGGESTED_PASSWORD_WORDS, suggestPassphrase } from '../lib/passphraseGenerator.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
+import { useCoarsePointer } from '../lib/deviceLayout.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -301,6 +302,31 @@ export function CategoryMarker({ kind = 'category', size, style }) {
         borderRadius: '50%',
         opacity: 0.78,
         ...style,
+      }}
+    />
+  )
+}
+
+// A resize grip on a touch screen. A finger needs a far wider target than a cursor, and with no hover it
+// needs something visible to aim at, so a grip widens to TOUCH_GRIP_WIDTH there and shows this diamond,
+// centred on its divider at the point `left`/`top` give. Renders nothing for a mouse.
+export const TOUCH_GRIP_WIDTH = 24
+
+export function TouchResizeMark({ left = '50%', top = '50%' }) {
+  const coarsePointer = useCoarsePointer()
+  if (!coarsePointer) return null
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        left,
+        top,
+        width: 5,
+        height: 5,
+        transform: 'translate(-50%, -50%) rotate(45deg)',
+        background: 'color-mix(in srgb, var(--muted) 55%, var(--border))',
+        pointerEvents: 'none',
       }}
     />
   )

@@ -19,6 +19,7 @@ import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
+import { dividerIsDraggable, moveDivider } from '../lib/columnDividers.js'
 import { localStore, sessionStore } from '../lib/browserStorage.js'
 import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 
@@ -33,25 +34,19 @@ const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'luma.accounts.sort'
 const ACCOUNTS_COLUMNS_PREF_KEY = 'ui.accounts.columns'
 
 // Account-list column geometry. Name is the fluid filler (`minmax(0, 1fr)`) so the table always fits
-// its container with no horizontal scrollbar — resizing Type/Owner/Tags reflows Name. Only those three
-// carry a numeric (px) width and are user-resizable; the drag-handle and delete gutters stay fixed.
-// Widths/order persist via the shared useColumnPreference model. Order MUST match the header config and
-// the cell order rendered by AccountRow/DraftAccountRow.
-//
-// Why Name has no resize grip: a fluid (`fr`) column has no fixed edge to drag, so the grip convention
-// (right edge of each column) has nothing to grab — you widen Name indirectly by shrinking the others.
-// Now that the table lives on its own tab, if direct Name resizing is ever wanted, give Name a numeric
-// px width and let the table scroll horizontally when over-widened (the Transactions-ledger model);
-// that trades the always-fits guarantee for a draggable Name edge.
+// its container with no horizontal scrollbar: the divider between Name and Type trades width between
+// those two, and the dividers after it follow the shared rule in `lib/columnDividers.js`. The
+// drag-handle and delete gutters stay fixed, so Tags is resized from its left divider. Widths/order
+// persist via the shared useColumnPreference model. Order MUST match the header config and the cell
+// order rendered by AccountRow/DraftAccountRow.
 const ACCOUNT_COLUMN_DEFAULTS = [
-  { key: 'drag', width: 22 },
+  { key: 'drag', width: 22, resizable: false },
   { key: 'name', width: 'minmax(0, 1fr)' },
   { key: 'type', width: 110, minWidth: 90 },
   { key: 'owner', width: 116, minWidth: 96 },
   { key: 'tags', width: 112, minWidth: 84 },
-  { key: 'actions', width: 28 },
+  { key: 'actions', width: 28, resizable: false },
 ]
-const ACCOUNT_RESIZABLE_COLUMN_KEYS = new Set(['type', 'owner', 'tags'])
 
 // Numeric widths render as pixels; string widths (the Name filler) pass through so the column flexes.
 function buildAccountGridTemplate(columns) {
@@ -1706,8 +1701,10 @@ export default function Accounts() {
     [effectiveAccountColumns],
   )
 
+  const accountDividerDraggable = key => dividerIsDraggable(accountColumns, accountColumns.findIndex(c => c.key === key))
+
   function startAccountColumnResize(event, key) {
-    if (!ACCOUNT_RESIZABLE_COLUMN_KEYS.has(key)) return
+    if (!accountDividerDraggable(key)) return
     preventPressDefaults(event)
     event.stopPropagation()
     columnResizeRef.current = { key, startX: event.clientX, startColumns: accountColumns.map(c => ({ ...c })) }
@@ -1717,13 +1714,7 @@ export default function Accounts() {
     function onMove(event) {
       const state = columnResizeRef.current
       if (!state) return
-      const next = state.startColumns.map(c => ({ ...c }))
-      const index = next.findIndex(c => c.key === state.key)
-      if (index === -1) return
-      const column = next[index]
-      const minWidth = Number(column.minWidth || 44)
-      const startWidth = Number(column.width || 0)
-      column.width = Math.max(minWidth, Math.min(640, startWidth + (event.clientX - state.startX)))
+      const next = moveDivider(state.startColumns, state.key, event.clientX - state.startX)
       liveAccountColumnsRef.current = next
       setLiveAccountColumns(next)
     }
@@ -2659,7 +2650,7 @@ export default function Accounts() {
                                   contentPadding: '0 9px',
                                   leadingInset: 0,
                                   trailingInset: 0,
-                                  resizable: false,
+                                  resizable: accountDividerDraggable('name'),
                                   draggable: false,
                                   title: 'Click to sort accounts by name',
                                 },
@@ -2670,7 +2661,7 @@ export default function Accounts() {
                                   contentPadding: '0 9px',
                                   leadingInset: 0,
                                   trailingInset: 0,
-                                  resizable: true,
+                                  resizable: accountDividerDraggable('type'),
                                   draggable: false,
                                   title: 'Click to sort accounts by type',
                                 },
@@ -2682,14 +2673,14 @@ export default function Accounts() {
                                   contentPadding: '0 9px',
                                   leadingInset: 0,
                                   trailingInset: 0,
-                                  resizable: true,
+                                  resizable: accountDividerDraggable('owner'),
                                   draggable: false,
                                   title: 'Click to sort accounts by owner',
                                 },
                                 {
                                   key: 'tags',
                                   sortable: false,
-                                  resizable: true,
+                                  resizable: accountDividerDraggable('tags'),
                                   draggable: false,
                                   cellPadding: 0,
                                   contentPadding: '0 9px',

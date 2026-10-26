@@ -31,11 +31,13 @@ vi.mock('../../contexts/UnifiedDuplicatesViewerContext.jsx', () => ({
 // Stable per key, as the real hook's value is: a fresh array each render makes the column-preference
 // consumer re-merge forever.
 const preferences = new Map()
+function storedPreference(key, fallback) {
+  if (!preferences.has(key)) preferences.set(key, fallback)
+  return [preferences.get(key), value => { preferences.set(key, value); return Promise.resolve() }]
+}
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
-  useUserPreference: (key, fallback) => {
-    if (!preferences.has(key)) preferences.set(key, fallback)
-    return [preferences.get(key), value => { preferences.set(key, value); return Promise.resolve() }]
-  },
+  useUserPreference: storedPreference,
+  useDeviceLayoutPreference: storedPreference,
 }))
 
 const BATCH = {

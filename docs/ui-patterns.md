@@ -133,6 +133,11 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - **Pill headers.** Sortable, reorderable and resizable headers come from `PillTableHeader`, and a full
   table from `PillGridTable`. Each behavior is optional, so a quiet table reuses the same look.
+- **Dragging a column divider moves only that divider** (`lib/columnDividers.js`): the two columns
+  beside it trade width, so nothing further along is pushed out of view. The last column's two dividers
+  change the table's width instead: the one before it slides the column along whole, since right-aligned
+  numbers would otherwise stand still, and the one after it widens it. A fixed column has no grip beside
+  it.
 - **Column order and widths persist** through `useColumnPreference`, whether or not the table uses
   `PillGridTable`.
 - **Rows that read as columns share one template, and its end track is fixed.** A list whose rows are
@@ -274,6 +279,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   browser's drag-and-drop, because both are mouse-only in practice and the app is used on tablets.
 - **A handle whose only job is the gesture** (a splitter, a resize grip, a panel header) follows the
   press at once with `trackPointer` and sets `touch-action: none`.
+- **On a touch screen a resize grip widens to `TOUCH_GRIP_WIDTH` and shows `TouchResizeMark`**, a small
+  diamond on its divider, because a finger has no hover to find an invisible strip. The wider grip
+  reaches into its neighbours rather than moving the layout. A mouse sees neither.
 - **An item that is also clicked, or sits in a scrolling list,** is picked up with `startPointerDrag`:
   after a few pixels with a mouse, after a press-and-hold with a finger, so a swipe still scrolls. Its
   targets are `useDropZone`s, and a list it is dragged along scrolls only if it asks to.

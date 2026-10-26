@@ -28,6 +28,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
+import { deviceLayoutPreferenceKey, useDeviceLayoutKey } from './deviceLayout.js'
 
 const UserPreferencesContext = createContext(null)
 
@@ -215,6 +216,28 @@ export function useUserPreference(key, defaultValue) {
     nextValueOrUpdater => setPreference(key, nextValueOrUpdater, stableDefault),
     [key, setPreference, stableDefault],
   )
+  return [value, setValue]
+}
+
+// Per-device variant for table column geometry (order and widths), so a layout tuned on a desktop does
+// not reach a tablet. The value is saved under `baseKey@<device>` (see `lib/deviceLayout.js`) and also
+// under `baseKey`, which keeps the most recent layout saved on any device. A device with no saved layout
+// of its own starts from that one, so a new screen never starts from the defaults when a layout exists.
+export function useDeviceLayoutPreference(baseKey, defaultValue) {
+  const { preferences, setPreference } = useUserPreferences()
+  const deviceKey = deviceLayoutPreferenceKey(baseKey, useDeviceLayoutKey())
+  const stableDefault = useStablePreferenceValue(defaultValue)
+  const seed = getPreferenceValue(preferences, baseKey, stableDefault)
+  const value = getPreferenceValue(preferences, deviceKey, seed)
+  const setValue = useCallback(nextValueOrUpdater => {
+    let next
+    const saved = setPreference(deviceKey, previous => {
+      next = typeof nextValueOrUpdater === 'function' ? nextValueOrUpdater(previous) : nextValueOrUpdater
+      return next
+    }, seed)
+    setPreference(baseKey, next, stableDefault)
+    return saved
+  }, [baseKey, deviceKey, seed, setPreference, stableDefault])
   return [value, setValue]
 }
 
