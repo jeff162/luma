@@ -320,6 +320,19 @@ describe('unlocking with a passkey', () => {
     }
   })
 
+  it('hands the highlight to the typed passphrase once there is one', async () => {
+    // Enter submits what was typed, so the passkey staying highlighted pointed at the other button.
+    const accent = button => button.style.background === 'var(--accent)'
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    const passkey = () => screen.getByText('Unlock with a passkey').closest('button')
+    const unlock = () => screen.getByText('Unlock').closest('button')
+    expect(accent(passkey())).toBe(true)
+    expect(accent(unlock())).toBe(false)
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'x')
+    expect(accent(passkey())).toBe(false)
+    expect(accent(unlock())).toBe(true)
+  })
+
   it('hands the unlocked session to the host, which settles the gate', async () => {
     const onUnlockedByPasskey = vi.fn()
     renderDialog({ mode: 'unlock', onUnlockedByPasskey }, withPasskey({ id: 'pk1' }))

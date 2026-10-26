@@ -155,6 +155,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // hold the new passphrase to the same floor and the same confirm-field check as the button beside it.
   // In the other two it carries nothing.
   const passkeyBlocked = changing && !!newPassphraseIssue
+  const passkeyLeads = canUsePasskey && !(changing ? current : passphrase)
 
   // A refusal leaves the dialog open on the passphrase, which is the fallback the user still has.
   const { busy: passkeyBusy, unlock: unlockByPasskey, label: passkeyLabel } = useVaultPasskeyUnlock({
@@ -212,17 +213,20 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       actions={
         <>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
-              in does not change depending on which surface asked. */}
+          {/* Ordered and toned as the Connections tab's vault strip does it, so the primary way in does
+              not change depending on which surface asked — until the secret the passkey stands in for
+              has been typed. Then the typed path is the one being taken, Enter already submits it, and
+              leaving the passkey highlighted points at the button not about to be pressed. */}
           {canUsePasskey ? (
             <Tooltip content={passkeyBlocked ? newPassphraseIssue : ''} align="right">
-              <Button onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
+              <Button variant={passkeyLeads ? 'primary' : 'secondary'} onClick={onPasskey}
+                disabled={busy || passkeyBusy || passkeyBlocked}>
                 {passkeyLabel}
               </Button>
             </Tooltip>
           ) : null}
           <Tooltip content={blocked && !busy ? newPassphraseIssue : ''} align="right">
-            <Button variant={canUsePasskey ? 'secondary' : 'primary'}
+            <Button variant={passkeyLeads ? 'secondary' : 'primary'}
               onClick={submit} disabled={blocked || passkeyBusy}>
               {busy ? 'Working…'
                 : changing ? 'Change passphrase'
