@@ -799,6 +799,47 @@ def documents_map_for(conn: sqlite3.Connection, txn_ids) -> dict[str, list[dict]
     return grouped
 
 
+# Markers FTS5 puts around each matched term in an excerpt. Control characters, so they cannot collide with
+# extracted text in practice; they are split out here and never reach the client.
+_EXCERPT_OPEN = "\x02"
+_EXCERPT_CLOSE = "\x03"
+# How many tokens of context an excerpt carries, matches included. Enough to recognise the line on the
+# receipt, short enough for a row tooltip.
+_EXCERPT_TOKENS = 14
+
+
+def document_match_excerpts(conn: sqlite3.Connection, fts_query: str, txn_ids) -> dict[str, list[dict]]:
+    """For each document on these transactions that matches `fts_query`, the passage it matched in.
+
+    Keyed by document id. A passage is a list of `{text, hit}` segments, `hit` marking the terms the query
+    matched, so a client can highlight them without parsing markers. The terms are whole tokens: a prefix
+    search for `75` highlights `75D15`, which is what the index matched. Asks the same question as the list
+    filter's `DOCUMENT_MATCH_SQL`, so every row marked `matched_document` has at least one passage.
+    """
+    ids = [txn_id for txn_id in txn_ids if txn_id]
+    if not ids or not fts_query:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT d.id, snippet(document_fts, 0, ?, ?, '…', ?) AS excerpt "
+        "FROM document_fts JOIN document d ON d.rowid = document_fts.rowid "
+        f"WHERE document_fts MATCH ? AND d.txn_id IN ({placeholders})",
+        [_EXCERPT_OPEN, _EXCERPT_CLOSE, _EXCERPT_TOKENS, fts_query, *ids],
+    )
+    return {row["id"]: _excerpt_segments(row["excerpt"] or "") for row in rows}
+
+
+def _excerpt_segments(excerpt: str) -> list[dict]:
+    # Whitespace is collapsed because a passage from a PDF or a receipt layout carries its line breaks
+    # and column padding, which mean nothing once it is one line in a tooltip.
+    segments = []
+    for i, piece in enumerate(re.split(f"[{_EXCERPT_OPEN}{_EXCERPT_CLOSE}]", excerpt)):
+        text = re.sub(r"\s+", " ", piece)
+        if text:
+            segments.append({"text": text, "hit": i % 2 == 1})
+    return segments
+
+
 def find_duplicate_attachment(
     conn: sqlite3.Connection, txn_id: Optional[str], sha256: str, exclude_id: Optional[str] = None,
 ) -> Optional[dict]:

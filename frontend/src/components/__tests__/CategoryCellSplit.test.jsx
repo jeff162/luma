@@ -148,7 +148,7 @@ describe('CategoryCell on a split transaction', () => {
 
 describe('CategoryCell on a split the search found by an item description', () => {
   const FOUND = {
-    id: 't1', amount: 100, is_split: true, split_part_count: 2, matched_split_label: 1,
+    id: 't1', amount: 100, is_split: true, split_part_count: 2, matched_split_label: 1, matched_search_text: 'BRACKET',
     split_parts: [
       { id: 'p1', category_id: 'groceries', category_name: 'Groceries', amount: 60, label: 'Pantry restock' },
       { id: 'p2', category_id: 'hardware', category_name: 'Hardware', amount: 40, label: 'Shelf brackets' },
@@ -165,6 +165,9 @@ describe('CategoryCell on a split the search found by an item description', () =
     await user.hover(chip)
 
     expect(await screen.findByText('Matched the search in an item description below.')).toBeTruthy()
+    // The term is highlighted in the description it matched, whatever its case.
+    const marks = document.querySelectorAll('mark')
+    expect([...marks].map(mark => mark.textContent)).toEqual(['bracket'])
   })
 
   it('is not marked when the search did not find it that way', async () => {

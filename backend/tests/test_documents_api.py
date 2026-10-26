@@ -423,6 +423,17 @@ class DocumentSearchTests(DocumentsApiTestCase):
         self.assertEqual([r["id"] for r in rows], ["txn-repair"])
         self.assertTrue(rows[0]["matched_document"])
 
+    def test_a_matching_document_carries_the_passage_with_the_matched_terms_marked(self):
+        # The viewer cannot point at the match, so the marker shows it. Terms are whole tokens: a prefix
+        # search highlights the word the index matched, not just the letters typed.
+        self.attach("txn-repair", b"Wiper blades", "Other.txt", "text/plain")
+        rows = self.list_rows("brak")
+        by_name = {doc["filename"]: doc for doc in rows[0]["documents"]}
+        excerpt = by_name["invoice.pdf"]["match_excerpt"]
+        self.assertEqual([seg["text"] for seg in excerpt if seg["hit"]], ["brake"])
+        self.assertIn("front", "".join(seg["text"] for seg in excerpt))
+        self.assertNotIn("match_excerpt", by_name["Other.txt"])
+
     def test_a_row_matched_on_a_visible_field_is_not_flagged_as_a_document_match(self):
         # The flag is a *reason*, so it must not fire for a row the search found by its payee. Marking
         # one would send the reader looking for an attachment that had nothing to do with the match.

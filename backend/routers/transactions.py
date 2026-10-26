@@ -56,6 +56,7 @@ from backend.services.categorizer import (
 )
 from backend.services.documents import (
     INGEST_GRACE_SECONDS,
+    document_match_excerpts,
     documents_map_for,
     sweep_unreferenced_files,
 )
@@ -556,6 +557,22 @@ def split_label_match_query(quick_filter: Optional[str]) -> Optional[str]:
     return None if field is not None else f"%{text.lower()}%"
 
 
+def hidden_text_search_value(quick_filter: Optional[str]) -> Optional[str]:
+    """The text a quick filter looks for in names and captured text, or None if it searches neither.
+
+    It is the whole filter when unprefixed and the value after `merchant:` or `raw:`; an unprefixed filter
+    is also what split part labels are searched for. The list feed returns it on the rows it marks as
+    matched on text the row does not show, so the hover that shows that text can highlight the match.
+    """
+    text = (quick_filter or "").strip()
+    if not text:
+        return None
+    field, remainder = _split_quick_filter_field(text)
+    if field not in (None, "merchant", "raw"):
+        return None
+    return (remainder if field is not None else text) or None
+
+
 def hidden_text_match_sql(quick_filter: Optional[str]):
     """`(sql, params)` for whether a row matched a quick filter on text its visible name does not show, or
     None when the filter searches no names.
@@ -564,15 +581,10 @@ def hidden_text_match_sql(quick_filter: Optional[str]):
     memo column has no visible cause on screen, so the list feed marks it rather than leaving it to read as
     a wrong result. A row whose visible name also matches is not marked — the name already explains it.
     """
-    text = (quick_filter or "").strip()
-    if not text:
-        return None
-    field, remainder = _split_quick_filter_field(text)
-    if field not in (None, "merchant", "raw"):
-        return None
-    value = remainder if field is not None else text
+    value = hidden_text_search_value(quick_filter)
     if not value:
         return None
+    field, _ = _split_quick_filter_field(quick_filter.strip())
     pattern = f"%{value.lower()}%"
     hidden_sql, hidden_params = _hidden_text_sql(pattern, field)
     return f"({hidden_sql} AND {VISIBLE_NAME_SQL} NOT LIKE ?)", [*hidden_params, pattern]
@@ -1259,6 +1271,15 @@ def list_transactions(
         # kilobytes no list surface renders), carried inline for the same reason `split_parts` is: the
         # marker opens straight from the row, and a fetch there would be a loading state inside a click.
         documents_by_txn = documents_map_for(conn, txn_ids) if rows else {}
+        # Where the search matched inside a document, the passage, so the marker can show it — the
+        # viewer cannot point at it, since it hands the file to the browser untouched.
+        excerpts_by_document = (
+            document_match_excerpts(conn, doc_query, [t["id"] for t in transactions if t.get("matched_document")])
+            if doc_query else {}
+        )
+        # The text the search looked for, on the rows matched through text the row itself does not show,
+        # so the hover that shows that text can highlight it.
+        hidden_search_value = hidden_text_search_value(quick_filter)
         # The purchase each row is a payment of, for the row's link marker. A *summary* per row (label,
         # ordinal, totals) rather than the sibling payments: this marker explains the row rather than
         # acting on it, so the panel is where the payments are listed. See services/purchase_links.py.
@@ -1284,6 +1305,11 @@ def list_transactions(
             txn["split_parts"] = parts
             txn["split_part_count"] = len(parts)
             docs = documents_by_txn.get(txn["id"], [])
+            for doc in docs:
+                if doc["id"] in excerpts_by_document:
+                    doc["match_excerpt"] = excerpts_by_document[doc["id"]]
+            if txn.get("matched_hidden_text") or txn.get("matched_split_label"):
+                txn["matched_search_text"] = hidden_search_value
             txn["documents"] = docs
             txn["document_count"] = len(docs)
             txn["purchase"] = purchases_by_txn.get(txn["id"])

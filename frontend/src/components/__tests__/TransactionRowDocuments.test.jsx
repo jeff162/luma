@@ -70,6 +70,19 @@ describe('the ledger document marker', () => {
     expect(screen.getByLabelText('Matched inside an attached document — open it')).toBeTruthy()
   })
 
+  it('shows on hover the passage the search matched, with the matched words highlighted', async () => {
+    // The viewer hands the file to the browser and cannot point at the match, so the hover shows it.
+    const user = userEvent.setup()
+    const excerpt = [{ text: '…new boat trailer tire ST225/', hit: false }, { text: '75D15', hit: true }, { text: '/8…', hit: false }]
+    renderRow({ documents: [{ ...INVOICE, match_excerpt: excerpt }, ESTIMATE], document_count: 2, matched_document: true })
+
+    await user.hover(screen.getByLabelText('Matched inside an attached document — open it'))
+
+    await waitFor(() => expect([...document.querySelectorAll('mark')].map(mark => mark.textContent)).toEqual(['75D15']))
+    expect(screen.getAllByText(INVOICE.filename).length).toBeGreaterThan(0)
+    expect(screen.queryByText(ESTIMATE.filename)).toBeNull()
+  })
+
   it('opens the edited document, not the one it replaced, after an edit made from the row', async () => {
     // An edit replaces the document under a new id. The row opens documents from its own copy, so unless
     // that copy is swapped the next click reaches for a document that no longer exists.

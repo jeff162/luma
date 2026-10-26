@@ -376,6 +376,7 @@ class SplitLabelSearchTests(SplitFixtureMixin, unittest.TestCase):
             rows = client.get("/api/transactions", params={"quick_filter": "bracket"}).json()["transactions"]
             self.assertEqual([r["id"] for r in rows], [txn])
             self.assertTrue(rows[0]["matched_split_label"])
+            self.assertEqual(rows[0]["matched_search_text"], "bracket")
 
     def test_a_row_found_another_way_is_not_marked(self):
         with api_client() as (client, path):

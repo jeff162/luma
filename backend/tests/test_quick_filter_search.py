@@ -81,6 +81,13 @@ class NameAndImportedTextTests(QuickFilterSearchTests):
         self.assertEqual(self.marked("meter reading"), ["txn-utility"])
         self.assertEqual(self.found("web pmt"), ["txn-utility"])
 
+    def test_a_marked_row_carries_the_text_searched_for(self):
+        # The hover that shows the hidden text highlights this, so it is the value after any keyword.
+        [row] = self._rows("merchant:riverstone")
+        self.assertEqual(row["matched_search_text"], "riverstone")
+        [row] = self._rows("city water")
+        self.assertNotIn("matched_search_text", row)
+
     def test_a_match_on_the_visible_name_is_not_marked(self):
         # The name on screen already explains it, so flagging it would send the reader looking elsewhere.
         self.assertEqual(self.found("city water"), ["txn-utility"])

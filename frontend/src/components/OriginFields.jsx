@@ -7,11 +7,12 @@
 
 import { getTxnFileOriginRows } from '../lib/importSourceFields.js'
 import CopyTransactionsButton from './CopyTransactionsButton.jsx'
-import { Button } from './ui.jsx'
+import { Button, HighlightedText } from './ui.jsx'
 
 const mutedStyle = { color: 'var(--muted)' }
 
-export function OriginRow({ row }) {
+// `highlight` marks a search term inside the values, for a card shown because a search matched there.
+export function OriginRow({ row, highlight = null }) {
   if (row.note) {
     return <div style={mutedStyle}>{row.note}</div>
   }
@@ -25,17 +26,17 @@ export function OriginRow({ row }) {
           style={{ color: 'var(--accent2)' }} onClick={e => e.stopPropagation()}>
           {row.value} ↗
         </a>
-      ) : row.value}
+      ) : typeof row.value === 'string' ? <HighlightedText text={row.value} query={highlight} /> : row.value}
       {row.suffix ? <span style={mutedStyle}> · {row.suffix}</span> : null}
     </div>
   )
 }
 
-export function OriginFieldList({ rows, gap = 6, fontSize = 12 }) {
+export function OriginFieldList({ rows, gap = 6, fontSize = 12, highlight = null }) {
   if (!rows?.length) return null
   return (
     <div style={{ display: 'grid', gap, fontSize }}>
-      {rows.map(row => <OriginRow key={row.key} row={row} />)}
+      {rows.map(row => <OriginRow key={row.key} row={row} highlight={highlight} />)}
     </div>
   )
 }
@@ -76,7 +77,7 @@ export function MerchantOriginHoverCard({ txn, onPin = null, copyable = false })
       {txn.matched_hidden_text ? (
         <div style={{ fontSize: 12, color: 'var(--accent)' }}>Matched the search in the imported text below.</div>
       ) : null}
-      <OriginFieldList rows={rows} />
+      <OriginFieldList rows={rows} highlight={txn.matched_hidden_text ? txn.matched_search_text : null} />
     </div>
   )
 }

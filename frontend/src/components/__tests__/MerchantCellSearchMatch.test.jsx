@@ -42,7 +42,7 @@ afterEach(cleanup)
 describe('a row found through text its name does not show', () => {
   it('underlines the name and says on hover where the match was', async () => {
     const user = userEvent.setup()
-    renderCell({ ...RENAMED, matched_hidden_text: 1 })
+    renderCell({ ...RENAMED, matched_hidden_text: 1, matched_search_text: 'utilities 04' })
 
     const name = screen.getByText('City Water')
     expect(name.style.textDecoration).toContain('underline')
@@ -52,8 +52,9 @@ describe('a row found through text its name does not show', () => {
     await user.hover(name)
 
     expect(await screen.findByText(MATCH_NOTE)).toBeTruthy()
-    // The text that matched is in the same card, which is what "below" promises.
-    expect(screen.getByText('RIVERSTONE UTILITIES 0412')).toBeTruthy()
+    // The text that matched is in the same card, which is what "below" promises, with the term highlighted.
+    const marks = [...document.querySelectorAll('mark')].map(mark => mark.textContent)
+    expect(marks).toContain('UTILITIES 04')
   })
 
   it('is not marked when the search did not find it that way', async () => {

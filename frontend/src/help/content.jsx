@@ -755,10 +755,12 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          A transaction found by text that is not on screen is marked. A match in the imported text
-          underlines the name with a dotted line, and hovering the name shows that text. A match in an item
-          description underlines the <strong>Split (N)</strong> marker the same way, and hovering it lists the
-          items. A match inside an attachment highlights the row&apos;s document marker, which opens the document.
+          A transaction found by text that is not on screen is marked, and hovering the mark shows where the
+          search matched, with the matching text highlighted. A match in the imported text underlines the
+          name with a dotted line, and hovering the name shows that text. A match in an item description
+          underlines the <strong>Split (N)</strong> marker the same way, and hovering it lists the items. A
+          match inside an attachment highlights the row&apos;s document marker; hovering it shows the passage
+          that matched, and clicking it opens the document.
         </p>
 
         <HelpHeading anchor="keywords">Keywords</HelpHeading>
@@ -1323,7 +1325,8 @@ export const HELP_TOPICS = [
         <p>
           Text found in an attachment is searched by the search box on the Transactions
           page. Search results where the match is from an attachment are flagged so it is clear why
-          they matched even though the search term is not visibly present.
+          they matched even though the search term is not visibly present, and hovering the flag shows
+          the passage that matched.
           Starting the search with the <code>doc:</code> keyword narrows it to only the attachments. See{' '}
           <HelpLink to="/help/searching-transactions#keywords">searching transactions</HelpLink>.
         </p>

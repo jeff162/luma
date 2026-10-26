@@ -304,7 +304,8 @@ shapes: `null` (unset, falls back to a page's registered default), the `{start:n
 
 - **Search:** document text is indexed in `document_fts` and reached from the Transactions search box;
   `doc:<terms>` narrows to documents only. A row matched inside an attachment carries
-  `matched_document` so the ledger can show why it came back.
+  `matched_document` so the ledger can show why it came back, and the matching document entries carry
+  the passage that matched, since the viewer hands the file to the browser and cannot point at it.
 
 - **List feed:** each row carries slim document entries (`documents` — id, filename, media type) and
   `document_count`, so the row marker opens the viewer without a fetch.

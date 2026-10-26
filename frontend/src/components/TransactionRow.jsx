@@ -18,7 +18,7 @@ import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton } from './ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton, HighlightedText, MatchExcerpt } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
@@ -599,10 +599,24 @@ function DocumentListPopover({ documents, onOpen, onClose }) {
           onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
           onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
         >
-          {doc.filename}
+          {doc.match_excerpt?.length ? <DocumentMatch doc={doc} /> : doc.filename}
         </button>
       ))}
     </div>
+  )
+}
+
+// A document the search matched inside: its name, and the passage the match is in with the matched words
+// highlighted. The viewer cannot point at the match — it hands the file to the browser untouched — so this
+// is where it is shown.
+function DocumentMatch({ doc }) {
+  return (
+    <span style={{ display: 'grid', gap: 1, minWidth: 0 }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.filename}</span>
+      <span style={{ color: 'var(--muted)', fontSize: 11.5, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+        <MatchExcerpt segments={doc.match_excerpt} />
+      </span>
+    </span>
   )
 }
 
@@ -719,6 +733,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
   const documentCount = txn.document_count || 0
   const matchedDocument = !!txn.matched_document
   const documents = Array.isArray(txn.documents) ? txn.documents : []
+  const matchedDocuments = matchedDocument ? documents.filter(doc => doc.match_excerpt?.length) : []
   // Surfaces that pair this list with a total which omits excluded-from-totals rows (the account
   // activity panel) opt in via showExcludedFromTotals; the row then carries a quiet ⊘ marker (and its
   // amount is dimmed over in TransactionAmountCell) so the gap between the visible rows and the total
@@ -908,11 +923,17 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
         ) : null}
         {documentCount > 0 ? (
           <RowTooltip
+            maxWidth={340}
             content={
-              <span>
-                {documentCount === 1 ? '1 attached document' : `${documentCount} attached documents`}
-                {matchedDocument ? ' — this row matched your search inside one of them' : ''}
-                {documentCount === 1 ? ' — click to open' : ' — click to choose one'}
+              <span style={{ display: 'grid', gap: 4 }}>
+                <span>
+                  {documentCount === 1 ? '1 attached document' : `${documentCount} attached documents`}
+                  {documentCount === 1 ? ' — click to open' : ' — click to choose one'}
+                </span>
+                {matchedDocument ? (
+                  <span style={{ color: 'var(--accent)' }}>Matched the search inside:</span>
+                ) : null}
+                {matchedDocuments.map(doc => <DocumentMatch key={doc.id} doc={doc} />)}
               </span>
             }
           >
@@ -1089,8 +1110,9 @@ export function TransactionAmountCell({ txn, onOpenDetail, showExcludedFromTotal
 // charge and of a deposit both read as magnitudes that add up to the row beside them. Direction is
 // carried by the color instead — the same green a deposit's own amount gets, since a part that moves
 // money in is the thing worth marking, not every part of an ordinary purchase.
-function SplitPartsHoverCard({ parts, txnAmount, matchedSearch = false }) {
+function SplitPartsHoverCard({ parts, txnAmount, matchedSearch = false, searchText = null }) {
   const dir = transactionDirection(txnAmount)
+  const needle = matchedSearch ? String(searchText || '').trim().toLowerCase() : ''
   return (
     <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
       {/* Set by the ledger's search when the row matched on a part's description, which the row itself
@@ -1113,12 +1135,15 @@ function SplitPartsHoverCard({ parts, txnAmount, matchedSearch = false }) {
             </span>
           </div>
           {/* What the allocation covers, where the user recorded it. Clamped to one line: these come
-              from marketplace item titles, which are long enough to swamp the figures they annotate. */}
+              from marketplace item titles, which are long enough to swamp the figures they annotate.
+              A label the search matched wraps instead, so the highlighted term cannot be clipped off. */}
           {part.label ? (
             <span style={{
-              color: 'var(--muted)', fontSize: 11, overflow: 'hidden',
-              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{part.label}</span>
+              color: 'var(--muted)', fontSize: 11,
+              ...(needle && part.label.toLowerCase().includes(needle)
+                ? { overflowWrap: 'anywhere' }
+                : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+            }}><HighlightedText text={part.label} query={needle} /></span>
           ) : null}
         </div>
       ))}
@@ -1254,7 +1279,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
           style={{ cursor: onOpenSplit ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           {parts.length ? (
-            <RowTooltip content={<SplitPartsHoverCard parts={parts} txnAmount={txn.amount} matchedSearch={matchedSearch} />} maxWidth={320}>
+            <RowTooltip content={<SplitPartsHoverCard parts={parts} txnAmount={txn.amount} matchedSearch={matchedSearch} searchText={txn.matched_search_text} />} maxWidth={320}>
               {chip}
             </RowTooltip>
           ) : chip}

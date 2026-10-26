@@ -1655,7 +1655,8 @@ export function Toggle({ checked, onChange, label, ariaLabel, disabled = false, 
   )
 }
 
-// Shared inline match highlighter for search surfaces (the category tree, pickers): wraps
+// Shared inline match highlighter for search surfaces (the category tree, pickers, the ledger's
+// match hovers): wraps
 // case-insensitive occurrences of `query` inside `text` so matches stand out. With no query it yields
 // the plain string, leaving non-search rendering untouched.
 export function HighlightedText({ text, query }) {
@@ -1674,15 +1675,24 @@ export function HighlightedText({ text, query }) {
       break
     }
     if (idx > from) parts.push(value.slice(from, idx))
-    parts.push(
-      <mark
-        key={`hl${key++}`}
-        style={{ background: 'color-mix(in srgb, var(--accent) 30%, transparent)', color: 'inherit', borderRadius: 3, padding: '0 1px' }}
-      >
-        {value.slice(idx, idx + needle.length)}
-      </mark>,
-    )
+    parts.push(<MatchMark key={`hl${key++}`}>{value.slice(idx, idx + needle.length)}</MatchMark>)
     from = idx + needle.length
   }
   return <>{parts}</>
+}
+
+// A passage the server already marked up, as `{ text, hit }` segments — for matches the client cannot
+// find itself, such as a document search, which matches whole words through the full-text index.
+export function MatchExcerpt({ segments }) {
+  return (segments || []).map((segment, i) => (
+    segment.hit ? <MatchMark key={i}>{segment.text}</MatchMark> : <span key={i}>{segment.text}</span>
+  ))
+}
+
+function MatchMark({ children }) {
+  return (
+    <mark style={{ background: 'color-mix(in srgb, var(--accent) 30%, transparent)', color: 'inherit', borderRadius: 3, padding: '0 1px' }}>
+      {children}
+    </mark>
+  )
 }

@@ -2502,7 +2502,9 @@ Text and search:
 - A stored document's text is indexed but found from the ledger only once it is attached.
 - The list feed projects `matched_document` on rows whose match came from a document, and
   `matched_hidden_text` on rows matched through raw or captured text, only when the filter has such a
-  component.
+  component. A row marked for hidden text or a split label also carries `matched_search_text`, the text
+  searched for, and each matching document entry carries `match_excerpt`, the passage as `{text, hit}`
+  segments from FTS5 `snippet()`, so the hover explaining the match can highlight it.
 
 ## Multi-payment purchases
 
