@@ -53,6 +53,22 @@ test('saving a suggestion creates its rule and claims its rows; undo reverses bo
   expect(new Set((await rowsFor(request, 'Keystone')).map(row => row.category_source))).toEqual(new Set(['import']))
 })
 
+test('deferring an accepted suggestion undoes the accept: its rule goes and its rows are back as imported', async ({ page, request }) => {
+  await openReview(page)
+  await pill(page, 'accepted').click()
+  expect(await ruleFor(request, 'fiberlink')).not.toBeNull()
+
+  await card(page, 'Fiberlink').getByRole('button', { name: 'Defer', exact: true }).click()
+  await expect(card(page, 'Fiberlink')).toHaveCount(0)
+  await expect.poll(() => ruleFor(request, 'fiberlink')).toBeNull()
+  const rows = await rowsFor(request, 'Fiberlink')
+  expect(rows).toHaveLength(13)
+  expect(rows.every(row => row.category_name === 'Internet' && row.category_source === 'import')).toBe(true)
+
+  await pill(page, 'deferred').click()
+  await expect(card(page, 'Fiberlink')).toBeVisible()
+})
+
 test('discarding either keeps the rows’ categories or clears them, as chosen', async ({ page, request }) => {
   await openReview(page)
   await card(page, 'City Power & Light').getByRole('button', { name: 'keep categorization' }).click()

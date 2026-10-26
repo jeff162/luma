@@ -1422,12 +1422,6 @@ export default function ImportRuleSuggestionReview({
         label: 'Discard and remove categorization',
         onClick: () => onRejectSuggestionDisposition(suggestion, 'clear'),
       })
-    } else {
-      actions.push({
-        key: 'remove',
-        label: 'Remove',
-        onClick: () => onSetSuggestionStatus(suggestion, 'discarded'),
-      })
     }
 
     actions.push({

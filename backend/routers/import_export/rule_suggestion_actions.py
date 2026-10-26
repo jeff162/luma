@@ -546,9 +546,10 @@ def _set_rule_suggestion_status(open_scope: _ReviewScopeOpener, body: RuleSugges
         statuses = scope.review_state.get("statuses") or {}
         for item in body.items:
             stored = statuses.get(item.suggestion_id) or {}
-            if status == "pending" and stored.get("status") == "accepted":
-                # Returning an accepted suggestion puts its rows back and trashes the rule only if this review
-                # created it — a pre-existing rule it merged into is not the review's to remove.
+            if status != "accepted" and stored.get("status") == "accepted":
+                # Leaving accepted, for any status, undoes the accept: only an accepted suggestion owns a rule.
+                # Its rows go back, and the rule is trashed only if this review created it — a pre-existing
+                # rule it merged into is not the review's to remove.
                 if stored.get("accepted_prior_rows"):
                     _restore_rows(conn, effects, list(stored["accepted_prior_rows"]))
                 created_rule_id = stored.get("created_rule_id")

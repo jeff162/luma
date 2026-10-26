@@ -716,7 +716,7 @@ matches contributes (`categorizer.categorize_transaction`). Precedence picks a w
 separately:
 
 | Action | Comes from |
-|---|---|
+| --- | --- |
 | Category | the first matching rule, in precedence order, that sets one |
 | Rename | the first matching rule that sets one, which need not be the rule that set the category |
 | Tags | every matching rule: they are added together |
@@ -1645,7 +1645,8 @@ Keeping a row as imported is not an override, so a later rule can still claim it
 
 **Accepting** applies the rule to the suggestion's own `source_row_ids` with a preserve-manual apply.
 The accepted entry stores `rule_id`, `created_rule_id` when the review created the rule, and
-`accepted_prior_rows`.
+`accepted_prior_rows`. Only an accepted entry owns a rule, so moving it to any other status restores
+`accepted_prior_rows` and trashes the rule if the review created it.
 
 **Each review action is one transaction across rules, rows and review state**
 (`routers/import_export/rule_suggestion_actions.py`), and answers with an undo payload holding the prior

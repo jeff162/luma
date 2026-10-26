@@ -2186,6 +2186,39 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         statuses = self._stored_review(open_scope)["statuses"]
         self.assertEqual({key: value["status"] for key, value in statuses.items()}, {"oakridge books": "accepted", "oakridge cafe": "accepted"})
 
+    def test_deferring_or_discarding_an_accepted_suggestion_reverses_the_accept(self):
+        """A deferred or discarded suggestion owns no rule (data-model.md → *Rule suggestions*), so leaving
+        accepted for either undoes the accept just as returning to pending does."""
+        account_id = self._insert_account("Card")
+        for status, merchant in (("skipped", "Willow Florist"), ("discarded", "Willow Bakery")):
+            with self.subTest(status=status):
+                keyword = merchant.lower()
+                leaf = self._insert_expense_leaf(f"Fixture{merchant.replace(' ', '')}")
+                batch_id = self._insert_import_batch()
+                rows = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name=merchant, amounts=[20, 22])
+                open_scope = lambda conn, batch_id=batch_id: _open_batch_review_scope(conn, batch_id)
+
+                with self._use_db_path():
+                    accepted = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                        self._accept_item(keyword, rows, {"keyword": keyword, "category_id": leaf}),
+                    ]))
+                    rule_id = accepted["undo"]["trash_rule_ids"][0]
+                    moved = set_batch_rule_suggestion_status(batch_id, RuleSuggestionStatusRequest(
+                        items=[{"suggestion_id": keyword, "source_row_ids": rows, "keyword": keyword}],
+                        status=status,
+                    ))
+
+                self.assertEqual(set(self._sources(rows).values()), {"import"})
+                self.assertIsNotNone(self._rule_row(rule_id)["deleted_at"])
+                self.assertEqual(self._stored_review(open_scope)["statuses"][keyword]["status"], status)
+
+                with self._use_db_path():
+                    undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**moved["undo"]))
+
+                self.assertIsNone(self._rule_row(rule_id)["deleted_at"])
+                self.assertEqual(set(self._sources(rows).values()), {"rule"})
+                self.assertEqual(self._stored_review(open_scope)["statuses"][keyword]["status"], "accepted")
+
     def test_discard_and_defer_settle_rows_by_intent_and_each_undoes(self):
         account_id = self._insert_account("Card")
         leaf = self._insert_expense_leaf("FixtureMapleHardware")
