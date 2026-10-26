@@ -11,6 +11,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary, RulePreviewDetail, ruleFormInitialValues } from '../components/RuleForm.jsx'
+import { isLowPriority } from '../lib/rulePriority.js'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
@@ -157,6 +158,7 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
             <TagBadge key={tag.id} tag={tag} />
           ))}
           {rule.is_recurring ? <span title="Tracked as a recurring series">↻ recurring</span> : null}
+          {isLowPriority(rule) ? <span title="Gives way to normal-priority rules matching the same transaction">low priority</span> : null}
           {!hasAction ? <span style={{ fontStyle: 'italic' }}>no action</span> : null}
           <span
             title="The newest transaction date this rule has categorized"
@@ -638,7 +640,7 @@ export default function Rules() {
     const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = collision
     if (fromEdit) {
       // Folds this rule's actions into the other rule and deletes this one (backend).
-      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+      await txnMutations.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
     } else {
       await api.createRule(ruleData, { onExisting: 'merge' })
     }
@@ -669,7 +671,7 @@ export default function Rules() {
     const { applyToExisting, reconcile, ...ruleData } = data
     // An edit can make this rule's matcher collide with another rule. Default update only classifies;
     // we ask before merging (which removes this rule) or surfacing a conflict.
-    const result = await api.updateRule(editingRuleId, ruleData, { reconcile })
+    const result = await txnMutations.updateRule(editingRuleId, ruleData, { reconcile })
     if (result?.status && result.status !== 'updated') {
       setCollision({ status: result.status, existingRuleId: result.existing_rule_id, ruleData, applyToExisting, fromEdit: true, editedRuleId: editingRuleId })
       return

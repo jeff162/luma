@@ -21,6 +21,7 @@ import { TagBadge } from './TagUi.jsx'
 import { amountConditionSummary } from './RuleForm.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { ruleMatcherTerms } from '../lib/ruleMatcher.js'
+import { isLowPriority } from '../lib/rulePriority.js'
 
 // The rule's scope clauses as plain sentence fragments, in the order the rule form presents them.
 function ruleConditionParts(rule) {
@@ -65,6 +66,7 @@ export default function RuleSummary({ rule, showConditions = false }) {
         {Array.isArray(rule.tags) && rule.tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
         {rule.clean_name ? <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>renames to “{rule.clean_name}”</span> : null}
         {rule.is_recurring ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title="Tracked as a recurring series">↻ recurring</span> : null}
+        {isLowPriority(rule) ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title="Gives way to normal-priority rules matching the same transaction">low priority</span> : null}
       </div>
       {conditions.length ? (
         <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{conditions.join(' · ')}</div>

@@ -954,15 +954,17 @@ def _load_overrides(conn: sqlite3.Connection) -> dict:
 
 def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
     """The category_rule rows backing any `source='rule'` series in `series_list`, keyed by rule id —
-    loaded once so membership can be computed from the pool without a per-series query. Only the matcher
-    columns are needed (categorizer.rule_matches_row)."""
+    loaded once so membership can be computed from the pool without a per-series query. Membership reads
+    the matcher columns (categorizer.rule_matches_row); `priority_level` rides along because the rows are
+    also the series' fingerprint (`_rule_fingerprint`), and priority decides which of two recurring rules
+    takes a row they both match."""
     rule_ids = {s["rule_id"] for s in series_list if s["source"] == "rule" and s["rule_id"]}
     if not rule_ids:
         return {}
     placeholders = ",".join("?" * len(rule_ids))
     rows = conn.execute(
         f"""SELECT id, keyword, match_expr, owner_id, {rule_scope_account_sql()}, account_type,
-                   amount_min, amount_max, debit_credit, match_source_text
+                   amount_min, amount_max, debit_credit, match_source_text, priority_level
             FROM category_rule WHERE id IN ({placeholders})""",
         list(rule_ids),
     ).fetchall()

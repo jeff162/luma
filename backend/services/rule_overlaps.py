@@ -6,8 +6,13 @@ Rule pairs that compete for the same transactions, surfaced on demand.
 
 Two rules can both match one row. Usually that is fine, because the precedence contract
 (`categorizer.rule_specificity_order_sql`) decides between them for a reason the user would recognize:
-a scoped rule beats a global one, a longer keyword beats a shorter one, a contained amount range beats
-the range containing it. This module reports the two cases worth a human's attention instead.
+a rule set to low priority loses, a scoped rule beats a global one, a longer keyword beats a shorter one,
+a contained amount range beats the range containing it. This module reports the cases worth a human's
+attention instead.
+
+**A priority difference settles a pair.** Priority is read before every other term and is the user's
+own answer to which rule should win, so two rules whose priorities differ are never an amount overlap,
+a co-match or a scope split. The one thing it can get wrong is a nesting pair, below.
 
 - **`amount_overlap` (warning).** Two rules the ordering can separate *only* by the amount-span term,
   whose ranges intersect with neither containing the other — `[300, 4000]` against `[3000, inf)`. Span
@@ -28,6 +33,11 @@ the range containing it. This module reports the two cases worth a human's atten
   Nothing is ambiguous — the inner rule wins where both match — and it is decided from the rules alone.
   It is reported so the outcome is visible, and because where the two rules do the same thing the inner
   one is surplus: `removable_rule_id` names it, and it is the pair the user can simply delete half of.
+
+- **`matcher_priority_shadow` (warning).** A nesting pair whose inner rule has the lower priority, so the
+  broader rule wins wherever both match, and which one wins changes the outcome (`_outcomes_agree`). The
+  inner rule's differing category or rename then applies only where the broader rule does not match. It
+  is the user's choice, so it can be dismissed, but it is more often a priority set on the wrong rule.
 
 - **`matcher_scope_split` (info).** One matcher sits inside the other's, but the outer rule carries an
   owner or account limit the inner one lacks, so neither rule contains the other: an owner-scoped
@@ -60,8 +70,8 @@ every transaction the other rule also matches, read off the ledger scan.
 
 The kinds cannot collide. `amount_overlap` requires identical matcher text and the two nesting kinds
 require one matcher inside the other; `matcher_co_match` takes what is left, matchers that are neither
-the same nor nested. The overlap and co-match kinds require the two rules' scopes to tie, because a
-scope difference is a real refinement that precedence reads before any of this.
+the same nor nested. The overlap and co-match kinds require the two rules' priorities and scopes to tie,
+because either difference is a real refinement that precedence reads before any of this.
 
 **Which rule wins is read from the engine's own ordering rather than re-decided here.** The rule ids are
 pulled once in precedence order and compared by rank, so this module cannot drift from what the import
@@ -122,6 +132,7 @@ KIND_MATCHER_NESTING = "matcher_nesting"
 KIND_SCOPE_SPLIT = "matcher_scope_split"
 KIND_CO_MATCH = "matcher_co_match"
 KIND_CO_MATCH_BENIGN = "matcher_co_match_benign"
+KIND_PRIORITY_SHADOW = "matcher_priority_shadow"
 
 # Which findings may be acknowledged. The line is not warning-vs-info, it is *does the winner change the
 # ledger*: a pair whose two rules file identically can be waved through, because whichever one wins the
@@ -129,7 +140,10 @@ KIND_CO_MATCH_BENIGN = "matcher_co_match_benign"
 # finding stays listed until the conditions are refined — the stable tiebreak settles it, but settling is
 # not deciding. Enforced where findings are assembled rather than only in the panel, so a stored dismissal
 # cannot hide a warning.
-DISMISSIBLE_KINDS = (KIND_MATCHER_NESTING, KIND_SCOPE_SPLIT, KIND_AMOUNT_OVERLAP_BENIGN, KIND_CO_MATCH_BENIGN)
+# A priority shadow changes the outcome but is dismissible all the same, because what picks its winner is
+# the user's own priority setting rather than an accident of the ordering.
+DISMISSIBLE_KINDS = (KIND_MATCHER_NESTING, KIND_SCOPE_SPLIT, KIND_AMOUNT_OVERLAP_BENIGN, KIND_CO_MATCH_BENIGN,
+                     KIND_PRIORITY_SHADOW)
 
 # A row matching more than this many rules contributes no pairs. The pair enumeration below is O(k^2) in
 # that count, and a row drawing dozens of rules is itself the finding — reporting hundreds of pairs off it
@@ -146,7 +160,7 @@ def eligible_rules(conn: sqlite3.Connection) -> list[dict]:
         f"""SELECT cr.id, cr.keyword, cr.match_expr, cr.match_source_text, cr.owner_id, cr.category_id,
                    {effective_account_id_sql("cr.account_id")} AS account_id,
                    cr.account_type, cr.amount_min, cr.amount_max, cr.debit_credit,
-                   cr.clean_name, cr.is_recurring
+                   cr.clean_name, cr.is_recurring, cr.priority_level
             FROM   category_rule cr
             LEFT   JOIN category c ON c.id = cr.category_id
             WHERE  cr.deleted_at IS NULL AND cr.is_managed = 0
@@ -267,8 +281,9 @@ def _deciding_scope(winner: dict, other: dict) -> str | None:
 
 
 def _scopes_identical(a: dict, b: dict) -> bool:
-    """Do the two rules tie on every precedence term above the amount span? That is what makes a range
-    overlap unresolvable: with the scopes and the keyword equal, span is the only thing left deciding,
+    """Do the two rules tie on every scope term of the precedence order? With the priority checked first,
+    that is what makes a range overlap unresolvable: with the scopes and the keyword equal, span is the
+    only thing left deciding,
     and where neither range contains the other it decides nothing meaningful."""
     return (
         a["owner_id"] == b["owner_id"]
@@ -346,8 +361,12 @@ def _contention_kind(a: dict, b: dict, texts_a: MerchantMatcher, texts_b: Mercha
     refinement only when one range contains the other; other matchers by text length, which is one only
     when they nest. A scope difference is read before either and is always a refinement.
 
+    A priority difference is read before everything, and is the user's own decision about the pair.
+
     The single statement of "arbitrary", shared by the checkup and by the conflicts a categorization
     pass records (`rule_conflicts`), so the two cannot disagree about which pairs those are."""
+    if a["priority_level"] != b["priority_level"]:
+        return None
     if not _scopes_identical(a, b):
         return None
     if texts_a == texts_b:
@@ -578,7 +597,14 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
                 else:
                     continue
                 if _scope_within(inner, outer, account_types):
+                    if inner["priority_level"] < outer["priority_level"] and not _outcomes_agree(outer, inner):
+                        findings.append(_priority_shadow_finding(outer, inner, texts[outer["id"]]))
+                        continue
                     findings.append(_nesting_finding(outer, inner, texts[outer["id"]], ranges, tags, rank))
+                    continue
+                # A priority difference decides before the scope does, so the limit is not what settles
+                # the pair and there is no surprise to report.
+                if first["priority_level"] != second["priority_level"]:
                     continue
                 evidence = pairs.get(tuple(sorted((first["id"], second["id"]))))
                 if evidence and not _outcomes_agree(first, second):
@@ -711,6 +737,22 @@ def _nesting_finding(broader: dict, narrower: dict, broader_texts: MerchantMatch
         # The removable one, when it is removable: the narrow rule is the redundant half of a nesting
         # pair, never the broad one, whose deletion would strand every row the narrow matcher misses.
         "removable_rule_id": narrower["id"] if redundant else None,
+        "sort_width": _matcher_width(broader_texts),
+        "sort_label": _matcher_label(broader_texts),
+    }
+
+
+def _priority_shadow_finding(broader: dict, narrower: dict, broader_texts: MerchantMatcher) -> dict:
+    """A nesting pair the priority turns around: the narrower rule has the lower priority, so the broader
+    one wins wherever both match and the two do different things there. Decided from the rules alone, like
+    any nesting. Listed broader rule first, which is also the winner."""
+    return {
+        "kind": KIND_PRIORITY_SHADOW,
+        "severity": SEVERITY_WARNING,
+        "key": f"{KIND_PRIORITY_SHADOW}:{broader['id']}:{narrower['id']}",
+        "rule_ids": [broader["id"], narrower["id"]],
+        "winner_rule_id": broader["id"],
+        "removable_rule_id": None,
         "sort_width": _matcher_width(broader_texts),
         "sort_label": _matcher_label(broader_texts),
     }

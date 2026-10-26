@@ -348,13 +348,13 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `rule_conflict`, the rule pairs a categorization pass caught deciding a transaction arbitrarily. v82 adds
 # `backup_history`, the backups this system made. v83 adds `backup_history.deleted_at`, the history's trash.
 # v84 drops `merchant_rename`, a pattern → clean-name table nothing ever wrote or read; a category rule's
-# `clean_name` is the rename.
+# `clean_name` is the rename. v85 adds `category_rule.priority_level`, the user's own precedence term.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 84
+CURRENT_VERSION = 85
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2612,6 +2612,15 @@ def _drop_merchant_rename(conn):
     conn.execute("DROP TABLE IF EXISTS merchant_rename")
 
 
+@migration(85)
+def _add_rule_priority_level(conn):
+    # See the baseline CREATE. Every existing rule is normal priority, which is the order it already had.
+    # An empty column set is the partial schema of an older migration test (see v81), with no rule table.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(category_rule)")}
+    if columns and "priority_level" not in columns:
+        conn.execute("ALTER TABLE category_rule ADD COLUMN priority_level INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3102,7 +3111,12 @@ def init_db(db_path: str | None = None):
                 -- and matcher-identity ignore trashed rules; the row survives for restore/purge.
                 deleted_at TEXT,
                 -- 1 = app-managed rule (auto-created money-movement Type rules); excluded from stale-rule cleanup.
-                is_managed INTEGER NOT NULL DEFAULT 0
+                is_managed INTEGER NOT NULL DEFAULT 0,
+                -- The user's precedence term, read before every inferred one (higher wins; levels in
+                -- categorizer.RULE_PRIORITY_LEVELS). Not part of the matcher identity. Not named `priority`
+                -- because older backups still carry a column of that name with another meaning, and
+                -- restore copies any payload column the table has.
+                priority_level INTEGER NOT NULL DEFAULT 0
             );
 
             -- `flag_new_for_review`: whether this owner's transactions arrive flagged `needs_review`

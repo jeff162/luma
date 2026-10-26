@@ -135,6 +135,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `RuleForm` | Editing a rule. Its `AmountCondition` is the amount-range control for any other surface. | `components/RuleForm.jsx` |
 | `RuleActionModal` | Creating a rule from a transaction, or opening the one that matches it. | `components/RuleActionModal.jsx` |
 | `RuleSummary` | Showing one rule read-only. | `components/RuleSummary.jsx` |
+| `RulePrioritySelect` | Choosing a rule's priority. | `components/RulePrioritySelect.jsx` |
 | `RuleSuggestionToast` | Offering a rule after a manual category change. `TransactionListTable` mounts it, so only a surface that draws its own `CategoryCell` adds one. | `components/RuleSuggestionToast.jsx` |
 | `RecategorizeControl` | The control that re-runs categorization. | `components/RecategorizeControl.jsx` |
 

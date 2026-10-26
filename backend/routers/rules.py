@@ -26,6 +26,8 @@ from backend.services.categorizer import (
     bump_rule_effect_dates,
     rule_scope_account_sql,
     rule_specificity_order_sql,
+    RULE_PRIORITY_LEVELS,
+    RULE_PRIORITY_NORMAL,
 )
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.rule_range_drift import find_range_drift
@@ -665,6 +667,8 @@ class RuleCreate(BaseModel):
     # seeds the rhythm). is_recurring counts as a valid rule action on its own (track-recurrence-only rule).
     is_recurring: bool           = False
     cadence:     Optional[str]   = None
+    # Precedence the user sets, read before every inferred term (`categorizer.RULE_PRIORITY_LEVELS`).
+    priority_level: int          = RULE_PRIORITY_NORMAL
 
 
 class RuleUpdate(BaseModel):
@@ -686,6 +690,7 @@ class RuleUpdate(BaseModel):
     match_source_text: Optional[bool] = None
     is_recurring:     Optional[bool] = None
     cadence:          Optional[str] = None
+    priority_level:   Optional[int] = None
     clear_amount_min: bool = False
     clear_amount_max: bool = False
     clear_clean_name: bool = False
@@ -711,6 +716,7 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.account_type,
                 cr.match_source_text,
                 cr.is_recurring,
+                cr.priority_level,
                 cr.last_effect_date,
                 cr.is_managed,
                 (SELECT rs.cadence FROM recurring_series rs WHERE rs.rule_id = cr.id) AS recurring_cadence,
@@ -857,6 +863,11 @@ def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag
         conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (target["id"], tag_id))
 
 
+def _check_priority_level(value: Optional[int]) -> None:
+    if value is not None and value not in RULE_PRIORITY_LEVELS:
+        raise HTTPException(status_code=400, detail="Unknown rule priority")
+
+
 def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
                      capture_rules: Optional[list] = None) -> dict:
     """Create a rule against an already-open connection, reconciling against any existing rule with the
@@ -875,9 +886,13 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
     | 'conflict'; a 'merged' result also carries `relation` ('mergeable' vs. a no-op 'duplicate') so a
     caller can tell whether anything actually changed.
 
+    Priority is not part of the matcher, and a merge keeps the existing rule's: the bulk callers send the
+    default, which must not reset a rule the user set low.
+
     `capture_rules` (optional): when given, a whole-row snapshot of any *pre-existing* rule this call
     writes to is appended to it (`_rule_snapshot`), so an undoable caller can put that rule back as it was.
     """
+    _check_priority_level(body.priority_level)
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
     keyword, match_expr = _resolve_matcher(body.clauses, body.alternatives, body.keyword)
@@ -915,11 +930,11 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
     rid = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO category_rule
-           (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring, priority_level)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, body.category_id, keyword, match_expr,
          body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
-         body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring))),
+         body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring)), body.priority_level),
     )
     for tag_id in body.tag_ids:
         conn.execute(
@@ -1023,13 +1038,18 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     catches exactly the rows a narrowed keyword/scope drops. Only applied on a clean update (not a
     collision merge/report).
 
+    A priority change re-derives the rows the rule matches whether or not `reconcile` is set, because a
+    new priority means nothing until the rows it decides follow it, and those rows are the only ones it
+    can move. Without `reconcile` it is the retaining pass Categorize runs, so hand categorizations stay.
+
     `capture_rules` (optional): a whole-row snapshot of every rule this call writes to is appended to it
     (`_rule_snapshot`) — the edited rule, and on a collision merge the rule it folds into as well, since
     the merge fills that rule's actions and deletes this one. That is what lets undo restore both.
     """
+    _check_priority_level(body.priority_level)
     current = conn.execute(
         """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
-                  amount_min, amount_max, debit_credit, match_source_text, is_recurring
+                  amount_min, amount_max, debit_credit, match_source_text, is_recurring, priority_level
            FROM category_rule WHERE id = ?""",
         (rule_id,),
     ).fetchone()
@@ -1095,6 +1115,7 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     if body.account_type is not None: fields.append("account_type = ?"); params.append(body.account_type)
     if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
     if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
+    if body.priority_level is not None: fields.append("priority_level = ?"); params.append(body.priority_level)
     if body.clear_amount_min:        fields.append("amount_min = NULL")
     if body.clear_amount_max:        fields.append("amount_max = NULL")
     if body.clear_clean_name:        fields.append("clean_name = NULL")
@@ -1135,10 +1156,12 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
         _drop_recurring_series_for_rule(conn, rule_id)
     # Opt-in reconcile: re-evaluate the rows the pre-edit rule owned. Rows still matching the edited
     # rule are unchanged; rows the edit dropped from scope clear or fall to another rule. Union with the
-    # rows the edited rule now matches so a broadened edit also stamps the newly-covered rows.
+    # rows the edited rule now matches so a broadened edit also stamps the newly-covered rows. A priority
+    # change without the opt-in re-derives only those current matches, retaining (see the docstring).
     rescan_ids: list[str] = []
     rescan_prior_keys: set = set()
-    if reconcile:
+    priority_changed = body.priority_level is not None and body.priority_level != current["priority_level"]
+    if reconcile or priority_changed:
         affected_ids = set(affected)
         post_rule = conn.execute(
             f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
@@ -1153,7 +1176,7 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
             # can leave the payee group it is in now (see `owe_recurring_rescan`).
             rescan_ids = list(affected_ids)
             rescan_prior_keys = payee_keys_for_ids(conn, rescan_ids)
-            recategorize_all(conn, txn_ids=rescan_ids, retain_unmatched=False)
+            recategorize_all(conn, txn_ids=rescan_ids, retain_unmatched=not reconcile)
     return {"ok": True, "status": "updated"}, rescan_ids, rescan_prior_keys
 
 
@@ -1369,7 +1392,7 @@ def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> tuple[list[st
 _TRASH_DISPLAY_SQL = """
     SELECT cr.id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
            cr.category_id, cr.owner_id, cr.account_id, cr.account_type, cr.match_source_text, cr.is_recurring,
-           cr.last_effect_date, cr.is_managed, cr.deleted_at,
+           cr.priority_level, cr.last_effect_date, cr.is_managed, cr.deleted_at,
            c.name AS category_name, NULL AS category_color, p.name AS parent_name,
            o.name AS owner_name, o.color AS owner_color,
            COALESCE(a.display_name, a.name) AS account_name, COALESCE(ap.mask, a.mask) AS account_mask

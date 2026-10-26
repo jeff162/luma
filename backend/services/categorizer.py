@@ -335,6 +335,12 @@ def _resolve_effective_account(
 # range compares as the widest possible one — "+infinity, expressible in SQL".
 _AMOUNT_SPAN_OPEN_END = 1000000000000.0
 
+# `category_rule.priority_level`, the user's own precedence term. Stored as an integer, higher winning, so
+# another level is a new value here rather than a schema change; the API accepts only these.
+RULE_PRIORITY_NORMAL = 0
+RULE_PRIORITY_LOW = -1
+RULE_PRIORITY_LEVELS = (RULE_PRIORITY_LOW, RULE_PRIORITY_NORMAL)
+
 
 def _matcher_length_sql(p: str) -> str:
     """The matcher-text term of `rule_specificity_order_sql`, read from the stored matcher rather than kept
@@ -355,7 +361,14 @@ def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool
     (what the user is told *would* happen), and the rules list (which reads general -> specific). Three
     hand-kept copies of an ordering are three chances for the app to disagree with itself.
 
-    Most specific first: owner scope, then account scope, then account *type* scope, then the longer
+    **The user's priority comes first** (`priority_level`, higher wins). Every term after it is inferred
+    from the rules, and inference has a blind spot: two matchers that do not nest, such as a generic
+    "electronic payment" and a payee's "northgate" in one merchant name, are settled on text length, which
+    says nothing about either rule. Priority is the user's answer there. It outranks everything, so a
+    low-priority rule loses to every normal one, including one it is nested inside; the rule checkup
+    reports that case (`rule_overlaps`).
+
+    Then most specific first: owner scope, then account scope, then account *type* scope, then the longer
     matcher text — a longer substring matches a strict subset of the rows a shorter one does. For an AND
     matcher that text is the stored `keyword` (every filter, space-joined), since more and longer filters
     narrow the rule. Alternatives invert that: adding one makes the rule match *more* rows while
@@ -381,6 +394,7 @@ def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool
     d, a = ("DESC", "ASC") if most_specific_first else ("ASC", "DESC")
     p = prefix
     return f"""
+               {p}priority_level {d},
                CASE WHEN {p}owner_id     IS NOT NULL THEN 1 ELSE 0 END {d},
                CASE WHEN {p}account_id   IS NOT NULL THEN 1 ELSE 0 END {d},
                CASE WHEN {p}account_type IS NOT NULL THEN 1 ELSE 0 END {d},
@@ -409,8 +423,9 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
            -- categorize into an inactive category. Tag-only rules (category_id NULL) still apply.
            -- A trashed rule (deleted_at set) is excluded so it stops categorizing while recoverable.
            WHERE  (cr.category_id IS NULL OR c.is_active = 1) AND cr.deleted_at IS NULL
-           -- Precedence: a specific account beats an account *type* beats global, then the longer
-           -- keyword, then the narrower amount range. rule_specificity_order_sql owns the contract.
+           -- Precedence: the user's priority, then a specific account beats an account *type* beats
+           -- global, then the longer keyword, then the narrower amount range.
+           -- rule_specificity_order_sql owns the contract.
            ORDER  BY {rule_specificity_order_sql()}"""
     ).fetchall()
 

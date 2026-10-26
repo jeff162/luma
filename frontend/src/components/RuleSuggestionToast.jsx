@@ -63,7 +63,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
     if (existingRule) {
       // Editing the matched rule can make it collide with a different rule; reconcile the same way
       // (merge folds this rule into the other and removes it).
-      const updated = await api.updateRule(existingRule.id, ruleData)
+      const updated = await txnMutations.updateRule(existingRule.id, ruleData)
       if (updated?.status === 'conflict') {
         setError('Your changes make this match another rule that assigns a different category. Edit that rule instead, or narrow the scope.')
         return
@@ -106,7 +106,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
   async function confirmMerge() {
     const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
     if (fromEdit) {
-      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+      await txnMutations.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
     } else {
       await api.createRule(ruleData, { onExisting: 'merge' })
     }

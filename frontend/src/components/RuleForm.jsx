@@ -28,6 +28,8 @@ import { OriginFieldList } from './OriginFields.jsx'
 import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { formatRuleMatcher, ruleMatcherLists, ruleMatcherTerms } from '../lib/ruleMatcher.js'
+import { RULE_PRIORITY_NORMAL } from '../lib/rulePriority.js'
+import RulePrioritySelect from './RulePrioritySelect.jsx'
 
 const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
 
@@ -107,6 +109,7 @@ export function ruleFormInitialValues(rule) {
     match_source_text: !!rule.match_source_text,
     is_recurring: !!rule.is_recurring,
     cadence: rule.recurring_cadence || 'monthly',
+    priority_level: rule.priority_level ?? RULE_PRIORITY_NORMAL,
   }
 }
 
@@ -587,6 +590,7 @@ const RuleForm = forwardRef(function RuleForm({
   // Rule-backed recurring series: the rule's matches become a recurring series (cadence seeds its rhythm).
   const [isRecurring, setIsRecurring] = useState(!!(initialValues.isRecurring ?? initialValues.is_recurring ?? false))
   const [cadence, setCadence] = useState(initialValues.cadence ?? 'monthly')
+  const [priorityLevel, setPriorityLevel] = useState(initialValues.priority_level ?? RULE_PRIORITY_NORMAL)
 
   const [kwOpen, setKwOpen] = useState(initialAlternatives.length + initialFilters.length > 0)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
@@ -711,6 +715,7 @@ const RuleForm = forwardRef(function RuleForm({
     match_source_text: matchSourceText,
     is_recurring: isRecurring,
     cadence: isRecurring ? cadence : null,
+    priority_level: priorityLevel,
     clear_amount_min: amtLow === null,
     clear_amount_max: amtHigh === null,
     clear_clean_name: !cleanName.trim(),
@@ -719,7 +724,7 @@ const RuleForm = forwardRef(function RuleForm({
     clear_account_type: !accountType,
     applyToExisting,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [clausesKey, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
+  }), [clausesKey, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, priorityLevel, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -813,6 +818,7 @@ const RuleForm = forwardRef(function RuleForm({
     catId && selectedCategoryName ? `category: ${selectedCategoryName}` : null,
     renameOpen && cleanName.trim() ? `rename to ${cleanName.trim()}` : null,
     ...selectedTags.map(tag => `tag: ${tag.name}`),
+    priorityLevel < RULE_PRIORITY_NORMAL ? 'low priority' : null,
   ].filter(Boolean)
   // The captured source text for this rule's example transaction (when one anchors the form): the raw
   // description + extra evidence fields like "Original Statement". Empty for abstract edits (Rules page)
@@ -1125,6 +1131,24 @@ const RuleForm = forwardRef(function RuleForm({
                 </div>
               ) : null}
             </div>
+
+            {/* Not offered in the suggestion review, whose save keeps only the fields a suggestion carries. */}
+            {suggestionFields ? null : (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 0 }}>
+                    Priority
+                  </SectionEyebrow>
+                  <FeatureExplainer topic="rule-precedence" placement="bottom-left" />
+                  <span style={{ marginLeft: 6 }}>
+                    <RulePrioritySelect size="compact" value={priorityLevel} onChange={setPriorityLevel} />
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
+                  A low-priority rule gives way to any normal rule matching the same transaction.
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

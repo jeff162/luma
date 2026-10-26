@@ -14,11 +14,16 @@
  *
  * **Overlapping amount ranges** and **Rules that match the same transaction** are work of a different
  * kind: both rules can claim a charge and nothing meaningful decides which, so the user has to settle
- * it. This panel deliberately proposes no edit for either, because the ambiguity is in the rules
- * themselves and a one-click "fix" would dress a coin flip as a decision. The two differ only in how the
- * pair reaches that state — one by ranges that overlap, one by two matchers landing in one merchant name
- * — and the second carries the transaction that proves it, since without a real row there is nothing to
- * report.
+ * it. This panel deliberately proposes no edit to either rule's conditions, because the ambiguity is in
+ * the rules themselves and a one-click "fix" would dress a coin flip as a decision. The two differ only
+ * in how the pair reaches that state — one by ranges that overlap, one by two matchers landing in one
+ * merchant name — and the second carries the transaction that proves it, since without a real row there
+ * is nothing to report.
+ *
+ * What these cards do offer is each rule's **priority**, because that is the user making the decision
+ * rather than the panel guessing one: a generic rule set to low gives way to every normal rule it meets,
+ * and the pair leaves the list. The same control sits on **A low-priority rule losing to a broader one**,
+ * the one case priority gets wrong, where it is the way back.
  *
  * **Nested merchant matchers** is not a defect; it is reported so the outcome is visible, and because a
  * pair whose two rules do the same thing has a surplus half worth clearing out. **Rules where a limit
@@ -66,6 +71,7 @@ import RuleSummary from './RuleSummary.jsx'
 import CornerTab from './CornerTab.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
+import RulePrioritySelect from './RulePrioritySelect.jsx'
 
 // A finding's contested band, said the way it reads: a range where the two ranges genuinely overlap,
 // a single figure where they meet at one value (capping one rule at the other's floor leaves exactly
@@ -123,7 +129,7 @@ function RuleActions({ ruleId, onEditRule, onDelete, busy }) {
   )
 }
 
-function RulePair({ finding, rules, onEditRule, onDelete, busy }) {
+function RulePair({ finding, rules, onEditRule, onDelete, onSetPriority, busy }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {finding.rule_ids.map((id, index) => {
@@ -146,6 +152,13 @@ function RulePair({ finding, rules, onEditRule, onDelete, busy }) {
             </div>
             {isWinner ? (
               <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', marginTop: 2, ...fadedIfDismissed(finding) }}>wins</span>
+            ) : null}
+            {onSetPriority ? (
+              <RulePrioritySelect
+                value={rule.priority_level}
+                onChange={level => onSetPriority(id, level)}
+                disabled={busy}
+              />
             ) : null}
             <RuleActions
               ruleId={id}
@@ -248,6 +261,14 @@ function scopeSplitNote(finding, winner, other) {
   return `${evidenceNote(finding)} #1 is limited to ${limit}, and owner and account limits count before keyword length, so #1 wins where both match. ${sentence(differences)}`
 }
 
+function priorityShadowNote(broader, narrower) {
+  const differences = actionDifferences(broader, narrower, ['#1', '#2'], { outcomeOnly: true })
+  return `#2 has low priority, so #1 wins wherever both match even though #2’s keyword is the more specific one. ${sentence(differences)}`
+}
+
+// The cards whose pair a priority settles, or unsettles.
+const PRIORITY_KINDS = ['amount_overlap', 'matcher_co_match', 'matcher_priority_shadow']
+
 // Said only on a pair that offers a Delete, because that is the claim the Delete rests on.
 function coverageNote(finding) {
   const index = finding.rule_ids.indexOf(finding.removable_rule_id)
@@ -255,7 +276,7 @@ function coverageNote(finding) {
   return `#${index + 1} has no transactions outside #${2 - index}’s.`
 }
 
-function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestore, busy }) {
+function FindingCard({ finding, rules, onEditRule, onDelete, onSetPriority, onDismiss, onRestore, busy }) {
   const first = rules[finding.rule_ids[0]]
   const second = rules[finding.rule_ids[1]]
   // Styling follows severity rather than kind now that both warnings have a benign twin: a pair whose
@@ -269,9 +290,9 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
   } else if (isCoMatchKind(finding.kind)) {
     note = evidenceNote(finding)
   } else if (first && second) {
-    note = finding.kind === 'matcher_scope_split'
-      ? scopeSplitNote(finding, first, second)
-      : nestingNote(finding, first, second)
+    if (finding.kind === 'matcher_scope_split') note = scopeSplitNote(finding, first, second)
+    else if (finding.kind === 'matcher_priority_shadow') note = priorityShadowNote(first, second)
+    else note = nestingNote(finding, first, second)
   }
   if (isBenign && finding.removable_rule_id) note = `${note} ${coverageNote(finding)}`
   const borderColor = isWarning ? 'color-mix(in srgb, var(--danger) 26%, var(--border))' : 'var(--border)'
@@ -295,7 +316,14 @@ function FindingCard({ finding, rules, onEditRule, onDelete, onDismiss, onRestor
           title="Acknowledge this pair — it stops being listed until the situation changes"
         />
       </div>
-      <RulePair finding={finding} rules={rules} onEditRule={onEditRule} onDelete={onDelete} busy={busy} />
+      <RulePair
+        finding={finding}
+        rules={rules}
+        onEditRule={onEditRule}
+        onDelete={onDelete}
+        onSetPriority={PRIORITY_KINDS.includes(finding.kind) ? onSetPriority : null}
+        busy={busy}
+      />
     </div>
   )
 }
@@ -521,6 +549,13 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
     onRulesChanged?.()
   })
 
+  // The server re-derives the transactions the rule matches as part of the save, so the rows follow the
+  // new priority straight away. Re-runs both checks, since a priority settles every pair the rule is in.
+  const setPriority = (ruleId, level) => runAction(async () => {
+    await txnMutations.updateRule(ruleId, { priority_level: level })
+    onRulesChanged?.()
+  })
+
   // Each family keeps its own dismissal store, so the finding's kind picks the endpoint.
   const isDrift = finding => finding.kind === 'rule_range' || finding.kind === 'rule_range_edge'
   const setOverlapDismissal = (finding, dismissed) => () => setOverlaps(prev => withDismissal(prev, finding.key, dismissed))
@@ -540,6 +575,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // toggle on, counting what is on screen would report acknowledged findings as work still to do.
   const openDrift = drift?.count || 0
   const openOverlaps = (overlaps?.counts?.amount_overlap || 0) + (overlaps?.counts?.matcher_co_match || 0)
+    + (overlaps?.counts?.matcher_priority_shadow || 0)
   // The informational tally is everything listed for knowledge rather than for action: nesting pairs,
   // and the competing pairs whose two rules turn out to do the same thing.
   const openNesting = (overlaps?.counts?.matcher_nesting || 0)
@@ -562,6 +598,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
           rules={overlaps.rules}
           onEditRule={onEditRule}
           onDelete={deleteRule}
+          onSetPriority={setPriority}
           onDismiss={dismissFinding}
           onRestore={restoreFinding}
           busy={busy}
@@ -639,17 +676,22 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
               />
               {pairSection(
                 'Amount ranges that overlap',
-                'Two rules with partially overlapping ranges match a transaction. Adjust the rules so that only one applies.',
+                'Two rules with partially overlapping ranges match a transaction. Adjust the rules so that only one applies, or set one of them to low priority.',
                 ['amount_overlap'],
               )}
               {pairSection(
                 'Rules that match the same transaction',
-                'Two rules whose keywords don’t contain each other match the same transaction with different results. Adjust the rules so only one applies.',
+                'Two rules whose keywords don’t contain each other match the same transaction with different results. Adjust the rules so only one applies, or set the more generic one to low priority.',
                 ['matcher_co_match'],
               )}
               {pairSection(
+                'A low-priority rule losing to a broader one',
+                'One rule’s keyword contains the other’s, which would normally make it win, but it has low priority, so the broader rule wins where both match and the two do different things. Change the priority if that is not the intention.',
+                ['matcher_priority_shadow'],
+              )}
+              {pairSection(
                 'Merchant matchers that nest',
-                'One rule’s keyword contains the other’s, so the longer one wins where both match. When both take the same action, the longer one can be removed. Edit the rules if that is not the intention.',
+                'One rule’s keyword contains the other’s, so the longer one wins where both match unless it has low priority. When both take the same action, the longer one can be removed. Edit the rules if that is not the intention.',
                 ['matcher_nesting'],
               )}
               {pairSection(

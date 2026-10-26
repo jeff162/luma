@@ -1752,7 +1752,7 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are not ranked manually. The ranking is determined by an algorithm that prioritizes more specific rules. The order of importance is narrow scope, keyword length, then the narrower amount range. Ambiguous situations which require adjusting the rules are listed by Rules checkup: amount ranges that overlap without one containing the other and two separate keywords that both appear in the same transaction.',
+    summary: 'Rules are ranked by an algorithm that prioritizes more specific rules, with one manual setting: a rule set to low priority gives way to every normal one. The order of importance is priority, narrow scope, keyword length, then the narrower amount range. Ambiguous situations which require adjusting the rules are listed by Rules checkup: amount ranges that overlap without one containing the other and two separate keywords that both appear in the same transaction.',
     body: () => (
       <>
         <p>
@@ -1768,6 +1768,16 @@ export const HELP_TOPICS = [
           Narrower on the amount axis means the <em>smaller range</em>, not the rule with more limits
           set. A rule for charges over $3,000 matches strictly fewer transactions than one for charges
           over $300, so it wins wherever both apply.
+        </p>
+        <h4>Low priority</h4>
+        <p>*needs review*</p>
+        <p>
+          The one part of the ranking set by hand is a rule's <strong>Priority</strong>. A rule set
+          to <strong>Low</strong> gives way to every normal rule matching the same transaction, ahead of
+          all the terms above. It is meant for a generic rule whose text turns up inside other merchants'
+          descriptions, such as <em>electronic payment</em>. Rather than lengthening every other rule's
+          keyword to outrank it, the generic rule is set to low once. Priority is set in the rule editor
+          or from Rule checkup, and changing it re-applies the rules to the transactions the rule matches.
         </p>
         <h4>Checking for rules that compete</h4>
         <p>
@@ -1785,7 +1795,8 @@ export const HELP_TOPICS = [
             <strong>Amount ranges that overlap</strong> -- two rules for the same merchant whose ranges
             cross without one sitting inside the other, such as $300 to $4,000 against $3,000 and up. A
             $3,500 charge matches both and neither rule is the more specific one, so which of them wins
-            is arbitrary. The way to settle this is to refine the conditions so they do not overlap.
+            is arbitrary. The way to settle this is to refine the conditions so they do not overlap, or
+            to set one of the rules to low priority.
           </li>
           <li>
             <strong>Rules that match the same transaction</strong> -- two keywords that are unrelated to
@@ -1795,7 +1806,7 @@ export const HELP_TOPICS = [
             keyword sits inside the other, and these do not. The finding carries the transaction it
             found and how many others like it there are, since without a real transaction matching both
             there would be nothing to report. The way to settle it is to narrow whichever keyword is
-            reaching further than intended.
+            reaching further than intended, or to set the more generic rule to low priority.
           </li>
           <li>
             <strong>Merchant matchers that nest</strong> -- one rule's keyword contained in
@@ -1811,6 +1822,11 @@ export const HELP_TOPICS = [
             because owner and account limits count before keyword length, the shorter keyword wins on
             that owner's or account's transactions. It is listed only when a real transaction matches both
             and the two rules do different things to it.
+          </li>
+          <li>
+            <strong>A low-priority rule losing to a broader one</strong> -- the longer keyword would win,
+            but it is set to low priority, so the shorter one wins where both match and the two rules do
+            different things. This is usually a priority set on the wrong rule.
           </li>
         </ul>
         <p>

@@ -220,7 +220,9 @@ shapes: `null` (unset, falls back to a page's registered default), the `{start:n
 
 - **Storage:** `category_rule`. **Runtime:** the categorizer service.
 
-- **Behavior:** rules are ordered automatically by specificity. A rule can assign a category, scope an
+- **Behavior:** rules are ordered automatically by specificity, after one term the user sets: a rule's
+  priority (normal or low), which settles the pairs specificity cannot. See `data-model.md` →
+  *Precedence*. A rule can assign a category, scope an
   amount rule to debits or credits, rename a merchant, and add tags. Manually overridden categories are
   preserved; a per-transaction tag edit overrides only that row's rule-derived tag presence.
 

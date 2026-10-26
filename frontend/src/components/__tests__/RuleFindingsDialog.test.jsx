@@ -41,7 +41,7 @@ vi.mock('../../lib/api.js', () => ({
   api: {
     getRuleOverlaps: vi.fn(), deleteRule: vi.fn(),
     dismissRuleOverlap: vi.fn(), restoreRuleOverlap: vi.fn(),
-    getRuleRangeDrift: vi.fn(), updateRule: vi.fn(),
+    getRuleRangeDrift: vi.fn(),
     dismissRuleRangeDrift: vi.fn(), restoreRuleRangeDrift: vi.fn(),
   },
 }))
@@ -49,7 +49,7 @@ vi.mock('../../lib/api.js', () => ({
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: (_key, fallback) => [fallback, () => {}],
 }))
-vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn() } }))
+vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn(), updateRule: vi.fn() } }))
 
 // Call counts are asserted below (a re-run of the check, a delete that must not fire), so the shared api
 // mock has to be reset between tests as well as the DOM.
@@ -151,7 +151,7 @@ function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissed
   api.getRuleOverlaps.mockResolvedValue(payload(findings, dismissedCount))
   api.getRuleRangeDrift.mockResolvedValue(payload(drift, driftDismissedCount))
   api.deleteRule.mockResolvedValue({ ok: true })
-  api.updateRule.mockResolvedValue({ ok: true })
+  txnMutations.updateRule.mockResolvedValue({ ok: true })
   api.dismissRuleOverlap.mockResolvedValue({ ok: true })
   api.restoreRuleOverlap.mockResolvedValue({ ok: true })
   api.dismissRuleRangeDrift.mockResolvedValue({ ok: true })
@@ -315,7 +315,7 @@ describe('RuleFindingsDialog', () => {
     const { onRulesChanged } = renderDialog([], { drift: [DRIFT] })
     await userEvent.click(await screen.findByText('Widen to include'))
     await waitFor(() => expect(txnMutations.widenRuleRange).toHaveBeenCalledWith('broad', 'max', 224))
-    expect(api.updateRule).not.toHaveBeenCalled()
+    expect(txnMutations.updateRule).not.toHaveBeenCalled()
     expect(txnMutations.applyRule).not.toHaveBeenCalled()
     expect(onRulesChanged).toHaveBeenCalled()
     // The whole checkup re-runs: widening can settle an overlap as well as this finding.
@@ -377,6 +377,18 @@ describe('RuleFindingsDialog', () => {
     expect(await screen.findByText(/NORTHGATE PRIME SUPPLY/)).toBeTruthy()
     expect(screen.queryByText('Dismiss')).toBeNull()
     expect(screen.queryByText('Delete')).toBeNull()
+  })
+
+  it('settles a co-match by setting one rule to low priority, then re-runs the checks', async () => {
+    // The user deciding which rule gives way, rather than the panel guessing: the save is the rule's own
+    // priority, and every pair that rule is in can change, so the whole checkup runs again.
+    const { onRulesChanged } = renderDialog([CO_MATCH])
+    expect(await screen.findByText(/NORTHGATE PRIME SUPPLY/)).toBeTruthy()
+    const [longSelect] = screen.getAllByRole('combobox', { name: 'Rule priority' })
+    await userEvent.selectOptions(longSelect, 'Low')
+    await waitFor(() => expect(txnMutations.updateRule).toHaveBeenCalledWith('long', { priority_level: -1 }))
+    expect(onRulesChanged).toHaveBeenCalled()
+    await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledTimes(2))
   })
 
   it('puts a pair whose rules file the same way out of the warnings and lets it be dismissed', async () => {

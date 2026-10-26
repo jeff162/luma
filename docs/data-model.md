@@ -675,7 +675,8 @@ category, a rename (`clean_name`), tags, a recurring series, or any combination.
 ### One rule per matcher
 
 A matcher is the keyword, the clause set, owner, account, account type, amount range, direction and the
-`match_source_text` flag. At most one live rule exists per matcher, because duplicates would make
+`match_source_text` flag. Priority is not part of it, since it does not change which rows match. At most
+one live rule exists per matcher, because duplicates would make
 "which rule wins" depend on row order and leave one copy firing after the other is edited.
 
 Saving a rule whose matcher exists is classified and reconciled:
@@ -687,24 +688,40 @@ Saving a rule whose matcher exists is classified and reconciled:
 
 `create_rule` and `update_rule` take `on_existing = reject` (classify and report, the default) or
 `merge`. When an edit makes a rule collide with a different rule, the merge folds the edited rule into
-the other and deletes the edited one. Tags still union across different matching rules.
+the other and deletes the edited one. A merge keeps the surviving rule's priority, because the bulk
+callers send the default and must not reset a rule set to low. Tags still union across different matching rules.
 
 ### Precedence
 
-Priority is computed, not curated. `categorizer.rule_specificity_order_sql` is the one definition, used
-by the engine, by the preview and apply in `routers/rules`, and by the rules list.
+Precedence is computed, apart from one term the user sets. `categorizer.rule_specificity_order_sql` is
+the one definition, used by the engine, by the preview and apply in `routers/rules`, by the rules list,
+by rule-backed recurring series, and by the rule checkup.
 
-1. **Scope**, in this order: an owner-scoped rule, then one pinned to a single account, then one
+1. **Priority** (`priority_level`), higher first. Every other term is inferred from the rules, and the
+   inference is blind where two matchers do not nest: a generic `electronic payment` and a payee's
+   `northgate` both land in "NORTHGATE MUTUAL ELECTRONIC PAYMENT", and text length picks the generic one
+   for no reason about either rule. Setting the generic rule low answers every such pair at once. It
+   outranks everything, so a low rule loses even to a normal rule it is nested inside. Stored as an
+   integer so another level needs no schema change; `categorizer.RULE_PRIORITY_LEVELS` lists the levels
+   the API accepts. The column is not called `priority`, because older backups carry a column of that
+   name with another meaning and restore copies any payload column the table has.
+2. **Scope**, in this order: an owner-scoped rule, then one pinned to a single account, then one
    covering an account type, then a global one.
-2. **Text length**: `LENGTH(keyword)`. For a multi-clause rule that is the summed clause length, so a
+3. **Text length**: `LENGTH(keyword)`. For a multi-clause rule that is the summed clause length, so a
    rule whose clauses are a superset of another's is always longer and wins where both match. An
    alternative widens a rule rather than narrowing it, so a rule with alternatives is as broad as its
    shortest one: its length is that alternative plus every filter, with the joined keyword's separators,
    which ranks it exactly as the AND rule of its shortest alternative. It is computed from `match_expr`
    in the ORDER BY rather than stored, so no write path can leave it stale.
-3. **Amount span**: `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)`. A range contained in
+4. **Amount span**: `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)`. A range contained in
    another has the smaller span, so `>= 3000` beats `>= 300`. Counting bounds cannot distinguish them.
-4. **Rule id**, so a tie is stable across a `VACUUM` or an index change.
+5. **Direction**: a rule limited to debits or to credits before one taking both.
+6. **Rule id**, so a tie is stable across a `VACUUM` or an index change.
+
+**A priority change moves the rows at once.** Saving a new priority re-derives every row the rule matches
+(the retaining pass Categorize runs, so hand categorizations stay), since those are the only rows whose
+winner it can change and a priority that waits for the next Categorize looks like it did nothing. The
+priority is also part of a rule-backed series' fingerprint, so the next scan reconciles the series.
 
 Two ranges that overlap without one containing the other have no principled winner; that case is
 reported, below.
@@ -741,16 +758,23 @@ carry the same actions (`_actions_agree`).
   category is never reported, and a dismissal does not consume a rule's per-rule cap.
 - **Widening is one transaction** (`POST /rules/{id}/widen`): the bound moves and the rule is applied
   together.
-- **Overlaps** (`GET /rules/overlaps`, `services/rule_overlaps.py`). Four ways two rules contend. An
-  **amount overlap** is two rules with the same matcher and the same scope whose ranges intersect with
+- **Overlaps** (`GET /rules/overlaps`, `services/rule_overlaps.py`). Five ways two rules contend. An
+  **amount overlap** is two rules with the same matcher, priority and scope whose ranges intersect with
   neither containing the other. A **matcher co-match** is two matchers that neither repeat nor contain
-  each other, under the same scope, both matching a real transaction. A **matcher nesting** is one rule
+  each other, under the same priority and scope, both matching a real transaction. A **matcher nesting** is one rule
   matching a subset of the other's rows, decided from the rules alone: its matcher sits inside the
   other's (every row it matches carries each of the outer one's filters and one of its alternatives) and
   its owner and account limits sit inside the other's. A **scope split** is a matcher inside another
   where the outer rule carries an owner or account limit the inner one lacks, so neither contains the
   other and the limit decides; it is reported only when a real transaction matches both and the two
-  rules' outcomes differ. Which rule wins is read from `rule_specificity_order_sql`.
+  rules' outcomes differ, and only between rules of one priority. A **priority shadow** is a nesting
+  whose inner rule has the lower priority, so the outer rule wins where both match, reported when the
+  two outcomes differ: the inner rule's category or rename then applies only where the outer rule does
+  not match, which is more often a priority set on the wrong rule than a plan. Which rule wins is read
+  from `rule_specificity_order_sql`.
+- **A priority difference settles a pair.** It is the user's own answer to which rule should win, so
+  two rules of different priority are never an overlap, co-match or scope split, and a recorded
+  `rule_conflict` between them stops counting.
 - **The co-match check reads the ledger; nothing else here does.** Whether two unrelated keywords ever
   land in one merchant name is a fact about the transactions, not about `category_rule`. It matters
   because precedence settles such a pair on text length, and that term stands for containment —
@@ -772,8 +796,8 @@ carry the same actions (`_actions_agree`).
   at one value overlap on that value. Managed rules, trashed rules and rules targeting an inactive
   category are left out; so are pending and trashed transactions, as evidence.
 - **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored answer.
-  `rule_overlaps.DISMISSIBLE_KINDS` admits the kinds whose winner changes nothing — nestings and the two
-  benign variants. A live amount overlap or co-match is settled only by the ordering's last terms:
+  `rule_overlaps.DISMISSIBLE_KINDS` admits the kinds whose winner changes nothing (nestings and the two
+  benign variants) and the priority shadow, whose winner the user picked. A live amount overlap or co-match is settled only by the ordering's last terms:
   reproducibly, but on no basis that is about the two rules. The key carries the pair and the
   redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
   dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.

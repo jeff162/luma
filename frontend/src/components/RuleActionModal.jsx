@@ -64,7 +64,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
     if (state.mode === 'edit') {
       // An edit can make this rule collide with another. Default update only classifies; merging
       // folds this rule into the other and removes this one, so we ask first.
-      const updated = await api.updateRule(state.ruleId, ruleData)
+      const updated = await txnMutations.updateRule(state.ruleId, ruleData)
       if (updated?.status === 'conflict') {
         setError(conflictMessage)
         return
@@ -109,7 +109,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
   async function confirmMerge() {
     const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
     if (fromEdit) {
-      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+      await txnMutations.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
     } else {
       await api.createRule(ruleData, { onExisting: 'merge' })
     }

@@ -82,6 +82,14 @@ export const txnMutations = {
     return result
   },
 
+  // A rule edit re-derives transactions when it changes the rule's priority or asks to reconcile, so it
+  // invalidates like an apply.
+  async updateRule(ruleId, data, options) {
+    const result = await api.updateRule(ruleId, data, options)
+    notifyTransactionsChanged()
+    return result
+  },
+
   // Move one of a rule's amount bounds out to a charge and re-apply the rule, as one request.
   async widenRuleRange(ruleId, bound, amount) {
     const result = await api.widenRuleRange(ruleId, bound, amount)
