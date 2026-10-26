@@ -1966,6 +1966,10 @@ export const HELP_TOPICS = [
             </ul>
           </li>
         </ul>
+        <p>
+          Deferring an accepted suggestion, or returning it to pending, undoes the accept: the rule it
+          created goes to the trash and its rows return to the categories they had before.
+        </p>
         <h4>Conflict sets, and the different ways to resolve them</h4>
         <p>
           When the same merchant was filed under <strong>several different categories</strong>, a single

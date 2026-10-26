@@ -23,7 +23,7 @@ export function ownerChipLabels(owners) {
 }
 
 // `swatch={false}` is for a pill that stands for no one in particular — a filter's "Everyone".
-export default function OwnerChip({ owner, label = owner.name, selected = false, onClick, swatch = true }) {
+export default function OwnerChip({ owner, label = owner.name, selected = false, onClick, swatch = true, disabled = false }) {
   const content = (
     <>
       {swatch ? <span
@@ -63,9 +63,10 @@ export default function OwnerChip({ owner, label = owner.name, selected = false,
       type="button"
       aria-pressed={selected}
       onClick={onClick}
+      disabled={disabled}
       title={label === owner.name ? undefined : owner.name}
       style={{
-        ...style, padding: '3px 9px', fontSize: 11.5, cursor: 'pointer',
+        ...style, padding: '3px 9px', fontSize: 11.5, cursor: disabled ? 'not-allowed' : 'pointer',
         fontWeight: selected ? 600 : 500,
         border: `1px solid ${selected ? 'color-mix(in srgb, var(--accent) 52%, var(--border))' : 'var(--border)'}`,
         background: selected ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',

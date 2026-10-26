@@ -64,6 +64,13 @@ export function suggestionSelectionChanged(suggestion, data) {
     || current.match_source_text !== next.match_source_text
 }
 
+// A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
+// saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
+// card labels its editor for that and routes the save through the refinement endpoint.
+export function isRefinedPendingSuggestion(suggestion) {
+  return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'
+}
+
 // A working set (the backend's `review_group_id`) stays active when any visible member is recent.
 // Settling one chunk should not immediately strand the user's remaining chunk in Older while they are
 // still resolving the same merchant-level review work.

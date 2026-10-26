@@ -109,6 +109,52 @@ test('resolving a conflict set builds the rule from the chosen category and leav
   await expect(page.locator('[data-rule-suggestion-card]').filter({ hasText: 'Hearthside Hardware' })).toHaveCount(1)
 })
 
+test('in the report, Use majority corrects a row’s file category and Preserve makes it a manual exception', async ({ page, request }) => {
+  await openReview(page)
+  await pill(page, 'conflict').click()
+  await page.locator('[data-rule-suggestion-card]').filter({ hasText: 'Hearthside Hardware' })
+    .getByRole('button', { name: 'Open matching transactions report' }).click()
+  await expect(page.getByRole('button', { name: 'Use majority' })).toHaveCount(2)
+
+  await page.getByRole('button', { name: 'Use majority' }).first().click()
+  await expect(page.getByRole('button', { name: 'Use majority' })).toHaveCount(1)
+  await page.getByRole('button', { name: 'Preserve This Categorization' }).click()
+  await expect(page.getByRole('button', { name: 'Preserve This Categorization' })).toHaveCount(0)
+
+  const byCategory = (await rowsFor(request, 'Hearthside Hardware')).reduce((counts, row) => ({
+    ...counts, [`${row.category_name}/${row.category_source}`]: (counts[`${row.category_name}/${row.category_source}`] || 0) + 1,
+  }), {})
+  expect(byCategory).toEqual({ 'Home Improvement/import': 5, 'Home Repairs/manual': 1 })
+})
+
+test('edits made on a card in place are what saving it sends', async ({ page, request }) => {
+  await openReview(page)
+  const keystone = card(page, 'Keystone Auto Insurance')
+
+  await keystone.getByRole('button', { name: 'keystone auto insurance', exact: true }).click()
+  await keystone.getByRole('textbox').fill('keystone auto')
+  await keystone.getByRole('textbox').press('Enter')
+  await expect(keystone.getByRole('button', { name: 'keystone auto', exact: true })).toBeVisible()
+
+  await keystone.getByText('category: Auto Insurance').click()
+  await page.getByPlaceholder('Auto Insurance').fill('Home Insurance')
+  await page.locator('[data-picker-row-active]').filter({ hasText: 'Home Insurance' }).first().click()
+  await expect(keystone.getByText('category: Home Insurance')).toBeVisible()
+
+  await keystone.click({ button: 'right' })
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Add tag…' }).click()
+  await page.getByText('Essential Expenses', { exact: true }).last().click()
+  await page.keyboard.press('Escape')
+  await expect(keystone.getByRole('button', { name: 'Remove Essential Expenses' })).toBeVisible()
+
+  await keystone.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(keystone).toHaveCount(0)
+  const rule = await ruleFor(request, 'keystone auto')
+  expect(rule).not.toBeNull()
+  expect(rule.category_name).toBe('Home Insurance')
+  expect(rule.tags.map(tag => tag.name)).toEqual(['Essential Expenses'])
+})
+
 test('narrowing a pending suggestion’s criteria splits it into the matched rows and the rest, creating no rule', async ({ page, request }) => {
   await openReview(page)
   await card(page, 'Northgate Gas').getByRole('button', { name: 'Open Rule Editor' }).click()

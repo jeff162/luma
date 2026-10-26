@@ -41,10 +41,6 @@ scale — rather than by feature.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
   the rest of the native-`title` → shared-`Tooltip` migration, and an opt-in
   per-detail-panel Refresh seam.
-- [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
-  remaining piece of the import/export refactor: in-component JSX extraction from the large
-  `ImportRuleSuggestionReview` component into prop-driven seams. No longer blocked — the review-model
-  work it waited on has landed.
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount

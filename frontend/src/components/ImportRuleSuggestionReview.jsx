@@ -11,89 +11,59 @@
  * scroll viewport, so giving this page one is a prerequisite decision about its scroll model, not a
  * detail. `docs/scale-and-limits.md` -> "Render windowing: the one list left unwindowed" lists the
  * four obstacles and what to try first if this list gets slow.
+ *
+ * The page's mechanisms live beside it in `importRuleSuggestions/`: bulk selection, the
+ * matching-transactions report and unsaved suggestion edits are hooks, and a suggestion is a
+ * `SuggestionCard`. What stays here was considered for extraction and left in place, because moving it
+ * adds wiring without making anything simpler:
+ * - the sticky header and bulk-actions bar, which are layout markup that reads fine where it is
+ * - `renderMerchantGroup`, `renderConflictSetCard` and `renderSettledConflictTable`, which are thin wrappers
+ * - the merchant filter control, which is small, already built on `FilterChip`, and has no shared equivalent
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { txnMutations } from '../lib/txnMutations.js'
-import { api } from '../lib/api.js'
 import { localIsoDate } from '../lib/utils.js'
-import { Spinner, Button, FilterChip, IconButton, LinkButton } from './ui.jsx'
-import CategoryPicker from './CategoryPicker.jsx'
-import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { TagBadge } from './TagUi.jsx'
+import { Spinner, Button, FilterChip, IconButton, LinkButton, SegmentedToggle, Select, getFormControlStyle } from './ui.jsx'
+import { ActionMenu } from './ActionMenu.jsx'
+import OwnerChip from './OwnerChip.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import {
   IMPORT_RULE_LOOKBACK_CHOICES,
   IMPORT_RULE_LOOKBACK_PREF_KEY,
   IMPORT_RULE_SORT_PREF_KEY,
   IMPORT_RULE_SORT_STORAGE_KEY,
-  buildCategoryDisplayLabel,
   findNearestScrollParent,
   getInWindowPendingSuggestionGroups,
   getRuleSuggestionMerchantGroupLabel,
-  getSuggestionFilterPills,
+  isRefinedPendingSuggestion,
   normalizeImportRuleLookback,
   normalizeImportRuleSortOrder,
   suggestionSelectionChanged,
 } from '../lib/importRuleSuggestions.js'
-import {
-  CriteriaGroup,
-  ProgressPill,
-  ReportArrowButton,
-  SuggestionActionButton,
-  SuggestionDispositionActions,
-  SuggestionPill,
-  SuggestionStatusBadge,
-} from './importRuleSuggestions/suggestionPresentational.jsx'
+import { ProgressPill, SuggestionActionButton } from './importRuleSuggestions/suggestionPresentational.jsx'
 import { SettledConflictSetTable } from './importRuleSuggestions/SettledConflictSetTable.jsx'
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal, MatchingTransactionsReport } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
 import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
+import { suggestionBulkStorageScope, useSuggestionBulkSelection } from './importRuleSuggestions/useSuggestionBulkSelection.js'
+import { useSuggestionMatchViewer } from './importRuleSuggestions/useSuggestionMatchViewer.js'
+import { useSuggestionDrafts } from './importRuleSuggestions/useSuggestionDrafts.js'
+import { SuggestionCard } from './importRuleSuggestions/SuggestionCard.jsx'
 import { useStableOrder } from '../lib/useStableOrder.js'
 import TransactionDetail from './TransactionDetail.jsx'
-import { localStore, sessionStore } from '../lib/browserStorage.js'
+import { localStore } from '../lib/browserStorage.js'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
-// Bulk-selection persistence. Deliberately sessionStorage, NOT the durable ui_preference store: the
-// in-progress selection is a within-session convenience that survives navigating away from the review
-// and reopening Generate Rules, but it should not outlive the session or get swept into data backups.
-// One slot, scoped by review context (import source + owner filter + view) so a saved selection is only
-// restored into the exact context it was built in, never bled across contexts.
-const BULK_SELECTION_STORAGE_KEY = 'luma.import-rule-suggestions.bulk-selection'
+const SORT_OPTIONS = [{ value: 'row_count', label: '# rows' }, { value: 'alpha', label: 'A–Z' }]
 
-function bulkSelectionScopeId(persistKey, selectedOwnerIds, reviewFilter) {
-  const owners = [...(selectedOwnerIds || [])].map(String).sort().join(',')
-  return `${persistKey || 'system'}::${owners}::${reviewFilter || 'pending'}`
-}
-
-function loadStoredBulkSelection(scopeId) {
-  const stored = sessionStore.getJson(BULK_SELECTION_STORAGE_KEY)
-  if (!stored || stored.scopeId !== scopeId) return null
-  return Array.isArray(stored.ids) ? stored.ids.map(String) : null
-}
-
-function saveStoredBulkSelection(scopeId, ids) {
-  sessionStore.setJson(BULK_SELECTION_STORAGE_KEY, { scopeId, ids })
-}
-
-// Scope-aware clear: only drops the slot when it belongs to this context, so entering bulk mode in one
-// context never wipes a selection saved for another.
-function clearStoredBulkSelection(scopeId) {
-  const stored = sessionStore.getJson(BULK_SELECTION_STORAGE_KEY)
-  if (scopeId && stored?.scopeId && stored.scopeId !== scopeId) return
-  sessionStore.remove(BULK_SELECTION_STORAGE_KEY)
+// A right-click menu opens where the pointer is, so its `ActionMenu` anchor is that point.
+function pointerAnchor(event) {
+  return { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY }
 }
 
 const merchantGroupKey = group => group.key
-
-// A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
-// saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
-// card labels its editor for that and routes the save through the refinement endpoint.
-function isRefinedPendingSuggestion(suggestion) {
-  return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'
-}
 
 export default function ImportRuleSuggestionReview({
   onLoadSuggestionMatches,
@@ -137,71 +107,23 @@ export default function ImportRuleSuggestionReview({
   const suggestions = useMemo(() => ruleSuggestionState?.suggestions || [], [ruleSuggestionState?.suggestions])
   const trashSets = ruleSuggestionState?.trash_sets || []
   const summary = ruleSuggestionState?.review_summary || {}
-  const [suggestionActionOverrides, setSuggestionActionOverrides] = useState({})
-  const [editingActionPill, setEditingActionPill] = useState(null)
-  const [editingActionDraft, setEditingActionDraft] = useState('')
-  const [editingCategorySuggestionId, setEditingCategorySuggestionId] = useState(null)
-  const [categoryPickerOpenToken, setCategoryPickerOpenToken] = useState(0)
-  const [editingTagSuggestionId, setEditingTagSuggestionId] = useState(null)
-  const categoryPickerHasOpenedRef = useRef(false)
-  const latestCategoriesRef = useRef(categories)
-  const sortControlRef = useRef(null)
-  const lookbackControlRef = useRef(null)
+  const drafts = useSuggestionDrafts({ suggestions, categories, owners, accounts, onReloadTags })
+  const getResolvedSuggestion = drafts.resolve
   const listTopRef = useRef(null)
   const stickyPanelRef = useRef(null)
   const pendingBulkAnchorRef = useRef(null)
-  const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
-  const [editingKeywordDraft, setEditingKeywordDraft] = useState('')
   const [openConflictGroupId, setOpenConflictGroupId] = useState(null)
-  const [bulkMode, setBulkMode] = useState(false)
-  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState([])
-  const [hoveredRemoveTooltip, setHoveredRemoveTooltip] = useState(null)
   const [bulkMenu, setBulkMenu] = useState(null)
   const [suggestionMenu, setSuggestionMenu] = useState(null)
   const [editingMatchMembers, setEditingMatchMembers] = useState(null)
-  const [sortMenu, setSortMenu] = useState(null)
-  const [lookbackMenu, setLookbackMenu] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
   const [merchantFilterText, setMerchantFilterText] = useState('')
   // The single source row backing the suggestion currently open in the rule editor, fetched so the
   // editor's "From the source file" panel can show it. Null unless the suggestion has exactly one row.
   const [editorExampleTxn, setEditorExampleTxn] = useState(null)
-  const [matchViewerState, setMatchViewerState] = useState({
-    open: false,
-    loading: false,
-    error: '',
-    merchantLabel: '',
-    keyword: '',
-    referenceTargetCategoryId: null,
-    ownerId: null,
-    ownerName: '',
-    accountId: null,
-    accountName: '',
-    amountMin: null,
-    amountMax: null,
-    count: 0,
-    rows: [],
-    applyingAll: false,
-  })
-  // The match viewer's merchant ↗ opens the standard merchant spending report (TransactionDetail) as a
-  // floating panel above the modal; edits there are reflected back by reloading the match rows.
-  const [payeeDetail, setPayeeDetail] = useState(null)
-  async function openMerchantReport(row) {
-    if (!row?.id) return
-    // The match-row shape is lighter than a full transaction (no category name, source file, tags, or
-    // import evidence), so fetch the canonical record first — otherwise the report paints with gaps.
-    // Fall back to the match row if the fetch fails.
-    try {
-      const result = await api.getTransactions({ ids: row.id })
-      setPayeeDetail(result?.transactions?.[0] || row)
-    } catch {
-      setPayeeDetail(row)
-    }
-  }
+  const matchViewer = useSuggestionMatchViewer({ loadMatches: onLoadSuggestionMatches, onRowsChanged: onReloadSuggestions })
+  const matchViewerState = matchViewer.state
 
-  useEffect(() => {
-    latestCategoriesRef.current = categories
-  }, [categories])
   const merchantFilterSnapshotRef = useRef('')
   const merchantFilterInputRef = useRef(null)
   const merchantFilterButtonRef = useRef(null)
@@ -451,6 +373,13 @@ export default function ImportRuleSuggestionReview({
     }
     return groups
   }, [visibleSuggestions])
+  const bulk = useSuggestionBulkSelection({
+    visibleSuggestions,
+    conflictGroupMembers: visibleConflictGroupMembers,
+    available: bulkAvailable,
+    storageScope: suggestionBulkStorageScope(persistKey, selectedOwnerIds, reviewFilter),
+  })
+  const bulkMode = bulk.active
   const conflictSetSuggestions = useMemo(
     () => (openConflictGroupId
       ? suggestions.filter(suggestion => suggestion.conflict_group_id === openConflictGroupId)
@@ -550,24 +479,8 @@ export default function ImportRuleSuggestionReview({
   }, [bulkMode])
 
   useEffect(() => {
-    const visibleIds = new Set(suggestions.map(suggestion => String(suggestion.id)))
-    setSuggestionActionOverrides(prev => {
-      const next = {}
-      let changed = false
-      Object.entries(prev).forEach(([suggestionId, value]) => {
-        if (visibleIds.has(suggestionId)) next[suggestionId] = value
-        else changed = true
-      })
-      return changed ? next : prev
-    })
-  }, [suggestions])
-
-  useEffect(() => {
-    if (bulkAvailable) return
-    setBulkMode(false)
-    setSelectedSuggestionIds([])
-    setBulkMenu(null)
-  }, [bulkAvailable])
+    if (!bulkMode) setBulkMenu(null)
+  }, [bulkMode])
 
   // The conflicts and older filters only exist while their pill has a count (the pill is hidden
   // otherwise). Once that count hits zero, drop back to pending so the user isn't stranded on an empty
@@ -582,58 +495,6 @@ export default function ImportRuleSuggestionReview({
     const hasSuggestions = suggestions.some(suggestion => suggestion.conflict_group_id === openConflictGroupId)
     if (!hasSuggestions) setOpenConflictGroupId(null)
   }, [openConflictGroupId, suggestions])
-
-  useEffect(() => {
-    const visibleIds = new Set(visibleSuggestions.map(suggestion => getSuggestionKey(suggestion.id)))
-    setSelectedSuggestionIds(prev => {
-      const next = prev.filter(id => visibleIds.has(id))
-      if (next.length === prev.length && next.every((id, index) => id === prev[index])) {
-        return prev
-      }
-      return next
-    })
-  }, [visibleSuggestions])
-
-  useEffect(() => {
-    if (!hoveredRemoveTooltip) return
-    const visibleIds = new Set(suggestions.map(suggestion => getSuggestionKey(suggestion.id)))
-    if (!visibleIds.has(getSuggestionKey(hoveredRemoveTooltip.id))) {
-      setHoveredRemoveTooltip(null)
-    }
-  }, [hoveredRemoveTooltip, suggestions])
-
-  useEffect(() => {
-    if (!hoveredRemoveTooltip) return undefined
-    function dismiss() {
-      setHoveredRemoveTooltip(null)
-    }
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    window.addEventListener('blur', dismiss)
-    return () => {
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-      window.removeEventListener('blur', dismiss)
-    }
-  }, [hoveredRemoveTooltip])
-
-  useEffect(() => {
-    if (!bulkMenu && !suggestionMenu && !sortMenu && !lookbackMenu) return undefined
-    function dismiss() {
-      setBulkMenu(null)
-      setSuggestionMenu(null)
-      setSortMenu(null)
-      setLookbackMenu(null)
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [bulkMenu, suggestionMenu, sortMenu, lookbackMenu])
 
   useEffect(() => {
     if (!merchantFilterOpen || bulkMode) return
@@ -658,7 +519,6 @@ export default function ImportRuleSuggestionReview({
   }
 
   function handleLookbackChange(nextYears) {
-    setLookbackMenu(null)
     setPreference(IMPORT_RULE_LOOKBACK_PREF_KEY, normalizeImportRuleLookback(nextYears)).catch(() => { })
   }
 
@@ -696,15 +556,8 @@ export default function ImportRuleSuggestionReview({
       pendingBulkAnchorRef.current = null
     }
 
-    setBulkMode(prev => {
-      const next = !prev
-      if (!next) {
-        setSelectedSuggestionIds([])
-        setBulkMenu(null)
-      }
-      setSortMenu(null)
-      return next
-    })
+    if (bulkMode) bulk.exit()
+    else bulk.enter()
   }
 
   function getBulkActions() {
@@ -742,164 +595,20 @@ export default function ImportRuleSuggestionReview({
 
   const bulkActions = getBulkActions()
   const selectedResolvedSuggestions = visibleSuggestions
-    .filter(suggestion => selectedSuggestionIds.includes(getSuggestionKey(suggestion.id)))
+    .filter(suggestion => bulk.isSelected(suggestion.id))
     .map(getResolvedSuggestion)
   const selectedCount = selectedResolvedSuggestions.length
 
-  const bulkSelectionScope = bulkSelectionScopeId(persistKey, selectedOwnerIds, reviewFilter)
-  const bulkSelectionHydratedRef = useRef(false)
-
-  // Restore a saved selection once suggestions are available, so leaving the review and reopening
-  // Generate Rules in the same context comes back to the in-progress batch. Runs once per mount; stale
-  // ids (suggestions saved/disposed/regenerated since) are dropped by intersecting with what's visible,
-  // so a no-longer-present id silently falls away rather than restoring an empty/ghost selection.
-  useEffect(() => {
-    if (bulkSelectionHydratedRef.current) return
-    if (!visibleSuggestions.length) return
-    bulkSelectionHydratedRef.current = true
-    const stored = loadStoredBulkSelection(bulkSelectionScope)
-    if (!stored || !stored.length) return
-    const visibleKeys = new Set(visibleSuggestions.map(item => getSuggestionKey(item.id)))
-    const restored = stored.filter(id => visibleKeys.has(id))
-    if (!restored.length) return
-    setSelectedSuggestionIds(restored)
-    setBulkMode(true)
-  }, [visibleSuggestions, bulkSelectionScope])
-
-  // Persist on every change (sessionStorage writes are cheap, so there's no need to defer). Gated on
-  // hydration so the initial empty render can't clear the slot before the restore above has run.
-  useEffect(() => {
-    if (!bulkSelectionHydratedRef.current) return
-    if (bulkMode && selectedSuggestionIds.length) {
-      saveStoredBulkSelection(bulkSelectionScope, selectedSuggestionIds)
-    } else {
-      clearStoredBulkSelection(bulkSelectionScope)
-    }
-  }, [bulkMode, selectedSuggestionIds, bulkSelectionScope])
-
-  function resetBulkMode() {
-    setBulkMode(false)
-    setSelectedSuggestionIds([])
-    setHoveredRemoveTooltip(null)
-    setBulkMenu(null)
-    setSuggestionMenu(null)
-    setSortMenu(null)
-  }
-
   async function runBulkAction(action) {
     if (!selectedResolvedSuggestions.length) return
-    setBulkMenu(null)
     await action.run(selectedResolvedSuggestions)
-    resetBulkMode()
-  }
-
-  function toggleSuggestionSelection(suggestionId) {
-    const suggestionKey = getSuggestionKey(suggestionId)
-    setSelectedSuggestionIds(prev => (
-      prev.includes(suggestionKey)
-        ? prev.filter(id => id !== suggestionKey)
-        : [...prev, suggestionKey]
-    ))
-  }
-
-  function toggleConflictParentSelection(suggestion) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const memberIds = (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).map(getSuggestionKey)
-    const childIds = memberIds.filter(id => id !== suggestionKey)
-    setSelectedSuggestionIds(prev => {
-      const parentSelected = prev.includes(suggestionKey)
-      const nextParentSelected = !parentSelected
-      const allChildrenMatchParent = childIds.every(id => prev.includes(id) === parentSelected)
-      const next = new Set(prev)
-
-      if (nextParentSelected) next.add(suggestionKey)
-      else next.delete(suggestionKey)
-
-      if (allChildrenMatchParent) {
-        childIds.forEach(id => {
-          if (nextParentSelected) next.add(id)
-          else next.delete(id)
-        })
-      }
-
-      return [...next]
-    })
-  }
-
-  function getScopedBulkIdsForSuggestion(suggestion) {
-    if (!suggestion?.conflict_group_id) {
-      return visibleSuggestions.map(item => getSuggestionKey(item.id))
-    }
-    const groupIds = (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).map(getSuggestionKey)
-    if (groupIds.length <= 1) {
-      return visibleSuggestions.map(item => getSuggestionKey(item.id))
-    }
-    const leadId = groupIds[0]
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    if (suggestionKey === leadId) return groupIds
-    return groupIds.filter(id => id !== leadId)
-  }
-
-  function selectAllScoped(scopeIds = null) {
-    const ids = scopeIds?.length ? scopeIds : visibleSuggestions.map(suggestion => getSuggestionKey(suggestion.id))
-    setSelectedSuggestionIds(prev => [...new Set([...prev, ...ids])])
-    setBulkMenu(null)
-  }
-
-  function clearScopedSelection(scopeIds = null) {
-    const ids = scopeIds?.length ? scopeIds : visibleSuggestions.map(suggestion => getSuggestionKey(suggestion.id))
-    setSelectedSuggestionIds(prev => prev.filter(id => !ids.includes(id)))
-    setBulkMenu(null)
-  }
-
-  function enterBulkMode(initialSuggestion = null) {
+    bulk.exit()
     setSuggestionMenu(null)
-    setBulkMenu(null)
-    setBulkMode(true)
-    if (!initialSuggestion) {
-      setSelectedSuggestionIds([])
-      return
-    }
-    const suggestionKey = getSuggestionKey(initialSuggestion.id)
-    const conflictGroupIds = initialSuggestion.conflict_group_id
-      ? (visibleConflictGroupMembers.get(initialSuggestion.conflict_group_id) || []).map(getSuggestionKey)
-      : []
-    if (conflictGroupIds.length > 1 && conflictGroupIds[0] === suggestionKey) {
-      setSelectedSuggestionIds(conflictGroupIds)
-      return
-    }
-    setSelectedSuggestionIds([suggestionKey])
   }
 
-  function getResolvedSuggestion(suggestion) {
-    const override = suggestionActionOverrides[getSuggestionKey(suggestion.id)] || {}
-    const hasOwnerOverride = Object.prototype.hasOwnProperty.call(override, 'ownerId')
-    const hasAccountOverride = Object.prototype.hasOwnProperty.call(override, 'accountId')
-    const hasAmountMinOverride = Object.prototype.hasOwnProperty.call(override, 'amountMin')
-    const hasAmountMaxOverride = Object.prototype.hasOwnProperty.call(override, 'amountMax')
-    // Every preview, bulk action, and match lookup should see the same unsaved
-    // edits, so we always merge transient UI overrides before using a suggestion.
-    const ownerId = override.removeOwner ? null : (hasOwnerOverride ? override.ownerId : suggestion.owner_id)
-    const accountId = override.removeAccount ? null : (hasAccountOverride ? override.accountId : suggestion.account_id)
-    const amountMin = override.removeAmount ? null : (hasAmountMinOverride ? override.amountMin : suggestion.amount_min)
-    const amountMax = override.removeAmount ? null : (hasAmountMaxOverride ? override.amountMax : suggestion.amount_max)
-    return {
-      ...suggestion,
-      keyword: override.keyword ?? suggestion.keyword,
-      target_category_id: override.removeCategory ? null : (override.targetCategoryId ?? suggestion.target_category_id),
-      target_category_name: override.removeCategory ? null : (override.targetCategoryName ?? suggestion.target_category_name),
-      amount_min: amountMin,
-      amount_max: amountMax,
-      owner_id: ownerId,
-      owner_name: ownerId ? (owners.find(owner => String(owner.id) === String(ownerId))?.name || suggestion.owner_name) : null,
-      account_id: accountId,
-      account_name: accountId ? (accounts.find(account => String(account.id) === String(accountId))?.name || suggestion.account_name) : null,
-      clean_name_suggestion: override.removeRename
-        ? null
-        : (override.cleanName ?? suggestion.clean_name_suggestion),
-      tag_ids: override.tagIds ?? (suggestion.tag_ids || []),
-      match_source_text: override.matchSourceText ?? !!suggestion.match_source_text,
-    }
+  function enterBulkMode(initialSuggestion) {
+    setSuggestionMenu(null)
+    bulk.enter(initialSuggestion)
   }
 
   function getConflictReferenceSuggestion(suggestion) {
@@ -923,14 +632,13 @@ export default function ImportRuleSuggestionReview({
     return ranked[0]
   }
 
-  async function openMatchingTransactionsViewer(suggestion, { referenceMode = false } = {}) {
-    if (!onLoadSuggestionMatches) return
+  // What a card's report covers: exactly the rows the card represents (a conflict card its whole group,
+  // the union of its members' source rows; a single card its own), so the report agrees with the card's
+  // row count instead of listing every same-keyword row, including rows other suggestions own.
+  function matchTargetFor(suggestion) {
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
     const referenceSuggestion = getConflictReferenceSuggestion(suggestion)
-    // Limit the report to exactly the rows this card represents: a conflict card covers its whole group
-    // (union of member source rows), a single card just its own. This keeps the report's rows matching the
-    // card's "N rows" count instead of every same-keyword row — including ones owned by other suggestions.
-    const scopedRowIds = suggestion.conflict_group_id
+    const rowIds = suggestion.conflict_group_id
       ? [...new Set(
           (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || [])
             .map(id => suggestions.find(item => item.id === id))
@@ -939,27 +647,11 @@ export default function ImportRuleSuggestionReview({
             .map(String),
         )]
       : (resolvedSuggestion.source_row_ids || []).map(String)
-    setMatchViewerState({
-      open: true,
-      loading: true,
-      error: '',
+    return {
       merchantLabel: resolvedSuggestion.merchant_label,
-      keyword: resolvedSuggestion.keyword,
-      referenceTargetCategoryId: referenceSuggestion.target_category_id || null,
-      ownerId: resolvedSuggestion.owner_id || null,
-      ownerName: resolvedSuggestion.owner_name || '',
-      accountId: resolvedSuggestion.account_id || null,
-      accountName: resolvedSuggestion.account_name || '',
-      amountMin: resolvedSuggestion.amount_min,
-      amountMax: resolvedSuggestion.amount_max,
-      matchSourceText: !!resolvedSuggestion.match_source_text,
-      rowIds: scopedRowIds,
-      referenceMode,
-      count: 0,
-      rows: [],
-    })
-    try {
-      const result = await onLoadSuggestionMatches({
+      ownerName: resolvedSuggestion.owner_name,
+      accountName: resolvedSuggestion.account_name,
+      query: {
         keyword: resolvedSuggestion.keyword,
         reference_target_category_id: referenceSuggestion.target_category_id || null,
         owner_id: resolvedSuggestion.owner_id || null,
@@ -967,145 +659,34 @@ export default function ImportRuleSuggestionReview({
         amount_min: resolvedSuggestion.amount_min,
         amount_max: resolvedSuggestion.amount_max,
         match_source_text: !!resolvedSuggestion.match_source_text,
-        row_ids: scopedRowIds.length ? scopedRowIds : undefined,
-      })
-      setMatchViewerState(prev => ({
-        ...prev,
-        loading: false,
-        count: result.count || 0,
-        rows: result.transactions || [],
-      }))
-    } catch (err) {
-      setMatchViewerState(prev => ({
-        ...prev,
-        loading: false,
-        error: err.message || 'Unable to load matching imported rows.',
-      }))
+        row_ids: rowIds.length ? rowIds : undefined,
+      },
     }
   }
 
-  function closeMatchingTransactionsReference() {
-    setMatchViewerState(prev => ({ ...prev, open: false, referenceMode: false }))
+  function openMatchingTransactionsViewer(suggestion) {
+    matchViewer.open(matchTargetFor(suggestion))
   }
 
   function toggleMatchingTransactionsReference(suggestion) {
-    if (matchViewerState.open && matchViewerState.referenceMode) {
-      closeMatchingTransactionsReference()
-      return
+    if (matchViewerState.open && matchViewerState.referenceMode) matchViewer.closeReference()
+    else matchViewer.open(matchTargetFor(suggestion), { referenceMode: true })
+  }
+
+  // The suggestion as the rule editor's form left it, which is what saving it sends.
+  function suggestionFromEditor(suggestion, data) {
+    return {
+      ...suggestion,
+      keyword: data.keyword,
+      target_category_id: data.category_id || null,
+      target_category_name: drafts.categoryById(data.category_id)?.name || null,
+      amount_min: data.amount_min,
+      amount_max: data.amount_max,
+      clean_name_suggestion: data.clean_name || null,
+      tag_ids: data.tag_ids || [],
+      owner_id: data.owner_id || null,
+      account_id: data.account_id || null,
     }
-    openMatchingTransactionsViewer(suggestion, { referenceMode: true })
-  }
-
-  async function reloadMatchViewer() {
-    const result = await onLoadSuggestionMatches?.({
-      keyword: matchViewerState.keyword,
-      reference_target_category_id: matchViewerState.referenceTargetCategoryId,
-      owner_id: matchViewerState.ownerId,
-      account_id: matchViewerState.accountId,
-      amount_min: matchViewerState.amountMin,
-      amount_max: matchViewerState.amountMax,
-      match_source_text: !!matchViewerState.matchSourceText,
-      row_ids: matchViewerState.rowIds?.length ? matchViewerState.rowIds : undefined,
-    })
-    setMatchViewerState(prev => ({
-      ...prev,
-      loading: false,
-      error: '',
-      count: result?.count || 0,
-      rows: result?.transactions || [],
-    }))
-  }
-
-  // Reconcile a single imported row to a chosen category as a *corrected file categorization*: it stays
-  // category_source='import' (so it keeps driving the suggestions — the suggestion re-targets to the new
-  // category) and its recorded file label is rewritten to match. Contrast Preserve, which marks the row
-  // a manual exception. Used by the per-row picker and the "Use majority" button.
-  async function setMatchRowCategory(row, categoryId) {
-    if (!row?.id || !categoryId) return
-    setMatchViewerState(prev => ({
-      ...prev,
-      rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: true } : current)),
-    }))
-    try {
-      await txnMutations.setImportedCategory(row.id, categoryId)
-      await onReloadSuggestions?.()
-      await reloadMatchViewer()
-    } catch (err) {
-      setMatchViewerState(prev => ({
-        ...prev,
-        error: err.message || 'Unable to set this category.',
-        rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: false } : current)),
-      }))
-    }
-  }
-
-  // Preserve marks the row a manual exception: the rules never change it and it drops out of the
-  // suggestions (a deliberate one-off, not part of any rule).
-  async function keepMatchingTransactionCategory(row) {
-    if (!row?.id || !row?.target_category_id) return
-    setMatchViewerState(prev => ({
-      ...prev,
-      rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: true } : current)),
-    }))
-    try {
-      await txnMutations.setCategory(row.id, row.target_category_id)
-      await onReloadSuggestions?.()
-      await reloadMatchViewer()
-    } catch (err) {
-      setMatchViewerState(prev => ({
-        ...prev,
-        error: err.message || 'Unable to preserve this categorization.',
-        rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: false } : current)),
-      }))
-    }
-  }
-
-  // Bulk reconcile: re-pin every matching row that isn't already `categoryId` to it (as a corrected file
-  // categorization, kept as import), collapsing the conflict onto a single suggestion.
-  async function setAllMatchCategories(categoryId) {
-    if (!categoryId || matchViewerState.applyingAll) return
-    const targets = matchViewerState.rows.filter(row => String(row.target_category_id) !== String(categoryId))
-    if (!targets.length) return
-    setMatchViewerState(prev => ({ ...prev, applyingAll: true, error: '' }))
-    try {
-      for (const row of targets) {
-        await txnMutations.setImportedCategory(row.id, categoryId)
-      }
-      await onReloadSuggestions?.()
-      await reloadMatchViewer()
-    } catch (err) {
-      setMatchViewerState(prev => ({ ...prev, error: err.message || 'Unable to set the category for these rows.' }))
-    } finally {
-      setMatchViewerState(prev => ({ ...prev, applyingAll: false }))
-    }
-  }
-
-  function persistSuggestionDraft(suggestion, data) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const nextCategory = data.category_id
-      ? categories.find(category => String(category.id) === String(data.category_id))
-      : null
-    setSuggestionActionOverrides(prev => ({
-      ...prev,
-      [suggestionKey]: {
-        ...(prev[suggestionKey] || {}),
-        keyword: data.keyword || suggestion.keyword,
-        targetCategoryId: data.category_id || null,
-        targetCategoryName: nextCategory?.name || null,
-        removeCategory: !data.category_id,
-        amountMin: data.amount_min ?? null,
-        amountMax: data.amount_max ?? null,
-        removeAmount: Boolean(data.clear_amount_min) && Boolean(data.clear_amount_max),
-        ownerId: data.owner_id || null,
-        removeOwner: Boolean(data.clear_owner),
-        accountId: data.account_id || null,
-        removeAccount: Boolean(data.clear_account),
-        cleanName: data.clean_name || '',
-        removeRename: !data.clean_name,
-        tagIds: data.tag_ids || [],
-        matchSourceText: !!data.match_source_text,
-      },
-    }))
   }
 
   function buildMatchRefinePayload(members, data) {
@@ -1133,124 +714,6 @@ export default function ImportRuleSuggestionReview({
     }
   }
 
-  function removeSuggestionAction(suggestionId, actionKey) {
-    const suggestionKey = getSuggestionKey(suggestionId)
-    setSuggestionActionOverrides(prev => ({
-      ...prev,
-      [suggestionKey]: {
-        ...(prev[suggestionKey] || {}),
-        [actionKey]: true,
-      },
-    }))
-    if (editingActionPill?.suggestionId === suggestionKey) {
-      setEditingActionPill(null)
-      setEditingActionDraft('')
-    }
-    if (editingCategorySuggestionId === suggestionKey) {
-      setEditingCategorySuggestionId(null)
-    }
-  }
-
-  function beginCategoryActionEdit(suggestion) {
-    categoryPickerHasOpenedRef.current = false
-    setEditingCategorySuggestionId(getSuggestionKey(suggestion.id))
-    setCategoryPickerOpenToken(token => token + 1)
-  }
-
-  function commitCategoryActionEdit(suggestion, categoryId) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const nextCategory = latestCategoriesRef.current.find(category => String(category.id) === String(categoryId))
-    setSuggestionActionOverrides(prev => ({
-      ...prev,
-      [suggestionKey]: {
-        ...(prev[suggestionKey] || {}),
-        targetCategoryId: categoryId || null,
-        targetCategoryName: nextCategory?.name || null,
-        removeCategory: !categoryId,
-      },
-    }))
-    setEditingCategorySuggestionId(null)
-    categoryPickerHasOpenedRef.current = false
-  }
-
-  function beginTagEdit(suggestion) {
-    setSuggestionMenu(null)
-    setEditingTagSuggestionId(getSuggestionKey(suggestion.id))
-    Promise.resolve(onReloadTags?.()).catch(() => {})
-  }
-
-  // Tags are held as a transient override (`tagIds`) like the other suggestion edits; they're applied to
-  // the rule on save (createRule accepts tag_ids), not persisted to the review state.
-  function setSuggestionTag(suggestion, tagId, present) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    setSuggestionActionOverrides(prev => {
-      const current = prev[suggestionKey] || {}
-      const currentTags = current.tagIds ?? (suggestion.tag_ids || [])
-      const nextTags = present
-        ? (currentTags.includes(tagId) ? currentTags : [...currentTags, tagId])
-        : currentTags.filter(id => id !== tagId)
-      return { ...prev, [suggestionKey]: { ...current, tagIds: nextTags } }
-    })
-  }
-
-  function beginRenameActionEdit(suggestion) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const resolvedSuggestion = getResolvedSuggestion(suggestion)
-    setEditingActionPill({ suggestionId: suggestionKey, actionKey: 'rename' })
-    setEditingActionDraft(resolvedSuggestion.clean_name_suggestion || '')
-  }
-
-  function commitRenameActionEdit(suggestion) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const nextValue = editingActionDraft.trim()
-    setSuggestionActionOverrides(prev => ({
-      ...prev,
-      [suggestionKey]: nextValue
-        ? {
-          ...(prev[suggestionKey] || {}),
-          cleanName: nextValue,
-          removeRename: false,
-        }
-        : {
-          ...(prev[suggestionKey] || {}),
-          cleanName: '',
-          removeRename: true,
-        },
-    }))
-    setEditingActionPill(null)
-    setEditingActionDraft('')
-  }
-
-  function cancelRenameActionEdit() {
-    setEditingActionPill(null)
-    setEditingActionDraft('')
-  }
-
-  function beginKeywordEdit(suggestion) {
-    const resolvedSuggestion = getResolvedSuggestion(suggestion)
-    setEditingKeywordSuggestionId(getSuggestionKey(suggestion.id))
-    setEditingKeywordDraft(resolvedSuggestion.keyword || '')
-  }
-
-  function commitKeywordEdit(suggestion) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const nextValue = editingKeywordDraft.trim()
-    setSuggestionActionOverrides(prev => ({
-      ...prev,
-      [suggestionKey]: {
-        ...(prev[suggestionKey] || {}),
-        keyword: nextValue || suggestion.keyword,
-      },
-    }))
-    setEditingKeywordSuggestionId(null)
-    setEditingKeywordDraft('')
-  }
-
-  function cancelKeywordEdit() {
-    setEditingKeywordSuggestionId(null)
-    setEditingKeywordDraft('')
-  }
-
   const editingSuggestion = editingSuggestionId
     ? suggestions.find(suggestion => getSuggestionKey(suggestion.id) === getSuggestionKey(editingSuggestionId))
     : null
@@ -1264,14 +727,10 @@ export default function ImportRuleSuggestionReview({
     : 0
   const editorReferenceOpen = Boolean(resolvedEditingSuggestion || editingMatchReferenceSuggestion)
 
+  const closeMatchReference = matchViewer.closeReference
   useEffect(() => {
-    if (editorReferenceOpen) return
-    setMatchViewerState(prev => (
-      prev.open && prev.referenceMode
-        ? { ...prev, open: false, referenceMode: false }
-        : prev
-    ))
-  }, [editorReferenceOpen])
+    if (!editorReferenceOpen) closeMatchReference()
+  }, [editorReferenceOpen, closeMatchReference])
 
   // When the rule editor opens for a suggestion backed by exactly one source row, fetch that row so the
   // editor's "From the source file" panel can show its captured text. Multi-row suggestions skip this —
@@ -1356,39 +815,6 @@ export default function ImportRuleSuggestionReview({
   }
   const activeViewHeader = viewHeaders[reviewFilter] || viewHeaders.pending
 
-  function getSuggestionActions(suggestion) {
-    const resolvedSuggestion = getResolvedSuggestion(suggestion)
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const categoryLabel = buildCategoryDisplayLabel(
-      categories,
-      resolvedSuggestion.target_category_id,
-      resolvedSuggestion.target_category_name,
-    )
-    return [
-      resolvedSuggestion.target_category_id
-        ? {
-          key: 'category',
-          label: `category: ${categoryLabel}`,
-          onRemove: () => removeSuggestionAction(suggestion.id, 'removeCategory'),
-          onMouseDown: () => beginCategoryActionEdit(suggestion),
-        }
-        : null,
-      resolvedSuggestion.clean_name_suggestion
-        ? {
-          key: 'rename',
-          label: `rename to ${resolvedSuggestion.clean_name_suggestion}`,
-          onRemove: () => removeSuggestionAction(suggestion.id, 'removeRename'),
-          onClick: () => beginRenameActionEdit(suggestion),
-          editing: editingActionPill?.suggestionId === suggestionKey && editingActionPill?.actionKey === 'rename',
-          editValue: editingActionDraft,
-          onEditValueChange: setEditingActionDraft,
-          onEditCommit: () => commitRenameActionEdit(suggestion),
-          onEditCancel: cancelRenameActionEdit,
-        }
-        : null,
-    ].filter(Boolean)
-  }
-
   function getSuggestionMenuActions(suggestion, resolvedSuggestion) {
     if (suggestion.review_status === 'discarded') {
       return [
@@ -1407,7 +833,7 @@ export default function ImportRuleSuggestionReview({
       actions.push({
         key: 'tag',
         label: 'Add tag…',
-        onClick: () => beginTagEdit(suggestion),
+        onClick: () => drafts.tags.begin(suggestion),
       })
       // No rule: reject the suggestion and settle the rows it covered. 'keep' records the file's
       // category as a manual decision; 'clear' discards it (the `cleared` source). See the page's
@@ -1455,133 +881,8 @@ export default function ImportRuleSuggestionReview({
     await onSaveSuggestionAsIs(resolvedSuggestion)
   }
 
-  function showRemoveTooltip(suggestionId, label, target) {
-    if (typeof window === 'undefined' || !target?.getBoundingClientRect) {
-      setHoveredRemoveTooltip({ id: suggestionId, align: 'left', offset: 0 })
-      return
-    }
-    const rect = target.getBoundingClientRect()
-    const parentRect = target.offsetParent?.getBoundingClientRect?.() || null
-    const estimatedWidth = Math.max(132, label.length * 7.1 + 18)
-    const fitsRight = rect.right + 12 + estimatedWidth <= window.innerWidth - 12
-    const anchorCenter = rect.width / 2
-    const offset = fitsRight
-      ? Math.max(0, Math.round((rect.left - (parentRect?.left || 0)) + anchorCenter - 19))
-      : Math.max(0, Math.round(((parentRect?.right || rect.right) - rect.right) + anchorCenter - 19))
-    setHoveredRemoveTooltip({
-      id: suggestionId,
-      align: fitsRight ? 'left' : 'right',
-      offset,
-    })
-  }
-
-  function getRemoveTooltipStyle(align, offset = 0) {
-    return {
-      position: 'absolute',
-      top: 12,
-      ...(align === 'left'
-        ? { left: offset, transformOrigin: '16px 100%' }
-        : { right: offset, transformOrigin: 'calc(100% - 16px) 100%' }),
-      transform: 'translateY(calc(-100% - 2px))',
-      zIndex: 14,
-      display: 'inline-flex',
-      alignItems: 'center',
-      minHeight: 26,
-      padding: '5px 9px',
-      borderRadius: 9,
-      border: '1px solid rgba(214, 222, 238, 0.42)',
-      background: 'linear-gradient(180deg, rgba(10, 12, 18, 0.995), rgba(4, 6, 11, 0.995))',
-      color: 'color-mix(in srgb, white 94%, var(--text) 6%)',
-      fontSize: 10.5,
-      fontWeight: 600,
-      letterSpacing: '0.01em',
-      lineHeight: 1.2,
-      whiteSpace: 'nowrap',
-      boxShadow: '0 18px 36px rgba(2, 6, 23, 0.56), 0 6px 14px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(220, 228, 244, 0.06)',
-      backdropFilter: 'blur(14px)',
-      outline: '1px dashed rgba(188, 198, 220, 0.52)',
-      outlineOffset: 2,
-      pointerEvents: 'none',
-    }
-  }
-
-  function getRemoveTooltipArrowStyle(align) {
-    return {
-      position: 'absolute',
-      ...(align === 'left' ? { left: 16 } : { right: 16 }),
-      bottom: -5,
-      width: 10,
-      height: 10,
-      borderRight: '1px solid rgba(214, 222, 238, 0.42)',
-      borderBottom: '1px solid rgba(214, 222, 238, 0.42)',
-      background: 'rgba(4, 6, 11, 0.995)',
-      boxShadow: '4px 4px 12px rgba(2, 6, 23, 0.2)',
-      transform: 'rotate(45deg)',
-    }
-  }
-
-  function getMenuPanelStyle(position) {
-    return {
-      position: 'fixed',
-      left: position.x,
-      top: position.y,
-      zIndex: 950,
-      minWidth: 146,
-      background: 'color-mix(in srgb, var(--surface) 94%, rgba(15, 23, 42, 0.18))',
-      border: '1px solid color-mix(in srgb, var(--border) 86%, white 6%)',
-      borderRadius: 9,
-      boxShadow: '0 12px 24px rgba(15, 23, 42, 0.2)',
-      backdropFilter: 'blur(10px)',
-      overflow: 'hidden',
-    }
-  }
-
-  function getMenuButtonStyle(disabled = false) {
-    return {
-      width: '100%',
-      textAlign: 'left',
-      background: 'none',
-      border: 'none',
-      color: disabled ? 'var(--muted)' : 'var(--text)',
-      padding: '6px 10px',
-      fontSize: 12,
-      lineHeight: 1.15,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-    }
-  }
-
-  function getSortMenuItemStyle(active = false) {
-    return {
-      ...getMenuButtonStyle(false),
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 12,
-      background: active ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-      color: active ? 'color-mix(in srgb, var(--accent) 70%, white 18%)' : 'var(--text)',
-      fontWeight: active ? 600 : 500,
-    }
-  }
-
-  function openSortMenu() {
-    if (bulkMode) return
-    const rect = sortControlRef.current?.getBoundingClientRect?.()
-    if (!rect) return
-    const menuWidth = 148
-    const margin = 12
-    const x = Math.max(
-      margin,
-      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin),
-    )
-    const y = Math.min(rect.bottom + 8, window.innerHeight - 120)
-    setBulkMenu(null)
-    setSuggestionMenu(null)
-    setSortMenu({ x, y })
-  }
-
   function handleSortChange(nextSortOrder) {
     handleSortOrderChange(nextSortOrder)
-    setSortMenu(null)
     requestAnimationFrame(() => {
       listTopRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' })
     })
@@ -1589,134 +890,36 @@ export default function ImportRuleSuggestionReview({
 
   function renderSortControl() {
     if (reviewFilter === 'trash') return null
-    const currentSortLabel = sortOrder === 'row_count' ? '# rows' : 'A-Z'
     return (
-      <div style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        padding: '3px 9px',
-        borderRadius: 999,
-        border: '1px solid color-mix(in srgb, var(--border) 72%, white 12%)',
-        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 96%, white 4%), color-mix(in srgb, var(--surface2) 84%, var(--surface)))',
-        color: 'var(--text)',
-        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
-        fontSize: 11.5,
-        lineHeight: 1.2,
-        opacity: bulkMode ? 0.5 : 1,
-      }}>
-        <span style={{ whiteSpace: 'nowrap' }}>Sort order</span>
-        <button
-          ref={sortControlRef}
-          type="button"
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => {
-            event.stopPropagation()
-            if (bulkMode) return
-            if (sortMenu) {
-              setSortMenu(null)
-              return
-            }
-            openSortMenu()
-          }}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+        Sort order
+        <SegmentedToggle
+          size="compact"
+          ariaLabel="Sort order"
+          value={sortOrder}
+          onChange={handleSortChange}
+          options={SORT_OPTIONS}
           disabled={bulkMode}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '0 2px',
-            margin: 0,
-            font: 'inherit',
-            position: 'relative',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            cursor: bulkMode ? 'not-allowed' : 'pointer',
-            color: 'inherit',
-          }}
-        >
-          <span style={{ fontSize: 12, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-            {currentSortLabel}
-          </span>
-          <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
-        </button>
-      </div>
+        />
+      </span>
     )
-  }
-
-  function openLookbackMenu() {
-    const rect = lookbackControlRef.current?.getBoundingClientRect?.()
-    if (!rect) return
-    const menuWidth = 148
-    const margin = 12
-    const x = Math.max(margin, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin))
-    const y = Math.min(rect.bottom + 8, window.innerHeight - 180)
-    setBulkMenu(null)
-    setSuggestionMenu(null)
-    setSortMenu(null)
-    setLookbackMenu({ x, y })
   }
 
   // Only meaningful where the lens runs (pending / conflicts / older); hidden elsewhere so it doesn't
   // imply an effect it isn't having on the accepted/discarded/total views.
   function renderLookbackControl() {
     if (!lensRelevant) return null
-    const longestLookbackLabel = IMPORT_RULE_LOOKBACK_CHOICES
-      .map(lookbackLabel)
-      .reduce((longest, label) => (label.length > longest.length ? label : longest), '')
     return (
-      <div style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        padding: '3px 9px',
-        borderRadius: 999,
-        border: '1px solid color-mix(in srgb, var(--border) 72%, white 12%)',
-        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 96%, white 4%), color-mix(in srgb, var(--surface2) 84%, var(--surface)))',
-        color: 'var(--text)',
-        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
-        fontSize: 11.5,
-        lineHeight: 1.2,
-      }}>
-        <span style={{ whiteSpace: 'nowrap' }}>Look back</span>
-        <button
-          ref={lookbackControlRef}
-          type="button"
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => {
-            event.stopPropagation()
-            if (lookbackMenu) {
-              setLookbackMenu(null)
-              return
-            }
-            openLookbackMenu()
-          }}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '0 2px',
-            margin: 0,
-            font: 'inherit',
-            position: 'relative',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            cursor: 'pointer',
-            color: 'inherit',
-          }}
-        >
-          {/* An invisible sizer holds the width of the widest choice ("All time"), so the pill doesn't
-              resize as you flip between "1 year" / "2 years" / "All time". */}
-          <span style={{ display: 'inline-grid', fontSize: 12, lineHeight: 1.2 }}>
-            <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden', whiteSpace: 'nowrap' }}>
-              {longestLookbackLabel}
-            </span>
-            <span style={{ gridArea: '1 / 1', whiteSpace: 'nowrap' }}>
-              {lookbackLabel(lookbackYears)}
-            </span>
-          </span>
-          <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
-        </button>
-      </div>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+        Look back
+        <Select
+          aria-label="Look back"
+          value={String(lookbackYears)}
+          onChange={value => handleLookbackChange(Number(value))}
+          options={IMPORT_RULE_LOOKBACK_CHOICES.map(years => ({ value: String(years), label: lookbackLabel(years) }))}
+          style={getFormControlStyle({ size: 'sm', clickable: true })}
+        />
+      </span>
     )
   }
 
@@ -1935,76 +1138,33 @@ export default function ImportRuleSuggestionReview({
             scrollbarWidth: 'thin',
             justifyContent: 'center',
           }}>
-            {availableOwners.map(owner => {
-              const selected = selectedOwnerIds.includes(owner.id)
-              return (
-                <button
-                  key={owner.id}
-                  type="button"
-                  onClick={() => {
-                    if (bulkMode) return
-                    onToggleOwner(owner.id)
-                    onOwnerFilterOpenChange(false)
-                    setTimeout(() => ownerFilterButtonRef.current?.focus(), 0)
-                  }}
-                  disabled={bulkMode}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    borderRadius: 999,
-                    border: `1px solid ${selected ? 'color-mix(in srgb, var(--accent) 52%, var(--border))' : 'var(--border)'}`,
-                    background: selected
-                      ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent) 18%, var(--surface2)), color-mix(in srgb, var(--accent) 8%, var(--surface)))'
-                      : 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
-                    color: selected ? 'var(--text)' : 'var(--muted)',
-                    padding: '4px 9px',
-                    fontSize: 11.5,
-                    cursor: bulkMode ? 'not-allowed' : 'pointer',
-                    boxShadow: selected ? '0 6px 14px rgba(15, 23, 42, 0.14)' : 'none',
-                    fontWeight: selected ? 600 : 500,
-                    flex: '0 0 auto',
-                  }}
-                >
-                  <span style={{ width: 7, height: 7, borderRadius: 999, background: owner.color || 'var(--accent)' }} />
-                  {owner.name}
-                </button>
-              )
-            })}
+            {availableOwners.map(owner => (
+              <OwnerChip
+                key={owner.id}
+                owner={owner}
+                selected={selectedOwnerIds.includes(owner.id)}
+                disabled={bulkMode}
+                onClick={() => {
+                  onToggleOwner(owner.id)
+                  onOwnerFilterOpenChange(false)
+                  setTimeout(() => ownerFilterButtonRef.current?.focus(), 0)
+                }}
+              />
+            ))}
           </div>
-          <button
-            type="button"
+          <IconButton
+            size="compact"
+            aria-label="Close owner filter"
+            disabled={bulkMode}
             onClick={() => {
-              if (bulkMode) return
               selectedOwnerIds.forEach(ownerId => onToggleOwner(ownerId))
               onOwnerFilterOpenChange(false)
               setTimeout(() => ownerFilterButtonRef.current?.focus(), 0)
             }}
-            disabled={bulkMode}
-            title="Close owner filter"
-            style={{
-              position: 'absolute',
-              top: -6,
-              right: -6,
-              width: 16,
-              height: 16,
-              padding: 0,
-              borderRadius: 999,
-              border: '1px solid color-mix(in srgb, var(--border) 78%, white 8%)',
-              background: 'color-mix(in srgb, var(--surface) 82%, transparent)',
-              color: 'var(--muted)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: bulkMode ? 'not-allowed' : 'pointer',
-              fontSize: 11,
-              fontWeight: 700,
-              lineHeight: 1,
-              boxShadow: '0 3px 8px rgba(15, 23, 42, 0.12)',
-            }}
+            style={{ position: 'absolute', top: -6, right: -6 }}
           >
             ×
-          </button>
+          </IconButton>
         </div>
       )
     }
@@ -2023,6 +1183,32 @@ export default function ImportRuleSuggestionReview({
     )
   }
 
+  function handleCardContextMenu(event, suggestion, resolvedSuggestion) {
+    event.preventDefault()
+    if (bulkMode && bulkAvailable) {
+      event.stopPropagation()
+      setSuggestionMenu(null)
+      setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: bulk.scopedIdsFor(suggestion) })
+      return
+    }
+    setBulkMenu(null)
+    setSuggestionMenu({ anchorRect: pointerAnchor(event), suggestion, resolvedSuggestion })
+  }
+
+  const cardCatalog = { categories, tags, onCategoriesChanged, onTagCreated }
+  const cardHandlers = {
+    editingSuggestionId,
+    onEditSuggestion,
+    runRowStatusAction,
+    runRowSaveAction,
+    onRejectSuggestionDisposition,
+    onOpenReport: openMatchingTransactionsViewer,
+    onOpenConflictSet: setOpenConflictGroupId,
+    onContextMenu: handleCardContextMenu,
+  }
+
+  // The conflict modal renders its sections through this too, passing each section's own view and
+  // conflict context so its cards match the main list.
   function renderSuggestionCard(
     suggestion,
     {
@@ -2032,338 +1218,27 @@ export default function ImportRuleSuggestionReview({
       allowConflictOpen = true,
     } = {},
   ) {
-    const resolvedSuggestion = getResolvedSuggestion(suggestion)
-    const actionLabels = getSuggestionActions(suggestion)
-    const filterPills = getSuggestionFilterPills(resolvedSuggestion)
-    const isConflictFollower = filterKey === 'pending' && followerIds.has(suggestion.id)
     const isConflictLead = leadIds.has(suggestion.id)
-    const conflictGroupIds = suggestion.conflict_group_id
-      ? (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).map(getSuggestionKey)
-      : []
-    const leadHasVisibleChildren = bulkMode && filterKey === 'pending' && isConflictLead && conflictGroupIds.length > 1
-    const showConflictMarker = Boolean(suggestion.conflict_group_id) && filterKey !== 'pending'
-    const statusBadge = suggestion.review_status === 'accepted'
-      ? { label: 'Accepted', tone: 'accepted' }
-      : suggestion.review_status === 'skipped'
-        ? { label: 'Deferred', tone: 'skipped' }
-        : suggestion.review_status === 'discarded'
-          ? { label: 'Removed', tone: 'discarded' }
-          : suggestion.review_status === 'pending' && hasLens && !inLookbackWindow(suggestion)
-            ? { label: 'Older', tone: 'older' }
-            : null
-    const showStatusBadge = Boolean(
-      statusBadge && (
-        filterKey === 'total'
-        || filterKey === 'accepted'
-        || filterKey === 'deferred'
-        || filterKey === 'discarded'
-        || filterKey === 'older'
-      )
-    )
-    const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
-    const removeActionStatus = returnsToPending ? 'pending' : 'discarded'
-    const removeTitle = returnsToPending ? 'Return suggestion to pending' : 'Discard suggestion'
-
+    const conflictGroupSize = suggestion.conflict_group_id
+      ? (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).length
+      : 0
     return (
-      <div
+      <SuggestionCard
         key={suggestion.id}
-        data-rule-suggestion-card=""
-        data-rule-suggestion-id={getSuggestionKey(suggestion.id)}
-        onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-        onContextMenu={event => {
-          event.preventDefault()
-          if (bulkMode && bulkAvailable) {
-            event.stopPropagation()
-            setSuggestionMenu(null)
-            setSortMenu(null)
-            setBulkMenu({
-              x: event.clientX,
-              y: event.clientY,
-              scopeIds: getScopedBulkIdsForSuggestion(suggestion),
-            })
-            return
-          }
-          setBulkMenu(null)
-          setSortMenu(null)
-          setSuggestionMenu({
-            x: event.clientX,
-            y: event.clientY,
-            suggestion,
-            resolvedSuggestion,
-          })
+        suggestion={suggestion}
+        view={{
+          filterKey,
+          isConflictFollower: filterKey === 'pending' && followerIds.has(suggestion.id),
+          isConflictLead,
+          leadHasVisibleChildren: bulkMode && filterKey === 'pending' && isConflictLead && conflictGroupSize > 1,
+          allowConflictOpen,
+          isOlder: suggestion.review_status === 'pending' && hasLens && !inLookbackWindow(suggestion),
         }}
-        style={{
-          position: 'relative',
-          marginLeft: isConflictFollower ? 30 : 0,
-          // Each card is its own stacking context (position + z-index), so an inline popover (the tag
-          // picker) can't paint over the *next* card unless this card outranks it while open.
-          zIndex: editingTagSuggestionId === getSuggestionKey(suggestion.id)
-            ? 30
-            : (hoveredRemoveTooltip?.id === suggestion.id ? 8 : 0),
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          overflow: 'visible',
-          isolation: hoveredRemoveTooltip?.id === suggestion.id ? 'isolate' : 'auto',
-          background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
-        }}
-      >
-        {isConflictFollower ? (
-          <span
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              left: -12,
-              top: -10,
-              bottom: -10,
-              width: 8,
-              borderLeft: '2px solid color-mix(in srgb, var(--text) 28%, var(--border))',
-              borderRight: '2px solid color-mix(in srgb, var(--text) 18%, var(--border))',
-              borderRadius: 999,
-              pointerEvents: 'none',
-              opacity: 0.95,
-            }}
-          />
-        ) : null}
-        {bulkMode ? (
-          <label aria-label="Select this suggestion" style={{
-            position: 'absolute',
-            top: 13,
-            left: 14,
-            zIndex: 2,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 20,
-            height: 20,
-            cursor: 'pointer',
-          }}>
-            <input
-              type="checkbox"
-              checked={selectedSuggestionIds.includes(getSuggestionKey(suggestion.id))}
-              onChange={() => {
-                if (leadHasVisibleChildren) {
-                  toggleConflictParentSelection(suggestion)
-                  return
-                }
-                toggleSuggestionSelection(suggestion.id)
-              }}
-              style={{ width: 16, height: 16, accentColor: 'var(--accent)', cursor: 'pointer' }}
-            />
-          </label>
-        ) : null}
-        {showStatusBadge && statusBadge ? (
-          <SuggestionStatusBadge
-            label={statusBadge.label}
-            tone={statusBadge.tone}
-            left={bulkMode ? 42 : 14}
-          />
-        ) : null}
-        {suggestion.review_status === 'accepted' ? (
-          <>
-            {hoveredRemoveTooltip?.id === suggestion.id ? (
-              <div style={getRemoveTooltipStyle(hoveredRemoveTooltip.align, hoveredRemoveTooltip.offset)}>
-                {removeTitle}
-                <span style={getRemoveTooltipArrowStyle(hoveredRemoveTooltip.align)} />
-              </div>
-            ) : null}
-            <IconButton
-              tone="danger"
-              aria-label={removeTitle}
-              title=""
-              onMouseEnter={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
-              onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-              onFocus={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
-              onBlur={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-              onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, removeActionStatus)}
-              style={{ position: 'absolute', top: 10, right: 10, zIndex: 1 }}
-            >
-              ×
-            </IconButton>
-          </>
-        ) : null}
-        <div style={{
-          padding: showStatusBadge
-            ? (suggestion.review_status === 'discarded'
-              ? `11px 16px 11px ${bulkMode ? 72 : 44}px`
-              : `11px 52px 11px ${bulkMode ? 72 : 44}px`)
-            : (suggestion.review_status === 'discarded'
-              ? `11px 16px 11px ${bulkMode ? 44 : 16}px`
-              : `11px 52px 11px ${bulkMode ? 44 : 16}px`),
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 14,
-          flexWrap: 'wrap',
-        }}>
-          <div style={{ minWidth: 0, flex: '1 1 280px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-              <CriteriaGroup
-                merchantLabel={resolvedSuggestion.merchant_label}
-                keyword={resolvedSuggestion.keyword}
-                filterPills={filterPills}
-                onRemoveFilter={actionKey => removeSuggestionAction(suggestion.id, actionKey)}
-                editing={editingKeywordSuggestionId === getSuggestionKey(suggestion.id)}
-                draftValue={editingKeywordDraft}
-                onEditSuggestion={() => onEditSuggestion(suggestion.id)}
-                onBeginKeywordEdit={() => beginKeywordEdit(suggestion)}
-                onKeywordChange={setEditingKeywordDraft}
-                onKeywordCommit={() => commitKeywordEdit(suggestion)}
-                onKeywordCancel={cancelKeywordEdit}
-              />
-              {suggestion.txn_count ? (
-                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  {suggestion.txn_count} matching row{suggestion.txn_count === 1 ? '' : 's'}
-                  <ReportArrowButton onClick={() => openMatchingTransactionsViewer(suggestion)} />
-                </span>
-              ) : null}
-              {showConflictMarker ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!allowConflictOpen || !suggestion.conflict_group_id) return
-                    setOpenConflictGroupId(suggestion.conflict_group_id)
-                  }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
-                    background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
-                    border: '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
-                    whiteSpace: 'nowrap',
-                    cursor: allowConflictOpen ? 'pointer' : 'default',
-                  }}
-                >
-                  conflict set
-                </button>
-              ) : null}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-              <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>actions:</span>
-              {actionLabels.length > 0 ? actionLabels.map(action => (
-                action.key === 'category' && editingCategorySuggestionId === getSuggestionKey(suggestion.id) ? (
-                  <div key={action.key} style={{ minWidth: 240, maxWidth: 320, flex: '0 1 320px' }}>
-                    <CategoryPicker
-                      value={resolvedSuggestion.target_category_id}
-                      categories={categories}
-                      onChange={value => commitCategoryActionEdit(suggestion, value)}
-                      onCategoryCreated={async () => {
-                        const nextCategories = await onCategoriesChanged?.()
-                        if (Array.isArray(nextCategories)) {
-                          latestCategoriesRef.current = nextCategories
-                        }
-                      }}
-                      compact
-                      openToken={categoryPickerOpenToken}
-                      onOpenChange={open => {
-                        if (open) {
-                          categoryPickerHasOpenedRef.current = true
-                          return
-                        }
-                        // Some picker close events fire before the popover is ever
-                        // visible; ignore those so category edit mode does not cancel instantly.
-                        if (categoryPickerHasOpenedRef.current) {
-                          setEditingCategorySuggestionId(current => (
-                            current === getSuggestionKey(suggestion.id) ? null : current
-                          ))
-                          categoryPickerHasOpenedRef.current = false
-                        }
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <SuggestionPill
-                    key={action.key}
-                    label={action.label}
-                    onRemove={action.onRemove}
-                    onClick={action.onClick}
-                    onMouseDown={action.onMouseDown}
-                    editing={action.editing}
-                    editValue={action.editValue}
-                    onEditValueChange={action.onEditValueChange}
-                    onEditCommit={action.onEditCommit}
-                    onEditCancel={action.onEditCancel}
-                  />
-                )
-              )) : (
-                <span style={{ fontSize: 12, color: 'var(--muted)' }}>none</span>
-              )}
-            </div>
-
-            {(resolvedSuggestion.tag_ids?.length || editingTagSuggestionId === getSuggestionKey(suggestion.id)) ? (
-	              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-	                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
-	                <span style={{ position: 'relative', display: 'inline-flex' }}>
-	                  <FilterChip
-	                    variant="add"
-	                    // Open-only: while the picker is open its own outside-click dismissal closes it, so a
-	                    // toggling onClick would close-then-reopen on the same click.
-	                    onClick={editingTagSuggestionId === getSuggestionKey(suggestion.id)
-	                      ? undefined
-	                      : () => beginTagEdit(suggestion)}
-	                  >
-	                    + tag
-	                  </FilterChip>
-	                  {editingTagSuggestionId === getSuggestionKey(suggestion.id) ? (
-	                    <TagPickerWithCreate
-	                      allTags={tags}
-	                      selectedTagIds={new Set(resolvedSuggestion.tag_ids)}
-	                      onToggleTag={(tag, present) => setSuggestionTag(suggestion, tag.id, present)}
-	                      onTagCreated={created => onTagCreated?.(created)}
-	                      onClose={() => setEditingTagSuggestionId(null)}
-	                      positioning="absolute"
-	                      align="left"
-	                    />
-	                  ) : null}
-	                </span>
-	                {resolvedSuggestion.tag_ids.map(tagId => {
-	                  const tag = tags.find(item => String(item.id) === String(tagId))
-	                  if (!tag) return null
-	                  return (
-                    <span key={tagId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <TagBadge tag={tag} />
-                      <IconButton
-                        size="compact"
-                        aria-label={`Remove ${tag.name}`}
-                        onClick={() => setSuggestionTag(suggestion, tagId, false)}
-                      >
-                        ×
-                      </IconButton>
-	                    </span>
-	                  )
-	                })}
-	              </div>
-            ) : null}
-
-            {suggestion.needs_resolution && filterKey === 'pending' && isConflictLead ? (
-              <div style={{ marginTop: 6, fontSize: 12, color: 'color-mix(in srgb, var(--warning) 72%, var(--text))' }}>
-                Conflicting category assignments for the same merchant. Pick one or add selection criteria to distinguish them.
-              </div>
-            ) : null}
-          </div>
-
-          <SuggestionDispositionActions
-            suggestion={suggestion}
-            resolvedSuggestion={resolvedSuggestion}
-            editingSuggestionId={editingSuggestionId}
-            onEditSuggestion={onEditSuggestion}
-            runRowStatusAction={runRowStatusAction}
-            runRowSaveAction={runRowSaveAction}
-            onRejectSuggestionDisposition={onRejectSuggestionDisposition}
-            editLabel={isRefinedPendingSuggestion(resolvedSuggestion)
-              ? 'Edit selection criteria'
-              : undefined}
-            editOpenLabel={isRefinedPendingSuggestion(resolvedSuggestion)
-              ? 'Selection editor open'
-              : undefined}
-          />
-        </div>
-      </div>
+        selection={bulk}
+        drafts={drafts}
+        catalog={cardCatalog}
+        handlers={cardHandlers}
+      />
     )
   }
 
@@ -2390,11 +1265,8 @@ export default function ImportRuleSuggestionReview({
         onEditMatch={membersToEdit => setEditingMatchMembers(membersToEdit)}
         onEditRule={memberId => onEditSuggestion(memberId)}
         categories={categories}
-        onSetMemberCategory={(member, categoryId) => commitCategoryActionEdit(member, categoryId)}
-        onCategoryCreated={async () => {
-          const nextCategories = await onCategoriesChanged?.()
-          if (Array.isArray(nextCategories)) latestCategoriesRef.current = nextCategories
-        }}
+        onSetMemberCategory={drafts.setCategory}
+        onCategoryCreated={async () => drafts.noteCategories(await onCategoriesChanged?.())}
       />
     )
   }
@@ -2413,9 +1285,9 @@ export default function ImportRuleSuggestionReview({
         members={members}
         showStatusColumn={reviewFilter === 'total'}
         bulkMode={bulkMode && bulkAvailable}
-        selectedSuggestionIds={selectedSuggestionIds}
+        selectedSuggestionIds={bulk.selectedIds}
         getSuggestionKey={getSuggestionKey}
-        onToggleSelection={toggleSuggestionSelection}
+        onToggleSelection={bulk.toggle}
         getResolvedSuggestion={getResolvedSuggestion}
         tags={tags}
         editingSuggestionId={editingSuggestionId}
@@ -2495,13 +1367,13 @@ export default function ImportRuleSuggestionReview({
     <MatchingTransactionsReport
       state={matchViewerState}
       categories={categories}
-      onKeepCategory={keepMatchingTransactionCategory}
-      onSetRowCategory={setMatchRowCategory}
-      onSetAllCategories={setAllMatchCategories}
+      onKeepCategory={matchViewer.keepRowCategory}
+      onSetRowCategory={matchViewer.setRowCategory}
+      onSetAllCategories={matchViewer.setAllCategories}
       onCategoriesChanged={onCategoriesChanged}
       applyingAll={matchViewerState.applyingAll}
-      onOpenMerchantReport={openMerchantReport}
-      onClose={closeMatchingTransactionsReference}
+      onOpenMerchantReport={matchViewer.openMerchantReport}
+      onClose={matchViewer.closeReference}
       embedded
       readOnly
       allowPinnedOrigin
@@ -2524,7 +1396,7 @@ export default function ImportRuleSuggestionReview({
       onContextMenu={event => {
         if (!bulkMode || !bulkAvailable) return
         event.preventDefault()
-        setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
+        setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
       }}
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, minWidth: 0 }}
     >
@@ -2533,7 +1405,7 @@ export default function ImportRuleSuggestionReview({
         onContextMenu={event => {
           if (!bulkMode || !bulkAvailable) return
           event.preventDefault()
-          setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
+          setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
         }}
         style={{
           position: 'sticky',
@@ -2604,7 +1476,7 @@ export default function ImportRuleSuggestionReview({
             onContextMenu={event => {
               if (!bulkMode) return
               event.preventDefault()
-              setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
+              setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
             }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}
           >
@@ -2670,10 +1542,10 @@ export default function ImportRuleSuggestionReview({
                 <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   {selectedCount} of {visibleSuggestions.length} selected
                 </span>
-                <LinkButton onClick={() => selectAllScoped()} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <LinkButton onClick={() => bulk.selectAll()} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   Select all
                 </LinkButton>
-                <LinkButton onClick={() => setSelectedSuggestionIds([])} disabled={selectedCount === 0} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <LinkButton onClick={() => bulk.clear()} disabled={selectedCount === 0} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   Clear
                 </LinkButton>
               </div>
@@ -2751,30 +1623,30 @@ export default function ImportRuleSuggestionReview({
         <MatchingTransactionsModal
           state={matchViewerState}
           categories={categories}
-          onKeepCategory={keepMatchingTransactionCategory}
-          onSetRowCategory={setMatchRowCategory}
-          onSetAllCategories={setAllMatchCategories}
+          onKeepCategory={matchViewer.keepRowCategory}
+          onSetRowCategory={matchViewer.setRowCategory}
+          onSetAllCategories={matchViewer.setAllCategories}
           onCategoriesChanged={onCategoriesChanged}
           applyingAll={matchViewerState.applyingAll}
-          onOpenMerchantReport={openMerchantReport}
-          onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
+          onOpenMerchantReport={matchViewer.openMerchantReport}
+          onClose={matchViewer.close}
         />
       ) : null}
 
-      {payeeDetail ? (
+      {matchViewer.merchantReport ? (
         // Stack the merchant spending report above the match modal (z 905). Detail panels live in the
         // 401+ band, so a high-z wrapper lifts the whole panel subtree over the modal. Rendered
         // non-floating (a centered modal) so it doesn't do the floating-panel measure-then-snap on
-        // open. Edits reflect back into the match rows via reloadMatchViewer.
+        // open. Edits reflect back into the match rows via the viewer's reload.
         <div style={{ position: 'fixed', inset: 0, zIndex: 960 }}>
           <TransactionDetail
-            txn={payeeDetail}
+            txn={matchViewer.merchantReport}
             categories={categories}
             availableTags={tags}
             showPayeeActivity={false}
-            onClose={() => setPayeeDetail(null)}
+            onClose={matchViewer.closeMerchantReport}
             // Any edit invalidates the matcher preview; a trash also closes the panel.
-            onReconcile={(txnId, patch) => { reloadMatchViewer(); if (patch === null) setPayeeDetail(null) }}
+            onReconcile={(txnId, patch) => { matchViewer.reload(); if (patch === null) matchViewer.closeMerchantReport() }}
           />
         </div>
       ) : null}
@@ -2797,44 +1669,16 @@ export default function ImportRuleSuggestionReview({
               await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
               return
             }
-            persistSuggestionDraft(resolvedEditingSuggestion, data)
-            const nextCategory = data.category_id
-              ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
-              : null
-            await onSaveSuggestion({
-              ...resolvedEditingSuggestion,
-              keyword: data.keyword,
-              target_category_id: data.category_id || null,
-              target_category_name: nextCategory?.name || null,
-              amount_min: data.amount_min,
-              amount_max: data.amount_max,
-              clean_name_suggestion: data.clean_name || null,
-              tag_ids: data.tag_ids || [],
-              owner_id: data.owner_id || null,
-              account_id: data.account_id || null,
-            }, data)
+            drafts.keepEditorDraft(resolvedEditingSuggestion, data)
+            await onSaveSuggestion(suggestionFromEditor(resolvedEditingSuggestion, data), data)
           }}
           onSaveAccepted={async data => {
             if (editingSuggestionUsesSelectionEditor) {
               await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
               return
             }
-            persistSuggestionDraft(resolvedEditingSuggestion, data)
-            const nextCategory = data.category_id
-              ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
-              : null
-            await onSaveAcceptedSuggestion({
-              ...resolvedEditingSuggestion,
-              keyword: data.keyword,
-              target_category_id: data.category_id || null,
-              target_category_name: nextCategory?.name || null,
-              amount_min: data.amount_min,
-              amount_max: data.amount_max,
-              clean_name_suggestion: data.clean_name || null,
-              tag_ids: data.tag_ids || [],
-              owner_id: data.owner_id || null,
-              account_id: data.account_id || null,
-            }, data)
+            drafts.keepEditorDraft(resolvedEditingSuggestion, data)
+            await onSaveAcceptedSuggestion(suggestionFromEditor(resolvedEditingSuggestion, data), data)
           }}
           onCloseWithDraft={async data => {
             if (editingSuggestionUsesSelectionEditor) {
@@ -2845,7 +1689,7 @@ export default function ImportRuleSuggestionReview({
               await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
               return
             }
-            persistSuggestionDraft(resolvedEditingSuggestion, data)
+            drafts.keepEditorDraft(resolvedEditingSuggestion, data)
             onCancelEdit()
           }}
           onDiscard={onCancelEdit}
@@ -2890,121 +1734,36 @@ export default function ImportRuleSuggestionReview({
       ) : null}
 
       {bulkMenu ? (
-        <div
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => event.stopPropagation()}
-          onContextMenu={event => event.preventDefault()}
-          style={getMenuPanelStyle(bulkMenu)}
-        >
-          <button
-            type="button"
-            onClick={() => selectAllScoped(bulkMenu.scopeIds)}
-            style={getMenuButtonStyle()}
-          >
-            Select All
-          </button>
-          <button
-            type="button"
-            onClick={() => clearScopedSelection(bulkMenu.scopeIds)}
-            style={getMenuButtonStyle()}
-          >
-            Clear All
-          </button>
-          <div style={{ height: 1, background: 'var(--border)' }} />
-          {bulkActions.map(action => (
-            <button
-              key={action.key}
-              type="button"
-              disabled={selectedSuggestionIds.length === 0}
-              onClick={() => runBulkAction(action)}
-              style={getMenuButtonStyle(selectedSuggestionIds.length === 0)}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {sortMenu ? (
-        <div
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => event.stopPropagation()}
-          onContextMenu={event => event.preventDefault()}
-          style={getMenuPanelStyle(sortMenu)}
-        >
-          <button
-            type="button"
-            onClick={() => handleSortChange('alpha')}
-            style={getSortMenuItemStyle(sortOrder === 'alpha')}
-          >
-            <span>A-Z</span>
-            {sortOrder === 'alpha' ? <span style={{ fontSize: 11 }}>✓</span> : null}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSortChange('row_count')}
-            style={getSortMenuItemStyle(sortOrder === 'row_count')}
-          >
-            <span># rows</span>
-            {sortOrder === 'row_count' ? <span style={{ fontSize: 11 }}>✓</span> : null}
-          </button>
-        </div>
-      ) : null}
-
-      {lookbackMenu ? (
-        <div
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => event.stopPropagation()}
-          onContextMenu={event => event.preventDefault()}
-          style={getMenuPanelStyle(lookbackMenu)}
-        >
-          {IMPORT_RULE_LOOKBACK_CHOICES.map(years => (
-            <button
-              key={years}
-              type="button"
-              onClick={() => handleLookbackChange(years)}
-              style={getSortMenuItemStyle(lookbackYears === years)}
-            >
-              <span>{lookbackLabel(years)}</span>
-              {lookbackYears === years ? <span style={{ fontSize: 11 }}>✓</span> : null}
-            </button>
-          ))}
-        </div>
+        <ActionMenu
+          anchorRect={bulkMenu.anchorRect}
+          align="start"
+          onClose={() => setBulkMenu(null)}
+          items={[
+            { label: 'Select All', onClick: () => bulk.selectAll(bulkMenu.scopeIds) },
+            { label: 'Clear All', onClick: () => bulk.clear(bulkMenu.scopeIds) },
+            ...bulkActions.map((action, index) => ({
+              label: action.label,
+              onClick: () => runBulkAction(action),
+              disabled: selectedCount === 0,
+              separatorBefore: index === 0,
+            })),
+          ]}
+        />
       ) : null}
 
       {suggestionMenu ? (
-        <div
-          onMouseDown={event => event.stopPropagation()}
-          onClick={event => event.stopPropagation()}
-          onContextMenu={event => event.preventDefault()}
-          style={getMenuPanelStyle(suggestionMenu)}
-        >
-          {getSuggestionMenuActions(suggestionMenu.suggestion, suggestionMenu.resolvedSuggestion).map(action => (
-            <button
-              key={action.key}
-              type="button"
-              onClick={() => {
-                setSuggestionMenu(null)
-                action.onClick()
-              }}
-              style={getMenuButtonStyle()}
-            >
-              {action.label}
-            </button>
-          ))}
-          {bulkAvailable ? (
-            <>
-              <div style={{ height: 1, background: 'var(--border)' }} />
-              <button
-                type="button"
-                onClick={() => enterBulkMode(suggestionMenu.suggestion)}
-                style={getMenuButtonStyle()}
-              >
-                Bulk Select
-              </button>
-            </>
-          ) : null}
-        </div>
+        <ActionMenu
+          anchorRect={suggestionMenu.anchorRect}
+          align="start"
+          onClose={() => setSuggestionMenu(null)}
+          items={[
+            ...getSuggestionMenuActions(suggestionMenu.suggestion, suggestionMenu.resolvedSuggestion)
+              .map(action => ({ label: action.label, onClick: action.onClick })),
+            bulkAvailable
+              ? { label: 'Bulk Select', onClick: () => enterBulkMode(suggestionMenu.suggestion), separatorBefore: true }
+              : null,
+          ]}
+        />
       ) : null}
     </div>
   )

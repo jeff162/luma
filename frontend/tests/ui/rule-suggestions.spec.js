@@ -62,8 +62,7 @@ test('a one-year look-back moves a stale suggestion from pending to older', asyn
     await expect(card(page, 'Harbor Yoga Studio')).toBeVisible()
     const pendingBefore = await pillCount(page, 'pending')
 
-    await page.getByRole('button', { name: /years? ▾$/ }).click()
-    await page.getByRole('button', { name: /^1 year/ }).click()
+    await page.getByRole('combobox', { name: 'Look back' }).selectOption({ label: '1 year' })
 
     await expect.poll(() => pillCount(page, 'pending')).toBe(pendingBefore - 1)
     await expect(pill(page, 'older')).toBeVisible()
@@ -96,12 +95,11 @@ test('sorting by name reorders merchants that sorting by row count put the other
   }
   await withPreferenceRestored(request, 'ui.importRuleSuggestions.sortOrder', 'row_count', async () => {
     await openReview(page)
-    await page.getByRole('button', { name: /▾$/ }).filter({ hasText: /rows|A-Z/ }).click()
-    await page.getByRole('button', { name: /^# rows( ✓)?$/ }).click()
+    const sort = page.getByRole('group', { name: 'Sort order' })
+    await sort.getByRole('button', { name: '# rows' }).click()
     await expect.poll(() => above('Northgate Gas', 'CellOne Mobile')).toBe(true)
 
-    await page.getByRole('button', { name: /▾$/ }).filter({ hasText: /rows|A-Z/ }).click()
-    await page.getByRole('button', { name: /^A-Z( ✓)?$/ }).click()
+    await sort.getByRole('button', { name: 'A–Z' }).click()
     await expect.poll(() => above('CellOne Mobile', 'Northgate Gas')).toBe(true)
   })
 })
@@ -133,4 +131,65 @@ test('in bulk mode, selecting a conflict set’s lead selects the whole set', as
 
   await page.getByRole('checkbox', { name: 'Select this suggestion' }).first().click()
   await expect(page.getByText('2 of 2 selected')).toBeVisible()
+})
+
+test('a card’s right-click menu offers its actions and Escape closes it', async ({ page }) => {
+  await openReview(page)
+  await card(page, 'Acme Corp Payroll').click({ button: 'right' })
+  const menu = page.getByRole('menu')
+  await expect(menu.getByRole('menuitem', { name: 'Save' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Defer' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Bulk Select' })).toBeVisible()
+
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+})
+
+test('in bulk mode, right-clicking a conflict set’s lead can select just that set', async ({ page }) => {
+  await openReview(page)
+  await page.getByRole('button', { name: 'Bulk Select' }).click()
+  await expect(page.getByText(/^0 of \d+ selected$/)).toBeVisible()
+
+  await page.locator('[data-rule-suggestion-card]').filter({ hasText: 'Hearthside Hardware' }).first().click({ button: 'right' })
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Select All' }).click()
+  await expect(page.getByText(/^2 of \d+ selected$/)).toBeVisible()
+})
+
+test('a card’s matching-transactions report lists exactly the rows behind that card', async ({ page }) => {
+  await openReview(page)
+  const rowsInReport = page.getByRole('button', { name: 'Open merchant spending report' })
+
+  await card(page, 'Keystone Auto Insurance').getByRole('button', { name: 'Open matching transactions report' }).click()
+  await expect(rowsInReport).toHaveCount(13)
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(rowsInReport).toHaveCount(0)
+
+  // A conflict set's report covers every member's rows, and no row any other suggestion owns.
+  await pill(page, 'conflict').click()
+  await page.locator('[data-rule-suggestion-card]').filter({ hasText: 'Hearthside Hardware' })
+    .getByRole('button', { name: 'Open matching transactions report' }).click()
+  await expect(rowsInReport).toHaveCount(6)
+})
+
+test('the rule editor shows the suggestion’s rows beside it, and they go when the editor closes', async ({ page }) => {
+  await openReview(page)
+  const rowsInReport = page.getByRole('button', { name: 'Open merchant spending report' })
+  const openEditor = () => card(page, 'Keystone Auto Insurance').getByRole('button', { name: 'Open Rule Editor' }).click()
+
+  await openEditor()
+  await page.getByRole('button', { name: '13 matching rows' }).click()
+  await expect(rowsInReport).toHaveCount(13)
+  await page.getByRole('button', { name: 'Hide reference rows' }).click()
+  await expect(rowsInReport).toHaveCount(0)
+
+  await page.getByRole('button', { name: '13 matching rows' }).click()
+  await expect(rowsInReport).toHaveCount(13)
+  // Clicking outside the editor closes it, keeping the draft.
+  await page.mouse.click(5, 5)
+  await expect(page.getByText('Rule editor', { exact: true })).toHaveCount(0)
+  await expect(rowsInReport).toHaveCount(0)
+
+  await openEditor()
+  await expect(page.getByRole('button', { name: '13 matching rows' })).toBeVisible()
+  await expect(rowsInReport).toHaveCount(0)
 })

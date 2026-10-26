@@ -1371,7 +1371,5 @@ display and a `show_by_default` flag.
 
 - **Dependency-based query-cache invalidation**, replacing the hand-wired refresh map.
   → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
-- **Extracting `ImportRuleSuggestionReview`** into prop-driven seams.
-  → [`backlog/import-rule-suggestion-review-extraction.md`](backlog/import-rule-suggestion-review-extraction.md)
 - **Auto-restoring hard-rejected rows when the import they matched is undone.**
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
