@@ -475,9 +475,8 @@ precondition; its docstring has the ladder. What each state and field means is i
 
 - **Hard-reject:** the row is never inserted into `txn`. Its would-be payload is kept in
   `import_batch_duplicate` and can be replayed (`POST /import-export/batches/{id}/duplicates/import`,
-  through `_insert_imported_transaction`). The records are scoped to their own batch, so undoing a
-  different batch leaves them. Nothing auto-restores them when the batch they matched is undone (see
-  *Open*).
+  through `_insert_imported_transaction`). A record lasts as long as the import its verdict leaned on:
+  when that import leaves the ledger, the row is judged again (see *Records are revisited* below).
 
 - **Soft-flag:** after a batch finalizes, each row is checked against the rest of the ledger for
   cross-account matches and flagged via `suspect_duplicate_of`. Same-batch rows on different accounts
@@ -492,13 +491,24 @@ precondition; its docstring has the ladder. What each state and field means is i
 - **Records are revisited when their premise changes:**
   - `undo_batch` deletes the batch's `import_batch_duplicate` and `import_batch_account` rows and clears
     `suspect_duplicate_of` pointers at its deleted rows.
+  - **Other files' rows rejected against an import are judged again when it leaves the ledger**: Undo, a
+    re-import replacing the file (after the new rows are in), and a connection's *Remove synced
+    transactions*. `rejudge_orphaned_rejections` takes every record whose verdict names an import that is
+    no longer completed (a coverage claim's batch or connection, or a matched row's batch) and asks what a
+    fresh import of that file would decide today. A row still accounted for keeps its record, re-pointed;
+    one that is not comes in through the Import anyway path, takes today's rules, and gets the full
+    post-import sweep. The trigger is the import, not the matched row, so a twin purged from the Trash
+    brings nothing back. Files are judged oldest first, without the coverage claims of files still waiting
+    to be judged: those claims do not hold until the files' own rows are dealt with, and two such files
+    would otherwise each keep the other's row out.
   - `attach_account` clears the pair's distinct assertion and promotes existing flags inside the new
     group, tagged `dedupe_resolved_by = 'auto_merge'`.
   - `detach_account` restores any `auto_merge` promotion whose pair straddles the detach boundary,
     whichever side holds the trashed row. Rows the user rejected (`'user'`) are left alone.
   - Applying a connection mapping re-judges that connection's earlier rows (see *Provider connections*).
   - `POST /accounts/duplicate-rescan` runs on app load, gated on `DUPLICATE_DETECTION_VERSION`: it
-    re-scans each account once per matcher change and skips pairs the user has judged.
+    re-judges any rejection whose import is gone, as above, then re-scans each account once per matcher
+    change and skips pairs the user has judged.
 
 - **The report replays a stored verdict.** `matched_transaction_json` is written at import. Opening a
   report first runs `refresh_unexplained_coverage_candidates`, which recomputes candidates only for
@@ -1372,5 +1382,3 @@ display and a `show_by_default` flag.
 
 - **Dependency-based query-cache invalidation**, replacing the hand-wired refresh map.
   → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
-- **Auto-restoring hard-rejected rows when the import they matched is undone.**
-  → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)

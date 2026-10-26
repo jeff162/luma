@@ -1612,7 +1612,8 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
     make). Instead we describe the coverage and attach any actual candidates the lookup found.
 
     Shape:
-      - covered: { start_date, end_date, source_batch_id }   (always present)
+      - covered: { start_date, end_date, source_batch_id }   (always present; a connection's claim names
+        `source_connection_id` in place of a batch)
       - candidates: list of compact candidate dicts          (may be empty → no specific match)
       - candidate_count: len(candidates)                     (UI shortcut)
 
@@ -1628,6 +1629,8 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
     }
     if cov.get("same_source_account"):
         covered["same_source_account"] = True
+    if cov.get("connection_id"):
+        covered["source_connection_id"] = cov["connection_id"]
     return {
         "covered": covered,
         "candidates":      candidates,
@@ -1927,6 +1930,7 @@ def build_dedupe_context(
     compare_targets: Optional[dict] = None,
     alias_values: Optional[Iterable[str]] = None,
     exclude_batch_ids: Optional[Iterable[str]] = None,
+    exclude_coverage_batch_ids: Optional[Iterable[str]] = None,
     exclude_connection_ids: Optional[Iterable[str]] = None,
     source_id: Optional[str] = None,
     coverage_strategy_enabled: bool = True,
@@ -1956,12 +1960,17 @@ def build_dedupe_context(
     excluded set, rather than just the row being evaluated, is deliberate: excluding only "self"
     would let two rows from the same excluded batch reject each other, and mutual rejection trashes
     both copies of a transaction that has only one duplicate.
+    `exclude_coverage_batch_ids` withholds only those batches' coverage claims, keeping their rows as
+    candidates. Re-judging held rejections passes the files whose own rejections are still to be re-judged:
+    a file whose rows were kept out against an import that is gone does not cover those dates until its
+    rows are dealt with, and two such files would otherwise each hold the other's row out of the ledger.
     `exclude_connection_ids` does the same for a connection's own coverage claim; see the note at the
     connection-coverage query below for why a sync must exclude itself and a CSV re-import must not.
     """
     compare_targets = dict(compare_targets or {})
     alias_values = set(alias_values or ())
     exclude_batch_ids = {str(b) for b in (exclude_batch_ids or ()) if b}
+    withheld_coverage_ids = exclude_batch_ids | {str(b) for b in (exclude_coverage_batch_ids or ()) if b}
     exclude_connection_ids = {str(c) for c in (exclude_connection_ids or ()) if c}
     source_values = {str(v or "").strip() for v in source_values}
 
@@ -2197,6 +2206,9 @@ def build_dedupe_context(
             "csv_value": label,
             "account_id": account_id,
             "batch_id": None,
+            # A connection's claim has no batch behind it, so the verdict names the connection instead, which
+            # is how a rejection resting on it is found once the connection's synced rows are removed.
+            "connection_id": connection_id or None,
         }
         import_coverage_by_csv_value.setdefault(label, []).append(entry)
         if scope_id:
@@ -2266,9 +2278,9 @@ def build_dedupe_context(
           AND  iba.was_skipped = 0
     """
     coverage_params: list[str] = []
-    if exclude_batch_ids:
-        coverage_query += f" AND b.id NOT IN ({_placeholders(exclude_batch_ids)})"
-        coverage_params.extend(exclude_batch_ids)
+    if withheld_coverage_ids:
+        coverage_query += f" AND b.id NOT IN ({_placeholders(withheld_coverage_ids)})"
+        coverage_params.extend(withheld_coverage_ids)
 
     terminal_batch_lookup: dict[tuple[str, str, str], dict] = {}
     terminal_batch_ids: set[str] = set()
@@ -3248,6 +3260,58 @@ def matched_existing_txn_ids(matched) -> list[str]:
     return ids
 
 
+def orphaned_rejections(conn: sqlite3.Connection) -> list[tuple[str, list[int]]]:
+    """The stored hard-rejects whose verdict rests on an import that is no longer in the ledger, as
+    `(batch_id, row_numbers)` per holding file, oldest file first.
+
+    A verdict names what it leaned on: a coverage claim's `source_batch_id` (or `source_connection_id`,
+    for a connection's claim), and the `import_batch_id` of each row it named as the match. When that
+    import is undone, replaced or removed with its connection's synced rows — or the connection no longer
+    claims any coverage — the reason the row was kept out has gone with it, and the row is owed a fresh
+    judgement (`core.rejudge_orphaned_rejections`). Keyed on the **import** rather than on whether the
+    named row still exists, because a row the user purged from the Trash is a decision about that
+    transaction, and must not bring its duplicate back.
+
+    Oldest first because rejections chain: a row restored from an earlier file is ledger data by the time
+    a later file's rows are judged, and may be exactly what still accounts for them."""
+    rows = conn.execute(
+        """
+        WITH held AS (
+            SELECT d.batch_id, d.row_number, d.matched_transaction_json AS matched
+            FROM   import_batch_duplicate d
+            JOIN   import_batch b ON b.id = d.batch_id AND b.status = 'completed'
+            WHERE  json_valid(d.matched_transaction_json)
+        ), batch_refs AS (
+            SELECT batch_id, row_number, json_extract(matched, '$.covered.source_batch_id') AS ref FROM held
+            UNION ALL
+            SELECT batch_id, row_number, json_extract(matched, '$.import_batch_id') FROM held
+            UNION ALL
+            SELECT h.batch_id, h.row_number, json_extract(c.value, '$.import_batch_id')
+            FROM   held h, json_each(h.matched, '$.candidates') c
+        ), orphaned AS (
+            SELECT batch_id, row_number FROM batch_refs
+            WHERE  ref IS NOT NULL
+              AND  NOT EXISTS (SELECT 1 FROM import_batch b WHERE b.id = ref AND b.status = 'completed')
+            UNION
+            SELECT batch_id, row_number FROM held
+            WHERE  json_extract(matched, '$.covered.source_connection_id') IS NOT NULL
+              AND  NOT EXISTS (
+                       SELECT 1 FROM connection_account ca
+                       WHERE  ca.connection_id = json_extract(matched, '$.covered.source_connection_id')
+                         AND  ca.coverage_start_date IS NOT NULL
+                   )
+        )
+        SELECT o.batch_id, o.row_number
+        FROM   orphaned o JOIN import_batch holder ON holder.id = o.batch_id
+        ORDER  BY holder.imported_at, holder.rowid, o.row_number
+        """
+    ).fetchall()
+    by_batch: dict[str, list[int]] = {}
+    for row in rows:
+        by_batch.setdefault(row["batch_id"], []).append(int(row["row_number"]))
+    return list(by_batch.items())
+
+
 def account_skipped_duplicate_summary(conn: sqlite3.Connection, account_id: str) -> dict:
     """Summarize transactions that belonged to `account_id` but never entered (or were trashed from)
     the active ledger because they were duplicates — the explanation for an account that looks empty.
@@ -4154,16 +4218,17 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
 
 
 # Bumped whenever a change to the matching rules could make detection reach a different verdict on rows
-# already in the ledger — a new tier, a tokenizer change, a threshold move, a widened pairing condition.
-# On app load a database stamped with an older value is re-scanned once (`maybe_rescan_for_detection_
-# change`), because the alternative is what happened in practice: the rules improved, nothing re-examined
-# what was already stored, and the pairs the improvement was written for stayed invisible forever.
+# already stored — a new tier, a tokenizer change, a threshold move, a widened pairing condition. On app
+# load a database stamped with an older value is re-scanned once (`maybe_rescan_for_detection_change`),
+# after its rejections whose import is gone are judged again (`rejudge_orphaned_rejections`), because the
+# alternative is what happened in practice: the rules improved, nothing re-examined what was already
+# stored, and the pairs the improvement was written for stayed invisible forever.
 #
 # It is deliberately NOT the schema version. Nothing about these changes touches the schema, and tying
 # them together would either force a migration for a threshold tweak or silently skip a re-scan whenever
 # a migration happened to land first. Bump it in the same commit as the rule change, the way
 # CURRENT_VERSION is bumped with a schema change.
-DUPLICATE_DETECTION_VERSION = 1
+DUPLICATE_DETECTION_VERSION = 2
 _DETECTION_VERSION_META_KEY = "duplicate_detection_version"
 
 # A pass only lets each row take one partner, so rows that lose a contest become available on the next

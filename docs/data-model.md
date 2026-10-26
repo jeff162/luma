@@ -2657,7 +2657,7 @@ and owed decisions*.
 - **Recurring detection**: the pool-load cost of a scoped scan, the long-cadence bias on stale series,
   and showing a transfer pair that is not a series.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
-- **Dedupe follow-ups**, including the prefix-stripping item and auto-restore after an undo.
+- **Dedupe follow-ups**, including the prefix-stripping item and a duplicate-resolution history.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)

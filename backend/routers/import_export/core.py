@@ -86,6 +86,8 @@ from backend.services.duplicate_detection import (
     evaluate_duplicate,
     get_effective_account_row,
     ADVISORY_REVIEW_SUBSTATES,
+    matched_existing_txn_ids,
+    orphaned_rejections,
     is_settled_source_restatement,
     list_unified_batch_duplicates,
     mark_import_suspects,
@@ -128,6 +130,7 @@ from backend.services.source_capabilities import (
     rejects_zero_amount,
     zero_amount_policy_for_source,
 )
+from backend.services.connection_dedupe import build_connection_dedupe
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
@@ -4031,6 +4034,10 @@ def run_import_parsed(
             owe_recurring_rescan(conn, batch_txn_ids)
             rule_conflicts.record_for_txns(conn, batch_txn_ids)
 
+        # The replaced file's rows are gone, so rows other files rejected against them are judged again —
+        # after this file's rows are in, since those are what a replacement exists to supply.
+        restored = rejudge_orphaned_rejections(conn) if replace_batch_id else {}
+
         account_skipped = sum(skip_counts.values())
 
     # Cross-account soft-flag sweep — catches matches between this batch's rows and existing rows on
@@ -4050,6 +4057,7 @@ def run_import_parsed(
         match_orders_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db(), batch_id=batch_id)
         pair_refunds_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
         pair_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
+    finish_restored_rejections(restored)
 
     trailing_non_transaction_message = None
     if trailing_non_transaction_suspected:
@@ -4596,130 +4604,125 @@ def mark_batch_reviewed(batch_id: str):
     return {"updated": len(transaction_ids), "transaction_ids": transaction_ids}
 
 
-@router.post("/batches/{batch_id}/duplicates/import")
-def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, row_count, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
+def import_held_rows(conn, batch_id: str, row_numbers: Optional[set[int]]) -> dict:
+    """Bring a batch's held rejections into the ledger: the rows named, or every one when `row_numbers` is
+    None. Shared by Import anyway, where the user overrules the rejections, and by
+    `rejudge_orphaned_rejections`, where the reason for them is gone, so a held row enters the ledger the
+    same way whoever decided it should. The caller runs the post-commit passes over `imported_ids`.
 
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        summary = snapshot.get(IMPORT_SUMMARY_KEY)
-        if not isinstance(summary, dict):
-            raise HTTPException(status_code=400, detail="Batch does not have duplicate details")
+    A row that cannot be imported stays held: one with no payload, and a synced row whose provider id a row
+    already holds — that transaction is in the ledger by another path since it was held (a later sync, a
+    restore), and importing it would be a second copy, besides breaking the id's uniqueness.
 
-        headers, duplicate_rows = _load_batch_duplicate_details(conn, batch)
-        if not duplicate_rows:
-            raise HTTPException(status_code=400, detail="Batch has no duplicate rows to import")
+    Returns `imported_ids`, `settled_pairs` (each imported row with every existing row it had been
+    rejected against), `not_importable_count` among the rows named, and `remaining_count`, the rows still
+    held. Nothing is written when nothing can be imported."""
+    batch = conn.execute(
+        "SELECT id, config_snapshot FROM import_batch WHERE id = ?", (batch_id,),
+    ).fetchone()
+    headers, duplicate_rows = _load_batch_duplicate_details(conn, batch) if batch else ([], [])
 
-        selected_rows = set(int(row) for row in (body.row_numbers or []))
-        if not body.import_all and not selected_rows:
-            raise HTTPException(status_code=400, detail="Choose duplicates to import")
+    imported_ids: list[str] = []
+    imported_rows: list[int] = []
+    # Held rows whose payload made no categorization decision: a file row's payload carries the one its
+    # import made (mapping, rule, or file label), but a sync holds its row before the rules run. Those go
+    # through the rules now, as a hand-entered row does, rather than landing uncategorized.
+    uncategorized_ids: list[str] = []
+    settled_pairs: set[tuple[str, str]] = set()
+    remaining_rows = []
+    not_importable_count = 0
+    account_increments: dict[tuple[str | None, str], int] = {}
+    unflagged_owner_ids = owners_not_flagging(conn)
 
-        imported_now = 0
-        imported_ids: list[str] = []   # scopes the post-commit duplicate sweep to what this call added
-        # Forced rows whose held payload made no categorization decision: a file row's payload carries the
-        # one its import made (mapping, rule, or file label), but a sync holds its row before the rules
-        # run. Those go through the rules now, as a hand-entered row does, rather than landing uncategorized.
-        uncategorized_ids: list[str] = []
-        # (forced row, the existing row it was rejected against) — the pairs the user has just overruled,
-        # which the sweep below must not put back in front of them as review work.
-        settled_pairs: set[tuple[str, str]] = set()
-        remaining_rows = []
-        importable_selected = 0
-        not_importable_count = 0
-        account_increments: dict[tuple[str | None, str], int] = {}
-        unflagged_owner_ids = owners_not_flagging(conn)
+    for entry in duplicate_rows:
+        row_number = int(entry.get("row") or 0)
+        if row_numbers is not None and row_number not in row_numbers:
+            remaining_rows.append(entry)
+            continue
 
-        for entry in duplicate_rows:
-            row_number = int(entry.get("row") or 0)
-            chosen = body.import_all or row_number in selected_rows
-            if not chosen:
-                remaining_rows.append(entry)
-                continue
-
-            payload = entry.get("txn_payload")
-            if not isinstance(payload, dict):
-                not_importable_count += 1
-                remaining_rows.append(entry)
-                continue
-            # A synced row whose provider id a row already holds is that transaction, in the ledger by
-            # another path since it was held (a later sync, a restore). Importing it again would be a
-            # second copy, and the id is unique besides.
-            provider_id = payload.get("external_transaction_id")
-            if provider_id and conn.execute(
-                "SELECT 1 FROM txn WHERE external_transaction_id = ?", (provider_id,)
-            ).fetchone():
-                not_importable_count += 1
-                remaining_rows.append(entry)
-                continue
-            # A synced row held before its payload named an owner takes its account's, as every import does.
-            if "owner_id" not in payload:
-                owner = conn.execute(
-                    "SELECT owner_id FROM account WHERE id = ?", (payload.get("account_id"),)
-                ).fetchone()
-                payload = {**payload, "owner_id": owner["owner_id"] if owner else None}
-
-            importable_selected += 1
-            txn_id = _insert_imported_transaction(
-                conn, batch_id, payload,
-                flag_for_review=payload.get("owner_id") not in unflagged_owner_ids,
-            )
-            imported_ids.append(txn_id)
-            if "category_id" not in payload:
-                uncategorized_ids.append(txn_id)
-            settled_pairs.update(
-                (txn_id, existing_id)
-                for existing_id in _duplicate_match_txn_ids(entry.get("matched_transaction") or {})
-            )
-            imported_now += 1
-            account_key = (payload.get("account_id"), str(payload.get("csv_value") or entry.get("csv_value") or ""))
-            account_increments[account_key] = account_increments.get(account_key, 0) + 1
-
-        if importable_selected == 0:
-            raise HTTPException(status_code=400, detail="Selected duplicates cannot be imported from this batch")
-        if uncategorized_ids:
-            recategorize_all(conn, txn_ids=uncategorized_ids)
-        # Forced rows are new data like any import's, so they owe their payees a rescan, settled below.
-        owe_recurring_rescan(conn, imported_ids)
-
-        chosen_rows = [int(entry.get("row") or 0) for entry in duplicate_rows if body.import_all or int(entry.get("row") or 0) in selected_rows]
-        if chosen_rows:
-            placeholders = ",".join("?" * len(chosen_rows))
-            conn.execute(
-                f"DELETE FROM import_batch_duplicate WHERE batch_id = ? AND row_number IN ({placeholders})",
-                [batch_id, *chosen_rows],
-            )
-
-        for (account_id, csv_value), count in account_increments.items():
-            existing = conn.execute(
-                "SELECT row_count FROM import_batch_account WHERE batch_id = ? AND csv_value = ?",
-                (batch_id, csv_value),
+        payload = entry.get("txn_payload")
+        if not isinstance(payload, dict):
+            not_importable_count += 1
+            remaining_rows.append(entry)
+            continue
+        provider_id = payload.get("external_transaction_id")
+        if provider_id and conn.execute(
+            "SELECT 1 FROM txn WHERE external_transaction_id = ?", (provider_id,)
+        ).fetchone():
+            not_importable_count += 1
+            remaining_rows.append(entry)
+            continue
+        # A synced row held before its payload named an owner takes its account's, as every import does.
+        if "owner_id" not in payload:
+            owner = conn.execute(
+                "SELECT owner_id FROM account WHERE id = ?", (payload.get("account_id"),)
             ).fetchone()
-            if existing:
-                conn.execute(
-                    "UPDATE import_batch_account SET row_count = row_count + ?, was_skipped = 0, account_id = COALESCE(account_id, ?) WHERE batch_id = ? AND csv_value = ?",
-                    (count, account_id, batch_id, csv_value),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO import_batch_account
-                      (batch_id, csv_value, account_id, row_count, was_skipped)
-                    VALUES (?, ?, ?, ?, 0)
-                    """,
-                    (batch_id, csv_value, account_id, count),
-                )
+            payload = {**payload, "owner_id": owner["owner_id"] if owner else None}
 
+        txn_id = _insert_imported_transaction(
+            conn, batch_id, payload,
+            flag_for_review=payload.get("owner_id") not in unflagged_owner_ids,
+        )
+        imported_ids.append(txn_id)
+        imported_rows.append(row_number)
+        if "category_id" not in payload:
+            uncategorized_ids.append(txn_id)
+        settled_pairs.update(
+            (txn_id, existing_id)
+            for existing_id in _duplicate_match_txn_ids(entry.get("matched_transaction") or {})
+        )
+        account_key = (payload.get("account_id"), str(payload.get("csv_value") or entry.get("csv_value") or ""))
+        account_increments[account_key] = account_increments.get(account_key, 0) + 1
+
+    result = {
+        "imported_ids": imported_ids,
+        "settled_pairs": settled_pairs,
+        "not_importable_count": not_importable_count,
+        "remaining_count": len(remaining_rows),
+    }
+    if not imported_ids:
+        return result
+
+    if uncategorized_ids:
+        recategorize_all(conn, txn_ids=uncategorized_ids)
+    # Brought-in rows are new data like any import's, so they owe their payees a rescan.
+    owe_recurring_rescan(conn, imported_ids)
+
+    placeholders = ",".join("?" * len(imported_rows))
+    conn.execute(
+        f"DELETE FROM import_batch_duplicate WHERE batch_id = ? AND row_number IN ({placeholders})",
+        [batch_id, *imported_rows],
+    )
+
+    for (account_id, csv_value), count in account_increments.items():
+        existing = conn.execute(
+            "SELECT row_count FROM import_batch_account WHERE batch_id = ? AND csv_value = ?",
+            (batch_id, csv_value),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE import_batch_account SET row_count = row_count + ?, was_skipped = 0, account_id = COALESCE(account_id, ?) WHERE batch_id = ? AND csv_value = ?",
+                (count, account_id, batch_id, csv_value),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO import_batch_account
+                  (batch_id, csv_value, account_id, row_count, was_skipped)
+                VALUES (?, ?, ?, ?, 0)
+                """,
+                (batch_id, csv_value, account_id, count),
+            )
+
+    snapshot = safe_json_dict(batch["config_snapshot"])
+    summary = snapshot.get(IMPORT_SUMMARY_KEY)
+    if isinstance(summary, dict):
         summary["duplicate_headers"] = headers
         if "duplicate_rows" in summary:
             summary["duplicate_rows"] = remaining_rows
         summary["deduped_count"] = len(remaining_rows)
         summary["duplicate_count"] = len(remaining_rows)
-        summary["imported_count"] = int(summary.get("imported_count") or 0) + imported_now
+        summary["imported_count"] = int(summary.get("imported_count") or 0) + len(imported_ids)
         # Rows the file accounted for, as `refresh_batch_totals` sums them: the ones that added nothing
         # to the ledger without being duplicates in the report are still rows of the file.
         summary["total_rows"] = (
@@ -4728,10 +4731,39 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
         )
         snapshot[IMPORT_SUMMARY_KEY] = summary
         save_batch_snapshot(conn, batch_id, snapshot)
-        conn.execute(
-            "UPDATE import_batch SET deduped_count = ? WHERE id = ?",
-            (len(remaining_rows), batch_id),
-        )
+    conn.execute(
+        "UPDATE import_batch SET deduped_count = ? WHERE id = ?",
+        (len(remaining_rows), batch_id),
+    )
+    return result
+
+
+@router.post("/batches/{batch_id}/duplicates/import")
+def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        if not isinstance(snapshot.get(IMPORT_SUMMARY_KEY), dict):
+            raise HTTPException(status_code=400, detail="Batch does not have duplicate details")
+
+        _headers, duplicate_rows = _load_batch_duplicate_details(conn, batch)
+        if not duplicate_rows:
+            raise HTTPException(status_code=400, detail="Batch has no duplicate rows to import")
+
+        selected_rows = set(int(row) for row in (body.row_numbers or []))
+        if not body.import_all and not selected_rows:
+            raise HTTPException(status_code=400, detail="Choose duplicates to import")
+
+        result = import_held_rows(conn, batch_id, None if body.import_all else selected_rows)
+        imported_ids = result["imported_ids"]
+        if not imported_ids:
+            raise HTTPException(status_code=400, detail="Selected duplicates cannot be imported from this batch")
 
     # The same soft-duplicate sweep the main import path runs, so user-driven "force import these
     # duplicates" rows are cross-checked against unrelated accounts too — after the transaction above has
@@ -4752,21 +4784,199 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
     # And `exclude_pairs`, so the sweep does not hand back the very pair "import anyway" answered. The
     # pair, not the row: a forced row is an ordinary transaction that may duplicate something *else*, and
     # this is its only backward look at what already existed.
-    if imported_ids:
-        with get_db() as conn:
-            mark_import_suspects(conn, batch_id, txn_ids=imported_ids, exclude_pairs=settled_pairs)
-        from .amazon import match_orders_after_ingest  # lazy: avoid the core↔amazon import cycle
-        match_orders_after_ingest(get_db(), txn_ids=imported_ids)
-        pair_refunds_after_ingest(get_db())
-        pair_after_ingest(get_db())
-        settle_owed_rescans()
+    with get_db() as conn:
+        mark_import_suspects(conn, batch_id, txn_ids=imported_ids, exclude_pairs=result["settled_pairs"])
+    from .amazon import match_orders_after_ingest  # lazy: avoid the core↔amazon import cycle
+    match_orders_after_ingest(get_db(), txn_ids=imported_ids)
+    pair_refunds_after_ingest(get_db())
+    pair_after_ingest(get_db())
+    settle_owed_rescans()
 
     return {
         "batch_id": batch_id,
-        "imported_count": imported_now,
-        "remaining_duplicate_count": len(remaining_rows),
-        "not_importable_count": not_importable_count,
+        "imported_count": len(imported_ids),
+        "remaining_duplicate_count": result["remaining_count"],
+        "not_importable_count": result["not_importable_count"],
     }
+
+
+def _held_row_label(entry: dict) -> str:
+    """The source value a held row was judged under: a file row's account-column value, or the provider
+    account label a sync recorded in the row's values (a sync payload names no `csv_value`)."""
+    payload = entry.get("txn_payload") or {}
+    if "csv_value" in payload:
+        return str(payload.get("csv_value") or "").strip()
+    return str((entry.get("values") or {}).get("Account") or "").strip()
+
+
+def _rejudge_context(conn, batch, entries: list[dict], pending_batch_ids: list[str]):
+    """The dedupe context and source-value resolver for judging a batch's held rows as a fresh import of
+    that batch would judge them today.
+
+    A sync card is judged under its connection's current mapping and without the connection's own coverage
+    or cards, exactly as a sync is (`build_connection_dedupe`). A file, or a card whose connection is gone,
+    is judged on the accounts and labels its held payloads record, under its data source, with its own
+    rows withheld — they were not in the ledger when the file was judged. Either way the coverage of
+    `pending_batch_ids`, the files whose own held rows are still to be judged, is withheld."""
+    connection = conn.execute(
+        "SELECT * FROM connection WHERE id = ?", (batch["connection_id"],),
+    ).fetchone() if batch["connection_id"] else None
+    if connection is not None:
+        dedupe = build_connection_dedupe(conn, connection, exclude_coverage_batch_ids=pending_batch_ids)
+        labels = dedupe.label_by_account
+
+        def connection_label(entry: dict) -> str:
+            account_id = str((entry.get("txn_payload") or {}).get("account_id") or "")
+            return labels.get(account_id) or _held_row_label(entry)
+
+        return dedupe.context, connection_label
+
+    account_by_label: dict[str, Optional[str]] = {}
+    for entry in entries:
+        account_by_label.setdefault(_held_row_label(entry), entry["txn_payload"].get("account_id"))
+    snapshot = safe_json_dict(batch["config_snapshot"])
+    context = build_dedupe_context(
+        conn,
+        source_values=account_by_label.keys(),
+        account_by_source_value=account_by_label,
+        fallback_account_id=snapshot.get("account_id"),
+        exclude_batch_ids=[batch["id"]],
+        exclude_coverage_batch_ids=pending_batch_ids,
+        source_id=batch["profile_id"],
+    )
+    return context, _held_row_label
+
+
+def rejudge_orphaned_rejections(conn) -> dict[str, list[str]]:
+    """Judge again every held rejection whose verdict rests on an import that is gone
+    (`orphaned_rejections`), as a fresh import of its file would judge it against today's ledger, and act
+    on the answer. The user made no decision here, so none is asked for: a rejection is a judgement
+    against what the ledger held, and when what it leaned on is gone the judgement is simply owed again.
+
+    - **Still a duplicate** (the ladder rejects it, or the source's own id names a row it holds): the
+      record stays and is re-pointed at what accounts for it now — reason, match and review sub-state are
+      rewritten, `reviewed_at` is left as it was.
+    - **No longer a duplicate**: imported through `import_held_rows`, the path Import anyway takes, and its
+      funding legs are paired as a fresh import pairs them.
+
+    Run wherever an import's rows leave the ledger (Undo, a re-import replacing a file, a connection's
+    Remove synced transactions), inside that operation's transaction, and once as the app-load catch-up
+    (`DUPLICATE_DETECTION_VERSION`). Files are taken oldest first, each against a context built after the
+    previous file's rows came in and without the coverage claims of the files still to come, which do not
+    hold until their own rows are dealt with. An enrichment the row no longer stands behind (it is being
+    imported, or now names a different match) is reversed.
+
+    Returns the rows imported, by batch, for `finish_restored_rejections` once the caller has committed."""
+    restored: dict[str, list[str]] = {}
+    orphaned = orphaned_rejections(conn)
+    for position, (batch_id, row_numbers) in enumerate(orphaned):
+        batch = conn.execute(
+            "SELECT id, profile_id, connection_id, config_snapshot FROM import_batch WHERE id = ?", (batch_id,),
+        ).fetchone()
+        wanted = set(row_numbers)
+        _headers, all_entries = _load_batch_duplicate_details(conn, batch)
+        entries = [
+            entry for entry in all_entries
+            if int(entry.get("row") or 0) in wanted
+            and isinstance(entry.get("txn_payload"), dict)
+            and entry["txn_payload"].get("account_id")
+            and entry["txn_payload"].get("date")
+            and entry["txn_payload"].get("amount") is not None
+        ]
+        if not entries:
+            continue
+        context, label_for = _rejudge_context(
+            conn, batch, entries, [later for later, _rows in orphaned[position + 1:]],
+        )
+        source_ids = (
+            SourceTransactionIds.load(conn, batch["profile_id"], exclude_batch_id=batch_id)
+            if not batch["connection_id"] else None
+        )
+
+        to_import: set[int] = set()
+        repointed: list[tuple[int, str, dict]] = []
+        for entry in entries:
+            payload = entry["txn_payload"]
+            row_number = int(entry.get("row") or 0)
+            source_txn_id = payload.get("source_transaction_id") or None
+            id_match = source_ids.claim(
+                source_txn_id, amount=payload["amount"], is_pending=bool(payload.get("is_pending")),
+            ) if source_ids else None
+            if id_match:
+                reason = ID_MATCH_REASON if id_match.kind == "same" else AMBIGUOUS_ID_MATCH_REASON
+                repointed.append((row_number, reason, held_row_summary(id_match.row)))
+                continue
+            label = label_for(entry)
+            verdict = evaluate_duplicate(
+                context=context,
+                receiving_account_id=payload["account_id"],
+                csv_value=label,
+                content_hash=payload.get("content_hash") or "",
+                parsed_date=payload["date"],
+                amount=float(payload["amount"]),
+                scope_id=context.scope_id_for(payload["account_id"], label),
+                txn_payload=payload,
+                posted_date=payload.get("posted_date"),
+                refuted=(lambda txn_id, sid=source_txn_id: source_ids.refutes(txn_id, sid)) if source_ids else None,
+            )
+            if verdict.hard_reject:
+                repointed.append((row_number, verdict.reason, verdict.matched or {}))
+            else:
+                to_import.add(row_number)
+
+        # The batch's own claims, as the import weighed them, decide which near-date guesses are shown.
+        untouched = [entry.get("matched_transaction") or {} for entry in all_entries
+                     if int(entry.get("row") or 0) not in wanted]
+        release_contested_candidates([matched for _row, _reason, matched in repointed] + untouched)
+
+        enrichments = {
+            int(r["row_number"]): r["enriched_txn_id"] for r in conn.execute(
+                "SELECT row_number, enriched_txn_id FROM import_batch_duplicate "
+                "WHERE batch_id = ? AND enriched_at IS NOT NULL",
+                (batch_id,),
+            ).fetchall()
+        }
+        for row_number, reason, matched in repointed:
+            if row_number in enrichments and enrichments[row_number] not in matched_existing_txn_ids(matched):
+                undo_duplicate_enrichment(conn, batch_id, row_number)
+            conn.execute(
+                """
+                UPDATE import_batch_duplicate
+                SET    reason = ?, matched_transaction_json = ?, review_substate = ?
+                WHERE  batch_id = ? AND row_number = ?
+                """,
+                (reason, json.dumps(matched), coverage_review_substate(matched), batch_id, row_number),
+            )
+        for row_number in to_import & enrichments.keys():
+            undo_duplicate_enrichment(conn, batch_id, row_number)
+
+        if to_import:
+            imported_ids = import_held_rows(conn, batch_id, to_import)["imported_ids"]
+            if imported_ids:
+                # The held payload carries the categorization of the day the file was imported. Rules made
+                # since apply to every row already in the ledger, so they apply to these as they arrive.
+                recategorize_all(conn, txn_ids=imported_ids)
+                suppress_batch_funding_legs(conn, batch_id, txn_ids=imported_ids)
+                restored[batch_id] = imported_ids
+    return restored
+
+
+def finish_restored_rejections(restored: dict[str, list[str]]) -> None:
+    """The post-commit passes a fresh import runs over its rows, for the rejections
+    `rejudge_orphaned_rejections` brought in: the full duplicate sweep, promotion included — unlike Import
+    anyway, no one has overruled anything here, so an exact match inside a merged group is confirmed as a
+    fresh import would confirm it — then the marketplace, refund and wallet-funding pairings. Each opens its
+    own connection, after the caller's transaction, for the reason given on `sweep_import_suspects`."""
+    if not restored:
+        return
+    for batch_id, txn_ids in restored.items():
+        with get_db() as conn:
+            sweep_import_suspects(conn, batch_id, txn_ids=txn_ids)
+    from .amazon import match_orders_after_ingest  # lazy: avoid the core↔amazon import cycle
+    match_orders_after_ingest(get_db(), txn_ids=[txn_id for ids in restored.values() for txn_id in ids])
+    pair_refunds_after_ingest(get_db())
+    pair_after_ingest(get_db())
+
 
 @router.get("/batches")
 def list_batches():
@@ -5666,6 +5876,8 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         )
         if batch["use_imported_categories"]:
             _remove_imported_batch_categories(conn, batch_id)
+        restored = rejudge_orphaned_rejections(conn)
+    finish_restored_rejections(restored)
     settle_owed_rescans()
     compact_if_worthwhile(reason="undid an import")
 

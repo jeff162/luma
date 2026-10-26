@@ -76,14 +76,16 @@ def own_card_ids(conn: sqlite3.Connection, connection_id: str) -> list[str]:
     ]
 
 
-def build_connection_dedupe(conn: sqlite3.Connection, connection, adapter=None) -> ConnectionDedupe:
+def build_connection_dedupe(conn: sqlite3.Connection, connection, adapter=None, *,
+                            exclude_coverage_batch_ids=None) -> ConnectionDedupe:
     """Assemble the dedupe context for one connection, from its account mapping.
 
     The connection excludes **its own** coverage claim: a delta inside that range is a late-posting
     charge the provider has only now reported, not a re-import of a range we already asked for. Its own
     sync cards are excluded for the same reason — and, in a re-scan, because a row must not be compared
     against itself. Coverage from *other* sources — a Monarch CSV, another connection — is exactly what
-    should reject these rows, and does.
+    should reject these rows, and does. `exclude_coverage_batch_ids` is passed through to
+    `build_dedupe_context`, for re-judging held rejections.
     """
     inputs = dedupe_inputs_for_connection(conn, connection["id"])
     context = build_dedupe_context(
@@ -93,6 +95,7 @@ def build_connection_dedupe(conn: sqlite3.Connection, connection, adapter=None) 
         compare_targets=inputs["compare_targets"],
         alias_values=inputs["alias_values"],
         exclude_batch_ids=own_card_ids(conn, connection["id"]),
+        exclude_coverage_batch_ids=exclude_coverage_batch_ids,
         exclude_connection_ids=[connection["id"]],
     )
     return ConnectionDedupe(

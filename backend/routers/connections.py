@@ -257,7 +257,11 @@ def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
 
         # Lazy, as elsewhere for this module: core.py pulls in many services, and a connection with
         # nothing synced never needs it.
-        from backend.routers.import_export.core import undo_batches
+        from backend.routers.import_export.core import (
+            finish_restored_rejections,
+            rejudge_orphaned_rejections,
+            undo_batches,
+        )
 
         result = undo_batches(conn, card_ids)
         if card_ids:
@@ -275,6 +279,10 @@ def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
             """,
             (connection_id,),
         )
+        # After the coverage clear: rows other sources rejected against this connection's are judged again
+        # against the ledger without them.
+        restored = rejudge_orphaned_rejections(conn)
+    finish_restored_rejections(restored)
     settle_owed_rescans()
     compact_if_worthwhile(reason="removed a connection's synced transactions")
 

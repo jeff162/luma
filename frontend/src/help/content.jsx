@@ -3698,7 +3698,10 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Both directions are reversible. A row rejected at import never reached the ledger,
-          and <strong>Import anyway</strong> brings it in. A transaction that was imported and removed
+          and <strong>Import anyway</strong> brings it in. A rejection lasts only as long as the import it
+          was made against: undoing or replacing that file (or removing a connection&apos;s synced
+          transactions) checks the row again, and it comes in unless something else in the ledger still
+          accounts for it. A transaction that was imported and removed
           afterwards is listed under <strong>Removed later</strong>, and <strong>Restore</strong> puts
           it back &mdash; see{' '}
           <HelpLink to="/help/removed-as-duplicates">a transaction that was imported, then

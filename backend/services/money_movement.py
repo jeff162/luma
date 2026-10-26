@@ -382,21 +382,29 @@ def delete_money_movement_rules(conn: sqlite3.Connection, type_values) -> int:
     return deleted
 
 
-def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict:
+def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str, *,
+                                txn_ids: Optional[list[str]] = None) -> dict:
     """Pair and suppress the batch's wallet funding legs. Returns
     ``{"suppressed": [ {leg_id, counterpart_id, amount, date, leg_type, recognized_type}, … ],
        "unrecognized_types": [sorted str]}`` — the count is ``len(suppressed)``.
 
     Each suppressed leg is recategorized into the excluded "Money movement" category and linked to its
     purchase (or, for a refund's withdrawal, its refund); the leg's prior categorization is stashed in the
-    link metadata for reversal."""
-    rows = conn.execute(
-        """SELECT id, account_id, date, amount, display_name, merchant_name, raw_name, import_evidence_json,
-                  category_id, category_source, category_overridden
-           FROM   txn
-           WHERE  import_batch_id = ? AND trashed_at IS NULL""",
-        (batch_id,),
-    ).fetchall()
+    link metadata for reversal.
+
+    `txn_ids` narrows the pass to rows added to a batch after its import (rejections brought back in), so
+    rows the import already paired are not paired a second time."""
+    wanted = None if txn_ids is None else set(txn_ids)
+    rows = [
+        row for row in conn.execute(
+            """SELECT id, account_id, date, amount, display_name, merchant_name, raw_name, import_evidence_json,
+                      category_id, category_source, category_overridden
+               FROM   txn
+               WHERE  import_batch_id = ? AND trashed_at IS NULL""",
+            (batch_id,),
+        ).fetchall()
+        if wanted is None or row["id"] in wanted
+    ]
 
     pairs = _referenced_pairs(rows)
     paired = {row["id"] for leg, counterpart, _role in pairs for row in (leg, counterpart)}

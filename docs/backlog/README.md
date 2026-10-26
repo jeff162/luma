@@ -126,9 +126,9 @@ scale — rather than by feature.
   moving from Quicken (added 2026-10-23), mapping-free too, with splits and transfers. SimpleFIN — the Plaid-parallel connection track that
   shared this file — shipped 2026-08-07 and everything it taught is in
   [`../building-a-connector.md`](../building-a-connector.md).
-- [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
-  deduped rows when a contributing import is undone, and a duplicate-resolution history view + batch
-  undo. Both convenience only — per-row restore already prevents loss. Also holds two measured/scoped
+- [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** A
+  duplicate-resolution history view + batch undo, convenience only — per-row restore already prevents
+  loss. Also holds two measured/scoped
   deferrals: bank-side type prefixes, and letting a coverage reject rest on the actual twin rather than
   on whichever same-amount row filled the candidate slot (the report half of that one shipped).
 - [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not

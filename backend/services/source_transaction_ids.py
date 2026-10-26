@@ -68,10 +68,14 @@ class SourceTransactionIds:
     claimed: set[str] = field(default_factory=set)
 
     @classmethod
-    def load(cls, conn: sqlite3.Connection, profile_id: Optional[str]) -> Optional["SourceTransactionIds"]:
+    def load(cls, conn: sqlite3.Connection, profile_id: Optional[str], *,
+             exclude_batch_id: Optional[str] = None) -> Optional["SourceTransactionIds"]:
         """The source's rows, trashed ones included — a row the user removed is still the record of that
         transaction, and an import naming it again must not bring it back. None without a data source:
-        a one-off file has no scope to match ids in, though it still stores them."""
+        a one-off file has no scope to match ids in, though it still stores them.
+
+        `exclude_batch_id` leaves out one file's own rows, for re-judging that file's held rejections:
+        its rows were not in the ledger when those rows were judged, as with any import."""
         if not profile_id:
             return None
         index = cls()
@@ -79,8 +83,8 @@ class SourceTransactionIds:
             """SELECT t.id, t.source_transaction_id, t.amount, t.is_pending, t.date, t.raw_name,
                       t.merchant_name, t.display_name, t.account_id, t.import_batch_id
                FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
-               WHERE  b.profile_id = ?""",
-            (profile_id,),
+               WHERE  b.profile_id = ? AND b.id IS NOT ?""",
+            (profile_id, exclude_batch_id),
         ).fetchall():
             row = dict(r)
             index.rows_by_txn[row["id"]] = row

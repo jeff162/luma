@@ -474,7 +474,13 @@ def rescan_duplicates_for_detection_change():
 
     A no-op on every load but the first after a rule change, so it is safe to call unconditionally. Pairs
     the user has already judged are skipped, so a bump surfaces what was never examined without re-asking
-    anything that was."""
+    anything that was.
+
+    Held rejections whose reason is gone are judged again first (`rejudge_orphaned_rejections`), so the
+    rows that brings in are part of the ledger the rescan examines."""
+    # Lazy: core.py pulls in the whole import package, which only a due catch-up needs.
+    from backend.routers.import_export.core import finish_restored_rejections, rejudge_orphaned_rejections
+
     # One rescan at a time: two tabs loading together would otherwise both read the old version and both
     # rescan the whole ledger.
     with get_db() as conn:
@@ -483,6 +489,10 @@ def rescan_duplicates_for_detection_change():
     with single_runner("duplicate_rescan") as claimed:
         if not claimed:
             return {"skipped": True, "reason": "scan_in_progress"}
+        with get_db() as conn:
+            restored = rejudge_orphaned_rejections(conn)
+        finish_restored_rejections(restored)
+        settle_owed_rescans()
         with get_db() as conn:
             return maybe_rescan_for_detection_change(conn)
 
