@@ -254,14 +254,17 @@ That failure is hard to spot. A helper that ignores a bad response leaves the AP
 spec fails much later, somewhere else, waiting for UI that never appears.
 
 **The suite runs in phases, set by the `projects` list in `playwright.config.js`**, and the comment
-there explains why. `app` runs first and holds every spec that reads the demo ledger. A setup spec then
-clears the demo data, and the phases after it need that empty tenant and run one at a time. The npm
+there explains why. `app` runs first and holds every spec that reads the demo ledger. `rule-review`
+runs next, alone, and reloads the demo before each of its tests. A setup spec then clears the demo
+data, and the phases after it need that empty tenant and run one at a time. The npm
 scripts pick phases with `--project`; `package.json` shows which ones the routine `ui:test` runs.
 
 Put a new spec in `app` unless it needs an empty tenant. If it does, give it its own project at the end
 of the chain, or add it to a phase whose specs it can't disturb. Specs within a phase still run in
 parallel, so a spec that reads the demo data should leave it as it found it, and a spec that has to
-change it should restore it afterwards (see `categorize.spec.js`).
+change it should restore it afterwards (see `categorize.spec.js`). A spec whose changes are too broad
+to put back goes in a phase of its own before the clear and reloads the demo instead (see
+`rule-suggestions-actions.spec.js`).
 
 ## What is tested, what isn't, and why
 

@@ -150,7 +150,9 @@ dataset's worked examples each have a spec: splits, reimbursables, attached
 documents, recurring signals, cash flow, and the rule-overlap check
 (`splits` / `reimbursements` / `documents` / `recurring` / `cash-flow` /
 `rule-overlaps`), alongside tag inheritance, inline categorize, dashboard
-render and cross-account duplicate review. The five rule-*collision* flows above
+render and cross-account duplicate review. The Generate Rules review's views and
+actions have theirs too (`rule-suggestions` / `rule-suggestions-actions`), but not
+a bulk accept that collides with existing rules. The five rule-*collision* flows above
 are what remains — they need a rule set built for the collision, which the demo
 deliberately does not carry.
 
@@ -267,4 +269,3 @@ Standing one up is the real work; the sections are large and lean on `UserPrefer
 `AppSessionContext`, and a lot of `api` surface. Worth doing as its own task rather than as a rider on
 whatever feature lands there next. `VaultSettingsDialog.test.jsx` is the closest existing example of
 mounting one of this file's dialogs with mocked `api`.
-

@@ -15,8 +15,8 @@ component into prop-driven presentational components — analogous to how `Impor
 `ImportUploadStage` / `ImportHistorySection` were carved out.
 
 This is the harder half (the easy, self-contained pieces are already extracted — see below), so it's its
-own later pass and **needs manual click-through to verify** (there are no frontend unit tests for this
-surface).
+own later pass. The browser specs `rule-suggestions.spec.js` and `rule-suggestions-actions.spec.js`
+cover the review's views and actions, so they are the check that each extraction changed no behavior.
 
 ## Already done (don't redo)
 
@@ -36,6 +36,5 @@ green per step, vitest green):
 Keep state in the main component and pass it down to new prop-driven seams (the deliberate
 "`ImportHistorySection`" pattern — large prop surfaces are acceptable here, flagged as the spot to
 revisit only if grouped props are preferred). One extraction per commit, behavior-preserving; verify
-each with `cd frontend && npx eslint <files> && npm run build`, then manual click-through of the
-Generate Rules review (pending / conflicts / older / accepted / deferred / discarded / total, bulk
-select, the rule editor, the matching-transactions report).
+each with `cd frontend && npx eslint <files> && npm run build` and the two specs above. The specs do
+not open the matching-transactions report, so check that by hand after an extraction that touches it.

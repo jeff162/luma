@@ -84,12 +84,20 @@ export default defineConfig({
       // other down until pages miss their deadlines: docs/scale-and-limits.md → "Many sessions on one
       // server". `npm run ui:stress` raises it to 10 through PLAYWRIGHT_APP_WORKERS to measure exactly that.
       workers: Number(process.env.PLAYWRIGHT_APP_WORKERS) || 3,
-      testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|watched-folders|reconciliation-report|paypal-statement-import)\.spec\.js/,
+      testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|watched-folders|reconciliation-report|paypal-statement-import|rule-suggestions-actions)\.spec\.js/,
+    },
+    // The rule-suggestion actions write rules and categories across the ledger, and each test reloads the
+    // demo to start clean, which would pull the ledger out from under any spec running beside it. So it
+    // runs alone, after every spec that reads the demo and before the lane that clears it.
+    {
+      name: 'rule-review',
+      testMatch: /rule-suggestions-actions\.spec\.js/,
+      dependencies: ['app'],
     },
     {
       name: 'demo-cleared',
       testMatch: /demo-clear\.setup\.js/,
-      dependencies: ['app'],
+      dependencies: ['rule-review'],
     },
     {
       name: 'import',
