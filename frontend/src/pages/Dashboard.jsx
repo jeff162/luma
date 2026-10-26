@@ -2036,16 +2036,14 @@ export default function Dashboard() {
   // section of lib/trendBuckets.js for the two modes.
   const [singleTrendRows, setSingleTrendRows] = useState([])
   const [spanTrend, setSpanTrend] = useState({ key: null, rows: [] })
-  // The chooser's pick; null follows the selection's default. A pick survives the navigation the chart
-  // itself does — a bar click, the back-step — and is dropped when the period is chosen any other way,
-  // where it would describe a different selection. `keepTrendGrainForDateRef` names the date such a
-  // chart navigation is about to set, which is how the reset below tells the two apart.
+  // The chooser's pick; null follows the selection's default. A pick is a way of viewing history rather
+  // than part of the selection, so it holds across every date change until the page is left — a pick
+  // that does not apply to the current selection falls back to its default (`effectiveTrendGrain`).
   const [trendGrainChoice, setTrendGrainChoice] = useState(null)
   // How far back every multi-period chart on the page reaches — the single-period trend here, and the
   // Annual totals / Yearly trend charts on the Trends tab. One persisted setting for all of them, read
   // here so the charts in a frame always agree about it (`lib/trendSpan.js`).
   const [trendSpanPref, setTrendSpanPref] = useUserPreference(TREND_SPAN_PREF_KEY, TREND_SPAN_ALL)
-  const keepTrendGrainForDateRef = useRef(undefined)
   // The date a drilled trend's bar (or its back-step) is about to set, so that change keeps the drill.
   const keepDrillForDateRef = useRef(undefined)
   const [level, setLevel] = useState('groups')
@@ -2416,13 +2414,6 @@ export default function Dashboard() {
     if (mode !== 'single' || dateResolving) return
     loadSpanTrend().catch(() => { })
   }, [mode, dateResolving, loadSpanTrend])
-
-  useEffect(() => {
-    const keep = keepTrendGrainForDateRef.current
-    keepTrendGrainForDateRef.current = undefined
-    if (keep !== undefined && sameDateRange(keep, filters.date)) return
-    setTrendGrainChoice(null)
-  }, [filters.date])
 
   // Null while the same-span totals for the current buckets are still in flight; the chart then keeps
   // the bars it had rather than drawing the new buckets empty.
@@ -3370,12 +3361,10 @@ export default function Dashboard() {
                     // back-step can undo it — a FilterBar pick is a visible choice and does not record.
                     // The period's transactions open from the header's "View transactions" button, not a
                     // bar double-click (Recharts bars can't be double-clicked reliably).
-                    keepTrendGrainForDateRef.current = date
                     keepDrillForDateRef.current = date
                     pinDateFromChart(date)
                   }
                   function handleTrendBack() {
-                    keepTrendGrainForDateRef.current = previousDate
                     keepDrillForDateRef.current = previousDate
                     goBackDate()
                   }

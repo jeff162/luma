@@ -408,7 +408,7 @@ async function trendClickReport(page) {
 // click once replaced it with the back-step alone, leaving no way into a selected year's months; and a
 // to-date selection could only be compared against earlier periods rounded to whole months. This walks
 // the reported path: a to-date pick, its exact same-span comparison, a bar click and the step back
-// keeping that choice, and a FilterBar pick dropping it. Month to date rather than year to date, because
+// keeping that choice, and a FilterBar pick keeping it too. Month to date rather than year to date, because
 // the demo ledger's spending sits in one year but several months.
 test('single-period trend keeps its grain chooser through bar clicks and compares exact spans', async ({ page }) => {
   await instrumentTrendClick(page)
@@ -491,10 +491,11 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   await expect(datePicker).toHaveText(/Month to date/)
   await expect(grain).toHaveValue('span')
 
-  // A period chosen in the FilterBar is a new selection, and the chooser goes back to its default.
+  // A pick holds through a FilterBar pick too, where the selection's default would differ: Last month
+  // opens monthly.
   await grain.selectOption('year')
   await pickPreset('Last month')
-  await expect(grain).toHaveValue('month')
+  await expect(grain).toHaveValue('year')
   await expect(grain.locator('option')).toHaveText(['Monthly', 'Quarterly', 'Yearly'])
 })
 
