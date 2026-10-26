@@ -86,12 +86,11 @@ function clearStoredBulkSelection(scopeId) {
   sessionStore.remove(BULK_SELECTION_STORAGE_KEY)
 }
 
-// Small text-style buttons (Select all / Clear) used inside the bulk-actions bar.
+const merchantGroupKey = group => group.key
+
 // A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
 // saving it re-partitions the review (see `docs/data-model.md` → *Rule suggestions*), so the
 // card labels its editor for that and routes the save through the refinement endpoint.
-const merchantGroupKey = group => group.key
-
 function isRefinedPendingSuggestion(suggestion) {
   return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'
 }
