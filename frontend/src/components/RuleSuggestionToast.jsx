@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Badge, Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
+import { Badge, Button, DialogActions, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
@@ -25,6 +25,10 @@ function RuleModal({ prompt, onSave, onCancel }) {
   // A save that collided with another rule on the same matcher and is awaiting the user's confirm to
   // merge. Shape: { ruleData, applyToExisting, existingRuleId }.
   const [pendingMerge, setPendingMerge] = useState(null)
+  // The form's own actions are hidden so Save and Cancel sit in a footer that stays in view.
+  const formRef = useRef(null)
+  const [draftState, setDraftState] = useState({ data: null, canSave: false })
+  const [saving, setSaving] = useState(false)
   // Whether the load has run long enough that opening on a loading state beats showing nothing.
   const loadSlow = useBusyIndicator(loading, { delayMs: PAINT_GATE_DELAY_MS })
 
@@ -103,6 +107,20 @@ function RuleModal({ prompt, onSave, onCancel }) {
     onSave({ applyToExisting, ruleData, ruleId, updatedExisting: created?.status === 'duplicate', transactionIds: applied?.transaction_ids })
   }
 
+  async function submit() {
+    const current = formRef.current?.getDraftState?.() || draftState
+    if (!current.canSave || saving) return
+    setSaving(true)
+    try {
+      await handleSave(current.data)
+    } catch (err) {
+      setError(err.message || 'Failed to save rule')
+    } finally {
+      // On a collision the dialog stays open, where a leaked flag would wedge Save.
+      setSaving(false)
+    }
+  }
+
   async function confirmMerge() {
     const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
     if (fromEdit) {
@@ -127,8 +145,8 @@ function RuleModal({ prompt, onSave, onCancel }) {
 
   return (
     <OverlayBackdrop zIndex={900} tint="rgba(0,0,0,0.5)" blur={0}>
-      <FloatingPanel style={{ width: 540, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+      <FloatingPanel style={{ width: 540, maxWidth: '94vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px', flexShrink: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>⚙️ Create categorization rule</div>
           <IconButton size="large" aria-label="Close" onClick={onCancel}>×</IconButton>
         </FloatingPanelHeader>
@@ -137,6 +155,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
         ) : (
           <>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {error ? (
             <div style={{
               margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
@@ -162,6 +181,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
             </div>
           ) : null}
           <RuleForm
+            ref={formRef}
             initialValues={existingRule ? {
               ...ruleFormInitialValues(existingRule),
               catId: prompt.categoryId || existingRule.category_id || '',
@@ -180,9 +200,17 @@ function RuleModal({ prompt, onSave, onCancel }) {
             accounts={accounts}
             onSave={handleSave}
             onCancel={onCancel}
-            saveLabel={existingRule ? 'Save changes' : 'Save rule'}
+            hideFooterActions
+            onDraftChange={setDraftState}
             transactionData={prompt.transactionData}
           />
+          </div>
+          <DialogActions style={{ flexShrink: 0 }}>
+            <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
+            <Button onClick={submit} disabled={saving || !draftState.canSave}>
+              {saving ? 'Saving…' : (existingRule ? 'Save changes' : 'Save rule')}
+            </Button>
+          </DialogActions>
           </>
         )}
       </FloatingPanel>

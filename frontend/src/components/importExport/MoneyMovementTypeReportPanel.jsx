@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { Button, Spinner, FloatingPanel, FloatingPanelHeader, OverlayBackdrop } from '../ui.jsx'
+import { Spinner, FloatingPanel, FloatingPanelHeader, IconButton, OverlayBackdrop } from '../ui.jsx'
 import TransactionListTable from '../TransactionListTable.jsx'
 
 /*
@@ -52,7 +52,7 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
             <div style={{ fontSize: 16, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{type}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>Transactions on this source carrying this PayPal type</div>
           </div>
-          <Button variant="secondary" onClick={onClose}>Close</Button>
+          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </FloatingPanelHeader>
 
         <div style={{ padding: '8px 16px 16px', overflowY: 'auto' }}>

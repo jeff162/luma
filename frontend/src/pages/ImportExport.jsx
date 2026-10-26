@@ -17,7 +17,8 @@ import {
   AppConfirmDialog,
   AppNoticeDialog,
   AppTextEntryDialog,
-  OverlayBackdrop, LinkButton
+  OverlayBackdrop, LinkButton,
+  FloatingPanelHeader, IconButton, DialogActions,
 } from '../components/ui.jsx'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
@@ -3140,7 +3141,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       {/* Held while the unreadable-rows viewer, which floats above this, still needs the staged file. */}
       {stage === 'review-rows' ? <OverlayBackdrop zIndex={IMPORT_IN_PROGRESS_Z_INDEX} /> : null}
 
-      {/* No way out but Import and Cancel: neither the backdrop nor Escape dismisses it. */}
+      {/* No way out but Import and Cancel (the × is Cancel): neither the backdrop nor Escape dismisses it. */}
       {stage === 'mapping' && preview && (
         <OverlayBackdrop zIndex={IMPORT_IN_PROGRESS_Z_INDEX} alignItems="flex-start">
         <div
@@ -3153,6 +3154,12 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
           }}
         >
+        <FloatingPanelHeader style={{ padding: '16px 24px', flexShrink: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>
+            {importFiles.length > 1 ? `Import ${importFiles.length} files` : 'Import file'}
+          </div>
+          <IconButton size="large" aria-label="Close" onClick={resetImport}>×</IconButton>
+        </FloatingPanelHeader>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 24 }}>
         {/* The column is a child of the scrolling body, not the body itself: as flex items of a
             height-limited container the cards would shrink to fit it instead of scrolling. */}
@@ -3681,7 +3688,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         </div>
 
           {/* The two ways out, pinned under the scrolling mapping so neither is a scroll away. */}
-          <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <DialogActions style={{ flexShrink: 0, padding: '14px 24px' }}>
+            <Button variant="secondary" onClick={resetImport}>Cancel</Button>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
               <Button
                 onClick={runImport}
@@ -3697,8 +3705,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     : `Import ${importableRowCount} rows`)}
               </Button>
             </span>
-            <Button variant="secondary" onClick={resetImport}>Cancel</Button>
-          </div>
+          </DialogActions>
         </div>
         </OverlayBackdrop>
       )}
@@ -3759,7 +3766,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                   loadingMore={rawViewerLoadingMore}
                 />
               ) : null}
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                 <Button variant="secondary" onClick={cancelTrailingDataReview} disabled={loading}>
                   Cancel
                 </Button>

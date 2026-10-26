@@ -95,22 +95,22 @@ export function DataSourceMismatchDialog({
                 </div>
               ) : null}
             </div>
-            <DialogActions align="center">
+            <DialogActions>
               <Button variant="secondary" onClick={onCloseChooser}>
                 Back
               </Button>
             </DialogActions>
           </>
         ) : (
-          <DialogActions align="center">
+          <DialogActions>
+            <Button variant="secondary" onClick={onCancel}>
+              Cancel
+            </Button>
             <Button variant="secondary" onClick={onChangeDataSource}>
               Change data source
             </Button>
             <Button variant="secondary" onClick={onConfirm}>
               Continue
-            </Button>
-            <Button variant="secondary" onClick={onCancel}>
-              Cancel
             </Button>
           </DialogActions>
         )}
@@ -166,7 +166,7 @@ export function MultipleSourceMatchDialog({
             />
           </div>
         </div>
-        <DialogActions align="center">
+        <DialogActions>
           <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
@@ -221,7 +221,7 @@ export function MultiFileSourceChooserDialog({ groups = [], unreadable = [], onP
             </div>
           ) : null}
         </div>
-        <DialogActions align="center">
+        <DialogActions>
           <Button variant="secondary" onClick={onCancel}>Cancel</Button>
         </DialogActions>
       </FloatingPanel>

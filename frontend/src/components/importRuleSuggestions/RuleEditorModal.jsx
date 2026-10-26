@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import RuleForm from '../RuleForm.jsx'
-import { Button } from '../ui.jsx'
+import { Button, DialogActions, IconButton } from '../ui.jsx'
 
 export function RuleEditorModal({
   suggestion,
@@ -130,7 +130,7 @@ export function RuleEditorModal({
     }
   }
 
-  function renderHeaderActions() {
+  function renderFooterActions() {
     if (draftOnly) {
       return (
         <Button
@@ -169,23 +169,26 @@ export function RuleEditorModal({
     const saveLabel = isAccepted ? 'Save' : matchOnly ? 'Save match' : 'Save rule'
     return (
       <>
-        <Button onClick={saveAction} disabled={working || !draftState.canSave}>
-          {working ? 'Saving…' : saveLabel}
-        </Button>
         <Button variant="secondary" onClick={cancelAction} disabled={working}>
           Cancel
+        </Button>
+        <Button onClick={saveAction} disabled={working || !draftState.canSave}>
+          {working ? 'Saving…' : saveLabel}
         </Button>
       </>
     )
   }
 
+  // The ×, like the backdrop, leaves the way Cancel or Close would.
+  function dismiss() {
+    if (working) return
+    if (isAccepted) onDiscard()
+    else handleCloseWithDraft()
+  }
+
   return (
     <div
-      onMouseDown={() => {
-        if (working) return
-        if (isAccepted) onDiscard()
-        else handleCloseWithDraft()
-      }}
+      onMouseDown={dismiss}
       style={{
         position: 'fixed',
         inset: 0,
@@ -249,9 +252,7 @@ export function RuleEditorModal({
               </Button>
             ) : null}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
-            {renderHeaderActions()}
-          </div>
+          <IconButton size="large" aria-label="Close" onClick={dismiss} disabled={working} style={{ flexShrink: 0 }}>×</IconButton>
         </div>
 
         <div style={{
@@ -311,6 +312,9 @@ export function RuleEditorModal({
             {error}
           </div>
         ) : null}
+        <DialogActions style={{ flexShrink: 0 }}>
+          {renderFooterActions()}
+        </DialogActions>
       </div>
     </div>
   )

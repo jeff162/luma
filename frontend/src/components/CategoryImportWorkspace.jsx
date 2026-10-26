@@ -1421,17 +1421,17 @@ export default function CategoryImportWorkspace({
             <div style={{ display: 'grid', gap: 8, minWidth: 'min(320px, 100%)', justifyItems: 'stretch', flex: '0 0 auto' }}>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                  <Button variant="secondary" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
+                  <Button size="compact" variant="secondary" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
                     {saving ? applyPendingLabel : applyLabel}
                   </Button>
-                  {onMinimize ? <Button variant="secondary" onClick={onMinimize}>Minimize</Button> : null}
-                  <Button variant="secondary" onClick={onClose}>Close</Button>
+                  {onMinimize ? <Button size="compact" variant="secondary" onClick={onMinimize}>Minimize</Button> : null}
+                  <Button size="compact" variant="secondary" onClick={onClose}>Close</Button>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                  <Button variant="secondary" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
-                  <Button variant="secondary" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
+                  <Button size="compact" variant="secondary" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
+                  <Button size="compact" variant="secondary" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
                 </div>
               </div>
             </div>

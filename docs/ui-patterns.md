@@ -97,7 +97,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   report). A toolbar under it carries what shapes which rows are listed (search, filter, sort).
 - **Refresh sits on the title.** `RefreshButton` goes straight after the title of what it reloads:
   `PageHeader` and `AppDialog` take it as `refresh`.
-- **Close is at the upper right** of a panel or dialog header.
+- **The close × goes at the upper right of the header**, where it stays reachable however far the body
+  scrolls. A small dialog whose buttons are always in view can do without one. Completion actions sit
+  in a footer pinned under the body.
 - **Wide data tables scroll; management lists reflow.** A table with hard column minimums scrolls
   horizontally inside its own region while the chrome around it wraps. A list the user navigates and
   drags never grows a horizontal scrollbar: one fluid column absorbs the slack.
@@ -113,6 +115,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Red follows *Confirmation and dismissal*.** `variant="danger"` is the final confirm of something that
   cannot be undone. `tone="danger"` reds the label of an irreversible action that is not itself that
   confirm, such as a row's permanent delete.
+- **Actions sit at the bottom right, Cancel first.** Cancel leads and the completion actions follow to
+  its right, primary last, so Cancel never sits between two ways of finishing. `DialogActions` lays them
+  out this way.
 - **Two sizes.** `regular` is the default everywhere, so every Save, Cancel and Close is one size. An
   action repeated on every row or card is `compact`, so a run of them reads as a quiet toolbar rather
   than as the surface's main verbs.

@@ -6,8 +6,8 @@
 // and the answer handed back is the one that was chosen.
 //
 // The rungs are selected by their `value` and the confirm button by its position, not by their labels.
-// A disposition value is the contract with the caller and the button order is deliberate (confirm
-// first); the sentences around them are copy, and matching copy tests nothing the behaviour depends on
+// A disposition value is the contract with the caller and the button order is the app's convention
+// (confirm last, Cancel before it); the sentences around them are copy, and matching copy tests nothing the behaviour depends on
 // while turning every wording edit into a red run.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,7 +43,7 @@ function show(account, props = {}) {
 }
 
 const rung = value => container.querySelector(`input[name="account-removal-disposition"][value="${value}"]`)
-const confirmButton = () => screen.getAllByRole('button')[0]
+const confirmButton = () => screen.getAllByRole('button').at(-1)
 
 describe('AccountRemovalDialog', () => {
   it('offers a merged child and a root the same two answers, moving first', () => {

@@ -968,10 +968,10 @@ function ProfileForm({
         borderRadius: floating ? '0 0 18px 18px' : 0,
         zIndex: floating ? 3 : undefined,
       }}>
+        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
         <Button onClick={handleSave} disabled={!canSave}>
           {isNew ? 'Create data source' : 'Save changes'}
         </Button>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )

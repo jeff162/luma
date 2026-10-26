@@ -307,6 +307,25 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
       {...chrome}
       onClose={onCancel}
       bodyPadding={0}
+      footer={(
+        <>
+          <label
+            title="Re-evaluate the transactions this rule previously categorized: rows this edit no longer covers revert (to another matching rule or uncategorized) instead of keeping this rule's old category. Off leaves existing categorizations as they are."
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', cursor: working ? 'not-allowed' : 'pointer' }}
+          >
+            <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={working} />
+            Re-evaluate transactions
+          </label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="secondary" onClick={onCancel} disabled={working}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={working || !draftState.canSave}>
+              {working ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
+        </>
+      )}
       header={(
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div>
@@ -315,31 +334,16 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
               Update conditions and actions without leaving the rules list
             </div>
           </div>
-          {/* The header is the drag handle; a press on a control here is a press, not the start of a drag. */}
-          <div
-            onMouseDown={event => event.stopPropagation()}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0, cursor: 'default' }}
+          {/* Destructive, so it sits apart from Save, and behind a confirm. Deleting from here saves opening
+              the rule, deciding against it, and hunting the same rule down in the list to remove it. */}
+          <IconButton
+            onClick={() => setConfirmDelete(true)}
+            disabled={working}
+            aria-label="Delete this rule"
+            style={{ marginLeft: 'auto', flexShrink: 0 }}
           >
-            <label
-              title="Re-evaluate the transactions this rule previously categorized: rows this edit no longer covers revert (to another matching rule or uncategorized) instead of keeping this rule's old category. Off leaves existing categorizations as they are."
-              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', cursor: working ? 'not-allowed' : 'pointer', marginRight: 4 }}
-            >
-              <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={working} />
-              Re-evaluate transactions
-            </label>
-            <Button onClick={handleSave} disabled={working || !draftState.canSave}>
-              {working ? 'Saving…' : 'Save changes'}
-            </Button>
-            <Button variant="secondary" onClick={onCancel} disabled={working}>
-              Cancel
-            </Button>
-            {/* Destructive, so it sits at the far end rather than beside Save, and behind a confirm.
-                Deleting from here saves opening the rule, deciding against it, and hunting the same rule
-                down in the list to remove it. */}
-            <IconButton onClick={() => setConfirmDelete(true)} disabled={working} aria-label="Delete this rule" style={{ marginLeft: 4 }}>
-              🗑
-            </IconButton>
-          </div>
+            🗑
+          </IconButton>
         </div>
       )}
     >

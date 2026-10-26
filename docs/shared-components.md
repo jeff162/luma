@@ -50,7 +50,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. | `components/detailShared.jsx` |
+| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. A form panel passes its Save and Cancel as `footer`, which stays pinned under the scrolling body. | `components/detailShared.jsx` |
 | `useRestorablePanelGeometry` | Remembering where the user left a floating panel. | `components/detailShared.jsx` |
 | `usePanelReveal` | A panel whose size settles after its content loads. | `components/detailShared.jsx` |
 | `DetailRangeControl` + `computeDetailRange` | The Month / Year / All-time selector of a drill list. | `components/detailShared.jsx` |

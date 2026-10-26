@@ -121,10 +121,10 @@ export default function AccountRemovalDialog({ account, accounts, onCancel, onSu
         borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
         actions={(
           <>
+            <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
             <Button variant="danger" onClick={() => onSubmit({ mode: DELETE })} disabled={busy}>
               Remove
             </Button>
-            <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
           </>
         )}
       />
@@ -146,6 +146,7 @@ export default function AccountRemovalDialog({ account, accounts, onCancel, onSu
       borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
       actions={(
         <>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button
             variant="danger"
             onClick={submit}
@@ -154,7 +155,6 @@ export default function AccountRemovalDialog({ account, accounts, onCancel, onSu
           >
             {chosen === DELETE ? `Delete ${transactionCount === 1 ? 'it' : 'them'} and remove` : 'Move and remove'}
           </Button>
-          <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
         </>
       )}
     >

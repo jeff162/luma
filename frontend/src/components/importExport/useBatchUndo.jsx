@@ -3,7 +3,7 @@
 
 import React, { useCallback, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { Card, Button, Spinner } from '../ui.jsx'
+import { AppDialog, Button, Spinner } from '../ui.jsx'
 import { EditedTransactionsWarning } from '../EditedTransactionsWarning.jsx'
 
 // The shared "undo an import batch" flow: a confirm dialog that first surfaces any transactions the user
@@ -40,26 +40,24 @@ export function useBatchUndo(onAfterUndo) {
     : 0
 
   const undoNode = undoTarget ? (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Card style={{ width: 480, maxHeight: '80vh', overflow: 'auto' }}>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Undo import: {undoTarget.filename}</div>
-        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>This will permanently delete {netCount} transactions.</div>
-        {undoLoading ? <Spinner /> : undoEdited.length > 0 ? (
-          <>
-            <EditedTransactionsWarning rows={undoEdited} />
-            <div style={{ display: 'flex', gap: 10 }}>
-              <Button variant="danger" onClick={() => confirmUndo(true)}>Delete all anyway</Button>
-              <Button variant="secondary" onClick={cancel}>Cancel</Button>
-            </div>
-          </>
-        ) : (
-          <div style={{ display: 'flex', gap: 10 }}>
+    <AppDialog
+      title={`Undo import: ${undoTarget.filename}`}
+      description={`This will permanently delete ${netCount} transactions.`}
+      onClose={cancel}
+      width={480}
+      actions={(
+        <>
+          <Button variant="secondary" onClick={cancel}>Cancel</Button>
+          {undoLoading ? null : undoEdited.length > 0 ? (
+            <Button variant="danger" onClick={() => confirmUndo(true)}>Delete all anyway</Button>
+          ) : (
             <Button variant="danger" onClick={() => confirmUndo(false)}>Delete {netCount} transactions</Button>
-            <Button variant="secondary" onClick={cancel}>Cancel</Button>
-          </div>
-        )}
-      </Card>
-    </div>
+          )}
+        </>
+      )}
+    >
+      {undoLoading ? <Spinner /> : undoEdited.length > 0 ? <EditedTransactionsWarning rows={undoEdited} /> : null}
+    </AppDialog>
   ) : null
 
   return { openUndo, undoNode }

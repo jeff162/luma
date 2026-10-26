@@ -51,7 +51,7 @@ test('editing a rule from the checkup keeps the checkup open, and both windows m
   expect(Math.round(after.x - before.x)).toBeLessThan(-60)
 
   // The editor's own Cancel, beside its Save; the page toolbar carries a Cancel of its own while an editor is open.
-  await page.getByRole('button', { name: 'Save changes' }).locator('xpath=following-sibling::button[1]').click()
+  await page.getByRole('button', { name: 'Save changes' }).locator('xpath=preceding-sibling::button[1]').click()
   await expect(editorTitle).toBeHidden()
   await expect(checkupTitle).toBeVisible()
 })

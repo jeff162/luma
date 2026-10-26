@@ -31,7 +31,7 @@ import { CLICKABLE_CHART_EVENTS } from '../lib/chartInteraction.js'
 import { monthLabel } from '../lib/utils.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
-import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
+import { DialogActions, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 import { isEditableTarget } from '../lib/uiInteractions.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
@@ -839,6 +839,8 @@ export function DetailPanelShell({
   // A body that lays out its own sections edge to edge (a form whose sections carry their own padding
   // and full-width dividers) passes 0, so the shell's inset does not double it.
   bodyPadding = '20px 24px',
+  // Actions pinned under the body, so a long form keeps its Save and Cancel in reach.
+  footer = null,
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
@@ -940,6 +942,11 @@ export function DetailPanelShell({
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: bodyPadding, display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
+        {footer ? (
+          <DialogActions align="between" style={{ flexShrink: 0, borderRadius: '0 0 11px 11px' }}>
+            {footer}
+          </DialogActions>
+        ) : null}
         {onResizeStart && PANEL_RESIZE_HANDLES.map(handle => (
           <div
             key={handle.dir}
