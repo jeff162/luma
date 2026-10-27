@@ -144,9 +144,6 @@ scale — rather than by feature.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
-- [lint-and-tooling.md](lint-and-tooling.md) — **deferred; the posture is in** `collaboration-notes.md` → *Working on the Code*. Two "enable → measure → triage → gate"
-  linter passes: raise eslint strictness beyond the narrow baseline, and make the aspirational **ruff**
-  config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
   post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for

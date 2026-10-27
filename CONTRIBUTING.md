@@ -320,9 +320,8 @@ suite run can't catch anything such an edit could break.
 `docs/backlog/test-coverage-gaps.md` is a **running checklist** of tests that are wanted but not yet
 written: HTTP-contract tests to back up direct-call unit tests, the rule-collision UI flows, component
 coverage for the shared interactive parts of the UI, and a check that fresh and migrated databases
-get the same schema. Delete an entry when
-its test lands. `docs/backlog/lint-and-tooling.md` holds the remaining vitest-matcher item, and
-`docs/backlog/refactor-audits.md` holds the audit's standing list of candidates.
+get the same schema. Delete an entry when its test lands. `docs/backlog/refactor-audits.md` holds the
+audit's standing list of candidates.
 
 ## Hooks and lint
 
