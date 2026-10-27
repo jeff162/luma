@@ -6,6 +6,8 @@ import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
+import ImportedFilesPopover from '../components/importRuleSuggestions/ImportedFilesPopover.jsx'
+import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
@@ -96,6 +98,10 @@ export default function ImportRuleSuggestions() {
     dismissResult: dismissRecategorizeResult,
   } = useRecategorize()
   const reviewScope = useMemo(() => ({ batchId, profileId }), [batchId, profileId])
+  const { openBatchDetail, panelsNode: batchDetailPanelsNode } = useBatchDetailPanels({
+    categories,
+    onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
+  })
 
   const batch = useMemo(
     () => batches.find(item => item.id === batchId) || null,
@@ -579,12 +585,21 @@ export default function ImportRuleSuggestions() {
     : isProfileContext
       ? (profile?.name || 'Data source')
       : (batch?.filename || 'Import')
+  const describeBatch = item => [formatImportedAt(item?.imported_at), formatImportSummary(item)].filter(Boolean).join(' · ')
+  const contextFiles = isSystemContext ? systemCleanBatches : profileBatches
+  const contextFilesLink = (
+    <ImportedFilesPopover
+      files={contextFiles}
+      label={`${contextFiles.length} imported file${contextFiles.length === 1 ? '' : 's'}`}
+      describeFile={describeBatch}
+      onOpenFile={openBatchDetail}
+    />
+  )
   const contextSummary = isSystemContext
-    ? `Using ${systemCleanBatches.length} imported file${systemCleanBatches.length === 1 ? '' : 's'
-    }.`
+    ? <>Using {contextFilesLink}.</>
     : isProfileContext
-      ? `${profileBatches.length} imported file${profileBatches.length === 1 ? '' : 's'} `
-      : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''} `
+      ? contextFilesLink
+      : `Imported ${describeBatch(batch)}`
   const emptyStateTitle = isSystemContext ? 'No categorized imports yet' : (isProfileContext ? 'Data source not found' : 'Import not found')
   const emptyStateDescription = isSystemContext
     ? 'Use the categories present in the data from Import to include an imported file in rule suggestions.'
@@ -821,6 +836,7 @@ export default function ImportRuleSuggestions() {
           </div>
         </>
       )}
+      {batchDetailPanelsNode}
     </div>
   )
 }

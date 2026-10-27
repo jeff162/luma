@@ -1946,6 +1946,10 @@ export const HELP_TOPICS = [
           same categorization on future, uncategorized data.
         </p>
         <p>
+          A review that draws on several files (all categorized imports, or a data source) names how many it
+          uses; clicking that count lists the files, and choosing one opens its transactions.
+        </p>
+        <p>
           The output of <strong>Generate rules</strong> is rules, not a
           re-categorization of the file; the imported rows are already categorized.
           The goal is to capture the <em>pattern</em> so future imports categorize themselves.
