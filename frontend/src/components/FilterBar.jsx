@@ -15,6 +15,7 @@ import { EMPTY_AMOUNT_FILTER, amountFilterIsActive } from '../lib/filterParams.j
 import { CategoryMarker, Button, IconButton, LinkButton } from './ui.jsx'
 import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { subscribeVisibleArea } from '../lib/visibleViewport.js'
 import { TagGlyph } from './TagUi.jsx'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 
@@ -128,9 +129,12 @@ function Popover({ children, onClose, style }) {
     place()
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
+    // A dialog holding the trigger moves with the visible area while an on-screen keyboard is open.
+    const unsubscribeVisibleArea = subscribeVisibleArea(place)
     return () => {
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
+      unsubscribeVisibleArea()
     }
   }, [])
   return (

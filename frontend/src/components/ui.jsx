@@ -11,6 +11,7 @@ import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 import { SUGGESTED_PASSPHRASE_WORDS, SUGGESTED_PASSWORD_WORDS, suggestPassphrase } from '../lib/passphraseGenerator.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
+import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../lib/visibleViewport.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -454,6 +455,8 @@ export function OverlayBackdrop({
   // back in, so the centered panel must set pointerEvents: 'auto'.
   pointerEvents = 'auto',
 }) {
+  // Kept on the visible area while an on-screen keyboard is open (see visibleViewport.js).
+  const area = useVisibleViewport()
   return (
     <div
       onClick={onClick}
@@ -462,7 +465,7 @@ export function OverlayBackdrop({
       data-modal-overlay=""
       style={{
         position: 'fixed',
-        inset: 0,
+        ...visibleLayerBox(area),
         zIndex,
         display: 'flex',
         alignItems,
@@ -553,6 +556,7 @@ export function AppDialog({
 }) {
   const [drag, setDrag] = useState({ x: 0, y: 0 })
   const panelRef = useRef(null)
+  const area = useVisibleViewport()
 
   function startDrag(event) {
     if (!draggable || event.button !== 0) return
@@ -601,7 +605,7 @@ export function AppDialog({
         style={{
           width,
           border: `1px solid ${borderColor}`,
-          maxHeight: 'calc(100vh - 48px)',
+          maxHeight: `calc(${visibleHeightCss(area)} - 48px)`,
           display: 'flex',
           flexDirection: 'column',
           ...(draggable ? { pointerEvents: 'auto', transform: `translate(${drag.x}px, ${drag.y}px)` } : null),

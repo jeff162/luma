@@ -69,6 +69,7 @@ import {
 import { localStore } from './lib/browserStorage.js'
 import { NavIcon } from './components/navIcons.jsx'
 import { preventPressDefaults, trackPointer } from './lib/pointerDrag.js'
+import { useRevealFocusedField } from './lib/visibleViewport.js'
 
 // Shown in two places that cannot share a component: the dialog below, which renders inside the app,
 // and the error boundary's fallback, which renders in place of it. Sharing the words is what keeps the
@@ -1092,6 +1093,7 @@ export default function App() {
    */
   const location = useLocation()
   const navigate = useNavigate()
+  useRevealFocusedField()
   const [taskCount, setTaskCount] = useState(0)
   const [topTaskSeverity, setTopTaskSeverity] = useState(null)
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth)

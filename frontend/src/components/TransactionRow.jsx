@@ -11,6 +11,7 @@ import { txnMutations } from '../lib/txnMutations.js'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
+import { readVisibleBounds, subscribeVisibleArea } from '../lib/visibleViewport.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
@@ -631,14 +632,17 @@ function RowPopoverPortal({ anchorRef, children }) {
     function update() {
       const rect = element.getBoundingClientRect()
       const gap = 4
-      const spaceBelow = window.innerHeight - rect.bottom
-      const openUp = spaceBelow < 300 && rect.top > spaceBelow
+      // Room is measured within the visible area, which ends at an on-screen keyboard.
+      const visible = readVisibleBounds()
+      const spaceAbove = rect.top - visible.top
+      const spaceBelow = visible.bottom - rect.bottom
+      const openUp = spaceBelow < 300 && spaceAbove > spaceBelow
       setLayout({
         right: Math.max(8, window.innerWidth - rect.right),
         ...(openUp
           ? { bottom: Math.max(8, window.innerHeight - rect.top + gap) }
           : { top: rect.bottom + gap }),
-        maxHeight: Math.max(160, (openUp ? rect.top : spaceBelow) - 12),
+        maxHeight: Math.max(160, (openUp ? spaceAbove : spaceBelow) - 12),
       })
     }
 
@@ -647,9 +651,11 @@ function RowPopoverPortal({ anchorRef, children }) {
     // so the popover tracks the row as the list scrolls.
     window.addEventListener('scroll', update, true)
     window.addEventListener('resize', update)
+    const unsubscribeVisibleArea = subscribeVisibleArea(update)
     return () => {
       window.removeEventListener('scroll', update, true)
       window.removeEventListener('resize', update)
+      unsubscribeVisibleArea()
     }
   }, [anchorRef])
 

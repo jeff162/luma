@@ -38,6 +38,8 @@ import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMatchingTransactions.js'
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
+import { useScrollContainment } from '../lib/scrollContainment.js'
+import { useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -54,6 +56,8 @@ export const DETAIL_MAX_VISIBLE_ROWS = 7
 export const DETAIL_STACK_OFFSET = 28
 export const DETAIL_FLOATING_TOP_GUTTER = 72
 export const DETAIL_FLOATING_EDGE_GUTTER = 24
+// The least height a floating panel keeps above an on-screen keyboard; a panel lower than that moves up.
+const KEYBOARD_PANEL_MIN_ROOM = 240
 const DETAIL_SECTION_OVERHEAD = 108
 export function getDetailMonthSectionHeight(trend = []) {
   const maxCount = trend.reduce((max, row) => Math.max(max, Number(row?.count) || 0), 0)
@@ -870,20 +874,37 @@ export function DetailPanelShell({
     radius: 12,
   })
   const explicitSized = Boolean(size)
+  // While an on-screen keyboard is open, a floating panel is kept inside the visible area above it,
+  // moving only as far as it must, and its height is capped to what is left (see visibleViewport.js).
+  const area = useVisibleViewport()
+  let panelTop = pos?.y
+  let keyboardCap = null
+  if (pos && area.keyboard) {
+    const visibleBottom = area.top + area.height
+    panelTop = Math.max(
+      area.top + DETAIL_FLOATING_EDGE_GUTTER,
+      Math.min(pos.y, visibleBottom - KEYBOARD_PANEL_MIN_ROOM),
+    )
+    keyboardCap = `${Math.max(0, visibleBottom - panelTop - DETAIL_FLOATING_EDGE_GUTTER)}px`
+  }
   // The tallest the panel may be: a floating panel leaves the gutters it is dragged within, a docked one
   // sits under the overlay's own top padding.
-  const availableHeight = pos
-    ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
-    : '85vh'
+  const availableHeight = keyboardCap
+    ?? (pos
+      ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
+      : (area.keyboard ? `${Math.round(area.height * 0.85)}px` : '85vh'))
   // A press anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
   // Using the press rather than click means the panel rises immediately, before any nested
   // event listener runs — so the focused panel is on top while the user's actual gesture
   // (button press, drag-to-select) executes against it. A pointer press rather than a mouse
   // press, because a finger dragging the header produces no mouse events at all.
   const onPanelPointerDown = stack.bringToFront
+  // A swipe or wheel over the panel scrolls only the panel, never the page behind it.
+  const layerRef = useRef(null)
+  useScrollContainment(layerRef)
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: stack.zIndex - 1,
+    <div ref={layerRef} style={{
+      position: 'fixed', ...visibleLayerBox(area), zIndex: stack.zIndex - 1,
       background: pos ? 'transparent' : 'rgba(0,0,0,0.5)',
       display: pos ? 'block' : 'flex',
       alignItems: 'flex-start', justifyContent: 'center',
@@ -899,13 +920,13 @@ export function DetailPanelShell({
         style={{
           position: pos ? 'fixed' : 'relative',
           left: pos ? pos.x : undefined,
-          top: pos ? pos.y : undefined,
+          top: pos ? panelTop : undefined,
           width: explicitSized ? size.width : DETAIL_PANEL_WIDTH,
           maxWidth: explicitSized ? undefined : DETAIL_PANEL_WIDTH,
           // A filling panel takes its cap as its height, so the two stay one number: whatever the
           // viewport allows is both the most it may be and exactly what it is.
           height: explicitSized ? size.height : (fillHeight ? availableHeight : undefined),
-          maxHeight: explicitSized ? undefined : availableHeight,
+          maxHeight: explicitSized ? (keyboardCap ?? undefined) : availableHeight,
           display: 'flex',
           flexDirection: 'column',
           // 'auto' re-enables interaction inside the pointer-transparent floating backdrop; while the
@@ -939,7 +960,7 @@ export function DetailPanelShell({
             instead of silently clipping at the bottom. The transaction list inside still owns
             its own bounded scroll for the rows; the outer scroll here is for the panel-level
             content stack. */}
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: bodyPadding, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain', padding: bodyPadding, display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
         {footer ? (
