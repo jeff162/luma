@@ -118,6 +118,10 @@ export default function ImportRuleSuggestionReview({
   const [editingMatchMembers, setEditingMatchMembers] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
   const [merchantFilterText, setMerchantFilterText] = useState('')
+  // Bulk mode's "No conflicts" toggle: hides every conflict-set member so Select all takes only the
+  // clear-cut suggestions. It is a view filter like the merchant filter, so a selected card it hides is
+  // pruned from the selection. Off whenever bulk mode is, so each bulk session starts unfiltered.
+  const [conflictsHidden, setConflictsHidden] = useState(false)
   // The single source row backing the suggestion currently open in the rule editor, fetched so the
   // editor's "From the source file" panel can show it. Null unless the suggestion has exactly one row.
   const [editorExampleTxn, setEditorExampleTxn] = useState(null)
@@ -299,9 +303,13 @@ export default function ImportRuleSuggestionReview({
       || String(suggestion.merchant_label || '').toLowerCase().includes(normalizedMerchantFilter)
     return merchantMatches && matchesReviewFilter(suggestion, reviewFilter)
   }, [normalizedMerchantFilter, reviewFilter])
-  const filteredSuggestions = suggestions.filter(
+  const viewSuggestions = suggestions.filter(
     suggestion => matchesMerchantAndReviewFilter(suggestion) && passesLensForView(suggestion),
   )
+  const viewHasConflicts = viewSuggestions.some(suggestion => suggestion.conflict_group_id)
+  const filteredSuggestions = conflictsHidden
+    ? viewSuggestions.filter(suggestion => !suggestion.conflict_group_id)
+    : viewSuggestions
   const visibleSuggestions = useMemo(() => {
     // Order the currently-visible (filtered) suggestions by the frozen display order. Items missing
     // from the order (e.g. arrived just before it last refreshed) trail at the end so nothing vanishes.
@@ -380,6 +388,8 @@ export default function ImportRuleSuggestionReview({
     storageScope: suggestionBulkStorageScope(persistKey, selectedOwnerIds, reviewFilter),
   })
   const bulkMode = bulk.active
+  // Reset during render rather than in an effect, so leaving bulk mode never paints a filtered list.
+  if (conflictsHidden && !bulkMode) setConflictsHidden(false)
   const conflictSetSuggestions = useMemo(
     () => (openConflictGroupId
       ? suggestions.filter(suggestion => suggestion.conflict_group_id === openConflictGroupId)
@@ -1548,6 +1558,18 @@ export default function ImportRuleSuggestionReview({
                 <LinkButton onClick={() => bulk.clear()} disabled={selectedCount === 0} style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   Clear
                 </LinkButton>
+                {viewHasConflicts ? (
+                  <Button
+                    size="compact"
+                    variant="secondary"
+                    pressed={conflictsHidden}
+                    onClick={() => setConflictsHidden(value => !value)}
+                    title="Hide suggestions that belong to a conflict set"
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    No conflicts
+                  </Button>
+                ) : null}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {bulkActions.map(action => (

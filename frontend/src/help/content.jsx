@@ -2018,6 +2018,11 @@ export const HELP_TOPICS = [
           row out as an untouchable manual decision. How those properties affect subsequent behavior is covered
           in <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
         </p>
+        <p>
+          To get the straightforward suggestions out of the way first, turn on <strong>No conflicts</strong> in
+          the bulk actions bar. Suggestions in a conflict set are hidden, so <strong>Select all</strong> picks
+          up only the rest. Turning it on also deselects any conflict-set suggestions already selected.
+        </p>
         <h4>Older suggestions, and clearing them out in bulk</h4>
         <p>
           Rules are forward-looking, so a merchant pattern with no recent activity is unlikely to recur.
