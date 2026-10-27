@@ -390,9 +390,9 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     bank(52, "Red Cross Donation", "Charitable Giving", 75.00, "checking")
     bank(26, "Annual Membership", "Fees & Charges", 96.00, "checking")   # cross-account duplicate, leg A
 
-    # ===== Source 2: "Rewards Card" — a raw export WITHOUT categories (card + brokerage). Format B uses
-    # different header names (so it's a distinct data source); rows here are categorized only by the rules
-    # created below, or land uncategorized — demonstrating the other import path. =====
+    # ===== Source 2: "Rewards Card" — a raw export WITHOUT categories (card + brokerage, plus one savings
+    # row). Format B uses different header names (so it's a distinct data source); rows here are categorized
+    # only by the rules created below, or land uncategorized — demonstrating the other import path. =====
     card_rows = []  # (transaction date, payee, amount, account_name)
 
     def card(days_ago, payee, amount, acct="card"):
@@ -447,7 +447,9 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     card(30, "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
     for q, amount in enumerate([52.40, 49.85, 47.10, 45.60]):
         card(45 + q * 91, "Quarterly Dividend", -amount, "brokerage")   # uncategorized income
-    card(26, "Annual Membership", 96.00)                         # cross-account duplicate, leg B
+    # Leg B lands on savings, not the card: a duplicate is one account recorded twice, and a checking row
+    # and a card row can never be that (duplicate_detection.account_types_can_match).
+    card(26, "Annual Membership", 96.00, "savings")              # cross-account duplicate, leg B
     for m, amount in enumerate(card_payments):
         card(m * 30 + 14, "Payment Received - Thank You", -amount)   # the card side of each autopay
 
@@ -532,7 +534,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # "Annual Membership" duplicate against the checking row from the first import.
     _import(
         _render_csv(["Transaction Date", "Payee", "Amount", "Account"], card_rows),
-        profile_id=card_profile_id, column_map=card_cols, account_keys=("card", "brokerage"),
+        profile_id=card_profile_id, column_map=card_cols, account_keys=("card", "brokerage", "savings"),
         use_imported_categories=False, filename="rewards-card.csv",
     )
 

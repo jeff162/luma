@@ -389,6 +389,8 @@ flag (see [Soft duplicates](#soft-duplicates)).
 - A flag is resolved by **keep** (clears the flag on that row), **reject** (trashes the incoming row) or
   **replace** (the incoming row survives and the matched row is removed). None of the three says
   anything about the accounts.
+- A flag is also cleared with no decision (`clear_flag_between`) when its rows become a PayPal funding
+  pair, or when a matcher change means the rules would no longer raise it.
 - On **replace** the surviving row keeps its own category only when its file is the sole one with
   `use_imported_categories` set. Otherwise it takes the existing row's category as a manual override,
   and never copies a NULL.
@@ -1300,14 +1302,27 @@ never blocked.
   decided on that text and the cleaned payee name alone can reach no higher than weak
   (`row_match_texts`). A chain cleans every branch to one merchant string.
 - **A differing explicit check number vetoes a match.**
+- **Matching is one-to-one**: each new row takes at most one existing row and each existing row at most
+  one new row, strongest text then closest date first. A purchase that repeats every few days would
+  otherwise have several new rows claim one existing charge.
 - **Skipped**: pairs in `suspect_pair_distinct`, account pairs in `account_pair_distinct`, rows that
   already carry a suspect pointer, and rows the source gave different ids.
+- **Never paired** (`_never_duplicates`, in both this sweep and the existing-versus-existing scan):
+  - rows on accounts whose effective types cannot name one real account (`account_types_can_match`). A
+    same-amount match between a card and a checking or PayPal account is two sides of one movement.
+    Deposit-like types (`depository`, `savings`, `p2p`, `paypal`) count as one, because a wallet sits as
+    `depository` until it is typed and a savings account can arrive typed `depository`. `other` and a
+    missing type match anything.
+  - rows linked as a [PayPal funding pair](#paypal-funding-pairs).
 - The window is wide because two sources date a charge on different bases; the text comparison is what
   rejects coincidences inside it.
 
 `promote_in_group_suspects_to_confirmed` runs at import finalize, after a sync, and on an account merge.
 It confirms exact matches whose two sides share a group (`auto_merge`) or an account
-(`auto_cross_source`), so import order and merge order give the same result. A posted suspect of a
+(`auto_cross_source`), so import order and merge order give the same result. An exact match among
+repeats of one purchase stays for review (`_ambiguous_among_repeats`): when another row of the same
+amount and related text lies in the group within the window, only a same-day pair with no such row on
+its date is confirmed, because the date is then the only evidence. A posted suspect of a
 pending row is confirmed the other way round: the pending copy is trashed pointing at the posted one,
 which takes over the pending row's manual category, name, notes and tags (`carry_user_edits`). A pending
 row holding a split or a link stays the survivor, since neither moves.
@@ -1326,7 +1341,9 @@ conclusion. The stamp is the version and not a "done" flag, so a later bump stil
 everything; an upgraded database is deliberately left unstamped, because it has rows that predate the
 stamp.
 `rescan_until_settled` loops to a fixed cap, because each row takes one partner per pass. It is not the
-schema version: a threshold change needs no migration. A flag already raised keeps its tier.
+schema version: a threshold change needs no migration. A flag already raised keeps its tier. Before the
+scan, `retire_flags_no_longer_raised` clears the unresolved flags the current rules would never raise,
+because the scan only adds flags.
 
 ### Evidence field roles
 
@@ -1347,7 +1364,8 @@ auto-confirming tier.
 
 A set of cross-account flags between one pair of accounts is one question. It is asked at mapping time
 (the "Possible duplicate account?" chooser, where *Keep separate* passes `distinct_from_account_id`)
-and in the duplicate report (`unresolved_account_pairs`, with `can_merge` decided server-side).
+and in the duplicate report (`unresolved_account_pairs`, with `can_merge` decided server-side). The
+report does not ask it about two accounts already in one group; their flags stay as row-level review.
 
 - **Different accounts** (`record_account_pair_distinct`) clears every unresolved flag between the pair,
   whatever its tier, because the assertion also suppresses future detection.
@@ -1938,6 +1956,9 @@ the movement and links them (`paypal_funding`).
   spending for anyone not tracking the PayPal account.
 - Changed rows get `category_source = 'enrichment'` and their priors are stashed on the link (`priors`).
 - A PayPal row with no captured `Type` could be either kind; the candidate's sign settles it.
+- **Pairing clears a duplicate flag between the two rows**, and the duplicate sweeps never pair them
+  afterwards ([Soft duplicates](#soft-duplicates)). The post-ingest duplicate sweep runs before this pass,
+  so it can flag the PayPal row against its own funding leg first.
 
 **A candidate** is a row on a non-PayPal account that reads as PayPal in its name, raw text or evidence,
 with the same amount to the cent, within that module's `PAIR_WINDOW_DAYS`, on an account whose owner is

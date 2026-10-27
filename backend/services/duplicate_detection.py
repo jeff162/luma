@@ -70,6 +70,12 @@ and so never pair within one account. A same-account exact match is auto-confirm
 `promote_in_group_suspects_to_confirmed` (they trivially share an effective root) under its own
 `AUTO_CROSS_SOURCE_RESOLVED_BY` marker, so the user is not asked about it.
 
+**Two kinds of pair are never duplicates, so neither sweep raises them** (`_never_duplicates`). Rows on
+accounts whose types cannot name one real account (`account_types_can_match`) are two sides of one
+movement, such as a card payment or a PayPal funding leg. Rows already linked as a PayPal funding pair have
+been judged as one movement on two accounts. Pairing a funding pair clears any flag already raised between
+its rows (`clear_flag_between`), because the post-ingest sweep runs before the funding pass.
+
 Check-number discriminator (`are_distinct_checks`): two genuinely different checks can share
 date+amount+description (often just "Check"), so they collide on the content hash AND on the
 terminal-day rule's amount fallback. Wherever a match is keyed on the hash/amount — the exact-hash
@@ -2456,7 +2462,7 @@ def unresolved_account_pairs(conn: sqlite3.Connection, batch_id: str) -> list[di
     two accounts the same account or not? Both answers are terminal — merge them, or record them as
     distinct — and each resolves every flag between them, so N coincidences between one pair are one
     decision rather than N. That decision used to ride along invisibly on Keep; asking it needs the pairs
-    named, which is what this returns.
+    named, which is what this returns. Pairs of accounts already grouped together are left out.
 
     `can_merge` is decided here rather than in the browser because it is a *rule*, and the merge rule
     already exists on the account side (`attach_account`): both accounts need a type and an owner, the
@@ -2487,7 +2493,9 @@ def unresolved_account_pairs(conn: sqlite3.Connection, batch_id: str) -> list[di
           AND  t1.suspect_duplicate_of IS NOT NULL
           AND  t1.suspect_resolved_at IS NULL
           AND  t1.trashed_at IS NULL
-          AND  a1.id <> a2.id
+          -- Accounts already in one group have been answered: they are the same account, and their
+          -- flags stay in the list as row-level review.
+          AND  COALESCE(a1.parent_account_id, a1.id) <> COALESCE(a2.parent_account_id, a2.id)
         GROUP  BY account_id_low, account_id_high
         ORDER  BY flag_count DESC
         """,
@@ -2735,11 +2743,14 @@ def restore_auto_merged_after_detach(conn: sqlite3.Connection,
 
 def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
     """From the raw (new-row × existing-row) candidate pairs — already narrowed in SQL to cross-account,
-    equal rounded amount, within the date window, cross-batch, and not `account_pair_distinct` — keep at
-    most ONE existing match per new row and classify it.
+    equal rounded amount, within the date window, cross-batch, and not `account_pair_distinct` — pair each
+    new row with at most ONE existing row, and each existing row with at most one new row, and classify
+    the pair. One-to-one because an existing row is one charge: where a purchase repeats every few days,
+    two new rows within the window of one existing row cannot both be its copy.
 
-    Selection order per new row: strongest text match (exact before fuzzy), then closest date (so a near-
-    date candidate never displaces an exact-day twin), then lowest existing id. Pairs whose source texts
+    Pairs are taken greedily in order: strongest text match (exact before fuzzy), then closest date (so a
+    near-date candidate never displaces an exact-day twin), then the ids. A new row whose best partner is
+    taken falls to its next-best one. Pairs whose source texts
     don't match at all are dropped, as are pairs carrying explicit, different check numbers (two distinct
     checks can share date/amount). Returns [{new_id, existing_id, reason}] with reason `'cross_account'`
     for an exact text match or `'cross_account_fuzzy'` for a near-miss (review-only) match.
@@ -2754,7 +2765,7 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
             text_cache[key] = cached
         return cached
 
-    best_by_new: dict[str, dict] = {}
+    ranked: list[tuple] = []
     for r in candidate_rows:
         if are_distinct_checks(r["new_merchant"], r["existing_merchant"]):
             continue
@@ -2764,20 +2775,24 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
         )
         if kind is None:
             continue
-        rank = (
+        ranked.append((
             _TEXT_RELATION_RANK[kind],
             _date_distance_days(r["new_date"], r["existing_date"]),
+            str(r["new_id"]),
             str(r["existing_id"]),
-        )
-        current = best_by_new.get(r["new_id"])
-        if current is None or rank < current["_rank"]:
-            best_by_new[r["new_id"]] = {
-                "new_id": r["new_id"],
-                "existing_id": r["existing_id"],
-                "reason": _TEXT_RELATION_REASONS[kind],
-                "_rank": rank,
-            }
-    return list(best_by_new.values())
+            kind,
+        ))
+    ranked.sort()
+    taken_new: set = set()
+    taken_existing: set = set()
+    matches = []
+    for _rank, _dist, new_id, existing_id, kind in ranked:
+        if new_id in taken_new or existing_id in taken_existing:
+            continue
+        taken_new.add(new_id)
+        taken_existing.add(existing_id)
+        matches.append({"new_id": new_id, "existing_id": existing_id, "reason": _TEXT_RELATION_REASONS[kind]})
+    return matches
 
 
 def mark_import_suspects(conn: sqlite3.Connection, batch_id: str, *,
@@ -2827,6 +2842,10 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str, *,
     # expressed in the join. Returns every candidate pair, then one existing match is kept per new row.
     window = CROSS_ACCOUNT_DATE_WINDOW_DAYS
     candidates = _cross_account_candidates(conn, batch_id, window, txn_ids)
+    if candidates:
+        never = _never_duplicates(conn)
+        candidates = [r for r in candidates
+                      if not never(r["new_id"], r["new_type"], r["existing_id"], r["existing_type"])]
     if exclude_pairs:
         # Filtered here rather than in SQL, and before selection so the next-best candidate can win the
         # place the excluded pair was holding.
@@ -2851,9 +2870,56 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str, *,
 
 
 # Chunked so a caller may pass more ids than SQLite will bind in one statement. Splitting on `t1` is safe
-# because selection keeps at most one match per *new* row (`_select_best_cross_account_matches` groups by
-# `new_id`), so no candidate pair is separated from a rival it would have been ranked against.
+# because the chunks' candidates are gathered before `_select_best_cross_account_matches` runs once over
+# all of them, so no candidate pair is separated from a rival it would have been ranked against.
 _CANDIDATE_ID_CHUNK = 400
+
+# Account types grouped by which can name the same real account. Deposit-like types share a group because
+# they are routinely confused: a wallet sits as `depository` or `p2p` until it is typed `paypal`
+# (data-model.md → Type), and a savings account can arrive typed `depository`. `other`, a missing type and
+# any type not listed are unknown and match anything.
+_ACCOUNT_TYPE_GROUP = {
+    "depository": "deposit", "savings": "deposit", "p2p": "deposit", "paypal": "deposit",
+    "credit": "credit", "loan": "loan", "investment": "investment", "amazon": "amazon",
+}
+
+
+def account_types_can_match(type_a: Optional[str], type_b: Optional[str]) -> bool:
+    """Whether accounts of these types could be one real account recorded twice. Pass each account's
+    *effective* type (its group parent's)."""
+    group_a = _ACCOUNT_TYPE_GROUP.get(str(type_a or "").strip().lower())
+    group_b = _ACCOUNT_TYPE_GROUP.get(str(type_b or "").strip().lower())
+    return group_a is None or group_b is None or group_a == group_b
+
+
+def _never_duplicates(conn: sqlite3.Connection) -> Callable[[str, Optional[str], str, Optional[str]], bool]:
+    """A test, for both sweeps, of whether two rows (each with its account's effective type) can never be
+    a duplicate pair: their account types cannot be one account, or the rows are a PayPal funding pair."""
+    # Imported here: `services.paypal_funding` imports this module.
+    from backend.services.paypal_funding import funding_pairs
+    paired = funding_pairs(conn)
+
+    def never(id_a: str, type_a: Optional[str], id_b: str, type_b: Optional[str]) -> bool:
+        return not account_types_can_match(type_a, type_b) or _sorted_pair(id_a, id_b) in paired
+    return never
+
+
+def clear_flag_between(conn: sqlite3.Connection, txn_id_a: str, txn_id_b: str) -> int:
+    """Clear an unresolved duplicate flag between two rows, in either direction, once another mechanism
+    has settled that they are not a duplicate pair. Returns the number of rows cleared."""
+    cursor = conn.execute(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = NULL,
+               suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  suspect_resolved_at IS NULL
+          AND  trashed_at IS NULL
+          AND  ((id = ? AND suspect_duplicate_of = ?) OR (id = ? AND suspect_duplicate_of = ?))
+        """,
+        (txn_id_a, txn_id_b, txn_id_b, txn_id_a),
+    )
+    return cursor.rowcount or 0
 
 
 def _cross_account_candidates(conn: sqlite3.Connection, batch_id: str, window: int,
@@ -2883,7 +2949,9 @@ _CROSS_ACCOUNT_CANDIDATE_SQL = """
           t1.import_evidence_json AS new_evidence,
           t2.id AS existing_id, t2.date AS existing_date,
           t2.merchant_name AS existing_merchant, t2.raw_name AS existing_raw,
-          t2.import_evidence_json AS existing_evidence
+          t2.import_evidence_json AS existing_evidence,
+          COALESCE(p1.type, a1.type) AS new_type,
+          COALESCE(p2.type, a2.type) AS existing_type
         FROM   txn t1
         LEFT   JOIN import_batch b1 ON b1.id = t1.import_batch_id
         JOIN   txn t2
@@ -2914,6 +2982,10 @@ _CROSS_ACCOUNT_CANDIDATE_SQL = """
                   AND  sp.txn_id_high = MAX(t1.id, t2.id)
           )
         LEFT   JOIN import_batch b2 ON b2.id = t2.import_batch_id
+        LEFT   JOIN account a1 ON a1.id = t1.account_id
+        LEFT   JOIN account p1 ON p1.id = a1.parent_account_id
+        LEFT   JOIN account a2 ON a2.id = t2.account_id
+        LEFT   JOIN account p2 ON p2.id = a2.parent_account_id
         WHERE  t1.import_batch_id = ?
           AND  t1.trashed_at IS NULL
           AND  t1.suspect_duplicate_of IS NULL
@@ -4228,7 +4300,7 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
 # them together would either force a migration for a threshold tweak or silently skip a re-scan whenever
 # a migration happened to land first. Bump it in the same commit as the rule change, the way
 # CURRENT_VERSION is bumped with a schema change.
-DUPLICATE_DETECTION_VERSION = 2
+DUPLICATE_DETECTION_VERSION = 3
 _DETECTION_VERSION_META_KEY = "duplicate_detection_version"
 
 # A pass only lets each row take one partner, so rows that lose a contest become available on the next
@@ -4279,6 +4351,7 @@ def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
     seen = _detection_version_seen(conn)
     if seen >= DUPLICATE_DETECTION_VERSION:
         return {"skipped": True, "version": seen}
+    retired = retire_flags_no_longer_raised(conn)
     account_ids = [r["id"] for r in conn.execute("SELECT id FROM account WHERE trashed_at IS NULL")]
     result = rescan_until_settled(conn, account_ids)
     conn.execute(
@@ -4286,7 +4359,33 @@ def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (_DETECTION_VERSION_META_KEY, str(DUPLICATE_DETECTION_VERSION)),
     )
-    return {"skipped": False, "from_version": seen, "version": DUPLICATE_DETECTION_VERSION, **result}
+    return {"skipped": False, "from_version": seen, "version": DUPLICATE_DETECTION_VERSION,
+            "retired": retired, **result}
+
+
+def retire_flags_no_longer_raised(conn: sqlite3.Connection) -> int:
+    """Clear the unresolved flags whose pair the current rules never raise (`_never_duplicates`). The
+    rescan only adds flags, so without this a flag raised under older rules would stay in the report.
+    Returns the number cleared."""
+    rows = conn.execute(
+        """
+        SELECT t1.id AS id_a, COALESCE(p1.type, a1.type) AS type_a,
+               t2.id AS id_b, COALESCE(p2.type, a2.type) AS type_b
+        FROM   txn t1
+        JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
+        LEFT   JOIN account a1 ON a1.id = t1.account_id
+        LEFT   JOIN account p1 ON p1.id = a1.parent_account_id
+        LEFT   JOIN account a2 ON a2.id = t2.account_id
+        LEFT   JOIN account p2 ON p2.id = a2.parent_account_id
+        WHERE  t1.suspect_resolved_at IS NULL
+          AND  t1.trashed_at IS NULL
+        """
+    ).fetchall()
+    if not rows:
+        return 0
+    never = _never_duplicates(conn)
+    return sum(clear_flag_between(conn, r["id_a"], r["id_b"]) for r in rows
+               if never(r["id_a"], r["type_a"], r["id_b"], r["type_b"]))
 
 
 def stamp_detection_version(conn: sqlite3.Connection) -> None:
@@ -4373,9 +4472,12 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                b.profile_id, t.source_transaction_id,
                -- What reported this row: the connection if it came from one, else the file. NULL for a
                -- manual entry, which asserts nothing and therefore pairs with nothing on its own account.
-               COALESCE(b.connection_id, t.import_batch_id) AS origin_id
+               COALESCE(b.connection_id, t.import_batch_id) AS origin_id,
+               COALESCE(p.type, a.type) AS account_type
         FROM   txn t
         LEFT JOIN import_batch b ON b.id = t.import_batch_id
+        LEFT JOIN account a ON a.id = t.account_id
+        LEFT JOIN account p ON p.id = a.parent_account_id
         WHERE  t.account_id IN ({ph})
           AND  t.trashed_at IS NULL
         """,
@@ -4388,6 +4490,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
     # applied when pairing within a group below. Each row's match-text sets are precomputed once; a row
     # with no captured text can never match, so it is dropped here.
     judged = load_suspect_pair_distinct(conn)
+    never = _never_duplicates(conn)
     row_texts: dict[str, RowMatchTexts] = {}
     groups: dict[float, list] = {}
     for r in rows:
@@ -4428,6 +4531,8 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                     continue  # one source does not report a charge twice — a legitimate repeat
                 if _sorted_pair(a["id"], b["id"]) in judged:
                     continue  # the user has already decided these two are not the same charge
+                if never(a["id"], a["account_type"], b["id"], b["account_type"]):
+                    continue
                 dist = _date_distance_days(a["date"], b["date"])
                 if dist > window:
                     continue
@@ -4481,7 +4586,9 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
 
     EXACT soft-flags (`suspect_duplicate_reason='cross_account'`) are promoted; the review-only tiers in
     `REVIEW_ONLY_SOFT_FLAG_REASONS` (a near-miss text match, or two merely-shared tokens) are deliberately
-    left for the user to resolve, so a merge never silently trashes a row on similarity alone. This is the
+    left for the user to resolve, so a merge never silently trashes a row on similarity alone. So is an
+    exact flag among repeats of one purchase (`_ambiguous_among_repeats`), where only the date tells the
+    visits apart. This is the
     merge-time resolution sweep; exact soft-flags are created at import time (and by the merge-time fresh
     scan).
 
@@ -4511,7 +4618,12 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
         f"""
         SELECT t1.id, (t1.account_id = t2.account_id) AS same_account, t2.id AS target_id,
                t1.is_pending AS suspect_pending, t2.is_pending AS target_pending,
-               t1.suspect_duplicate_reason
+               t1.suspect_duplicate_reason,
+               COALESCE(a1.parent_account_id, a1.id) AS root, t1.amount,
+               t1.date AS suspect_date, t1.merchant_name AS suspect_merchant,
+               t1.raw_name AS suspect_raw, t1.import_evidence_json AS suspect_evidence,
+               t2.date AS target_date, t2.merchant_name AS target_merchant,
+               t2.raw_name AS target_raw, t2.import_evidence_json AS target_evidence
         FROM   txn t1
         JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
         JOIN   account a1 ON a1.id = t1.account_id
@@ -4526,6 +4638,7 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
         """,
         [*REVIEW_ONLY_SOFT_FLAG_REASONS, *account_id_list, *account_id_list],
     ).fetchall()
+    rows = [r for r in rows if not _ambiguous_among_repeats(conn, r)]
     if not rows:
         return 0
     # Inverted only where the pending row is this sweep's sole target: two posted suspects of one pending
@@ -4575,6 +4688,48 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     # helper docstring.)
     _clear_same_batch_siblings_after_promotion(conn, ids)
     return len(ids)
+
+
+def _ambiguous_among_repeats(conn: sqlite3.Connection, flag) -> bool:
+    """Whether an exact flag is too uncertain to confirm without the user, because the charge repeats.
+
+    Where the same purchase recurs every few days, amount and text are identical across every visit and
+    only the date separates them, so a pair is trusted only when no other look-alike in the group (same
+    amount, related text, not trashed) falls inside the date window around it — or, where one does, only
+    when the pair is same-day and no look-alike shares either date. Otherwise the flag stays for review."""
+    window = CROSS_ACCOUNT_DATE_WINDOW_DAYS
+    first, last = sorted([flag["suspect_date"], flag["target_date"]])
+    neighbours = conn.execute(
+        """
+        SELECT n.date, n.merchant_name, n.raw_name, n.import_evidence_json
+        FROM   txn n
+        JOIN   account a ON a.id = n.account_id
+        WHERE  ROUND(n.amount, 2) = ROUND(?, 2)
+          AND  n.date BETWEEN date(?, ?) AND date(?, ?)
+          AND  n.trashed_at IS NULL
+          AND  n.id NOT IN (?, ?)
+          AND  COALESCE(a.parent_account_id, a.id) = ?
+        """,
+        (flag["amount"], first, f"-{window} days", last, f"+{window} days",
+         flag["id"], flag["target_id"], flag["root"]),
+    ).fetchall()
+    if not neighbours:
+        return False
+    pair_texts = (
+        row_match_texts(flag["suspect_merchant"], flag["suspect_raw"], flag["suspect_evidence"]),
+        row_match_texts(flag["target_merchant"], flag["target_raw"], flag["target_evidence"]),
+    )
+    look_alikes = [
+        n for n in neighbours
+        if any(classify_source_text_relation(
+            row_match_texts(n["merchant_name"], n["raw_name"], n["import_evidence_json"]), texts)
+            for texts in pair_texts)
+    ]
+    if not look_alikes:
+        return False
+    if _date_distance_days(flag["suspect_date"], flag["target_date"]) > 0:
+        return True
+    return any(n["date"] in (flag["suspect_date"], flag["target_date"]) for n in look_alikes)
 
 
 def _carries_structure(conn: sqlite3.Connection, txn_id: str) -> bool:

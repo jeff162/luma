@@ -32,6 +32,7 @@ from backend.services.duplicate_detection import (
     promote_in_group_suspects_to_confirmed,
     record_account_pair_distinct,
     resolve_suspect,
+    retire_flags_no_longer_raised,
     unresolved_account_pairs,
     scan_scope_for_cross_account_duplicates,
     restore_auto_merged_after_detach,
@@ -1440,9 +1441,10 @@ class SuspectDuplicateTests(unittest.TestCase):
     def test_a_pair_that_cannot_be_merged_says_so(self):
         # The prompt offers "same account — merge them" only where a merge is actually possible, and the
         # rule lives here rather than in the browser so this and the Accounts page cannot disagree about
-        # whether it is offerable. Different types is the plainest case.
+        # whether it is offerable. Checking against savings is still paired (the two types are routinely
+        # confused) but cannot merge until one is retyped.
         account_a = self._insert_account("Account A", account_type="depository")
-        account_b = self._insert_account("Account B", account_type="credit")
+        account_b = self._insert_account("Account B", account_type="savings")
         batch = self._insert_batch()
         self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
         self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
@@ -1453,6 +1455,100 @@ class SuspectDuplicateTests(unittest.TestCase):
                 pairs = unresolved_account_pairs(conn, batch)
         self.assertEqual(len(pairs), 1)
         self.assertFalse(pairs[0]["can_merge"])
+
+    def test_accounts_whose_types_cannot_be_one_account_are_never_paired(self):
+        # A same-amount match between a checking account and a card is a payment, not one charge recorded
+        # twice. Both sweeps leave it alone.
+        account_a = self._insert_account("Account A", account_type="depository")
+        account_b = self._insert_account("Account B", account_type="credit")
+        batch = self._insert_batch()
+        self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
+        self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
+                         batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, batch), 0)
+                self.assertEqual(scan_scope_for_cross_account_duplicates(conn, [account_a, account_b]), 0)
+
+    def test_a_flag_the_rules_no_longer_raise_is_retired(self):
+        # A flag raised under older rules would otherwise stay in the report, since the rescan only adds.
+        account_a = self._insert_account("Account A", account_type="depository")
+        account_b = self._insert_account("Account B", account_type="credit")
+        canonical = self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
+        suspect = self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
+                                   batch_id=self._insert_batch())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (canonical, suspect),
+                )
+                self.assertEqual(retire_flags_no_longer_raised(conn), 1)
+        link = self._suspect_link(suspect)
+        self.assertIsNone(link["suspect_duplicate_of"])
+        self.assertIsNotNone(link["suspect_resolved_at"])
+        self.assertIsNone(link["trashed_at"])
+
+    def test_an_existing_row_is_matched_by_at_most_one_new_row(self):
+        # One existing charge cannot be the copy of two new ones. The closer date takes it.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        existing = self._insert_txn(account_id=account_a, date="2025-10-04", amount=-6.75, merchant_name="Scoops")
+        near = self._insert_txn(account_id=account_b, date="2025-10-04", amount=-6.75, merchant_name="Scoops",
+                                batch_id=batch)
+        far = self._insert_txn(account_id=account_b, date="2025-10-01", amount=-6.75, merchant_name="Scoops",
+                               batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, batch), 1)
+        self.assertEqual(self._suspect_link(near)["suspect_duplicate_of"], existing)
+        self.assertIsNone(self._suspect_link(far)["suspect_duplicate_of"])
+
+    def test_an_exact_flag_among_repeats_is_left_for_review(self):
+        # A purchase repeated every few days is identical in amount and text, so only the date tells the
+        # visits apart. A pair days apart among look-alikes is not confirmed automatically; a same-day
+        # pair with no look-alike on its date still is.
+        parent = self._insert_account("Card")
+        child = self._insert_account("Card (second source)")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (parent, child))
+        batch = self._insert_batch()
+        repeat_1 = self._insert_txn(account_id=parent, date="2025-10-02", amount=-6.75, merchant_name="Scoops")
+        repeat_2 = self._insert_txn(account_id=parent, date="2025-10-06", amount=-6.75, merchant_name="Scoops")
+        days_apart = self._insert_txn(account_id=child, date="2025-10-04", amount=-6.75, merchant_name="Scoops",
+                                      batch_id=batch)
+        same_day = self._insert_txn(account_id=child, date="2025-10-06", amount=-6.75, merchant_name="Scoops",
+                                    batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (repeat_1, days_apart),
+                )
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (repeat_2, same_day),
+                )
+                promote_in_group_suspects_to_confirmed(conn, [parent, child])
+        self.assertIsNone(self._suspect_link(days_apart)["trashed_at"])
+        self.assertIsNone(self._suspect_link(days_apart)["suspect_resolved_at"])
+        self.assertIsNotNone(self._suspect_link(same_day)["trashed_at"])
+
+    def test_accounts_already_grouped_are_not_asked_about(self):
+        # Merged accounts have answered "same account?"; their remaining flags are row-level review only.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
+        self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
+                         batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (account_a, account_b))
+                self.assertEqual(mark_import_suspects(conn, batch), 1)
+                self.assertEqual(unresolved_account_pairs(conn, batch), [])
 
     def test_resolve_keep_touches_only_the_row_it_was_given(self):
         # Keep used to cascade over the whole account pair, which made the bulk selection beside it a

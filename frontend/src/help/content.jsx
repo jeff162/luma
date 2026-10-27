@@ -3747,10 +3747,18 @@ export const HELP_TOPICS = [
           paired up in {APP_NAME}.
         </p>
         <p>
+          Accounts whose types can&apos;t be the same account, such as a credit card and a checking or
+          PayPal account, are never matched: the same amount on both is a payment between them. A PayPal
+          payment and the card or bank charge that funded it are matched in
+          the <HelpLink to="/help/paypal-reconciliation">PayPal reconciliation</HelpLink> instead.
+        </p>
+        <p>
           If the two accounts get merged, the pair is no longer called cross-account, and the wording
           decides what becomes of it. The amount already matches &mdash; that is what flagged the pair
           &mdash; so where both sources also describe it identically, the merge confirms the duplicate and
           the row leaves the active ledger as a <strong>duplicate in this account (confirmed)</strong>.
+          A purchase that repeats every few days at the same price is the exception: only the date tells
+          the visits apart, so unless both copies carry the same date the pair stays in review.
           When one copy is still pending and the other has posted, the pending copy is the one removed,
           and its renames, notes and tags move to the posted copy.
           Detaching the accounts reverses that, and a single row can be restored on its own. Where the two

@@ -131,6 +131,23 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         with self._db() as conn:
             return [r["id"] for r in conn.execute("SELECT id FROM txn_link WHERE kind = ?", (pf.LINK_KIND,))]
 
+    def test_pairing_clears_a_duplicate_flag_between_the_rows(self):
+        # The post-ingest duplicate sweep runs before the pairing pass, so a flag between the two rows can
+        # already exist. A pair is one movement on two accounts, which answers it.
+        payment = self._txn(self.paypal, "2026-08-25", 50.0, "Harbor Relief Fund", category=self.charity)
+        charge = self._txn(self.card, "2026-08-23", 50.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
+        with self._db() as conn:
+            conn.execute(
+                "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account_weak' WHERE id = ?",
+                (charge, payment),
+            )
+        self.assertEqual(self._pass()["paired"], 1)
+        with self._db() as conn:
+            row = conn.execute("SELECT suspect_duplicate_of, suspect_resolved_at FROM txn WHERE id = ?",
+                               (payment,)).fetchone()
+        self.assertIsNone(row["suspect_duplicate_of"])
+        self.assertIsNotNone(row["suspect_resolved_at"])
+
     # --- payment pairs ---------------------------------------------------------------------------------
 
     def test_a_payment_the_card_paid_counts_once_on_the_paypal_side(self):

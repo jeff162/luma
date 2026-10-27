@@ -74,6 +74,7 @@ from backend.app_logging import log_error
 from backend.db.database import get_shared_owner_id
 from backend.services import txn_links
 from backend.services.categorizer import category_lock_for
+from backend.services.duplicate_detection import clear_flag_between
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.money_movement import (
     MONEY_MOVEMENT_CATEGORY,
@@ -385,11 +386,26 @@ def _attach(conn: sqlite3.Connection, paypal: dict, other: dict, *, matched_by: 
                 priors[row["id"]] = _exclude(conn, row)
     elif not paypal["excluded"] and not other["excluded"]:
         priors[other["id"]] = _exclude(conn, other)
+    # The pair is one movement on two accounts, so a duplicate flag between its rows is answered.
+    clear_flag_between(conn, paypal["id"], other["id"])
     return txn_links.create_link(
         conn, LINK_KIND,
         [(paypal["id"], PAYPAL_ROLE), (other["id"], COUNTERPART_ROLE)],
         metadata={"priors": priors, "matched_by": matched_by},
     )
+
+
+def funding_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every paired (PayPal row, counterpart row), as id pairs sorted low to high."""
+    rows = conn.execute(
+        """SELECT MIN(p.txn_id, c.txn_id) AS low, MAX(p.txn_id, c.txn_id) AS high
+           FROM   txn_link l
+           JOIN   txn_link_member p ON p.link_id = l.id AND p.role = ?
+           JOIN   txn_link_member c ON c.link_id = l.id AND c.role = ?
+           WHERE  l.kind = ?""",
+        (PAYPAL_ROLE, COUNTERPART_ROLE, LINK_KIND),
+    ).fetchall()
+    return {(r["low"], r["high"]) for r in rows}
 
 
 def _restore(conn: sqlite3.Connection, txn_id: str, prior: dict) -> None:
