@@ -60,7 +60,7 @@ const SORT_OPTIONS = [{ value: 'row_count', label: '# rows' }, { value: 'alpha',
 
 // A right-click menu opens where the pointer is, so its `ActionMenu` anchor is that point.
 function pointerAnchor(event) {
-  return { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY }
+  return { x: event.clientX, y: event.clientY }
 }
 
 const merchantGroupKey = group => group.key
@@ -1188,11 +1188,11 @@ export default function ImportRuleSuggestionReview({
     if (bulkMode && bulkAvailable) {
       event.stopPropagation()
       setSuggestionMenu(null)
-      setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: bulk.scopedIdsFor(suggestion) })
+      setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: bulk.scopedIdsFor(suggestion) })
       return
     }
     setBulkMenu(null)
-    setSuggestionMenu({ anchorRect: pointerAnchor(event), suggestion, resolvedSuggestion })
+    setSuggestionMenu({ anchorPoint: pointerAnchor(event), suggestion, resolvedSuggestion })
   }
 
   const cardCatalog = { categories, tags, onCategoriesChanged, onTagCreated }
@@ -1396,7 +1396,7 @@ export default function ImportRuleSuggestionReview({
       onContextMenu={event => {
         if (!bulkMode || !bulkAvailable) return
         event.preventDefault()
-        setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
+        setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: null })
       }}
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, minWidth: 0 }}
     >
@@ -1405,7 +1405,7 @@ export default function ImportRuleSuggestionReview({
         onContextMenu={event => {
           if (!bulkMode || !bulkAvailable) return
           event.preventDefault()
-          setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
+          setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: null })
         }}
         style={{
           position: 'sticky',
@@ -1476,7 +1476,7 @@ export default function ImportRuleSuggestionReview({
             onContextMenu={event => {
               if (!bulkMode) return
               event.preventDefault()
-              setBulkMenu({ anchorRect: pointerAnchor(event), scopeIds: null })
+              setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: null })
             }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}
           >
@@ -1735,7 +1735,7 @@ export default function ImportRuleSuggestionReview({
 
       {bulkMenu ? (
         <ActionMenu
-          anchorRect={bulkMenu.anchorRect}
+          anchorPoint={bulkMenu.anchorPoint}
           align="start"
           onClose={() => setBulkMenu(null)}
           items={[
@@ -1753,7 +1753,7 @@ export default function ImportRuleSuggestionReview({
 
       {suggestionMenu ? (
         <ActionMenu
-          anchorRect={suggestionMenu.anchorRect}
+          anchorPoint={suggestionMenu.anchorPoint}
           align="start"
           onClose={() => setSuggestionMenu(null)}
           items={[

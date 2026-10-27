@@ -809,7 +809,7 @@ export default function Transactions() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
+      <div style={{ padding: '16px 24px 0', flexShrink: 0 }}>
         <PageHeader
           title="Transactions"
           help={<FeatureExplainer topic="page-transactions" placement="bottom-left" />}
@@ -844,8 +844,8 @@ export default function Transactions() {
         </PageHeader>
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
-        <div style={{ padding: '0 0 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 16px' }}>
+        <div style={{ padding: '0 0 8px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <SearchInput
               value={quickFilter}

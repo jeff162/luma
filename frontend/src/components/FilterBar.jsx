@@ -15,7 +15,7 @@ import { EMPTY_AMOUNT_FILTER, amountFilterIsActive } from '../lib/filterParams.j
 import { CategoryMarker, Button, IconButton, LinkButton } from './ui.jsx'
 import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
-import { subscribeVisibleArea } from '../lib/visibleViewport.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { TagGlyph } from './TagUi.jsx'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 
@@ -108,45 +108,32 @@ function accountTypeSelection(type, label) {
   return { type: 'account_type', id: `account-type:${type}`, label: `${label} accounts`, value: type }
 }
 
-// Placed against the viewport rather than against its trigger: a FilterBar may sit inside a dialog, whose
-// panel and scrolling body clip anything positioned within them. It stays where it is mounted, so its
-// stacking is unchanged, and follows its trigger through a scroll or a resize.
+// Positioned `fixed` rather than inside its trigger's box: a FilterBar may sit inside a dialog, whose panel
+// and scrolling body clip anything positioned within them. The browser keeps it under its trigger, the
+// element it is mounted in (useAnchoredPopup), so its stacking is unchanged.
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
-  const [position, setPosition] = useState(null)
+  const triggerRef = useRef(null)
   useDismissibleLayer({
     open: true,
     onClose,
     refs: [ref],
   })
+  // Declared before useAnchoredPopup, so the trigger is known when the hook names it.
   useLayoutEffect(() => {
-    function place() {
-      const anchor = ref.current?.parentElement?.getBoundingClientRect()
-      if (!anchor) return
-      const next = { top: anchor.bottom + 6, left: anchor.left }
-      setPosition(prev => (prev && prev.top === next.top && prev.left === next.left ? prev : next))
-    }
-    place()
-    window.addEventListener('scroll', place, true)
-    window.addEventListener('resize', place)
-    // A dialog holding the trigger moves with the visible area while an on-screen keyboard is open.
-    const unsubscribeVisibleArea = subscribeVisibleArea(place)
-    return () => {
-      window.removeEventListener('scroll', place, true)
-      window.removeEventListener('resize', place)
-      unsubscribeVisibleArea()
-    }
+    triggerRef.current = ref.current?.parentElement ?? null
   }, [])
+  const { popupStyle, contentRef } = useAnchoredPopup({ open: true, anchorRef: triggerRef, gap: 6 })
   return (
     <div ref={ref} style={{
-      position: 'fixed', top: position?.top ?? 0, left: position?.left ?? 0, zIndex: 300,
-      visibility: position ? 'visible' : 'hidden',
+      ...popupStyle,
+      zIndex: 300,
       background: 'var(--surface)',
       border: '1px solid color-mix(in srgb, var(--border) 50%, var(--muted) 50%)',
       borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
       minWidth: 290, ...style,
     }}>
-      {children}
+      <div ref={contentRef}>{children}</div>
     </div>
   )
 }

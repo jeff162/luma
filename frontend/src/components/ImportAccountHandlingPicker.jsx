@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAnchoredPopupLayout, useDismissiblePopup } from '../lib/uiInteractions.js'
+import { useDismissiblePopup } from '../lib/uiInteractions.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { getAccountOptionLabel, selectableAccountOptions } from '../lib/importExport/importAccountMatching.js'
 import ImportNewAccountFields from './ImportNewAccountFields.jsx'
 import { Button } from './ui.jsx'
@@ -36,18 +37,16 @@ export default function ImportAccountHandlingPicker({
   }, [newNameFocusRequest])
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const { openUp } = useDismissiblePopup({
+  useDismissiblePopup({
     open,
     setOpen,
     anchorRef: wrapRef,
     popupRef: listRef,
-    placementDeps: [headers.length, allHeaders.length],
-    preferredPopupHeight: 320,
   })
-  const popupLayout = useAnchoredPopupLayout({
+  const { popupStyle: popupLayout, contentRef: listContentRef } = useAnchoredPopup({
     open,
     anchorRef: wrapRef,
-    openUp,
+    anchorWidth: 'exact',
     minWidth: 220,
   })
 
@@ -132,14 +131,12 @@ export default function ImportAccountHandlingPicker({
   }
 
   const listStyle = {
-    position: 'fixed',
+    ...popupLayout,
     zIndex: 720,
     background: 'var(--surface)',
     border: '1px solid var(--border)',
     borderRadius: 8,
     boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-    overflowY: 'auto',
-    ...(popupLayout || {}),
   }
   const showAcceptSuggestion = !colAccount && !accountId && !singleAccountNew?.enabled && suggestedColumn && typeof onAcceptSuggestedColumn === 'function'
 
@@ -187,84 +184,86 @@ export default function ImportAccountHandlingPicker({
 
         {open && (
           <div ref={listRef} style={listStyle}>
-            <div
-              style={itemStyle(!colAccount && !accountId && !singleAccountNew?.enabled)}
-              onMouseDown={e => {
-                e.preventDefault()
-                onChange({ acct: '', createNew: false })
-                setOpen(false)
-              }}
-            >
-              <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
-            </div>
-
-            {allHeaders.length > 0 && (
-              <>
-                <div style={groupLabel}>Map rows from a column in the file</div>
-                {showSuggestedSection && suggestedHeaders.map(h => (
-                  <div
-                    key={h}
-                    style={itemStyle(colAccount === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange({ col: h, createNew: false })
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
-                    <span>{h}</span>
-                    <span style={suggestedPillStyle}>Possible</span>
-                    {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </div>
-                ))}
-                {directHeaders.map(h => (
-                  <div
-                    key={h}
-                    style={itemStyle(colAccount === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange({ col: h, createNew: false })
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
-                    <span>{h}</span>
-                    {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </div>
-                ))}
-              </>
-            )}
-
-            <>
-              <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Map transactions-&gt;single account</div>
-              {offerableAccounts.map(a => (
-                <div
-                  key={a.id}
-                  style={itemStyle(accountId === a.id)}
-                  onMouseDown={e => {
-                    e.preventDefault()
-                    onChange({ acct: a.id, createNew: false })
-                    setOpen(false)
-                  }}
-                >
-                  <span style={{ flex: 1 }}>{getAccountOptionLabel(a, accountsById)}</span>
-                  {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                </div>
-              ))}
+            <div ref={listContentRef}>
               <div
-                style={itemStyle(!!singleAccountNew?.enabled)}
+                style={itemStyle(!colAccount && !accountId && !singleAccountNew?.enabled)}
                 onMouseDown={e => {
                   e.preventDefault()
-                  onChange({ acct: '', createNew: true })
+                  onChange({ acct: '', createNew: false })
                   setOpen(false)
-                  setNewNameFocusRequest(n => n + 1)
                 }}
               >
-                <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
-                <span style={{ flex: 1 }}>Create new account…</span>
-                {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
               </div>
-            </>
+
+              {allHeaders.length > 0 && (
+                <>
+                  <div style={groupLabel}>Map rows from a column in the file</div>
+                  {showSuggestedSection && suggestedHeaders.map(h => (
+                    <div
+                      key={h}
+                      style={itemStyle(colAccount === h)}
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        onChange({ col: h, createNew: false })
+                        setOpen(false)
+                      }}
+                    >
+                      <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
+                      <span>{h}</span>
+                      <span style={suggestedPillStyle}>Possible</span>
+                      {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                    </div>
+                  ))}
+                  {directHeaders.map(h => (
+                    <div
+                      key={h}
+                      style={itemStyle(colAccount === h)}
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        onChange({ col: h, createNew: false })
+                        setOpen(false)
+                      }}
+                    >
+                      <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
+                      <span>{h}</span>
+                      {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              <>
+                <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Map transactions-&gt;single account</div>
+                {offerableAccounts.map(a => (
+                  <div
+                    key={a.id}
+                    style={itemStyle(accountId === a.id)}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      onChange({ acct: a.id, createNew: false })
+                      setOpen(false)
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{getAccountOptionLabel(a, accountsById)}</span>
+                    {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                  </div>
+                ))}
+                <div
+                  style={itemStyle(!!singleAccountNew?.enabled)}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    onChange({ acct: '', createNew: true })
+                    setOpen(false)
+                    setNewNameFocusRequest(n => n + 1)
+                  }}
+                >
+                  <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
+                  <span style={{ flex: 1 }}>Create new account…</span>
+                  {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                </div>
+              </>
+            </div>
           </div>
         )}
       </div>

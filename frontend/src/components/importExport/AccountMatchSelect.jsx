@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { useAnchoredPopupLayout, useDismissiblePopup } from '../../lib/uiInteractions.js'
+import { useDismissiblePopup } from '../../lib/uiInteractions.js'
+import { useAnchoredPopup } from '../../lib/anchoredPopup.js'
 import { getAccountOptionLabel } from '../../lib/importExport/importAccountMatching.js'
 
 /*
@@ -46,15 +47,18 @@ export default function AccountMatchSelect({
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const { openUp } = useDismissiblePopup({
+  useDismissiblePopup({
     open,
     setOpen,
     anchorRef: wrapRef,
     popupRef: listRef,
-    placementDeps: [options.length, candidates.length],
-    preferredPopupHeight: 320,
   })
-  const popupLayout = useAnchoredPopupLayout({ open, anchorRef: wrapRef, openUp, minWidth: 220 })
+  const { popupStyle: popupLayout, contentRef: listContentRef } = useAnchoredPopup({
+    open,
+    anchorRef: wrapRef,
+    anchorWidth: 'exact',
+    minWidth: 220,
+  })
 
   const candidateIds = new Set(candidates.map(a => a?.id).filter(Boolean))
   // Candidates are shown once, at the top. An account appearing in both sections would read as two
@@ -152,70 +156,72 @@ export default function AccountMatchSelect({
           role="listbox"
           aria-label="Account for this source account"
           style={{
-            position: 'fixed', zIndex: 720, background: 'var(--surface)',
+            ...popupLayout,
+            zIndex: 720, background: 'var(--surface)',
             border: '1px solid var(--border)', borderRadius: 8,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.25)', overflowY: 'auto',
-            ...(popupLayout || {}),
+            boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
           }}
         >
-          {onClear ? (
-            <button
-              type="button" role="option" aria-selected={!value && !createNew}
-              style={menuItemStyle(!value && !createNew)}
-              onMouseDown={choose(() => onClear())}
-            >
-              <span style={{ flex: 1, color: 'var(--muted)' }}>— Select —</span>
-            </button>
-          ) : null}
+          <div ref={listContentRef}>
+            {onClear ? (
+              <button
+                type="button" role="option" aria-selected={!value && !createNew}
+                style={menuItemStyle(!value && !createNew)}
+                onMouseDown={choose(() => onClear())}
+              >
+                <span style={{ flex: 1, color: 'var(--muted)' }}>— Select —</span>
+              </button>
+            ) : null}
 
-          {showCandidates ? candidates.map(account => (
-            <button
-              key={account.id}
-              type="button" role="option" aria-selected={value === account.id}
-              style={menuItemStyle(value === account.id)}
-              onMouseDown={choose(() => onSelectAccount?.(account))}
-            >
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {getAccountOptionLabel(account, accountsById)}
-              </span>
-              <span style={possiblePillStyle}>Possible</span>
-            </button>
-          )) : null}
+            {showCandidates ? candidates.map(account => (
+              <button
+                key={account.id}
+                type="button" role="option" aria-selected={value === account.id}
+                style={menuItemStyle(value === account.id)}
+                onMouseDown={choose(() => onSelectAccount?.(account))}
+              >
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {getAccountOptionLabel(account, accountsById)}
+                </span>
+                <span style={possiblePillStyle}>Possible</span>
+              </button>
+            )) : null}
 
-          {showCandidates && (otherOptions.length || inFlightOptions.length) ? divider : null}
+            {showCandidates && (otherOptions.length || inFlightOptions.length) ? divider : null}
 
-          {inFlightOptions.length ? (
-            <>
-              {showHeadings ? heading('New in this import') : null}
-              {inFlightOptions.map(option => (
-                <button
-                  key={option.value}
-                  type="button" role="option" aria-selected={false}
-                  style={menuItemStyle(false)}
-                  onMouseDown={choose(() => onSelectInFlight?.(option))}
-                >
-                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    + {option.label}
-                  </span>
-                </button>
-              ))}
-            </>
-          ) : null}
+            {inFlightOptions.length ? (
+              <>
+                {showHeadings ? heading('New in this import') : null}
+                {inFlightOptions.map(option => (
+                  <button
+                    key={option.value}
+                    type="button" role="option" aria-selected={false}
+                    style={menuItemStyle(false)}
+                    onMouseDown={choose(() => onSelectInFlight?.(option))}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      + {option.label}
+                    </span>
+                  </button>
+                ))}
+              </>
+            ) : null}
 
-          {showHeadings && otherOptions.length ? heading('Existing accounts') : null}
+            {showHeadings && otherOptions.length ? heading('Existing accounts') : null}
 
-          {otherOptions.map(account => (
-            <button
-              key={account.id}
-              type="button" role="option" aria-selected={value === account.id}
-              style={menuItemStyle(value === account.id)}
-              onMouseDown={choose(() => onSelectAccount?.(account))}
-            >
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {getAccountOptionLabel(account, accountsById)}
-              </span>
-            </button>
-          ))}
+            {otherOptions.map(account => (
+              <button
+                key={account.id}
+                type="button" role="option" aria-selected={value === account.id}
+                style={menuItemStyle(value === account.id)}
+                onMouseDown={choose(() => onSelectAccount?.(account))}
+              >
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {getAccountOptionLabel(account, accountsById)}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

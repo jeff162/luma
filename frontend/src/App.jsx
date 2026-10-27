@@ -223,7 +223,10 @@ class AppErrorBoundary extends Component {
 }
 
 const s = {
-  shell: { display: 'flex', height: '100vh', overflow: 'hidden' },
+  // The visible height (`dvh`), not `100vh`: iPad Safari's `vh` is the height with its toolbar hidden, so
+  // with the toolbar showing the page would be taller than the screen, and Safari can leave it scrolled
+  // by the difference after the on-screen keyboard closes.
+  shell: { display: 'flex', height: '100dvh', overflow: 'hidden' },
   nav: {
     background: 'var(--surface)', borderRight: '1px solid var(--border)',
     display: 'flex', flexDirection: 'column', padding: '24px 0', flexShrink: 0,

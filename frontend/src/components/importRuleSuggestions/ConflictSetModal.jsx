@@ -7,8 +7,11 @@
 
 import { IconButton } from '../ui.jsx'
 import { ProgressPill } from './suggestionPresentational.jsx'
+import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../../lib/visibleViewport.js'
 
 export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
+  // Kept on the visible area while an on-screen keyboard is open (see visibleViewport.js).
+  const area = useVisibleViewport()
   if (!sections.length) return null
 
   return (
@@ -16,7 +19,7 @@ export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
       onMouseDown={onClose}
       style={{
         position: 'fixed',
-        inset: 0,
+        ...visibleLayerBox(area),
         zIndex: 890,
         display: 'flex',
         alignItems: 'center',
@@ -33,7 +36,7 @@ export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
           borderRadius: 14,
           width: 980,
           maxWidth: '96vw',
-          maxHeight: '88vh',
+          maxHeight: `calc(${visibleHeightCss(area)} * 0.88)`,
           overflowY: 'auto',
           boxShadow: '0 20px 60px rgba(0,0,0,0.42)',
         }}

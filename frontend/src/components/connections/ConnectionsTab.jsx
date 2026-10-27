@@ -558,7 +558,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   const [revokeRefused, setRevokeRefused] = useState(null)
   const [disconnecting, setDisconnecting] = useState(false)
   // The open connection card's "⋯" menu. One at a time, so it lives on the tab rather than per card.
-  const [cardMenu, setCardMenu] = useState(null) // { connectionId, provider, connection, anchorRect }
+  const [cardMenu, setCardMenu] = useState(null) // { connectionId, provider, connection, anchorElement }
   // Which connections have their account list open. Collapsed by default: the list is the card's bulk —
   // a seven-account connection ran to fifteen rows — and it is reference rather than something asking to
   // be acted on. What *is* asking (an account with no destination) is counted in the collapsed summary,
@@ -1419,7 +1419,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                               open={cardMenu?.connectionId === c.id}
                               title={`Actions for ${c.institution || 'this connection'}`}
                               disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing || removingSync}
-                              onOpen={rect => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorRect: rect })}
+                              onOpen={element => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorElement: element })}
                             />
                           </div>
                         </div>
@@ -1700,7 +1700,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           sync pull the same history back, so its red belongs on the confirm button, not here. */}
       {cardMenu ? (
         <ActionMenu
-          anchorRect={cardMenu.anchorRect}
+          anchorElement={cardMenu.anchorElement}
           onClose={() => setCardMenu(null)}
           minWidth={220}
           items={[

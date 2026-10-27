@@ -830,7 +830,7 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       flexWrap: 'wrap', rowGap: 12,
-      marginBottom: 24,
+      marginBottom: 16,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -878,14 +878,20 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
 // accents above the capitals, so a label centred by its box draws low, by a pixel or more in some fonts.
 // Where the browser can trim that box to the capitals and the baseline, the padding grows to keep the
 // button's height. A caller that sizes the button itself (its own padding, height or line height) keeps
-// the untrimmed box, because its numbers were chosen against it.
+// the untrimmed box, because its numbers were chosen against it. So does one laid out as a flex or grid
+// container: the trim reaches only a block's own lines, so its label keeps the full box, and the larger
+// padding would make it taller than its size.
 const BUTTON_SIZES = {
   regular: { fontSize: 13, borderRadius: 8 },
   compact: { fontSize: 12, borderRadius: 6 },
 }
 
-function sizesItself(style) {
-  return !!style && ['padding', 'paddingTop', 'paddingBottom', 'paddingBlock', 'height', 'lineHeight'].some(key => key in style)
+const UNTRIMMABLE_DISPLAYS = new Set(['flex', 'inline-flex', 'grid', 'inline-grid'])
+
+function keepsUntrimmedBox(style) {
+  if (!style) return false
+  if (UNTRIMMABLE_DISPLAYS.has(style.display)) return true
+  return ['padding', 'paddingTop', 'paddingBottom', 'paddingBlock', 'height', 'lineHeight'].some(key => key in style)
 }
 
 function buttonLook(variant, tone, pressed) {
@@ -917,7 +923,7 @@ function buttonLook(variant, tone, pressed) {
 
 export function Button({ children, onClick, onMouseDown, onPointerDown, variant = 'primary', tone, pressed, size = 'regular',
   disabled, style, title, type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress, ...rest }) {
-  const className = `ui-button ui-button-${size}${sizesItself(style) ? '' : ' ui-button-trim'}`
+  const className = `ui-button ui-button-${size}${keepsUntrimmedBox(style) ? '' : ' ui-button-trim'}`
   const showsProgress = typeof progress === 'number' && Number.isFinite(progress)
   const look = {
     ...BUTTON_SIZES[size],

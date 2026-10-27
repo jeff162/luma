@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
 import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle, SegmentedToggle } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import TransientTextInput from './TransientTextInput.jsx'
+
+// How many entries show between the selected category and the field's end of the list when it opens.
+const ENTRIES_TOWARD_FIELD = 4
 
 /*
  * CategoryPicker is a hybrid search-and-create control: it preserves group context while searching,
@@ -269,7 +273,6 @@ export default function CategoryPicker({
   const [creating, setCreating] = useState(null)
   const [query, setQuery] = useState(initialQuery || '')
   const [cursor, setCursor] = useState(0)
-  const [panelPosition, setPanelPosition] = useState(null)
   const ref = useRef(null)
   const inputRef = useRef(null)
   const panelRef = useRef(null)
@@ -365,15 +368,27 @@ export default function CategoryPicker({
   }, [open, trimmedQuery])
 
   // Opening the (unsearched) list while a category is already chosen: put the keyboard cursor on it and
-  // scroll it into view, so the current choice is visibly selected and the user can see the categories
-  // around it rather than starting at the top.
+  // scroll the list so it sits a few entries from the field's end of the list (the top when the list
+  // opened below the field, the bottom when it opened above), so the current choice is visibly selected
+  // with the categories around it. Only the list scrolls: `scrollIntoView` would also scroll the page,
+  // which with an on-screen keyboard fights the page keeping the focused field in view, and the screen
+  // jumps.
   useEffect(() => {
     if (!open || trimmedQuery || value == null) return
     const idx = displayedIndexById.get(value)
     if (idx == null) return
     setCursor(idx)
     const timer = setTimeout(() => {
-      panelRef.current?.querySelector('[data-picker-row-selected="true"]')?.scrollIntoView({ block: 'nearest' })
+      const panel = panelRef.current
+      const row = panel?.querySelector('[data-picker-row-selected="true"]')
+      if (!row || !ref.current) return
+      const panelRect = panel.getBoundingClientRect()
+      const rowTop = row.getBoundingClientRect().top - panelRect.top - panel.clientTop + panel.scrollTop
+      const margin = ENTRIES_TOWARD_FIELD * row.offsetHeight
+      const opensAbove = panelRect.bottom <= ref.current.getBoundingClientRect().top + 1
+      panel.scrollTop = Math.max(0, opensAbove
+        ? rowTop + row.offsetHeight + margin - panel.clientHeight
+        : rowTop - margin)
     }, 0)
     return () => clearTimeout(timer)
   }, [open, trimmedQuery, value, displayedIndexById])
@@ -435,47 +450,13 @@ export default function CategoryPicker({
     }
   }
 
-  useLayoutEffect(() => {
-    if (!open || !ref.current) {
-      setPanelPosition(null)
-      return
-    }
-
-    // The panel portals to document.body, so it has to measure against the viewport instead of any clipped parent container.
-    const triggerRect = ref.current.getBoundingClientRect()
-    const viewportPadding = 8
-    const panelGap = 4
-    const minPanelWidth = compact ? 280 : 340
-    const panelWidth = Math.min(
-      Math.max(triggerRect.width, minPanelWidth),
-      window.innerWidth - viewportPadding * 2,
-    )
-    const triggerMidpoint = triggerRect.top + (triggerRect.height / 2)
-    const availableBelow = Math.max(0, window.innerHeight - triggerRect.bottom - viewportPadding - panelGap)
-    const availableAbove = Math.max(0, triggerRect.top - viewportPadding - panelGap)
-    const openUp = triggerMidpoint > (window.innerHeight / 2)
-    const availableSpace = openUp ? availableAbove : availableBelow
-    const maxHeight = Math.max(0, availableSpace)
-    const left = Math.min(
-      Math.max(viewportPadding, triggerRect.left),
-      window.innerWidth - panelWidth - viewportPadding,
-    )
-    const top = openUp ? null : triggerRect.bottom + panelGap
-    const bottom = openUp ? Math.max(viewportPadding, window.innerHeight - triggerRect.top + panelGap) : null
-
-    setPanelPosition({ left, top, bottom, width: panelWidth, maxHeight })
-  }, [open, compact, creating, query, categories.length])
-
-  useEffect(() => {
-    if (!open) return
-    function handleResize() {
-      setPanelPosition(null)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => {
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [open])
+  // The panel portals to document.body and is kept against the field by the browser (useAnchoredPopup).
+  const { popupStyle: panelPlacementStyle, contentRef: panelContentRef } = useAnchoredPopup({
+    open,
+    anchorRef: ref,
+    anchorWidth: 'exact',
+    minWidth: compact ? 280 : 340,
+  })
 
   useDismissibleLayer({
     open,
@@ -694,149 +675,144 @@ export default function CategoryPicker({
         <div
           ref={panelRef}
           style={{
-            position: 'fixed',
-            left: panelPosition?.left ?? 8,
-            top: panelPosition?.top ?? 'auto',
-            bottom: panelPosition?.bottom ?? 'auto',
-            width: panelPosition?.width ?? (compact ? 280 : 340),
+            ...panelPlacementStyle,
             zIndex: panelZIndex,
-            visibility: panelPosition ? 'visible' : 'hidden',
             background: 'var(--surface)',
             border: '1px solid var(--border)',
             borderRadius: 8,
             boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-            maxHeight: panelPosition?.maxHeight ?? 300,
-            overflowY: 'auto',
           }}
         >
-          {creating === 'group' ? (
-            <div style={{ padding: 8 }}>
-              <NewCategoryForm groups={groups} mode="group" defaultGroupId={null} onSave={handleGroupCreated} onCancel={() => setCreating(null)} />
-            </div>
-          ) : creating?.type === 'leaf' && creating.groupId == null ? (
-            <div style={{ padding: 8 }}>
-              <NewCategoryForm
-                groups={groups}
-                mode="leaf"
-                defaultGroupId={null}
-                defaultName={creating.defaultName ?? query.trim()}
-                onSave={handleCreated}
-                onCreateGroup={createdGroup => {
-                  onAddCategory?.(createdGroup)
-                  setQuery('')
-                  setCreating({ type: 'leaf', groupId: createdGroup.id, defaultName: creating.defaultName ?? query.trim() })
-                  setOpen(true)
-                }}
-                onCancel={() => setCreating(null)}
-              />
-            </div>
-          ) : (
-            <>
-              {clearable && value && !trimmedQuery ? (
-                <>
-                  <div
-                    onMouseDown={e => { e.preventDefault(); clearSelection() }}
-                    style={{ padding: '6px 10px', fontSize: 13, color: 'var(--muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <span style={{ fontSize: 12, opacity: 0.75 }} aria-hidden>⊘</span>
-                    <span style={{ fontStyle: 'italic' }}>Uncategorized</span>
-                  </div>
-                  <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                </>
-              ) : null}
-              {displayGroups.map(({ group, categories: groupCategories }) => {
-                const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
-                return (
-                  <div key={group.id}>
-                    <SectionEyebrow style={{ padding: '5px 10px 1px', display: 'flex', alignItems: 'center', gap: 7 }}>
-                      <CategoryMarker kind="group" />
-                      <span>{group.name}</span>
-                    </SectionEyebrow>
-                    {groupCategories.map(c => {
-                      const active = trimmedQuery && displayedIndexById.get(c.id) === cursor
-                      const selectedRow = value === c.id
-                      const background = active
-                        ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-                        : (!trimmedQuery && selectedRow)
+          <div ref={panelContentRef}>
+            {creating === 'group' ? (
+              <div style={{ padding: 8 }}>
+                <NewCategoryForm groups={groups} mode="group" defaultGroupId={null} onSave={handleGroupCreated} onCancel={() => setCreating(null)} />
+              </div>
+            ) : creating?.type === 'leaf' && creating.groupId == null ? (
+              <div style={{ padding: 8 }}>
+                <NewCategoryForm
+                  groups={groups}
+                  mode="leaf"
+                  defaultGroupId={null}
+                  defaultName={creating.defaultName ?? query.trim()}
+                  onSave={handleCreated}
+                  onCreateGroup={createdGroup => {
+                    onAddCategory?.(createdGroup)
+                    setQuery('')
+                    setCreating({ type: 'leaf', groupId: createdGroup.id, defaultName: creating.defaultName ?? query.trim() })
+                    setOpen(true)
+                  }}
+                  onCancel={() => setCreating(null)}
+                />
+              </div>
+            ) : (
+              <>
+                {clearable && value && !trimmedQuery ? (
+                  <>
+                    <div
+                      onMouseDown={e => { e.preventDefault(); clearSelection() }}
+                      style={{ padding: '6px 10px', fontSize: 13, color: 'var(--muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <span style={{ fontSize: 12, opacity: 0.75 }} aria-hidden>⊘</span>
+                      <span style={{ fontStyle: 'italic' }}>Uncategorized</span>
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                  </>
+                ) : null}
+                {displayGroups.map(({ group, categories: groupCategories }) => {
+                  const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
+                  return (
+                    <div key={group.id}>
+                      <SectionEyebrow style={{ padding: '5px 10px 1px', display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <CategoryMarker kind="group" />
+                        <span>{group.name}</span>
+                      </SectionEyebrow>
+                      {groupCategories.map(c => {
+                        const active = trimmedQuery && displayedIndexById.get(c.id) === cursor
+                        const selectedRow = value === c.id
+                        const background = active
                           ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-                        : 'transparent'
-                      return (
-                        <div
-                          key={c.id}
-                          data-picker-row-active={active ? 'true' : 'false'}
-                          data-picker-row-selected={selectedRow ? 'true' : 'false'}
-                          onMouseDown={e => { e.preventDefault(); pick(c) }}
-                          onMouseEnter={() => {
-                            const nextCursor = displayedIndexById.get(c.id)
-                            if (nextCursor != null) setCursor(nextCursor)
-                          }}
-                          style={{ padding: '5px 10px 5px 24px', fontSize: 13, cursor: 'pointer', background, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
-                        >
-                          <CategoryMarker kind="category" />
-                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {renderHighlightedCategoryName(c.name, trimmedQuery)}
-                          </span>
-                          {selectedRow ? <span style={{ marginLeft: 'auto', color: 'var(--accent2)', fontSize: 11 }}>✓</span> : null}
+                          : (!trimmedQuery && selectedRow)
+                            ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                          : 'transparent'
+                        return (
+                          <div
+                            key={c.id}
+                            data-picker-row-active={active ? 'true' : 'false'}
+                            data-picker-row-selected={selectedRow ? 'true' : 'false'}
+                            onMouseDown={e => { e.preventDefault(); pick(c) }}
+                            onMouseEnter={() => {
+                              const nextCursor = displayedIndexById.get(c.id)
+                              if (nextCursor != null) setCursor(nextCursor)
+                            }}
+                            style={{ padding: '5px 10px 5px 24px', fontSize: 13, cursor: 'pointer', background, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+                          >
+                            <CategoryMarker kind="category" />
+                            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {renderHighlightedCategoryName(c.name, trimmedQuery)}
+                            </span>
+                            {selectedRow ? <span style={{ marginLeft: 'auto', color: 'var(--accent2)', fontSize: 11 }}>✓</span> : null}
+                          </div>
+                        )
+                      })}
+                      {creatingHere ? (
+                        <div style={{ padding: '4px 10px 6px 18px' }}>
+                          <NewCategoryForm
+                            groups={groups}
+                            mode="leaf"
+                            defaultGroupId={group.id}
+                            defaultName={creating.defaultName ?? query.trim()}
+                            onSave={handleCreated}
+                            onCancel={() => setCreating(null)}
+                          />
                         </div>
-                      )
-                    })}
-                    {creatingHere ? (
-                      <div style={{ padding: '4px 10px 6px 18px' }}>
-                        <NewCategoryForm
-                          groups={groups}
-                          mode="leaf"
-                          defaultGroupId={group.id}
-                          defaultName={creating.defaultName ?? query.trim()}
-                          onSave={handleCreated}
-                          onCancel={() => setCreating(null)}
-                        />
-                      </div>
-                    ) : !trimmedQuery ? (
-                      <div
-                        onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: group.id }) }}
-                        style={{ padding: '4px 10px 5px 24px', fontSize: 12, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                      >
-                        ＋ New category in {group.name}
-                      </div>
-                    ) : null}
+                      ) : !trimmedQuery ? (
+                        <div
+                          onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: group.id }) }}
+                          style={{ padding: '4px 10px 5px 24px', fontSize: 12, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
+                          onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                          onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
+                        >
+                          ＋ New category in {group.name}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+                {trimmedQuery && displayGroups.length === 0 && (
+                  <div style={{ padding: '10px 12px 8px', fontSize: 12, color: 'var(--muted)' }}>
+                    No matching categories
                   </div>
-                )
-              })}
-              {trimmedQuery && displayGroups.length === 0 && (
-                <div style={{ padding: '10px 12px 8px', fontSize: 12, color: 'var(--muted)' }}>
-                  No matching categories
-                </div>
-              )}
-              {trimmedQuery && (
-                <>
-                  <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                  <div
-                    onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: null, defaultName: query.trim() }) }}
-                    style={{ padding: '5px 10px 6px', fontSize: 12, fontWeight: 600, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.9 }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = '0.9'}
-                  >
-                    ＋ New category
-                  </div>
-                </>
-              )}
-              {!trimmedQuery && (
-                <>
-                  <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                  <div
-                    onMouseDown={e => { e.stopPropagation(); setCreating('group') }}
-                    style={{ padding: '5px 10px 6px', fontSize: 11, color: 'var(--muted)', cursor: 'pointer', opacity: 0.8 }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                  >
-                    ＋ New group
-                  </div>
-                </>
-              )}
-            </>
-          )}
+                )}
+                {trimmedQuery && (
+                  <>
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                    <div
+                      onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: null, defaultName: query.trim() }) }}
+                      style={{ padding: '5px 10px 6px', fontSize: 12, fontWeight: 600, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.9 }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                      onMouseLeave={e => e.currentTarget.style.opacity = '0.9'}
+                    >
+                      ＋ New category
+                    </div>
+                  </>
+                )}
+                {!trimmedQuery && (
+                  <>
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                    <div
+                      onMouseDown={e => { e.stopPropagation(); setCreating('group') }}
+                      style={{ padding: '5px 10px 6px', fontSize: 11, color: 'var(--muted)', cursor: 'pointer', opacity: 0.8 }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                      onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
+                    >
+                      ＋ New group
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>,
         document.body,
       )}

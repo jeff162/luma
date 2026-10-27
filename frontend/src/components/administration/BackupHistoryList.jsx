@@ -116,14 +116,14 @@ export function BackupHistoryList({ rows, onRename, onTrash }) {
             <ActionMenuButton
               open={menu?.row.id === row.id}
               title="Actions for this backup"
-              onOpen={anchorRect => setMenu({ row, anchorRect })}
+              onOpen={anchorElement => setMenu({ row, anchorElement })}
             />
           )}
         />
       ))}
       {menu ? (
         <ActionMenu
-          anchorRect={menu.anchorRect}
+          anchorElement={menu.anchorElement}
           onClose={() => setMenu(null)}
           items={[
             { label: 'Edit filename', onClick: () => setEditing({ id: menu.row.id, draft: menu.row.filename || '' }) },

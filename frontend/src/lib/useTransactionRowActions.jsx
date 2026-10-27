@@ -42,6 +42,7 @@ import SplitEditorDialog from '../components/SplitEditorDialog.jsx'
 import { wholeTransactionRow } from './splitRows.js'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
+import { useVisibleViewport, visibleLayerBox } from './visibleViewport.js'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, onMembershipChange, categories, onAddCategory } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
@@ -358,6 +359,28 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   }
 }
 
+// The centered overlay a row menu opens its note or tag editor in. It covers the visible area, which
+// ends at an on-screen keyboard, and its own scroll keeps an editor taller than that reachable; the
+// editor's auto margins centre it only while it fits.
+function MenuEditorOverlay({ onClose, children }) {
+  const area = useVisibleViewport()
+  return (
+    <div
+      data-modal-overlay=""
+      style={{
+        position: 'fixed', ...visibleLayerBox(area), zIndex: 1000,
+        display: 'flex', overflowY: 'auto', padding: 16,
+        background: 'rgba(0,0,0,0.3)',
+      }}
+      onClick={onClose}
+    >
+      <div style={{ margin: 'auto' }} onClick={e => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export function TransactionRowActionsChrome({ controller }) {
   const {
     menu, menuReady, closeMenu, onOpenDetail,
@@ -398,53 +421,33 @@ export function TransactionRowActionsChrome({ controller }) {
         lets an underlying panel yield Escape to them). The inline note/tag affordances in
         TransactionMarkersCell stay the primary entry point; this mirrors them for the menu path. */}
       {noteTarget ? (
-        <div
-          data-modal-overlay=""
-          style={{
-            position: 'fixed', inset: 0, zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.3)',
-          }}
-          onClick={() => setNoteTarget(null)}
-        >
-          <div onClick={e => e.stopPropagation()}>
-            <NotePopover
-              txn={noteTarget}
-              positioning="relative"
-              onSave={handleNoteSave}
-              onClose={() => setNoteTarget(null)}
-            />
-          </div>
-        </div>
+        <MenuEditorOverlay onClose={() => setNoteTarget(null)}>
+          <NotePopover
+            txn={noteTarget}
+            positioning="relative"
+            onSave={handleNoteSave}
+            onClose={() => setNoteTarget(null)}
+          />
+        </MenuEditorOverlay>
       ) : null}
       {tagTarget ? (
-        <div
-          data-modal-overlay=""
-          style={{
-            position: 'fixed', inset: 0, zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.3)',
-          }}
-          onClick={() => setTagTarget(null)}
-        >
-          <div onClick={e => e.stopPropagation()}>
-            <TagPickerWithCreate
-              allTags={tagModalAllTags}
-              selectedTagIds={new Set((tagTarget.tags || []).map(t => t.id))}
-              inheritedTagIds={new Set(
-                (tagTarget.tags || [])
-                  .filter(t => t.source && t.source !== 'direct')
-                  .map(t => t.id),
-              )}
-              blockedTagIds={new Set((tagTarget.blocked_tags || []).map(t => t.id))}
-              loading={tagsLoading}
-              positioning="relative"
-              onToggleTag={toggleTagFromModal}
-              onTagCreated={addTagToCache}
-              onClose={() => setTagTarget(null)}
-            />
-          </div>
-        </div>
+        <MenuEditorOverlay onClose={() => setTagTarget(null)}>
+          <TagPickerWithCreate
+            allTags={tagModalAllTags}
+            selectedTagIds={new Set((tagTarget.tags || []).map(t => t.id))}
+            inheritedTagIds={new Set(
+              (tagTarget.tags || [])
+                .filter(t => t.source && t.source !== 'direct')
+                .map(t => t.id),
+            )}
+            blockedTagIds={new Set((tagTarget.blocked_tags || []).map(t => t.id))}
+            loading={tagsLoading}
+            positioning="relative"
+            onToggleTag={toggleTagFromModal}
+            onTagCreated={addTagToCache}
+            onClose={() => setTagTarget(null)}
+          />
+        </MenuEditorOverlay>
       ) : null}
       {pendingTrash ? (
         <AppConfirmDialog

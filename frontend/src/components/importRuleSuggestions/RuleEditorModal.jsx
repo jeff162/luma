@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import RuleForm from '../RuleForm.jsx'
 import { Button, DialogActions, IconButton } from '../ui.jsx'
+import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../../lib/visibleViewport.js'
 
 export function RuleEditorModal({
   suggestion,
@@ -37,6 +38,8 @@ export function RuleEditorModal({
   matchingRowsOpen = false,
   matchingRowsPanel = null,
 }) {
+  // Kept on the visible area while an on-screen keyboard is open (see visibleViewport.js).
+  const area = useVisibleViewport()
   const matchOnly = mode === 'match-only'
   const isAccepted = suggestion.review_status === 'accepted'
   const formRef = useRef(null)
@@ -191,7 +194,7 @@ export function RuleEditorModal({
       onMouseDown={dismiss}
       style={{
         position: 'fixed',
-        inset: 0,
+        ...visibleLayerBox(area),
         zIndex: 900,
         display: 'flex',
         alignItems: 'center',
@@ -209,7 +212,7 @@ export function RuleEditorModal({
           boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
           width: matchingRowsPanel ? 'min(1280px, 96vw)' : 640,
           maxWidth: '96vw',
-          maxHeight: '90vh',
+          maxHeight: `calc(${visibleHeightCss(area)} * 0.9)`,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',

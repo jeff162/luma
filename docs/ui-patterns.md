@@ -346,6 +346,18 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   `useDetachedReportViewer` and `MinimizedReportPill`.
 - **Geometry the user set is remembered** with `useRestorablePanelGeometry`.
 - **A panel that reflows on open stays invisible until it settles** (`usePanelReveal`).
+- **A swipe or wheel over a panel scrolls only the panel.** With nothing left to scroll inside it, the
+  gesture otherwise passes to the page behind (`useScrollContainment`, built into `DetailPanelShell`).
+- **A fixed layer that holds a text field stays above the on-screen keyboard.** iPad Safari slides the
+  visible area over the page instead of shrinking it, and a fixed layer slides off with it. A layer
+  covering the window takes `visibleLayerBox`, a height cap `visibleHeightCss`, and a floating panel
+  `placeAboveKeyboard` (`lib/visibleViewport.js`). `OverlayBackdrop`, `AppDialog` and
+  `DetailPanelShell` already do.
+- **A popup that belongs to an element is anchored by the browser** (`useAnchoredPopup`, CSS anchor
+  positioning), so it stays against that element through any scroll and through Safari's keyboard
+  slide. Placing a fixed popup from `getBoundingClientRect` goes wrong there, because WebKit measures
+  elements from the visible area while `position: fixed` places from the full-size page. A tooltip that
+  closes on scroll is the exception.
 
 ## Theming
 

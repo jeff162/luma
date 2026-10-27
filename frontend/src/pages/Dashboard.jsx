@@ -3158,7 +3158,7 @@ export default function Dashboard() {
                                   event.preventDefault()
                                   setPickerMenuOpen({
                                     id: activeTagReport.id,
-                                    anchorRect: event.currentTarget.getBoundingClientRect(),
+                                    anchorElement: event.currentTarget,
                                   })
                                 }}
                               >
@@ -3174,7 +3174,7 @@ export default function Dashboard() {
                                   <ActionMenuButton
                                     title="Manage this tag report"
                                     open={pickerMenuOpen?.id === activeTagReport.id}
-                                    onOpen={rect => setPickerMenuOpen({ id: activeTagReport.id, anchorRect: rect })}
+                                    onOpen={element => setPickerMenuOpen({ id: activeTagReport.id, anchorElement: element })}
                                   />
                                 )}
                               </div>
@@ -3846,7 +3846,7 @@ export default function Dashboard() {
           nothing to rename or delete (picking anything else discards it); it offers a way to keep it. */}
       {pickerMenuOpen && (
         <ActionMenu
-          anchorRect={pickerMenuOpen.anchorRect}
+          anchorElement={pickerMenuOpen.anchorElement}
           align="start"
           minWidth={140}
           onClose={() => setPickerMenuOpen(null)}

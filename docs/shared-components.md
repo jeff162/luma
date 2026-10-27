@@ -56,6 +56,9 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `usePanelReveal` | A panel whose size settles after its content loads. | `components/detailShared.jsx` |
 | `DetailRangeControl` + `computeDetailRange` | The Month / Year / All-time selector of a drill list. | `components/detailShared.jsx` |
 | `FloatingPanel` / `OverlayBackdrop` | The surface and backdrop under any popover or overlay. | `components/ui.jsx` |
+| `useScrollContainment` | Keeping a swipe or wheel over a layer from scrolling the page behind it. | `lib/scrollContainment.js` |
+| `useVisibleViewport` and its helpers | Keeping a fixed layer that holds a text field above an on-screen keyboard. | `lib/visibleViewport.js` |
+| `useAnchoredPopup` | A popup kept against the element it belongs to: below, beside or over it, flipping when there is no room. | `lib/anchoredPopup.js` |
 | `useDetachedReportViewer` + `MinimizedReportPill` | A report that stays open across navigation and minimizes to the navigation pane. Each report passes a `navIcon` of its own (`components/navIcons.jsx`), which is all that tells it apart in a collapsed pane. | `lib/useDetachedReportViewer.js`, `components/MinimizedReportPill.jsx` |
 | `useUnifiedDuplicatesViewer` | Opening the duplicate report from any surface. | `contexts/UnifiedDuplicatesViewerContext.jsx` |
 | `useReconciliationViewer` | Opening a reconciliation report. A new vendor is an entry in `reconciliationVendors.js` and `RECONCILIATION_REPORTS`, not a new dialog. | `contexts/ReconciliationViewerContext.jsx`, `components/importExport/reconciliation/`, `lib/reconciliationReports.js` |
@@ -89,7 +92,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `SplitButton` | A common action with its alternatives behind a caret. | `components/SplitButton.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
-| `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions. | `components/ActionMenu.jsx` |
+| `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions, opened from a button (`anchorElement`) or at the pointer (`anchorPoint`). | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 | `startPointerDrag` + `useDropZone` | Dragging an item onto a target, by mouse or by finger. | `lib/pointerDrag.js` |
 | `trackPointer` | A handle that follows a press: a splitter, a resize grip, a panel header. | `lib/pointerDrag.js` |

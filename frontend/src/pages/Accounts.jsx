@@ -22,6 +22,7 @@ import { useColumnPreference } from '../lib/useColumnPreference.js'
 import { dividerIsDraggable, moveDivider } from '../lib/columnDividers.js'
 import { localStore, sessionStore } from '../lib/browserStorage.js'
 import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -264,31 +265,21 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const [menuPos, setMenuPos] = useState(null)
   const selectedLabel = options.find(o => o.value === (value || ''))?.label || placeholder
 
-  const { openUp } = useDismissiblePopup({
+  useDismissiblePopup({
     open,
     setOpen,
     anchorRef: wrapRef,
     popupRef: listRef,
-    placementDeps: [options.length],
     disabled,
   })
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuPos(null)
-      return
-    }
-    if (!listRef.current || !wrapRef.current) return
-    const rect = wrapRef.current.getBoundingClientRect()
-    setMenuPos({
-      left: rect.left,
-      top: rect.bottom + 4,
-      width: Math.max(minOpenWidth, rect.width),
-    })
-  }, [minOpenWidth, open, options.length])
+  const { popupStyle: listPlacementStyle, contentRef: listContentRef } = useAnchoredPopup({
+    open,
+    anchorRef: wrapRef,
+    anchorWidth: 'atLeast',
+    minWidth: minOpenWidth,
+  })
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex', width: 'fit-content', maxWidth: '100%', zIndex: open ? 250 : 1 }}>
@@ -296,14 +287,6 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
         type="button"
         onClick={() => {
           if (disabled) return
-          if (!open && wrapRef.current) {
-            const rect = wrapRef.current.getBoundingClientRect()
-            setMenuPos({
-              left: rect.left,
-              top: rect.bottom + 4,
-              width: Math.max(minOpenWidth, rect.width),
-            })
-          }
           setOpen(prev => !prev)
         }}
         onContextMenu={disabled ? undefined : onContextMenu}
@@ -333,9 +316,7 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
         <div
           ref={listRef}
           style={{
-            position: 'fixed',
-            left: menuPos?.left ?? 0,
-            minWidth: menuPos?.width ?? minOpenWidth,
+            ...listPlacementStyle,
             width: 'max-content',
             maxWidth: 240,
             background: 'var(--surface2)',
@@ -344,71 +325,71 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
             boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.36)',
             padding: 4,
             zIndex: 200,
-            visibility: menuPos ? 'visible' : 'hidden',
-            ...(openUp ? { top: Math.max(8, (menuPos?.top ?? 0) - (listRef.current?.offsetHeight || 0) - 32) } : { top: menuPos?.top ?? 0 }),
           }}
         >
-          {options.map(option => {
-            const active = option.value === (value || '')
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onMouseDown={e => {
-                  e.preventDefault()
-                  onChange(option.value || '')
-                  setOpen(false)
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  width: '100%',
-                  textAlign: 'left',
-                  background: active ? 'var(--surface2)' : 'none',
-                  border: 'none',
-                  color: 'var(--text)',
-                  fontSize: 12,
-                  padding: '7px 9px',
-                  borderRadius: 7,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{ flex: 1 }}>{option.label}</span>
-                {active ? <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span> : null}
-              </button>
-            )
-          })}
-          {createLabel && onCreate ? (
-            <>
-              <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
-              <button
-                type="button"
-                onClick={e => {
-                  e.stopPropagation()
-                  setOpen(false)
-                  onCreate()
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  width: '100%',
-                  textAlign: 'left',
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--accent2)',
-                  fontSize: 12,
-                  padding: '7px 9px',
-                  borderRadius: 7,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  fontWeight: 600,
-                }}
-              >
-                {createLabel}
-              </button>
-            </>
-          ) : null}
+          <div ref={listContentRef}>
+            {options.map(option => {
+              const active = option.value === (value || '')
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    onChange(option.value || '')
+                    setOpen(false)
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    width: '100%',
+                    textAlign: 'left',
+                    background: active ? 'var(--surface2)' : 'none',
+                    border: 'none',
+                    color: 'var(--text)',
+                    fontSize: 12,
+                    padding: '7px 9px',
+                    borderRadius: 7,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{option.label}</span>
+                  {active ? <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span> : null}
+                </button>
+              )
+            })}
+            {createLabel && onCreate ? (
+              <>
+                <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation()
+                    setOpen(false)
+                    onCreate()
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    width: '100%',
+                    textAlign: 'left',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--accent2)',
+                    fontSize: 12,
+                    padding: '7px 9px',
+                    borderRadius: 7,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    fontWeight: 600,
+                  }}
+                >
+                  {createLabel}
+                </button>
+              </>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -926,50 +907,17 @@ function AccountTagsCell({
   // position to this button, so the row needs it rendered even when edit mode is off.
   const showControls = editable && (editMode || pickerOpen)
 
-  // The picker floats beside the "+" via fixed positioning rather than dropping down over the
-  // column, so the tag column below stays uncovered and the user can open the next row's picker
-  // without first closing this one. It opens to the right of the button (clamped to the viewport),
-  // and clamps vertically so it never spills past the edge or gets clipped by the list's own scroll
-  // container the way an absolutely-positioned panel would on the bottom rows.
+  // The picker floats beside the "+" rather than dropping down over the column, so the tag column below
+  // stays uncovered and the user can open the next row's picker without first closing this one. It opens
+  // to the right of the button, kept there by the browser (useAnchoredPopup), and is not clipped by the
+  // list's own scroll container the way an absolutely-positioned panel would be on the bottom rows.
   const addButtonRef = useRef(null)
-  const pickerRef = useRef(null)
-  const [pickerPos, setPickerPos] = useState(null)
-
-  useLayoutEffect(() => {
-    if (!(editable && pickerOpen)) {
-      setPickerPos(null)
-      return undefined
-    }
-    function place() {
-      const anchor = addButtonRef.current
-      if (!anchor) return
-      const rect = anchor.getBoundingClientRect()
-      const pad = 8
-      const gap = 6
-      const panelW = pickerRef.current?.offsetWidth || 252
-      const panelH = pickerRef.current?.offsetHeight || 320
-      let left = rect.right + gap
-      if (left + panelW > window.innerWidth - pad) {
-        left = Math.max(pad, window.innerWidth - panelW - pad)
-      }
-      let top = rect.top
-      if (top + panelH > window.innerHeight - pad) {
-        top = Math.max(pad, window.innerHeight - panelH - pad)
-      }
-      setPickerPos({ left, top })
-    }
-    place()
-    // Reposition as the panel grows (e.g. entering "+ New tag" create mode) and on scroll/resize.
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
-    if (observer && pickerRef.current) observer.observe(pickerRef.current)
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [editable, pickerOpen])
+  const { popupStyle: pickerPlacementStyle, contentRef: pickerContentRef } = useAnchoredPopup({
+    open: editable && pickerOpen,
+    anchorRef: addButtonRef,
+    placement: 'beside',
+    gap: 6,
+  })
 
   function toggleTag(tag, nextChecked) {
     const next = new Set(ownTagIds)
@@ -1012,25 +960,23 @@ function AccountTagsCell({
       ) : null}
       {editable && pickerOpen ? (
         <div
-          ref={pickerRef}
           style={{
-            position: 'fixed',
-            left: pickerPos?.left ?? 0,
-            top: pickerPos?.top ?? 0,
+            ...pickerPlacementStyle,
             zIndex: 520,
             borderRadius: 10,
             boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-            visibility: pickerPos ? 'visible' : 'hidden',
           }}
         >
-          <TagPickerWithCreate
-            allTags={allTags}
-            selectedTagIds={new Set(ownTagIds)}
-            onToggleTag={toggleTag}
-            onTagCreated={onTagCreated}
-            onClose={onClosePicker}
-            positioning="relative"
-          />
+          <div ref={pickerContentRef}>
+            <TagPickerWithCreate
+              allTags={allTags}
+              selectedTagIds={new Set(ownTagIds)}
+              onToggleTag={toggleTag}
+              onTagCreated={onTagCreated}
+              onClose={onClosePicker}
+              positioning="relative"
+            />
+          </div>
         </div>
       ) : null}
     </div>
@@ -1072,7 +1018,6 @@ function AccountRow({
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [ownerDraft, setOwnerDraft] = useState('')
   const [showOwnerCreate, setShowOwnerCreate] = useState(false)
-  const [ownerCreatePos, setOwnerCreatePos] = useState(null)
   const [ownerMenu, setOwnerMenu] = useState(null)
   const rowRef = useRef(null)
   const ownerCreateRef = useRef(null)
@@ -1121,46 +1066,29 @@ function AccountRow({
     if (!interactionDisabled) return
     setShowOwnerCreate(false)
     setOwnerDraft('')
-    setOwnerCreatePos(null)
     setOwnerMenu(null)
   }, [interactionDisabled])
 
   useLayoutEffect(() => {
-    if (!showOwnerCreate) return
-    if (ownerAnchorRef.current) {
-      const rect = ownerAnchorRef.current.getBoundingClientRect()
-      setOwnerCreatePos({
-        left: rect.left,
-        top: rect.top + rect.height / 2,
-      })
-    }
+    if (!showOwnerCreate) return undefined
     const focusId = requestAnimationFrame(() => {
       ownerInputRef.current?.focus()
       ownerInputRef.current?.select?.()
     })
-    function updatePosition() {
-      if (!ownerAnchorRef.current) return
-      const rect = ownerAnchorRef.current.getBoundingClientRect()
-      setOwnerCreatePos({
-        left: rect.left,
-        top: rect.top + rect.height / 2,
-      })
-    }
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      cancelAnimationFrame(focusId)
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
+    return () => cancelAnimationFrame(focusId)
   }, [showOwnerCreate])
+  // The new-owner field sits over the "Assign owner" chip, kept there by the browser (useAnchoredPopup).
+  const { popupStyle: ownerCreatePlacementStyle } = useAnchoredPopup({
+    open: showOwnerCreate,
+    anchorRef: ownerAnchorRef,
+    placement: 'over',
+  })
 
   useDismissibleLayer({
     open: showOwnerCreate,
     onClose: () => {
       setShowOwnerCreate(false)
       setOwnerDraft('')
-      setOwnerCreatePos(null)
     },
     refs: [ownerCreateRef, ownerAnchorRef],
   })
@@ -1454,10 +1382,7 @@ function AccountRow({
               ref={ownerCreateRef}
               onMouseDown={e => e.stopPropagation()}
               style={{
-                position: 'fixed',
-                left: ownerCreatePos?.left ?? 0,
-                top: ownerCreatePos?.top ?? 0,
-                transform: 'translateY(-50%)',
+                ...ownerCreatePlacementStyle,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -1468,7 +1393,6 @@ function AccountRow({
                 borderRadius: 999,
                 boxShadow: '0 12px 26px rgba(0, 0, 0, 0.16)',
                 zIndex: 260,
-                visibility: ownerCreatePos ? 'visible' : 'hidden',
               }}
             >
               <TransientTextInput
@@ -1593,7 +1517,7 @@ function AccountRow({
             open={rowMenuAccountId === account.id}
             disabled={interactionDisabled}
             title={`Actions for ${account.display_name || account.name}`}
-            onOpen={rect => onOpenRowMenu?.(account, rect)}
+            onOpen={element => onOpenRowMenu?.(account, element)}
           />
         </div>
       </div>
@@ -1983,8 +1907,8 @@ export default function Accounts() {
     notifyAccountsChanged()
   }
 
-  function openRowMenu(account, anchorRect) {
-    setRowMenu({ account, anchorRect })
+  function openRowMenu(account, anchorElement) {
+    setRowMenu({ account, anchorElement })
   }
 
   async function submitRemoval({ mode, targetAccountId, newAccount }) {
@@ -2445,7 +2369,7 @@ export default function Accounts() {
           which is a separate decision (see `delete_account`). */}
       {rowMenu ? (
         <ActionMenu
-          anchorRect={rowMenu.anchorRect}
+          anchorElement={rowMenu.anchorElement}
           onClose={() => setRowMenu(null)}
           minWidth={200}
           items={[

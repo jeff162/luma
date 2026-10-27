@@ -21,6 +21,7 @@ import {
   reconcileSnapshotGroupsWithCategories,
 } from '../lib/categoryImportState.js'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
+import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 
 export { createCategoryImportDraftState }
 
@@ -1396,8 +1397,15 @@ export default function CategoryImportWorkspace({
     setLeftPanelWidth(computedWidth)
   }, [groupColumns.length, hasPersistedLeftPanelWidth, leftPanelWidth, rightPanelHeight])
 
+  // While an on-screen keyboard is open, the workspace covers only the visible area and the new-group
+  // draft is kept above the keyboard (see visibleViewport.js).
+  const visibleArea = useVisibleViewport()
+  const groupDraftKeyboard = floatingGroupDraft
+    ? placeAboveKeyboard(visibleArea, floatingGroupDraft.y, { edge: 12, minRoom: 152 })
+    : null
+
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(15, 23, 42, 0.44)', padding: 20, display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
+    <div style={{ position: 'fixed', ...visibleLayerBox(visibleArea), zIndex: 1100, background: 'rgba(15, 23, 42, 0.44)', padding: 20, display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
       <div style={{ width: 'min(2040px, 100%)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 55%, var(--surface)), var(--surface))', border: '1px solid var(--border)', borderRadius: 18, boxShadow: '0 32px 88px rgba(15, 23, 42, 0.3)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 84%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18 }}>
@@ -1780,7 +1788,7 @@ export default function CategoryImportWorkspace({
             style={{
               position: 'fixed',
               left: floatingGroupDraft.x,
-              top: floatingGroupDraft.y,
+              top: groupDraftKeyboard?.top ?? floatingGroupDraft.y,
               zIndex: 1301,
               width: 250,
               borderRadius: 16,

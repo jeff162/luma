@@ -39,7 +39,7 @@ import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMa
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
 import { useScrollContainment } from '../lib/scrollContainment.js'
-import { useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
+import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -56,8 +56,6 @@ export const DETAIL_MAX_VISIBLE_ROWS = 7
 export const DETAIL_STACK_OFFSET = 28
 export const DETAIL_FLOATING_TOP_GUTTER = 72
 export const DETAIL_FLOATING_EDGE_GUTTER = 24
-// The least height a floating panel keeps above an on-screen keyboard; a panel lower than that moves up.
-const KEYBOARD_PANEL_MIN_ROOM = 240
 const DETAIL_SECTION_OVERHEAD = 108
 export function getDetailMonthSectionHeight(trend = []) {
   const maxCount = trend.reduce((max, row) => Math.max(max, Number(row?.count) || 0), 0)
@@ -877,16 +875,9 @@ export function DetailPanelShell({
   // While an on-screen keyboard is open, a floating panel is kept inside the visible area above it,
   // moving only as far as it must, and its height is capped to what is left (see visibleViewport.js).
   const area = useVisibleViewport()
-  let panelTop = pos?.y
-  let keyboardCap = null
-  if (pos && area.keyboard) {
-    const visibleBottom = area.top + area.height
-    panelTop = Math.max(
-      area.top + DETAIL_FLOATING_EDGE_GUTTER,
-      Math.min(pos.y, visibleBottom - KEYBOARD_PANEL_MIN_ROOM),
-    )
-    keyboardCap = `${Math.max(0, visibleBottom - panelTop - DETAIL_FLOATING_EDGE_GUTTER)}px`
-  }
+  const keyboardPlacement = pos ? placeAboveKeyboard(area, pos.y, { edge: DETAIL_FLOATING_EDGE_GUTTER }) : null
+  const panelTop = keyboardPlacement?.top ?? pos?.y
+  const keyboardCap = keyboardPlacement ? `${keyboardPlacement.maxHeight}px` : null
   // The tallest the panel may be: a floating panel leaves the gutters it is dragged within, a docked one
   // sits under the overlay's own top padding.
   const availableHeight = keyboardCap

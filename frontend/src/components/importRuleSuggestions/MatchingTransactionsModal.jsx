@@ -15,6 +15,7 @@ import CategoryDisplay from '../CategoryDisplay.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import WindowedRows from '../WindowedRows.jsx'
 import { Spinner, Tooltip, Button, IconButton } from '../ui.jsx'
+import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../../lib/visibleViewport.js'
 import { MerchantOriginHoverCard, OriginFieldList } from '../OriginFields.jsx'
 import { getTxnMerchantOriginRows, hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
@@ -518,6 +519,8 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
 }
 
 export function MatchingTransactionsModal(props) {
+  // Kept on the visible area while an on-screen keyboard is open (see visibleViewport.js).
+  const area = useVisibleViewport()
   if (!props.state?.open) return null
 
   return (
@@ -525,7 +528,7 @@ export function MatchingTransactionsModal(props) {
       onMouseDown={props.onClose}
       style={{
         position: 'fixed',
-        inset: 0,
+        ...visibleLayerBox(area),
         zIndex: 905,
         display: 'flex',
         alignItems: 'center',
@@ -541,7 +544,7 @@ export function MatchingTransactionsModal(props) {
           border: '1px solid var(--border)',
           borderRadius: 14,
           width: 'min(1200px, 96vw)',
-          maxHeight: '88vh',
+          maxHeight: `calc(${visibleHeightCss(area)} * 0.88)`,
           overflow: 'hidden',
           boxShadow: '0 20px 60px rgba(0,0,0,0.42)',
           display: 'flex',

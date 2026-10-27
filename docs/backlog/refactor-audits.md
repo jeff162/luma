@@ -57,8 +57,8 @@ The high-value three shipped (see below). These were deliberately **deferred**, 
   mapping, or the two grids drift in what a row offers.**
 - **`ContextMenu` vs. `ActionMenu`** — the transaction row's right-click menu (`TransactionRow.jsx`) is
   a second anchored-menu implementation. It anchors at the cursor and takes named per-action handlers
-  rather than an item list → **widen `ActionMenu` (cursor anchoring) and retire it when `ContextMenu`
-  needs a feature `ActionMenu` already has.**
+  rather than an item list. `ActionMenu` already anchors at the cursor (`anchorPoint`) → **retire
+  `ContextMenu` onto `ActionMenu` when it needs a feature `ActionMenu` already has.**
 
 ### `useTags()` consumers not yet migrated (see below)
 

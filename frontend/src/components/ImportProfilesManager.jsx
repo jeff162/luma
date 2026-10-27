@@ -48,6 +48,7 @@ import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
 import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
+import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed', label: 'Single column — negative = debit' },
@@ -1259,6 +1260,10 @@ export default function ImportProfilesManager({
     return byProfile
   }, [batches, profiles])
 
+  const visibleArea = useVisibleViewport()
+  const formPanelPlacement = formPanelPos || getDefaultFormPanelPosition()
+  const formPanelKeyboard = placeAboveKeyboard(visibleArea, formPanelPlacement.y)
+
   const content = (
     <>
       {noticeDialog ? (
@@ -1275,7 +1280,7 @@ export default function ImportProfilesManager({
           onMouseDown={event => event.stopPropagation()}
           style={{
             position: 'fixed',
-            inset: 0,
+            ...visibleLayerBox(visibleArea),
             zIndex: 360,
             background: 'rgba(15, 23, 42, 0.18)',
           }}
@@ -1287,11 +1292,14 @@ export default function ImportProfilesManager({
               width: `min(${ADD_PANEL_WIDTH}px, calc(100vw - 96px))`,
               // Cap the height relative to where the panel actually sits, so growing after a template is
               // loaded scrolls inside the panel instead of pushing the footer off the bottom of the screen.
-              maxHeight: `calc(100vh - ${(formPanelPos || getDefaultFormPanelPosition()).y}px - 24px)`,
+              maxHeight: formPanelKeyboard
+                ? formPanelKeyboard.maxHeight
+                : `calc(100vh - ${formPanelPlacement.y}px - 24px)`,
               overflow: 'auto',
               position: 'fixed',
-              left: (formPanelPos || getDefaultFormPanelPosition()).x,
-              top: (formPanelPos || getDefaultFormPanelPosition()).y,
+              left: formPanelPlacement.x,
+              // While an on-screen keyboard is open the panel is kept above it (see visibleViewport.js).
+              top: formPanelKeyboard?.top ?? formPanelPlacement.y,
               borderRadius: 18,
               userSelect: formPanelDragging ? 'none' : 'auto',
             }}

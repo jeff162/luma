@@ -212,7 +212,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
                         open={cardMenu?.connection.id === c.id}
                         title={`Actions for ${c.institution || 'this connection'}`}
                         disabled={!!refreshingConnId || !!fetchingHistoryConnId || syncing || removingSync}
-                        onOpen={rect => setCardMenu({ connection: c, anchorRect: rect })}
+                        onOpen={element => setCardMenu({ connection: c, anchorElement: element })}
                       />
                     </div>
                   </div>
@@ -234,7 +234,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
 
       {cardMenu ? (
         <ActionMenu
-          anchorRect={cardMenu.anchorRect}
+          anchorElement={cardMenu.anchorElement}
           onClose={() => setCardMenu(null)}
           minWidth={220}
           items={[

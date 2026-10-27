@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { useAnchoredPopupLayout, useDismissiblePopup } from '../lib/uiInteractions.js'
+import { useDismissiblePopup } from '../lib/uiInteractions.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 
 // Mapping fields use one control for three states the user needs to tell apart:
 // confirmed mapping, explicit "not mapped", and a likely single-match guess
@@ -26,18 +27,16 @@ export default function ImportColumnSelect({
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const { openUp } = useDismissiblePopup({
+  useDismissiblePopup({
     open,
     setOpen,
     anchorRef: wrapRef,
     popupRef: listRef,
-    placementDeps: [headers.length, allHeaders.length],
-    preferredPopupHeight: 320,
   })
-  const popupLayout = useAnchoredPopupLayout({
+  const { popupStyle: popupLayout, contentRef: listContentRef } = useAnchoredPopup({
     open,
     anchorRef: wrapRef,
-    openUp,
+    anchorWidth: 'exact',
     minWidth: 220,
   })
 
@@ -68,14 +67,12 @@ export default function ImportColumnSelect({
   }
 
   const listStyle = {
-    position: 'fixed',
+    ...popupLayout,
     zIndex: 720,
     background: 'var(--surface)',
     border: '1px solid var(--border)',
     borderRadius: 8,
     boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-    overflowY: 'auto',
-    ...(popupLayout || {}),
   }
 
   const menuItemStyle = (active, subtle = false) => ({
@@ -178,80 +175,82 @@ export default function ImportColumnSelect({
 
         {open && (
           <div ref={listRef} style={listStyle} role="listbox" aria-label={`${label} column options`}>
-            <button
-              type="button"
-              role="option"
-              aria-selected={!value}
-              style={menuItemStyle(!value)}
-              onMouseDown={e => {
-                e.preventDefault()
-                onChange('')
-                setOpen(false)
-              }}
-            >
-              <span style={{ flex: 1, color: 'var(--muted)' }}>Not mapped</span>
-              {!value && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-            </button>
+            <div ref={listContentRef}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={!value}
+                style={menuItemStyle(!value)}
+                onMouseDown={e => {
+                  e.preventDefault()
+                  onChange('')
+                  setOpen(false)
+                }}
+              >
+                <span style={{ flex: 1, color: 'var(--muted)' }}>Not mapped</span>
+                {!value && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+              </button>
 
-            {showSuggestedSection && (
-              <>
-                {suggestedHeaders.map(h => (
-                  <button
-                    key={h}
-                    type="button"
-                    role="option"
-                    aria-selected={value === h}
-                    style={menuItemStyle(value === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange(h)
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0, minWidth: 98 }}>
-                      <span style={suggestedPillStyle}>Possible</span>
-                      <span style={{ width: 12, textAlign: 'center', fontSize: 11, color: 'var(--accent2)', visibility: value === h ? 'visible' : 'hidden' }}>✓</span>
-                    </div>
-                  </button>
-                ))}
-              </>
-            )}
+              {showSuggestedSection && (
+                <>
+                  {suggestedHeaders.map(h => (
+                    <button
+                      key={h}
+                      type="button"
+                      role="option"
+                      aria-selected={value === h}
+                      style={menuItemStyle(value === h)}
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        onChange(h)
+                        setOpen(false)
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {h}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0, minWidth: 98 }}>
+                        <span style={suggestedPillStyle}>Possible</span>
+                        <span style={{ width: 12, textAlign: 'center', fontSize: 11, color: 'var(--accent2)', visibility: value === h ? 'visible' : 'hidden' }}>✓</span>
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
 
-            {directHeaders.length > 0 && (
-              <>
-                {showSuggestedSection ? (
-                  <div
-                    style={{
-                      height: 1,
-                      background: 'var(--border)',
-                      margin: '3px 0',
-                    }}
-                  />
-                ) : null}
-                {directHeaders.map(h => (
-                  <button
-                    key={h}
-                    type="button"
-                    role="option"
-                    aria-selected={value === h}
-                    style={menuItemStyle(value === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange(h)
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </span>
-                    {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </button>
-                ))}
-              </>
-            )}
+              {directHeaders.length > 0 && (
+                <>
+                  {showSuggestedSection ? (
+                    <div
+                      style={{
+                        height: 1,
+                        background: 'var(--border)',
+                        margin: '3px 0',
+                      }}
+                    />
+                  ) : null}
+                  {directHeaders.map(h => (
+                    <button
+                      key={h}
+                      type="button"
+                      role="option"
+                      aria-selected={value === h}
+                      style={menuItemStyle(value === h)}
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        onChange(h)
+                        setOpen(false)
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {h}
+                      </span>
+                      {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>

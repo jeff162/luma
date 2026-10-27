@@ -1,22 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
 import { HelpPopoverPanel } from './helpPanel.jsx'
 import { useHelpTopicViewer } from './useHelpTopicViewer.jsx'
 
-// Card chrome for the floating `?` popover (the tip callout supplies its own inline style).
+// Card chrome for the floating `?` popover (the tip callout supplies its own inline style), and the
+// text inside it.
 const HELP_POPOVER_CARD_STYLE = {
   background: 'var(--surface)',
   border: '1px solid var(--border)',
   borderRadius: 10,
   boxShadow: '0 12px 32px rgba(15,23,42,0.32)',
-  padding: '12px 14px',
   width: 'min(340px, calc(100vw - 32px))',
+}
+const HELP_POPOVER_TEXT_STYLE = {
+  padding: '12px 14px',
   fontSize: 13,
   lineHeight: 1.5,
   color: 'var(--text)',
@@ -35,13 +38,11 @@ const HELP_POPOVER_Z_INDEX = 1400
  *
  * `placement` names the edge the card lines up with — `bottom-left` opens rightward from the button's
  * left edge, `bottom-right` leftward from its right edge — and is a preference, not a promise. The card
- * is portaled and placed in viewport coordinates, slid back inside the window and flipped above the
- * button when it would overhang, the same way `Tooltip` places itself. Positioned inside the button's
- * own box it could not see the window edge, so a `?` near the right of a toolbar opened off screen.
+ * is portaled and kept against the button by the browser (useAnchoredPopup), flipping above it or to
+ * the other edge when it would overhang the window.
  */
 export default function FeatureExplainer({ topic, label = 'About this feature', placement = 'bottom-right' }) {
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState(null)
   const popoverRef = useRef(null)
   const buttonRef = useRef(null)
   const entry = HELP_TOPICS_BY_ID[topic]
@@ -53,31 +54,13 @@ export default function FeatureExplainer({ topic, label = 'About this feature', 
     refs: [popoverRef, buttonRef],
   })
 
-  // Measured before paint, and again whenever anything scrolls or the window resizes, so the card follows
-  // its button rather than hanging where the button used to be.
-  useLayoutEffect(() => {
-    if (!open) { setPos(null); return undefined }
-    function place() {
-      const trigger = buttonRef.current?.getBoundingClientRect()
-      const card = popoverRef.current?.getBoundingClientRect()
-      if (!trigger || !card) return
-      const { clientWidth: vw, clientHeight: vh } = document.documentElement
-      setPos({
-        left: alignOnAxis({
-          start: placement === 'bottom-left' ? trigger.left : trigger.right - card.width,
-          size: card.width, lo: 0, hi: vw,
-        }),
-        top: besideOnAxis({ before: trigger.top, after: trigger.bottom, size: card.height, lo: 0, hi: vh }),
-      })
-    }
-    place()
-    window.addEventListener('scroll', place, true)
-    window.addEventListener('resize', place)
-    return () => {
-      window.removeEventListener('scroll', place, true)
-      window.removeEventListener('resize', place)
-    }
-  }, [open, placement])
+  const { popupStyle, contentRef } = useAnchoredPopup({
+    open,
+    anchorRef: buttonRef,
+    align: placement === 'bottom-left' ? 'start' : 'end',
+    // The card shows whole, flipping rather than shrinking while the other side has room for it.
+    minRoom: Infinity,
+  })
 
   if (!entry) return null
 
@@ -102,19 +85,15 @@ export default function FeatureExplainer({ topic, label = 'About this feature', 
         }}
       >?</button>
       {open && createPortal(
-        <HelpPopoverPanel
-          topic={topic}
-          containerRef={popoverRef}
-          onClose={() => setOpen(false)}
-          onReadMore={() => { setOpen(false); openTopic(topic) }}
-          style={{
-            position: 'fixed', zIndex: HELP_POPOVER_Z_INDEX,
-            top: pos?.top ?? 0, left: pos?.left ?? 0,
-            // Hidden until measured, so the first frame never shows the card at an unclamped spot.
-            visibility: pos ? 'visible' : 'hidden',
-            ...HELP_POPOVER_CARD_STYLE,
-          }}
-        />,
+        <div ref={popoverRef} style={{ ...popupStyle, zIndex: HELP_POPOVER_Z_INDEX, ...HELP_POPOVER_CARD_STYLE }}>
+          <HelpPopoverPanel
+            topic={topic}
+            containerRef={contentRef}
+            onClose={() => setOpen(false)}
+            onReadMore={() => { setOpen(false); openTopic(topic) }}
+            style={HELP_POPOVER_TEXT_STYLE}
+          />
+        </div>,
         document.body,
       )}
       {viewerNode}

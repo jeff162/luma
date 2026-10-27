@@ -70,6 +70,10 @@ instruction and fix the drift.
 - Playwright cannot produce a real finger drag in WebKit. Chromium can, through a CDP session's
   `Input.dispatchTouchEvent`, which is the way to check scroll-versus-drag behaviour; an iPad is the
   only full check for Safari's engine.
+- An iPad scroll or keyboard bug in a fixed layer rarely shows on a desktop-sized page: a fixed layer
+  hands leftover scroll to the document, which does not scroll there. Make the document scrollable to
+  reproduce it, and simulate the keyboard by replacing `window.visualViewport` from a Playwright init
+  script; Safari's own sliding of the page shows only on the device.
 
 - The browser specs run against the demo ledger, which a script can build (temp database, `init_db`,
   `load_demo_data`, `scan_and_store`, then the service call the page makes), so a spec failure about

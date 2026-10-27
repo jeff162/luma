@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared transaction-cell components live alongside their tag/label helpers used across the app */
 
-import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
@@ -11,7 +11,7 @@ import { txnMutations } from '../lib/txnMutations.js'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
-import { readVisibleBounds, subscribeVisibleArea } from '../lib/visibleViewport.js'
+import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
@@ -622,47 +622,14 @@ function DocumentMatch({ doc }) {
 }
 
 
+// A row's note, tag or document popover. It portals to <body> so the list's scroll container cannot clip
+// it, and is kept under the row's marker strip by the browser (useAnchoredPopup), right edges aligned,
+// opening above the row when there is not enough room below.
 function RowPopoverPortal({ anchorRef, children }) {
-  const [layout, setLayout] = useState(null)
-
-  useLayoutEffect(() => {
-    const element = anchorRef.current
-    if (!element) return undefined
-
-    function update() {
-      const rect = element.getBoundingClientRect()
-      const gap = 4
-      // Room is measured within the visible area, which ends at an on-screen keyboard.
-      const visible = readVisibleBounds()
-      const spaceAbove = rect.top - visible.top
-      const spaceBelow = visible.bottom - rect.bottom
-      const openUp = spaceBelow < 300 && spaceAbove > spaceBelow
-      setLayout({
-        right: Math.max(8, window.innerWidth - rect.right),
-        ...(openUp
-          ? { bottom: Math.max(8, window.innerHeight - rect.top + gap) }
-          : { top: rect.bottom + gap }),
-        maxHeight: Math.max(160, (openUp ? spaceAbove : spaceBelow) - 12),
-      })
-    }
-
-    update()
-    // Capture-phase scroll catches the inner detail-panel/list scroll container, not just the window,
-    // so the popover tracks the row as the list scrolls.
-    window.addEventListener('scroll', update, true)
-    window.addEventListener('resize', update)
-    const unsubscribeVisibleArea = subscribeVisibleArea(update)
-    return () => {
-      window.removeEventListener('scroll', update, true)
-      window.removeEventListener('resize', update)
-      unsubscribeVisibleArea()
-    }
-  }, [anchorRef])
-
-  if (!layout) return null
+  const { popupStyle, contentRef } = useAnchoredPopup({ open: true, anchorRef, align: 'end' })
   return createPortal(
-    <div style={{ position: 'fixed', zIndex: 1000, overflowY: 'auto', ...layout }}>
-      {children}
+    <div style={{ ...popupStyle, zIndex: 1000 }}>
+      <div ref={contentRef}>{children}</div>
     </div>,
     document.body,
   )
