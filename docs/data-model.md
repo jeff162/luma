@@ -2308,9 +2308,20 @@ existing one is advanced by `run_migrations`, which applies each registered `@mi
 than `db_meta.version`, in order. `backend/db/database.py` is the record of what each migration does. A
 database from before the rebrand has no upgrade path; it comes across by backup and restore.
 
-**The two paths share no code, and nothing checks that they produce the same schema.** A column added to
-`init_db` without a migration, or the reverse, leaves new and upgraded databases with different schemas,
-and only users with older databases hit the bug.
+**The two paths share no code.** A column added to `init_db` without a migration, or the reverse, leaves
+new and upgraded databases with different schemas, and only users with older databases hit the bug.
+`test_schema_paths_agree.py` upgrades a v17 database through `init_db` and compares every table, column,
+foreign key, index and trigger against a fresh one. The differences that are known and harmless are listed
+in that test, each with its reason.
+
+**v17 is the oldest database the chain supports upgrading.** v8 to v16 upgrade too, but nothing keeps them
+working. v1–v5 do not: v5 adds a column that the table already has, and v6's data step reads rule columns
+that a later migration adds. The upgrade runs in one transaction, so a failure leaves the database at its
+old version, unchanged.
+
+**`init_db` runs its CREATE script before the migrations.** A table that an old database lacks is therefore
+created in today's shape, and a migration that adds a column to it finds the column already there. Such
+a migration checks for the column first (v22, v24).
 
 **A migration has two halves, schema and data-init.** A migration that derives a field from existing
 rows puts the derivation in a named function, calls it, and registers it in `POST_RESTORE_DATA_INIT`
@@ -2713,7 +2724,5 @@ and owed decisions*.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
-- **A check that fresh and migrated databases get the same schema** (*Schema evolution*).
-  → [`backlog/test-coverage-gaps.md`](backlog/test-coverage-gaps.md)
 - **The invariants a semantic database checker would assert.**
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

@@ -144,11 +144,6 @@ scale — rather than by feature.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
-- [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision
-  HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
-  post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for
-  `Settings.jsx`, which has none of any kind. Also records the E2E harness that *is* available
-  (`npm run ui:test` against its own throwaway stack).
 - [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
   ever checks that the databases are intact — no health surface, and notably no check of the *target*
   before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms

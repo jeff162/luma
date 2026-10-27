@@ -268,8 +268,8 @@ to put back goes in a phase of its own before the clear and reloads the demo ins
 
 ## What is tested, what isn't, and why
 
-The section above covers how to *run* the suites. This one covers what each suite tests and where the
-open gaps are listed.
+The section above covers how to *run* the suites. This one covers what each suite tests and where a
+missing test turns up.
 
 ### The four lanes, and the line that matters
 
@@ -315,13 +315,12 @@ does, so running it on every push would keep answering a question nothing has ch
 comment checks for both the frontend and the backend) and, for a Python file, a syntax check. A full
 suite run can't catch anything such an edit could break.
 
-### Where the open gaps are listed
+### Where a missing test turns up
 
-`docs/backlog/test-coverage-gaps.md` is a **running checklist** of tests that are wanted but not yet
-written: HTTP-contract tests to back up direct-call unit tests, the rule-collision UI flows, component
-coverage for the shared interactive parts of the UI, and a check that fresh and migrated databases
-get the same schema. Delete an entry when its test lands. `docs/backlog/refactor-audits.md` holds the
-audit's standing list of candidates.
+There is no checklist of tests still wanted. A test lands with the change that earns it
+(`docs/collaboration-notes.md` → *Testing*), and a test for code nobody is changing is written when
+that code is next touched. The conformance audit in `docs/backlog/refactor-audits.md` writes the failing
+test as part of each finding.
 
 ## Hooks and lint
 

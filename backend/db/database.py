@@ -910,8 +910,13 @@ def _add_connection_sync_cursor(conn):
     # records whether the historical backfill has finished (HISTORICAL_UPDATE_COMPLETE), which decides
     # whether synced rows land on the connection's single "initial import" card or the monthly period cards.
     # Fresh installs get both columns from the connection baseline CREATE TABLE; existing databases here.
-    conn.execute("ALTER TABLE connection ADD COLUMN transactions_cursor TEXT")
-    conn.execute("ALTER TABLE connection ADD COLUMN initial_sync_complete INTEGER NOT NULL DEFAULT 0")
+    # A database from before v18 has no `connection` table, so init_db's script creates it in today's
+    # shape before this runs, columns included.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)").fetchall()}
+    if "transactions_cursor" not in cols:
+        conn.execute("ALTER TABLE connection ADD COLUMN transactions_cursor TEXT")
+    if "initial_sync_complete" not in cols:
+        conn.execute("ALTER TABLE connection ADD COLUMN initial_sync_complete INTEGER NOT NULL DEFAULT 0")
 
 
 @migration(23)
@@ -958,7 +963,9 @@ def _add_connection_account_mapping(conn):
     # cross-account rules fire only when the receiving account already appears in the matching coverage or
     # was explicitly declared an alias, and a sync could satisfy neither — so a charge already imported
     # from a CSV came back from the provider as a second copy on a second account. See docs/data-model.md.
-    conn.execute("ALTER TABLE connection ADD COLUMN captured_fields TEXT")
+    # Already there when init_db's script created `connection` for a database from before v18 (see v22).
+    if "captured_fields" not in {r["name"] for r in conn.execute("PRAGMA table_info(connection)").fetchall()}:
+        conn.execute("ALTER TABLE connection ADD COLUMN captured_fields TEXT")
     # The transaction/authorization date, distinct from `date` (posted). Two sources routinely date the
     # same charge differently — one reports the transaction date, the other the posted date — so the
     # ladder tests both. NULL wherever the source publishes only one date, which is most CSVs.

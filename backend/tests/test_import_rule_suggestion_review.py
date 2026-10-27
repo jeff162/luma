@@ -1037,6 +1037,60 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertFalse(followup["id"].startswith(f"{accepted['id']}:"))
         self.assertEqual(followup["review_group_id"], accepted["review_group_id"])
 
+    def _two_owners_with_rows(self, merchant: str, category_a: str, category_b: str) -> tuple[str, str]:
+        owner_a, owner_b = str(uuid.uuid4()), str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany("INSERT INTO owner (id, name) VALUES (?, ?)", [(owner_a, "Owner A"), (owner_b, "Owner B")])
+        batch_id = self._insert_import_batch()
+        for owner_id, account_name, category_id in ((owner_a, "Owner A Card", category_a), (owner_b, "Owner B Card", category_b)):
+            account_id = self._insert_account(account_name, owner_id)
+            for _ in range(2):
+                self._insert_import_transaction(
+                    batch_id=batch_id, account_id=account_id, owner_id=owner_id, category_id=category_id,
+                    imported_category=category_id, merchant_name=merchant, amount=30,
+                )
+        return owner_a, owner_b
+
+    def test_accepting_one_owners_rule_leaves_the_other_owners_suggestion_owner_scoped(self):
+        # The regression: once owner A's rule claimed A's rows, B's suggestion looked single-owner and came
+        # back global, a rule that would overlap A's.
+        hardware, garden = self._insert_expense_leaf("FixtureHardware"), self._insert_expense_leaf("FixtureGarden")
+        owner_a, owner_b = self._two_owners_with_rows("Larkspur Supply", hardware, garden)
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "larkspur supply"]
+            self.assertEqual({s["owner_id"] for s in before}, {owner_a, owner_b})
+            owner_a_suggestion = next(s for s in before if s["owner_id"] == owner_a)
+            accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                owner_a_suggestion["id"],
+                owner_a_suggestion["source_row_ids"],
+                {"keyword": "larkspur supply", "category_id": hardware, "owner_id": owner_a},
+            )]))
+            after = get_system_rule_suggestions("")["suggestions"]
+
+        pending = [s for s in after if s["keyword"] == "larkspur supply" and s["review_status"] == "pending"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["owner_id"], owner_b)
+        self.assertEqual(pending[0]["target_category_id"], garden)
+        self.assertNotIn("__global__", pending[0]["conflict_group_id"] or "")
+
+    def test_an_owner_scoped_rule_with_the_same_category_does_not_scope_the_suggestion(self):
+        # The other side of the fix: folding existing rules in must not owner-scope a keyword every owner
+        # files the same way.
+        hardware = self._insert_expense_leaf("FixtureHardware")
+        owner_a, _owner_b = self._two_owners_with_rows("Larkspur Supply", hardware, hardware)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, owner_id) VALUES (?, ?, 'larkspur supply', ?)",
+                (str(uuid.uuid4()), hardware, owner_a),
+            )
+
+        with self._use_db_path():
+            suggestions = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "larkspur supply"]
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertIsNone(suggestions[0]["owner_id"])
+
     def test_review_group_precedence_is_split_root_then_conflict_keyword_then_label_then_keyword(self):
         suggestions = [
             {"id": "walgreens:__global__:pharmacy", "merchant_label": "Walgreens", "keyword": "walgreens"},

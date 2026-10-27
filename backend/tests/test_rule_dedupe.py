@@ -11,6 +11,7 @@ Fixture keywords avoid the seeded default rules so each case starts from a known
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 import uuid
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.rules import RuleCreate, RuleUpdate, create_rule, update_rule
+from backend.tests._api_client import api_client
 
 KW = "fixture dedupe co"
 
@@ -175,6 +177,64 @@ class RuleDedupeTests(unittest.TestCase):
         self.assertEqual(res["status"], "updated")
         state_a, _ = self._rule_state(a["id"])
         self.assertEqual(state_a["category_id"], dining)
+
+
+class RuleCollisionOverHttpTests(unittest.TestCase):
+    """`on_existing` as the frontend sends it. The single-save screens omit it and rely on the default
+    being `reject`: a default of `merge` would fold their saves into another rule, and delete an edited
+    one, without asking."""
+
+    def _seed(self, path: str) -> tuple[str, str]:
+        category_id, tag_id = str(uuid.uuid4()), str(uuid.uuid4())
+        conn = sqlite3.connect(path)
+        try:
+            group_id = conn.execute("SELECT id FROM category WHERE name = 'Food & Drink' AND parent_id IS NULL").fetchone()[0]
+            conn.execute(
+                "INSERT INTO category (id, parent_id, name, category_type, sort_order) VALUES (?, ?, 'Coffee', 'expense', 0)",
+                (category_id, group_id),
+            )
+            conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, 'Essential', '#22c55e', 0)", (tag_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        return category_id, tag_id
+
+    def _rules(self, path: str) -> dict[str, str]:
+        conn = sqlite3.connect(path)
+        try:
+            return dict(conn.execute("SELECT id, keyword FROM category_rule WHERE keyword LIKE '% merch'").fetchall())
+        finally:
+            conn.close()
+
+    def test_a_create_without_on_existing_reports_and_with_merge_merges(self):
+        with api_client() as (client, path):
+            coffee, essential = self._seed(path)
+            first = client.post("/api/rules", json={"keyword": "bbb merch", "category_id": coffee}).json()
+            mergeable = {"keyword": "bbb merch", "category_id": coffee, "tag_ids": [essential]}
+
+            reported = client.post("/api/rules", json=mergeable)
+            self.assertEqual(reported.status_code, 200, reported.text)
+            self.assertEqual(reported.json()["status"], "mergeable")
+            self.assertEqual(reported.json()["existing_rule_id"], first["id"])
+
+            merged = client.post("/api/rules", params={"on_existing": "merge"}, json=mergeable).json()
+            self.assertEqual(merged["status"], "merged")
+            self.assertEqual(list(self._rules(path)), [first["id"]])
+
+    def test_an_edit_without_on_existing_reports_and_with_merge_deletes_the_edited_rule(self):
+        with api_client() as (client, path):
+            coffee, essential = self._seed(path)
+            kept = client.post("/api/rules", json={"keyword": "bbb merch", "category_id": coffee}).json()
+            edited = client.post("/api/rules", json={"keyword": "aaa merch", "category_id": coffee, "tag_ids": [essential]}).json()
+
+            reported = client.patch(f"/api/rules/{edited['id']}", json={"keyword": "bbb merch"})
+            self.assertEqual(reported.status_code, 200, reported.text)
+            self.assertEqual(reported.json()["status"], "mergeable")
+            self.assertEqual(self._rules(path), {kept["id"]: "bbb merch", edited["id"]: "aaa merch"})
+
+            merged = client.patch(f"/api/rules/{edited['id']}", params={"on_existing": "merge"}, json={"keyword": "bbb merch"}).json()
+            self.assertEqual(merged["deleted_rule_id"], edited["id"])
+            self.assertEqual(self._rules(path), {kept["id"]: "bbb merch"})
 
 
 if __name__ == "__main__":
