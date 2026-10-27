@@ -26,7 +26,7 @@
 
 import { api } from './api.js'
 import { APP_NAME } from './appConfig.js'
-import { decodeBase64, encodeBase64 } from './base64url.js'
+import { decodeBase64, encodeBase64, encodeBase64Url } from './base64url.js'
 
 const PRF_UNSUPPORTED = { ok: false, reason: 'no_prf' }
 
@@ -77,8 +77,8 @@ function prfResult(credential) {
   return credential?.getClientExtensionResults?.()?.prf?.results?.first || null
 }
 
-// Read the PRF output for one credential via an assertion. Used by unlock, and by registration only when
-// `create()` did not already produce one — so both derive the KEK by exactly the same route.
+// Read the PRF output for one credential via an assertion. Used by registration when `create()` did not
+// already produce one, by unlock when the browser ignored `evalByCredential`, and by backup restore.
 async function evaluatePrf({ rpId, credentialIds, salt }) {
   let assertion
   try {
@@ -168,25 +168,49 @@ export async function registerPasskey(params, { label } = {}) {
 }
 
 // Run an unlock ceremony against the passkeys already registered for this user.
+//
+// **One ceremony offers every passkey**, each with its own salt through `evalByCredential`, so the device
+// answers with whichever one it holds. Asking for them one at a time stranded a second device's passkey:
+// a tablet asked first for the laptop's passkey offered only "use another device", and dismissing that
+// ended the unlock before the tablet's own passkey was ever requested.
+//
+// A browser that ignores `evalByCredential` still says which passkey answered, so that one alone is
+// asked again with its salt — a second prompt only where the browser cannot do it in one.
 export async function unlockWithPasskey(params) {
   const availability = passkeyAvailability(params)
   if (!availability.available) return { ok: false, reason: availability.reason }
   const usable = (params.credentials || []).filter(c => !c.pending)
-  if (!usable.length) return { ok: false, reason: 'no_prf' }
+  if (!usable.length) return PRF_UNSUPPORTED
 
-  // Every registered credential carries its own salt, so the ceremony has to be scoped to one at a
-  // time — offering all of them at once would leave no way to know which salt to evaluate.
-  for (const candidate of usable) {
-    const evaluated = await evaluatePrf({
-      rpId: params.rp_id,
-      credentialIds: [candidate.credential_id],
-      salt: b64.decode(candidate.prf_salt),
+  let assertion
+  try {
+    assertion = await navigator.credentials.get({
+      publicKey: {
+        rpId: params.rp_id,
+        challenge: randomChallenge(),
+        allowCredentials: usable.map(c => ({ id: b64.decode(c.credential_id), type: 'public-key' })),
+        userVerification: 'required',
+        // Keyed by base64url credential id, as the extension requires, whatever encoding the slot uses.
+        extensions: {
+          prf: {
+            evalByCredential: Object.fromEntries(usable.map(c => [
+              encodeBase64Url(b64.decode(c.credential_id)), { first: b64.decode(c.prf_salt) },
+            ])),
+          },
+        },
+      },
     })
-    if (evaluated.ok) return evaluated
-    // A dismissed prompt is the user's answer for the whole flow, not a reason to ask again per key.
-    if (evaluated.reason === 'cancelled') return evaluated
+  } catch (error) {
+    if (isCancellation(error)) return { ok: false, reason: 'cancelled' }
+    throw error
   }
-  return { ok: false, reason: 'no_prf' }
+
+  const credentialId = b64.encode(assertion.rawId)
+  const result = prfResult(assertion)
+  if (result) return { ok: true, credentialId, prfOutput: b64.encode(result) }
+  const answered = usable.find(c => c.credential_id === credentialId)
+  if (!answered) return PRF_UNSUPPORTED
+  return evaluatePrf({ rpId: params.rp_id, credentialIds: [answered.credential_id], salt: b64.decode(answered.prf_salt) })
 }
 
 export const __testing = { b64 }

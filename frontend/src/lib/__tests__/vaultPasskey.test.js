@@ -172,15 +172,31 @@ describe('unlockWithPasskey', () => {
     expect(result.prfOutput).toBe(b64.encode(bytes(8, 8)))
   })
 
-  it('tries each registered passkey, since every one carries its own salt', async () => {
-    // They cannot be offered together: the salt to evaluate is only known once the credential is.
+  it('offers every passkey in one prompt, each with its own salt', async () => {
+    // Asked one at a time, a device holding only the second passkey was asked first for one it does not
+    // have, and dismissing that ended the unlock.
+    const get = vi.fn(async () => credentialWithPrf(bytes(2), bytes(3)))
+    stubCredentials({ create: vi.fn(), get })
+    const result = await unlockWithPasskey(registered)
+    expect(result).toEqual({ ok: true, credentialId: b64.encode(bytes(2)), prfOutput: b64.encode(bytes(3)) })
+    expect(get).toHaveBeenCalledTimes(1)
+    const { publicKey } = get.mock.calls[0][0]
+    expect(publicKey.allowCredentials).toHaveLength(2)
+    expect(Object.keys(publicKey.extensions.prf.evalByCredential)).toEqual(['AQ', 'Ag'])
+    expect(new Uint8Array(publicKey.extensions.prf.evalByCredential.Ag.first)).toEqual(new Uint8Array(bytes(20)))
+  })
+
+  it('asks only the passkey that answered again when the browser ignores per-passkey salts', async () => {
     const get = vi.fn()
-      .mockResolvedValueOnce(credentialWithPrf(bytes(1), null))
+      .mockResolvedValueOnce(credentialWithPrf(bytes(2), null))
       .mockResolvedValueOnce(credentialWithPrf(bytes(2), bytes(3)))
     stubCredentials({ create: vi.fn(), get })
     const result = await unlockWithPasskey(registered)
     expect(result.ok).toBe(true)
     expect(get).toHaveBeenCalledTimes(2)
+    const { publicKey } = get.mock.calls[1][0]
+    expect(publicKey.allowCredentials).toHaveLength(1)
+    expect(new Uint8Array(publicKey.extensions.prf.eval.first)).toEqual(new Uint8Array(bytes(20)))
   })
 
   it('stops asking once the user dismisses a prompt', async () => {
