@@ -399,7 +399,7 @@ only live record, so that copy is restored from the trash first and takes over i
   reported a bank problem for is not listed, since its rows may be stale or short. A problem that names no
   connection or account withholds every listing in that response.
 - **Only a window that ends today is listed.** SimpleFIN lists its recent window, and reaches it back to
-  the oldest held pending row (`pending_since`, within `WINDOW_DAYS`) so a hold pending longer than the
+  the oldest held pending row (`pending_since`, within `RECOMMENDED_RANGE_DAYS`) so a hold pending longer than the
   routine overlap is still judged.
 
 ## Currency

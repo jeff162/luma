@@ -63,8 +63,8 @@ wrong today:
   module comment already anticipates the case and answers it with "a different server speaking the protocol
   would be a different product" — which this file agrees with, and which is exactly why the list has to
   belong to the *adapter class* rather than to the protocol module.
-- **`WINDOW_DAYS`** — derived from what the Bridge's live server says about range width, which has
-  already changed once. Another server has its own answer, or none.
+- **`RANGE_LIMIT_DAYS`, `RECOMMENDED_RANGE_DAYS`** (and `WINDOW_DAYS`, derived from the first) — the
+  Bridge's enforced range limit and its recommended range. Another server has its own answer, or none.
 - **`REQUEST_BUDGET_CAPACITY`, `REQUEST_BUDGET_REFILL_PER_HOUR`** — the Bridge's published
   daily allowance, read as a refilling bucket. Read directly by `_refill` and `_take_request`. A server
   that meters nothing would still be walked as though it were metered, which costs depth for no reason; a

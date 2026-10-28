@@ -37,33 +37,58 @@ to "have we taken this exact file".
 the recorded content hash is re-checked against what is on disk immediately before the delete, so a
 file swapped in under the same name is never removed. A delete that fails is recorded and reported
 rather than swallowed.
+
+**Where a source may watch is the operator's call, not the app's.** On an installation other devices
+can reach, watching is confined to the folders named in `WATCH_FOLDER_ROOTS` and is off until some are,
+because an administrator in the app need not be anyone with a shell on the machine, and the folder is
+the machine's filesystem. Only an installation this computer alone can open watches anywhere by default.
+Every path that touches the disk is checked against it — saving a folder, the picker, the scan and its
+purge, handing a parked file back — so a folder saved before the setting changed stops being read rather
+than slipping through (`security-model.md` → *Reading and deleting outside the data directory*).
+
+**Which files a source takes, and how each is read, is one table** (`_FILE_KINDS_BY_SOURCE`): a CSV
+through the source's column map, an Amazon export through the marketplace importer, a PayPal statement
+PDF through the statement importer. The scan, the purge's re-hash, the folder picker and the hand-off
+of a parked file all look a file up there, so none of them can disagree about what a file is.
 """
 
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 
+from backend import app_config
 from backend.app_logging import log_error
 from backend.authorization import require_admin_or_local
 from backend.runtime_config import app_name, data_dir
 from backend.db.database import get_db, single_runner
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
+from backend.services.ledger_currency import get_ledger_currency
+from backend.services.paypal_statement import StatementError, read_statement
 from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.restore_state import require_no_pending_restore
 from backend.time_utils import utcnow_iso
+from backend.transport import reachable_from_network
 
 from .core import (
     IMPORTED_CATEGORY_SETTINGS_KEY,
+    PAYPAL_SOURCE_KIND,
     make_import_file_hash,
     parse_csv_text,
     run_import_parsed,
+)
+from .paypal_statement import (
+    _check_assignments,
+    _config as _statement_config,
+    _parsed as _statement_parsed,
+    _statement_accounts,
 )
 
 router = APIRouter()
@@ -108,10 +133,6 @@ QUIET_SECONDS = 10
 IGNORED_SUFFIXES = (".part", ".crdownload", ".tmp", ".download", ".partial")
 IGNORED_PREFIXES = (".", "~$", ".~lock.")
 
-# Only a CSV is a candidate: a watched folder is a download destination, and the other things that
-# land in one are not this source's to read.
-CANDIDATE_SUFFIXES = (".csv",)
-
 # A marketplace source (`csv_import_profile.source_kind`) watches a folder exactly as a CSV source does,
 # but its files go through the vendor's own importer rather than a column map. Spelled here rather than
 # imported from `amazon` to keep this module's import of that one lazy (it imports `core`, as this does).
@@ -121,6 +142,42 @@ AMAZON_SOURCE_KIND = "marketplace:amazon"
 # bounded by what a person is willing to select. Read into memory whole, like every other import, so
 # the cap is about the machine rather than about the format.
 MAX_WATCHED_FILE_BYTES = 64 * 1024 * 1024
+
+
+WATCHING_NOT_ENABLED = (
+    "Watching folders is not enabled on this server. It is turned on by naming the folders it may watch "
+    "in WATCH_FOLDER_ROOTS, in the server's .env file."
+)
+OUTSIDE_WATCH_ROOTS = "This folder is outside the folders this server may watch (WATCH_FOLDER_ROOTS)."
+
+
+def allowed_watch_roots() -> Optional[list[str]]:
+    """The folders watching is confined to, resolved; `None` when any folder may be watched, and an empty
+    list when none may. Resolved through symlinks, as the folders checked against them are, so a link
+    inside a root that points outside it is outside."""
+    roots = app_config.watch_folder_roots()
+    if not roots and not reachable_from_network():
+        return None
+    return [os.path.realpath(os.path.expanduser(root)) for root in roots]
+
+
+def _within(path: str, root: str) -> bool:
+    path, root = os.path.normcase(path), os.path.normcase(root)
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def watch_folder_refusal(path: str) -> Optional[str]:
+    """Why this folder may not be watched here, or None when it may."""
+    roots = allowed_watch_roots()
+    if roots is None:
+        return None
+    if not roots:
+        return WATCHING_NOT_ENABLED
+    resolved = os.path.realpath(os.path.expanduser(path))
+    return None if any(_within(resolved, root) for root in roots) else OUTSIDE_WATCH_ROOTS
 
 
 def clamped_purge_days(value) -> int:
@@ -143,24 +200,25 @@ def _ignorable_name(name: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in IGNORED_SUFFIXES)
 
 
-def _is_candidate_name(name: str, filename_pattern: Optional[str]) -> bool:
-    if _ignorable_name(name):
-        return False
-    lowered = name.lower()
-    if not any(lowered.endswith(suffix) for suffix in CANDIDATE_SUFFIXES):
+def _is_candidate_name(name: str, profile: dict) -> bool:
+    if _ignorable_name(name) or _file_kind(profile.get("source_kind"), name) is None:
         return False
     # A source's filename pattern is not how two sources are told apart — a directory each is — but
     # it is what makes one directory shared by several sources work, and the field already exists and
     # already resolves a source in the preview. Substring, case-insensitive, matching that use.
-    pattern = str(filename_pattern or "").strip().lower()
-    return pattern in lowered if pattern else True
+    pattern = str(profile.get("filename_pattern") or "").strip().lower()
+    return pattern in name.lower() if pattern else True
+
+
+def _read_file_bytes(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 def _read_file_text(path: str) -> str:
     """Decode a watched file exactly as the upload path decodes a posted one, so the content hash of a
     file dropped in a folder equals the hash of the same file uploaded by hand."""
-    with open(path, "rb") as handle:
-        content = handle.read()
+    content = _read_file_bytes(path)
     try:
         return content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -326,6 +384,9 @@ def _scan_directory(profile: dict) -> tuple[list[dict], Optional[str]]:
     `os.scandir` has the name, the size and the mtime in hand from the readdir, so this is the cheap
     half of a scan and the only part that runs for a folder with nothing new in it."""
     directory = str(profile.get("watch_dir") or "")
+    refusal = watch_folder_refusal(directory)
+    if refusal:
+        return [], refusal
     listing = []
     try:
         with os.scandir(directory) as entries:
@@ -387,7 +448,7 @@ def _sync_seen_entries(conn, profile: dict, entries: list[dict], now: float) -> 
     seen_names = set()
     ready = []
     for entry in entries:
-        if not _is_candidate_name(entry["name"], profile.get("filename_pattern")):
+        if not _is_candidate_name(entry["name"], profile):
             continue
         seen_names.add(entry["name"])
         size, mtime = entry["size"], entry["mtime"]
@@ -438,14 +499,16 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
     if int(candidate["size"] or 0) > MAX_WATCHED_FILE_BYTES:
         return {"state": WATCH_STATE_PARKED,
                 "reason": f"This file is larger than {MAX_WATCHED_FILE_BYTES // (1024 * 1024)} MB."}
+    kind = _file_kind(profile.get("source_kind"), candidate["filename"])
     try:
-        text = _read_file_text(candidate["path"])
+        content = kind.read(candidate["path"])
     except OSError as error:
         return {"state": WATCH_STATE_ERROR, "reason": f"This file could not be read: {error.strerror or error}"}
+    return kind.import_file(profile, candidate, content)
 
-    if str(profile.get("source_kind") or "") == AMAZON_SOURCE_KIND:
-        return _import_ready_amazon_file(profile, candidate, text)
 
+def _import_ready_csv_file(profile: dict, candidate: dict, text: str) -> dict:
+    """A CSV read through the source's own column map — the ordinary case."""
     content_hash = make_import_file_hash(text)
     with get_db() as conn:
         existing_batch_id = _already_imported(conn, content_hash)
@@ -588,6 +651,121 @@ def _import_ready_amazon_file(profile: dict, candidate: dict, text: str) -> dict
             "reason": None}
 
 
+def _import_ready_paypal_statement(profile: dict, candidate: dict, data: bytes) -> dict:
+    """A PayPal statement PDF out of the PayPal source's folder, imported as the statement import does
+    it (`paypal_statement.py`).
+
+    The question the saved source has to answer is which ledger account a statement's PayPal account
+    goes into. That is already answered for any PayPal account with a statement imported by hand — the
+    tie `_statement_accounts` reads back from those cards — and is the only thing a statement needs, so
+    that tie is also what proves the setup. A statement for a PayPal account with no tie yet parks: the
+    interactive import asks which account it goes into, and picking one unattended is exactly the guess
+    an unmapped CSV account value is refused for. The interactive refusals (`_check_assignments`) still
+    apply, so an account trashed or retyped since parks too.
+    """
+    try:
+        statement = read_statement(data)
+    except StatementError as error:
+        return {"state": WATCH_STATE_PARKED, "reason": f"This PDF could not be read as a PayPal statement: {error}"}
+    if statement is None:
+        return {"state": WATCH_STATE_PARKED,
+                "reason": "This PDF is not a PayPal statement. Only the files this source is for belong in "
+                          "its folder — set a filename pattern if it shares one."}
+
+    content_hash = statement.content_hash
+    with get_db() as conn:
+        existing_batch_id = _already_imported(conn, content_hash)
+    if existing_batch_id:
+        return {"state": WATCH_STATE_DUPLICATE, "reason": "This exact statement has been imported already.",
+                "content_hash": content_hash, "batch_id": existing_batch_id}
+    if not statement.rows:
+        # Nothing to import is a finished outcome rather than a question, so it is not parked; the file
+        # is done with, and a purge setting may remove it like any imported one.
+        return {"state": WATCH_STATE_IMPORTED, "content_hash": content_hash, "batch_id": None, "imported": 0,
+                "reason": "This statement has no activity, so there was nothing to import."}
+
+    paypal_id = statement.paypal_account_id
+    with get_db() as conn:
+        tied_account = _statement_accounts(conn)[0].get(paypal_id)
+        if not tied_account:
+            return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
+                    "reason": f"No statement for PayPal account {paypal_id} has been imported yet. Import "
+                              "this one by hand to choose its account, after which this folder takes that "
+                              "account's statements on its own."}
+        try:
+            accounts = _check_assignments(conn, [statement], {paypal_id: tied_account})
+        except HTTPException as error:
+            detail = error.detail
+            message = detail.get("message") if isinstance(detail, dict) else detail
+            return {"state": WATCH_STATE_PARKED, "reason": str(message), "content_hash": content_hash}
+        ledger_currency = get_ledger_currency(conn)
+
+    try:
+        result = run_import_parsed(
+            _statement_parsed(statement, ledger_currency),
+            _statement_config(profile, accounts[paypal_id], statement),
+            filename=candidate["filename"],
+        )
+    except HTTPException as error:
+        detail = error.detail
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        return {"state": WATCH_STATE_PARKED, "reason": str(message), "content_hash": content_hash}
+    except Exception as error:
+        log_error(f"[import-watch] statement import failed for {candidate['filename']}: {error}", exc_info=error)
+        return {"state": WATCH_STATE_ERROR, "reason": f"The import failed: {error}",
+                "content_hash": content_hash}
+
+    return {"state": WATCH_STATE_IMPORTED, "content_hash": content_hash,
+            "batch_id": result.get("batch_id"), "imported": int(result.get("imported") or 0),
+            "reason": None}
+
+
+def _statement_hash(data: bytes) -> Optional[str]:
+    """A statement's identity is over what was read rather than its bytes (`Statement.content_hash`), so
+    the purge has to re-read a PDF to re-check it; one that no longer reads has changed."""
+    try:
+        statement = read_statement(data)
+    except StatementError:
+        return None
+    return statement.content_hash if statement else None
+
+
+@dataclass(frozen=True)
+class _FileKind:
+    """How one kind of watched file is read, identified and imported. `content_hash` is the identity
+    recorded on the watermark and in `import_batch.file_content_hash`; `media_type` is what a parked file
+    is handed back to the import page as."""
+    read: Callable[[str], Any]
+    content_hash: Callable[[Any], Optional[str]]
+    import_file: Callable[[dict, dict, Any], dict]
+    media_type: str
+
+
+_CSV_FILE = _FileKind(_read_file_text, make_import_file_hash, _import_ready_csv_file, "text/csv")
+_AMAZON_EXPORT = _FileKind(_read_file_text, make_import_file_hash, _import_ready_amazon_file, "text/csv")
+_PAYPAL_STATEMENT = _FileKind(_read_file_bytes, _statement_hash, _import_ready_paypal_statement, "application/pdf")
+
+# Keyed on `csv_import_profile.source_kind`, then on the file's extension. A watched folder is a download
+# destination, so a source takes only the extensions listed for it and passes over everything else that
+# lands there. A zip of statements is deliberately absent although the upload accepts one: expanding an
+# archive found on disk with nobody present is a wider capability than reading a file someone saved, and
+# a zip in a downloads folder is usually one nobody has opened.
+_DEFAULT_FILE_KINDS = {".csv": _CSV_FILE}
+_FILE_KINDS_BY_SOURCE = {
+    AMAZON_SOURCE_KIND: {".csv": _AMAZON_EXPORT},
+    PAYPAL_SOURCE_KIND: {".csv": _CSV_FILE, ".pdf": _PAYPAL_STATEMENT},
+}
+
+
+def candidate_suffixes(source_kind: Optional[str]) -> tuple[str, ...]:
+    return tuple(_FILE_KINDS_BY_SOURCE.get(source_kind or "", _DEFAULT_FILE_KINDS))
+
+
+def _file_kind(source_kind: Optional[str], filename: str) -> Optional[_FileKind]:
+    kinds = _FILE_KINDS_BY_SOURCE.get(source_kind or "", _DEFAULT_FILE_KINDS)
+    return kinds.get(os.path.splitext(filename)[1].lower())
+
+
 def _purge_pass(conn, profile: dict) -> list[dict]:
     """Delete the files this source is configured to clean up, and only those.
 
@@ -616,8 +794,11 @@ def _purge_pass(conn, profile: dict) -> list[dict]:
     directory = str(profile.get("watch_dir") or "")
     for row in rows:
         path = os.path.join(directory, row["filename"])
+        kind = _file_kind(profile.get("source_kind"), row["filename"])
+        if kind is None:
+            continue
         try:
-            if make_import_file_hash(_read_file_text(path)) != row["content_hash"]:
+            if kind.content_hash(kind.read(path)) != row["content_hash"]:
                 _record_outcome(
                     conn, row["id"], WATCH_STATE_PURGE_FAILED, content_hash=row["content_hash"],
                     reason="This file changed after it was imported, so it was left in place.",
@@ -682,8 +863,10 @@ def _scan_watched_sources(*, profile_id: Optional[str]) -> dict:
             elif outcome["state"] in WATCH_ATTENTION_STATES:
                 parked += 1
 
+        # Not for a folder that could not be listed: one this server may no longer watch must not be
+        # deleted from either, and one that is not there has nothing to delete.
         with get_db() as conn:
-            purged = _purge_pass(conn, profile)
+            purged = [] if notice else _purge_pass(conn, profile)
         summaries.append({
             "profile_id": profile["id"], "name": profile["name"], "notice": notice,
             "imported": imported, "parked": parked, "purged": len(purged),
@@ -796,7 +979,11 @@ MAX_BROWSE_ENTRIES = 500
 def _browse_roots() -> list[dict]:
     """Where the folder picker starts. Not a confinement — anywhere reachable can still be walked to or
     typed — but dropping someone at `/` makes them navigate down through directories that are nothing to
-    do with them. These are the three places a watched folder actually tends to be."""
+    do with them. These are the three places a watched folder actually tends to be — or, where watching
+    is confined, the folders it is confined to, since nothing outside them can be chosen."""
+    allowed = allowed_watch_roots()
+    if allowed is not None:
+        return [{"label": root, "path": root} for root in allowed]
     roots = [{"label": "Home", "path": str(Path.home())}]
     try:
         roots.append({"label": f"{app_name()} data", "path": str(data_dir().resolve())})
@@ -820,7 +1007,7 @@ def _browse_roots() -> list[dict]:
 
 
 @router.get("/watch/browse", dependencies=[Depends(require_admin_or_local)])
-def browse_directories(path: Optional[str] = None):
+def browse_directories(path: Optional[str] = None, profile_id: Optional[str] = None):
     """List the subdirectories of one directory on the **server**, for the folder picker.
 
     Read-only and admin-or-local, the same gate as naming the folder — and deliberately no more
@@ -831,19 +1018,29 @@ def browse_directories(path: Optional[str] = None):
 
     **The files are listed, not just counted**, because that is what answers "is this the folder?" — a
     name like last year's export sitting in it settles the question that a path cannot. Which files
-    those are is decided *here*, from `CANDIDATE_SUFFIXES`, the same constant the scan itself filters
-    on: the picker must never offer a file the folder would not take. The set is expected to grow (a
-    statement PDF is the obvious next one) and to become per-source when it does, at which point this
-    takes the source too — the client is deliberately told *which files*, never *which extensions*, so
-    that change does not reach it.
+    those are depends on the source (`profile_id`) and is decided *here*, from `candidate_suffixes`, the
+    same table the scan itself filters on: the picker must never offer a file the folder would not take.
+    The client is told *which files*, never *which extensions*, so the table growing does not reach it.
 
     An unreadable or missing directory is a notice rather than an error, in the same words
     `_scan_directory` uses, because removable media and network shares come and go.
     """
     target = (path or "").strip()
     if not target:
+        roots = _browse_roots()
+        not_enabled = allowed_watch_roots() == []
         return {"path": None, "parent": None, "entries": [], "files": [], "file_count": 0,
-                "truncated": False, "notice": None, "roots": _browse_roots()}
+                "truncated": False, "notice": WATCHING_NOT_ENABLED if not_enabled else None,
+                "roots": roots, "watching_enabled": not not_enabled}
+    refusal = watch_folder_refusal(target)
+    if refusal:
+        return _browse_notice(os.path.abspath(os.path.expanduser(target)), refusal)
+    source_kind = None
+    if profile_id:
+        with get_db() as conn:
+            row = conn.execute("SELECT source_kind FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()
+        source_kind = row["source_kind"] if row else None
+    suffixes = candidate_suffixes(source_kind)
     resolved = os.path.abspath(os.path.expanduser(target))
     entries, files, file_count, truncated = [], [], 0, False
     try:
@@ -856,7 +1053,7 @@ def browse_directories(path: Optional[str] = None):
                             continue
                         entries.append({"name": entry.name, "path": entry.path,
                                         "hidden": entry.name.startswith(".")})
-                    elif entry.is_file() and entry.name.lower().endswith(CANDIDATE_SUFFIXES):
+                    elif entry.is_file() and entry.name.lower().endswith(suffixes):
                         # Counted whole and listed up to the cap, so a folder holding more exports than
                         # fit still reports how many are really in it.
                         file_count += 1
@@ -888,9 +1085,12 @@ def _browse_notice(resolved: str, notice: str) -> dict:
 
 def _parent_of(resolved: str) -> Optional[str]:
     """The directory above, or None at a root — `os.path.dirname` of a root returns the root itself,
-    which would render as an *Up* that goes nowhere."""
+    which would render as an *Up* that goes nowhere — and None above a watch root too, where the folder
+    above could not be chosen."""
     parent = os.path.dirname(resolved.rstrip(os.sep)) or os.sep
-    return None if os.path.abspath(parent) == os.path.abspath(resolved) else parent
+    if os.path.abspath(parent) == os.path.abspath(resolved):
+        return None
+    return None if watch_folder_refusal(parent) else parent
 
 
 @router.post("/watch/scan")
@@ -925,6 +1125,15 @@ def set_profile_watch(profile_id: str, body: WatchSettings):
         # left `watch_dir` NULL with the switch still on: a source the status view no longer lists, armed
         # for the next request that names a folder.
         enabled = None if body.watch_enabled is None else (1 if body.watch_enabled else 0)
+        # Refused before anything is written: a folder this server may not watch is not saved, and an
+        # existing one that has since fallen outside cannot be switched back on.
+        stored_dir = conn.execute(
+            "SELECT watch_dir FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()["watch_dir"]
+        target_dir = (body.watch_dir if body.watch_dir is not None else stored_dir or "").strip()
+        if target_dir and (body.watch_dir is not None or enabled == 1):
+            refusal = watch_folder_refusal(target_dir)
+            if refusal:
+                raise HTTPException(status_code=400, detail=refusal)
         if body.watch_dir is not None:
             directory = body.watch_dir.strip()
             fields += ["watch_dir = ?", "watch_notice = NULL"]
@@ -951,26 +1160,33 @@ def set_profile_watch(profile_id: str, body: WatchSettings):
     return {"ok": True}
 
 
-@router.get("/watch/files/{file_id}/content", response_class=PlainTextResponse)
+@router.get("/watch/files/{file_id}/content")
 def watch_file_content(file_id: str):
     """The parked file itself, so the ordinary import flow can be opened with it pre-seeded. A parked
     file is one this app already decided it cannot take unattended; handing it back to the flow that
-    *can* ask questions is the whole answer to a parked file."""
+    *can* ask questions is the whole answer to a parked file.
+
+    The bytes go back as they are on disk, so the upload path decodes and hashes them exactly as it would
+    the same file dropped by hand; the media type is the file kind's."""
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT w.filename, w.state, p.watch_dir
+            SELECT w.filename, w.state, p.watch_dir, p.source_kind
             FROM   import_watch_file w
             JOIN   csv_import_profile p ON p.id = w.profile_id
             WHERE  w.id = ?
             """,
             (file_id,),
         ).fetchone()
-    if not row:
+    kind = _file_kind(row["source_kind"], row["filename"]) if row else None
+    if not kind:
         raise HTTPException(status_code=404, detail="File not found")
+    refusal = watch_folder_refusal(str(row["watch_dir"] or ""))
+    if refusal:
+        raise HTTPException(status_code=403, detail=refusal)
     path = os.path.join(str(row["watch_dir"] or ""), row["filename"])
     try:
-        return PlainTextResponse(_read_file_text(path), media_type="text/csv")
+        return Response(_read_file_bytes(path), media_type=kind.media_type)
     except OSError as error:
         raise HTTPException(status_code=404, detail=f"This file could not be read: {error.strerror or error}")
 

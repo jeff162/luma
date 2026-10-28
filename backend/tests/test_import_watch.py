@@ -7,6 +7,8 @@ is fixed somewhere else. The rest covers the watermark that keeps a scan off the
 which deletes only what it can still prove it imported.
 """
 
+import asyncio
+import json
 import os
 import tempfile
 import time
@@ -14,16 +16,37 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import watch
-from backend.routers.import_export.core import run_import_core
+from backend.routers.import_export.core import PAYPAL_SOURCE_KIND, _get_or_create_paypal_profile, run_import_core
+from backend.routers.import_export.paypal_statement import COLUMN_MAP as STATEMENT_COLUMN_MAP
+from backend.routers.import_export.paypal_statement import import_paypal_statements
+from backend.tests._pdf_fixture import make_text_pdf
+from backend.tests.test_paypal_statement import DEPOSIT, PAYMENT, FakeUpload, statement_pdf, txn
+
+def _as_desktop(test):
+    """Pin the installation to one only this computer can open, with no roots named, which is where any
+    folder may be watched. Both are read per call from process-wide state — whether another device has
+    been seen, the developer's `.env` — that other tests in the same worker can set, so a test about
+    something else must not inherit them."""
+    from unittest import mock
+    for patcher in (mock.patch.object(watch, "reachable_from_network", return_value=False),
+                    mock.patch.object(watch.app_config, "watch_folder_roots", return_value=[])):
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
 
 HEADER = "Date,Description,Amount,Account\n"
 ROW = "2026-02-03,Corner Market,12.50,Checking\n"
 
 
-class ImportWatchTests(unittest.TestCase):
+class _WatchFolderCase(unittest.TestCase):
+    """The database, source and folder fixtures the watched-folder tests share; it holds no tests."""
+
     def setUp(self):
+        _as_desktop(self)
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "watch.db"
         self.watched = Path(self.tempdir.name) / "downloads"
@@ -101,6 +124,8 @@ class ImportWatchTests(unittest.TestCase):
             return {row["filename"]: dict(row) for row in
                     conn.execute("SELECT * FROM import_watch_file").fetchall()}
 
+
+class ImportWatchTests(_WatchFolderCase):
     # --- the watermark ------------------------------------------------------------------------
 
     def test_a_new_file_is_only_taken_on_the_pass_after_it_is_first_seen(self):
@@ -413,12 +438,94 @@ class ImportWatchTests(unittest.TestCase):
             self.assertEqual(watch.maybe_auto_scan().get("skipped"), "no_watched_sources")
 
 
+class WatchRootsTests(_WatchFolderCase):
+    """Where an installation other devices can reach may watch. An administrator in the app need not have
+    a shell on the machine, so the folders it may read are named by whoever does, in WATCH_FOLDER_ROOTS;
+    with none named it watches nothing. Every way in is checked, not only the save, so a folder saved
+    before the setting changed stops being read and is never deleted from."""
+
+    def setUp(self):
+        super().setUp()
+        self.outside = Path(self.tempdir.name) / "elsewhere"
+        self.outside.mkdir()
+
+    @contextmanager
+    def _server(self, *roots):
+        from unittest import mock
+        with mock.patch.object(watch, "reachable_from_network", return_value=True), \
+                mock.patch.object(watch.app_config, "watch_folder_roots", return_value=[str(r) for r in roots]):
+            yield
+
+    def _save_folder(self, folder):
+        with self._use_db_path():
+            return watch.set_profile_watch("src-1", watch.WatchSettings(watch_dir=str(folder), watch_enabled=True))
+
+    def test_a_server_with_no_roots_named_watches_nothing(self):
+        self._create_source()
+        self._prove_source()
+        self._drop("january.csv")
+        with self._server():
+            self._scan(); self._scan()
+            with self.assertRaises(HTTPException) as refused:
+                self._save_folder(self.watched)
+            listing = watch.browse_directories(None)
+        self.assertEqual(refused.exception.status_code, 400)
+        self.assertFalse(listing["watching_enabled"])
+        self.assertEqual(listing["roots"], [])
+        self.assertNotIn(self._files().get("january.csv", {}).get("state"), (watch.WATCH_STATE_IMPORTED,))
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT watch_notice FROM csv_import_profile WHERE id = 'src-1'").fetchone()["watch_notice"],
+                watch.WATCHING_NOT_ENABLED)
+
+    def test_a_folder_inside_a_root_is_watched_and_one_outside_is_refused(self):
+        self._create_source()
+        self._prove_source()
+        with self._server(self.watched.parent / "downloads"):
+            self.assertEqual(self._save_folder(self.watched), {"ok": True})
+            with self.assertRaises(HTTPException):
+                self._save_folder(self.outside)
+            self._drop("january.csv")
+            self._scan(); self._scan()
+        self.assertEqual(self._files()["january.csv"]["state"], watch.WATCH_STATE_IMPORTED)
+
+    def test_a_link_inside_a_root_that_leads_outside_it_is_outside(self):
+        link = self.watched / "shortcut"
+        os.symlink(self.outside, link)
+        with self._server(self.watched):
+            self.assertEqual(watch.watch_folder_refusal(str(link)), watch.OUTSIDE_WATCH_ROOTS)
+
+    def test_a_folder_saved_before_the_roots_changed_is_neither_read_nor_purged(self):
+        self._create_source(purge_mode="on_import")
+        self._prove_source()
+        imported = self._drop("january.csv")
+        self._scan(); self._scan()
+        self.assertFalse(imported.exists(), "unconfined, the purge runs as configured")
+
+        kept = self._drop("february.csv", HEADER + "2026-03-03,Corner Market,9.00,Checking\n")
+        with self._server(self.outside):
+            self._scan(); self._scan()
+        self.assertTrue(kept.exists())
+        self.assertNotEqual(self._files().get("february.csv", {}).get("state"), watch.WATCH_STATE_IMPORTED)
+
+    def test_the_picker_starts_at_the_roots_and_goes_no_higher(self):
+        with self._server(self.watched):
+            start = watch.browse_directories(None)
+            inside = watch.browse_directories(str(self.watched))
+            above = watch.browse_directories(str(self.watched.parent))
+        self.assertEqual([r["path"] for r in start["roots"]], [os.path.realpath(self.watched)])
+        self.assertIsNone(inside["parent"])
+        self.assertEqual(above["notice"], watch.OUTSIDE_WATCH_ROOTS)
+        self.assertEqual(above["entries"], [])
+
+
 class BrowseDirectoriesTests(unittest.TestCase):
     """The folder picker's listing. It exists because the path names a directory on the *server*, which
     the person setting it usually cannot see — and it is read-only on purpose: naming a path and
     scanning it already lists a directory and imports from it, so listing alone adds no capability."""
 
     def setUp(self):
+        _as_desktop(self)
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name) / "downloads"
         (self.root / "statements").mkdir(parents=True)
@@ -440,11 +547,12 @@ class BrowseDirectoriesTests(unittest.TestCase):
         self.assertIsNone(result["notice"])
 
     def test_a_file_the_scan_would_not_take_is_not_offered_as_one_it_would(self):
-        # The picker filters on the same constant the scan does, so it can never name a file the folder
-        # would pass over. The set is expected to grow; what must not drift is the two being one list.
+        # The picker filters on the same table the scan does, so it can never name a file the folder
+        # would pass over. What must not drift is the two being one list.
+        (self.root / "statement.pdf").write_bytes(b"%PDF-1.4")
         result = watch.browse_directories(str(self.root))
-        self.assertNotIn("notes.txt", [f["name"] for f in result["files"]])
-        self.assertTrue(all(f["name"].lower().endswith(watch.CANDIDATE_SUFFIXES) for f in result["files"]))
+        self.assertEqual({f["name"] for f in result["files"]}, {"january.csv", "february.csv"})
+        self.assertTrue(all(watch._is_candidate_name(f["name"], {}) for f in result["files"]))
 
     def test_a_dot_folder_is_marked_rather_than_dropped(self):
         # The scan ignores dot-prefixed names, so listing them unmarked would offer a folder that can
@@ -497,6 +605,7 @@ class AmazonWatchedFolderTests(unittest.TestCase):
     )
 
     def setUp(self):
+        _as_desktop(self)
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "watch.db"
         self.watched = Path(self.tempdir.name) / "amazon"
@@ -634,6 +743,165 @@ class AmazonWatchedFolderTests(unittest.TestCase):
             self.assertEqual(conn.execute(
                 """SELECT COUNT(*) AS n FROM import_batch
                    WHERE source_kind = 'marketplace:amazon' AND id != 'b-proof'""").fetchone()["n"], 1)
+
+
+class PaypalStatementWatchedFolderTests(unittest.TestCase):
+    """The PayPal source watching a folder takes statement PDFs as well as activity CSVs. The question a
+    statement asks is which ledger account its PayPal account goes into; a statement imported by hand
+    answers it for that PayPal account, and nothing else may — so a statement for a PayPal account with
+    no statement imported yet is parked rather than guessed into one."""
+
+    def setUp(self):
+        _as_desktop(self)
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "watch.db"
+        self.watched = Path(self.tempdir.name) / "paypal"
+        self.watched.mkdir()
+        init_db(str(self.db_path))
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
+                   VALUES ('acc-pp', NULL, 'manual', 'PayPal', 'PayPal', 'paypal')"""
+            )
+        with self._use_db_path(), get_db() as conn:
+            self.profile_id = _get_or_create_paypal_profile(
+                conn, header_fingerprint="", column_map=STATEMENT_COLUMN_MAP, date_format="%m/%d/%Y",
+                amount_convention="single_signed")
+            conn.execute("UPDATE csv_import_profile SET watch_dir = ?, watch_enabled = 1 WHERE id = ?",
+                         (str(self.watched), self.profile_id))
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _import_by_hand(self, pdf):
+        with self._use_db_path():
+            asyncio.run(import_paypal_statements([FakeUpload("by-hand.pdf", pdf)],
+                                                 json.dumps({"robin@example.com": "acc-pp"})))
+
+    def _drop(self, name, data):
+        path = self.watched / name
+        path.write_bytes(data)
+        stamp = time.time() - (watch.QUIET_SECONDS + 5)
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def _scan_twice(self):
+        with self._use_db_path():
+            watch.scan_watched_sources()
+            return watch.scan_watched_sources()
+
+    def _file_state(self, name):
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT state, reason FROM import_watch_file WHERE filename = ?", (name,)
+            ).fetchone()
+        return (row["state"], row["reason"]) if row else (None, None)
+
+    def _paypal_rows(self):
+        with get_db(str(self.db_path)) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM txn WHERE account_id = 'acc-pp' AND trashed_at IS NULL").fetchone()["n"]
+
+    def test_a_statement_for_a_paypal_account_seen_before_goes_into_the_same_account(self):
+        self._import_by_hand(statement_pdf([PAYMENT, DEPOSIT]))
+        may = txn("05/03/2026", "Mobile Payment: Sam Okafor", "-12.00", "9MM00000MM0000009")
+        self._drop("statement-May-2026.pdf", statement_pdf([may], period=("May 1, 2026 - May 31,", "2026")))
+        self._scan_twice()
+        self.assertEqual(self._file_state("statement-May-2026.pdf"), (watch.WATCH_STATE_IMPORTED, None))
+        self.assertEqual(self._paypal_rows(), 3)
+        with get_db(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT profile_id, source_kind FROM import_batch WHERE filename = 'statement-May-2026.pdf'"
+            ).fetchone()
+        self.assertEqual((row["profile_id"], row["source_kind"]), (self.profile_id, PAYPAL_SOURCE_KIND))
+
+    def test_a_statement_for_an_unseen_paypal_account_parks_until_one_is_imported_by_hand(self):
+        """The account a statement goes into is chosen by a person once per PayPal account; after that the
+        parked file is retried and imports itself."""
+        self._drop("statement-Apr-2026.pdf", statement_pdf([PAYMENT, DEPOSIT]))
+        self._scan_twice()
+        state, reason = self._file_state("statement-Apr-2026.pdf")
+        self.assertEqual(state, watch.WATCH_STATE_PARKED)
+        self.assertIn("robin@example.com", reason)
+        self.assertEqual(self._paypal_rows(), 0)
+
+        march = txn("03/10/2026", "Mobile Payment: Sam Okafor", "-8.00", "8MM00000MM0000008")
+        self._import_by_hand(statement_pdf([march], period=("Mar 1, 2026 - Mar 31,", "2026")))
+        with self._use_db_path():
+            watch.scan_watched_sources()
+        self.assertEqual(self._file_state("statement-Apr-2026.pdf")[0], watch.WATCH_STATE_IMPORTED)
+        self.assertEqual(self._paypal_rows(), 3)
+
+    def test_a_statement_whose_account_was_trashed_parks_rather_than_landing_elsewhere(self):
+        self._import_by_hand(statement_pdf([PAYMENT, DEPOSIT]))
+        with get_db(str(self.db_path)) as conn:
+            conn.execute("UPDATE account SET trashed_at = '2026-05-01T00:00:00Z' WHERE id = 'acc-pp'")
+        may = txn("05/03/2026", "Mobile Payment: Sam Okafor", "-12.00", "9MM00000MM0000009")
+        self._drop("may.pdf", statement_pdf([may], period=("May 1, 2026 - May 31,", "2026")))
+        self._scan_twice()
+        self.assertEqual(self._file_state("may.pdf")[0], watch.WATCH_STATE_PARKED)
+
+    def test_the_same_month_downloaded_again_is_recognized(self):
+        self._import_by_hand(statement_pdf([PAYMENT, DEPOSIT]))
+        self._drop("statement-Apr-2026 (1).pdf",
+                   statement_pdf([PAYMENT, DEPOSIT], footnote="*Totals include any fees."))
+        self._scan_twice()
+        self.assertEqual(self._file_state("statement-Apr-2026 (1).pdf")[0], watch.WATCH_STATE_DUPLICATE)
+        self.assertEqual(self._paypal_rows(), 2)
+
+    def test_a_pdf_that_is_not_a_statement_is_parked(self):
+        self._import_by_hand(statement_pdf([PAYMENT, DEPOSIT]))
+        self._drop("invoice.pdf", make_text_pdf(["INVOICE", "Harbor Cycle Works", "Total 54.95"]))
+        self._scan_twice()
+        state, reason = self._file_state("invoice.pdf")
+        self.assertEqual(state, watch.WATCH_STATE_PARKED)
+        self.assertIn("not a PayPal statement", reason)
+
+    def test_purge_re_reads_a_statement_to_prove_it_was_imported(self):
+        """A statement's recorded identity is over what was read, not its bytes, so the purge's re-check
+        has to read it the same way — hashing the bytes would call every statement changed."""
+        self._import_by_hand(statement_pdf([PAYMENT, DEPOSIT]))
+        with get_db(str(self.db_path)) as conn:
+            conn.execute("UPDATE csv_import_profile SET watch_purge_mode = 'on_import' WHERE id = ?",
+                         (self.profile_id,))
+        may = txn("05/03/2026", "Mobile Payment: Sam Okafor", "-12.00", "9MM00000MM0000009")
+        path = self._drop("may.pdf", statement_pdf([may], period=("May 1, 2026 - May 31,", "2026")))
+        self._scan_twice()
+        self.assertFalse(path.exists())
+
+    def test_only_the_paypal_source_takes_pdfs_and_none_takes_a_zip(self):
+        # A zip is expanded by the upload, never from a folder: nobody has looked inside it.
+        self._drop("statements.zip", b"PK\x03\x04")
+        self._drop("statement.pdf", statement_pdf([PAYMENT, DEPOSIT]))
+        with self._use_db_path():
+            watch.scan_watched_sources()
+            listing = watch.browse_directories(str(self.watched), profile_id=self.profile_id)
+            plain = watch.browse_directories(str(self.watched))
+        self.assertEqual(set(self._watched_names()), {"statement.pdf"})
+        self.assertEqual([f["name"] for f in listing["files"]], ["statement.pdf"])
+        self.assertEqual(plain["files"], [])
+
+    def test_a_parked_statement_is_handed_back_as_the_pdf_on_disk(self):
+        pdf = statement_pdf([PAYMENT, DEPOSIT])
+        self._drop("statement.pdf", pdf)
+        self._scan_twice()
+        with get_db(str(self.db_path)) as conn:
+            file_id = conn.execute("SELECT id FROM import_watch_file").fetchone()["id"]
+        with self._use_db_path():
+            response = watch.watch_file_content(file_id)
+        self.assertEqual((response.body, response.media_type), (pdf, "application/pdf"))
+
+    def _watched_names(self):
+        with get_db(str(self.db_path)) as conn:
+            return [r["filename"] for r in conn.execute("SELECT filename FROM import_watch_file")]
 
 
 if __name__ == "__main__":

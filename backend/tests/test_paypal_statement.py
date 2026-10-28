@@ -25,6 +25,7 @@ from backend.db.database import get_db, init_db, reset_current_db_path, set_curr
 from backend.routers.import_export.core import PAYPAL_SOURCE_KIND, run_import_core, undo_batch
 from backend.routers.transactions import CategoryOverride, override_category
 from backend.routers.import_export.paypal_statement import import_paypal_statements, scan_paypal_statements
+from backend.routers.import_export.profiles import list_profiles
 from backend.services import paypal_funding
 from backend.services.categorizer import recategorize_all
 from backend.services.money_movement import money_movement_category_id_if_exists
@@ -201,6 +202,26 @@ class StatementImportTests(unittest.IsolatedAsyncioTestCase):
     def _category(self, txn_id):
         with self._db() as conn:
             return conn.execute("SELECT category_id FROM txn WHERE id = ?", (txn_id,)).fetchone()["category_id"]
+
+    async def test_the_paypal_source_lists_which_account_each_paypal_accounts_statements_go_into(self):
+        # The pairing is read back from past imports rather than stored as a setting, so the data source
+        # listing is the one place it can be seen; it has to follow the imports, undo included.
+        result = await self._import([FakeUpload("s.pdf", statement_pdf([PAYMENT, DEPOSIT]))],
+                                    {"robin@example.com": self.paypal})
+
+        def listed():
+            token = set_current_db_path(str(self.db_path))
+            try:
+                (source,) = [p for p in list_profiles() if p["source_kind"] == PAYPAL_SOURCE_KIND]
+            finally:
+                reset_current_db_path(token)
+            return source["statement_accounts"]
+
+        self.assertEqual(listed(), [{"paypal_account_id": "robin@example.com", "account_id": self.paypal,
+                                     "account_name": "PayPal"}])
+        with self._db():
+            undo_batch(result["batches"][0]["batch_id"])
+        self.assertEqual(listed(), [])
 
     async def test_a_statement_lands_in_its_paypal_account_under_the_paypal_source(self):
         pdf = statement_pdf([PAYMENT, DEPOSIT])

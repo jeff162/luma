@@ -260,6 +260,14 @@ SETTINGS: tuple[Setting, ...] = (
         advanced=True,
     ),
     Setting(
+        key="watch_folder_roots",
+        env_var="WATCH_FOLDER_ROOTS",
+        label="Watched folder roots",
+        help="The folders a data source may watch, with everything inside them; several are separated by the system's path separator (: on Linux and macOS, ; on Windows). An installation other devices can reach watches no folder until this is set. One only this computer can open may watch any folder unless this is set, in which case it is confined the same way.",
+        default="",
+        advanced=True,
+    ),
+    Setting(
         key="developer_options",
         env_var="LUMA_DEVELOPER_OPTIONS",
         label="Developer options",
@@ -476,6 +484,14 @@ def server_mode_enabled() -> bool:
     has had a say. Env-only because it is read before the server exists, and it is a property of how the
     process is started — not the topology, which stays a per-request fact (`backend/transport.py`)."""
     return truthy(value_of("server_mode"))
+
+
+def watch_folder_roots() -> list[str]:
+    """The folders watching is confined to, as configured; empty when none are. Env-only, because a
+    folder outside the data directory is the server's filesystem, which only someone with a shell on the
+    machine should decide the app may read (`docs/security-model.md` → *Reading and deleting outside the
+    data directory*)."""
+    return [part.strip() for part in value_of("watch_folder_roots").split(os.pathsep) if part.strip()]
 
 
 @dataclass(frozen=True)

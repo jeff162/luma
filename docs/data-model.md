@@ -1541,6 +1541,9 @@ and never removed, since it carries the coverage claim.
 
 - A range pull (initial backfill, *Fetch more history*) sets or extends `coverage_start_date`; a delta
   advances `coverage_through_date`; a failed sync advances nothing; a cursor reset clears both.
+- **The trailing edge moves only to a date that was fetched.** A walking adapter reports how far it
+  fetched (`covered_through`, and an account's own `through`), and `coverage_through_date` moves forward
+  to that and never back. A sync that paused before fetching the recent window leaves it where it was.
 - **A range pull claims what it reached, per account.** The adapter reports `account_coverage`. The
   caller falls back to the requested depth only for an adapter that keeps no per-account coverage (a
   cursor provider). A walking adapter that reports an empty set reached nothing new. An overstated
@@ -1746,8 +1749,9 @@ only answer to what a file left out.
 
 ## Watched import folders
 
-A data source may name a directory on the server (`csv_import_profile.watch_dir`); a CSV appearing
-there is imported unattended. The mechanism is in `architecture.md` → *Import / export*.
+A data source may name a directory on the server (`csv_import_profile.watch_dir`); a file of a kind
+that source takes appearing there — a CSV, or for the PayPal source also a statement PDF — is imported
+unattended. The mechanism is in `architecture.md` → *Import / export*.
 
 **`watch_dir` and `watch_enabled` are separate.** A restore from another instance clears the switch and
 keeps the path, so the person can see what the folder was. Clearing the path clears the switch.
@@ -1769,6 +1773,13 @@ parks on the same principle with its own list: the file is not an Amazon export,
 Amazon account or one that no longer exists, the source has no completed batch yet, or any paying card
 in the file has no funding account mapped. The last is the counterpart of an unmapped account value —
 resolving it wrong moves a charge into the wrong account quietly.
+
+**The PayPal source's statement PDFs** park when the PDF is not a PayPal statement or cannot be read as
+one, when no statement for its PayPal account has been imported by hand (that import is what chooses the
+account), or when the interactive import would refuse it — the tied account trashed or no longer a PayPal
+account. A statement with no activity is done with rather than parked. Its durable record is the
+statement's own content hash, which is over what was read rather than the file's bytes, so the purge
+re-reads a statement to re-check it.
 
 **`import_watch_file` is a cache**: `(size, mtime)` per file plus the reason a file is waiting. It is
 left out of backups because it describes a filesystem the restoring machine does not have. The durable

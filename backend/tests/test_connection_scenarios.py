@@ -338,6 +338,49 @@ class ConnectionScenarioTests(unittest.TestCase):
             CHECKING, coverage["coverage_start_date"], coverage["coverage_through_date"])
         self.assertGreater(len(expected), 0, "the fixture must actually span the claimed range")
 
+    def _held_ids(self):
+        with self._db() as conn:
+            return {r["external_transaction_id"] for r in conn.execute(
+                "SELECT external_transaction_id FROM txn WHERE trashed_at IS NULL")}
+
+    def test_mapping_a_new_account_does_not_skip_the_recent_window_for_the_others(self):
+        # The new account walks from today, and the walk is filtered to it alone, so its first window brings
+        # only that account current. The established one still needs the recent window fetched — skipping it
+        # because *some* account starts at today left the established account's days since its last sync
+        # unfetched while its watermark moved to today, past the overlap the next sync re-asks for.
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True)
+        for day in range(1, 11):
+            self.sim.advance_days(1)
+            self.sim.post("Demo Checking", self.sim.today.isoformat(), amount=f"-{day}.00")
+
+        self._offer(SAVINGS)
+        self._sync(days=90, full_history=True)
+        self.sim.advance_days(1)
+        self._sync(days=90)
+
+        coverage = self._coverage()[CHECKING]
+        expected = self.sim.expected_ids(
+            CHECKING, coverage["coverage_start_date"], coverage["coverage_through_date"])
+        self.assertFalse(expected - self._held_ids(),
+                         "the established account's activity while the new one was mapped was never fetched")
+
+    def test_a_sync_that_cannot_afford_the_recent_window_leaves_the_trailing_edge_alone(self):
+        # Coverage through today is a claim that today's data is held; duplicate detection trusts it. A sync
+        # paused on an empty shared allowance fetched nothing recent, so it must not make that claim.
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True)
+        before = self._coverage()[CHECKING]["coverage_through_date"]
+        self.sim.advance_days(3)
+        with self._db() as conn:
+            conn.execute(
+                "UPDATE connection SET provider_request_budget = ? WHERE id = ?",
+                (json.dumps({"pools": {"shared": {"tokens": 0.0, "as_of": self.sim.now.timestamp()}}}),
+                 CONNECTION_ID),
+            )
+        self._sync(days=90)
+        self.assertEqual(self._coverage()[CHECKING]["coverage_through_date"], before)
+
     def test_a_history_pull_does_not_let_ongoing_activity_slip_through_the_gap(self):
         # The scenario that catches a watermark advanced without a fetch behind it. The shape is specific
         # and needs every part: a routine sync establishes where top-ups resume from, the bank keeps

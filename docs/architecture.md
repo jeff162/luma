@@ -602,12 +602,20 @@ A data source may name a directory on the **server**; a file that appears there 
 `run_import_parsed` (`watch.py`). The result is an ordinary import batch, so its duplicates, refused
 rows and rule suggestions appear on the usual file card.
 
-A **marketplace source** watches a folder the same way, forking in `_import_ready_file` to
-`run_amazon_import` instead. The refusal rule is the same — park anything the saved source does not
+Which files a source takes, and how each is read, identified and imported, is one table in `watch.py`
+(`_FILE_KINDS_BY_SOURCE`, keyed on `source_kind` and then extension); the scan, the purge's re-check,
+the folder picker and the hand-back of a parked file all look a file up there. A **marketplace source**
+watches a folder the same way, its CSVs going to `run_amazon_import` instead. The refusal rule is the same — park anything the saved source does not
 answer — but the questions differ: there is no header fingerprint to check (an AZAD export is
 recognized by `read_export`), and what must be answered instead is the Amazon account and the funding
 account of every paying card the file names. An unmapped card parks the file, because the interactive
 form refuses to import until each one is mapped and an unattended path may not take the looser option.
+
+The **PayPal source** takes statement PDFs beside its activity CSVs, imported as the statement upload
+imports them. What a statement must have answered is the ledger account its PayPal account goes into,
+which a statement imported by hand settles for that PayPal account (the tie `_statement_accounts` reads
+back); a statement for a PayPal account with no tie yet parks. A zip of statements is not taken from a
+folder, although the upload expands one: an archive found on disk is one nobody has opened.
 
 - **Scanning is request-driven; there is no scheduler.** The app has per-identity database paths, so a
   timer thread would have no tenant to run as. `POST /import-export/watch/auto-scan` scans only if one
@@ -626,7 +634,11 @@ form refuses to import until each one is mapped and an unattended path may not t
 - A source's `filename_pattern` is a secondary filter, so several sources can share one directory.
 - **Settings are admin-gated** (`PATCH /import-export/profiles/{id}/watch`, `require_admin_or_local`),
   because naming a directory is a statement about the server's filesystem; see `security-model.md` →
-  *Reading and deleting outside the data directory*. A restore from another instance switches watching
+  *Reading and deleting outside the data directory*. **Where is the operator's**: an installation other
+  devices can reach (`transport.reachable_from_network`) watches only inside `WATCH_FOLDER_ROOTS`, and
+  nothing until it is set. `watch_folder_refusal` is the one check, applied on save, in the picker, in the
+  scan (a refused folder is a source notice, and its purge is skipped) and when a parked file is handed
+  back (`operations.md` → *Watched folders on a server*). A restore from another instance switches watching
   off; the verdict is taken before the wipe, since every restore gives the system a new `instance_id`.
 - **The folder is picked by browsing the server, not the viewer's machine** (`GET
   /import-export/watch/browse`, same gate, read-only, creates nothing). The browser's own pickers
@@ -643,10 +655,9 @@ form refuses to import until each one is mapped and an unattended path may not t
   of text is indistinguishable from the path field above it. It lists the **files the folder would
   import** under its subfolders — plain rows, not buttons, since a folder is picked and never a file —
   because a name like last year's export settles "is this the folder?" in a way a path cannot. Which
-  files those are is decided server-side from `CANDIDATE_SUFFIXES`, the constant the scan itself filters
-  on, so the picker can never offer a file the folder would pass over; the client is told *which files*,
-  never *which extensions*, so the set growing (a statement PDF is the obvious next one) does not reach
-  it.
+  files those are is decided server-side, for the source being edited, from the same table the scan
+  filters on, so the picker can never offer a file the folder would pass over; the client is told *which
+  files*, never *which extensions*, so the table growing does not reach it.
 
 ### Detail panels
 
@@ -993,9 +1004,13 @@ import card. The full rule is in `data-model.md`.
   advances all of them, and narrows to an account only when one wants it. Rows already held are skipped
   on `external_transaction_id`.
 
-- **A walk that has moved back from today spends its first request on the recent window**, so new
-  transactions keep arriving while history fills. The top-up watermark (`through`) advances only after
-  that fetch.
+- **A pull that walks history spends its first request on the recent window**, so new transactions
+  keep arriving while history fills. Only a connection's first pull skips it, since then every account is
+  walking from today; on any later pull an account that is not walking, or is walked on its own filtered
+  window, is brought current only by that request. The top-up watermark (`through`) advances only after
+  that fetch. A top-up whose gap since the last one is wider than one request may ask for is fetched in
+  abutting `WINDOW_DAYS` requests, oldest first, because the server caps a wider range without failing;
+  `through` advances per request, so an allowance running out partway claims only what was fetched.
 
 - **The ledger's currency is a setting that adapters are told.** `services/ledger_currency.py` owns it
   (tenant state in `import_workflow_state`); `run_sync` passes `ledger_currency` into

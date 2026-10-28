@@ -766,7 +766,8 @@ def _build_account_targets(conn, connection, *, target_start: date, ledger_curre
 
 
 def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_start: date | None,
-                          synced_accounts: dict, account_coverage: dict | None = None) -> None:
+                          synced_accounts: dict, account_coverage: dict | None = None,
+                          covered_through: str | None = None) -> None:
     """Advance the connection's coverage claim after a successful pull.
 
     The claim belongs to the *chain*, not to any card: `transactions_cursor` + `initial_sync_complete`
@@ -782,6 +783,12 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
     hard-reject genuine transactions — a later CSV import of that period discarded as duplicates of rows
     nothing ever fetched. Absent (a cursor provider), the requested depth applies to everything synced,
     which for that provider is accurate: it maintains one window across the whole item.
+
+    The trailing edge follows the same rule. An adapter that reports `account_coverage` also reports how
+    far it fetched: `covered_through` for every account it holds, and a `through` on an account's own entry
+    when a window for that account alone reached further. The edge moves to the later of the two and never
+    back, and not at all when neither is given — a pull that paused before fetching the recent window
+    leaves it where it was, rather than claiming today.
     """
     today = date.today().isoformat()
     if account_coverage is not None:
@@ -792,15 +799,16 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
                 SET    coverage_start_date = CASE
                            WHEN coverage_start_date IS NULL OR coverage_start_date > ?
                            THEN ? ELSE coverage_start_date END,
-                       coverage_through_date = ?,
                        history_complete = ?,
                        history_empty_streak = ?
                 WHERE  connection_id = ? AND external_account_id = ?
                 """,
-                (reported["reached"], reported["reached"], today,
+                (reported["reached"], reported["reached"],
                  1 if reported.get("complete") else 0, reported.get("empty_streak", 0),
                  connection["id"], external_account_id),
             )
+            through = max(filter(None, (reported.get("through"), covered_through)), default=None)
+            _advance_coverage_through(conn, connection["id"], external_account_id, through)
         # A pull routinely touches accounts the walk had nothing to say about: once every account's history
         # is complete there is no walk left, yet the recent top-up still fetched current rows for all of
         # them. Their trailing edge advanced even though their start did not, and only the trailing edge is
@@ -808,15 +816,8 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
         for external_account_id in synced_accounts:
             if external_account_id in account_coverage:
                 continue
-            conn.execute(
-                """
-                UPDATE connection_account
-                SET    coverage_through_date = ?
-                WHERE  connection_id = ? AND external_account_id = ?
-                  AND  coverage_start_date IS NOT NULL
-                """,
-                (today, connection["id"], external_account_id),
-            )
+            _advance_coverage_through(conn, connection["id"], external_account_id, covered_through,
+                                      require_start=True)
         return
     for external_account_id in synced_accounts:
         if is_range_pull and requested_start:
@@ -844,6 +845,22 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
                 """,
                 (today, connection["id"], external_account_id),
             )
+
+
+def _advance_coverage_through(conn, connection_id: str, external_account_id: str, through: str | None, *,
+                              require_start: bool = False) -> None:
+    if not through:
+        return
+    conn.execute(
+        f"""
+        UPDATE connection_account
+        SET    coverage_through_date = ?
+        WHERE  connection_id = ? AND external_account_id = ?
+          AND  (coverage_through_date IS NULL OR coverage_through_date < ?)
+          {"AND coverage_start_date IS NOT NULL" if require_start else ""}
+        """,
+        (through, connection_id, external_account_id, through),
+    )
 
 
 @router.post("")
@@ -1649,6 +1666,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                             {a: c for a, c in account_coverage.items() if a not in unsupported_accounts}
                             if account_coverage is not None else None
                         ),
+                        covered_through=page.get("covered_through"),
                     )
                     if not page["has_more"]:
                         break

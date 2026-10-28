@@ -135,9 +135,14 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
     def _breakdown(self, index=0):
         """The newest row's skip buckets as the endpoint serves them — summed from `account_counts`, which
         is the only place they are stored. Read through the endpoint on purpose: the derivation is the
-        thing under test, and asserting against the stored column would pin the shape this replaced."""
+        thing under test, and asserting against the stored column would pin the shape this replaced.
+
+        The endpoint sorts by `started_at`, a wall clock that steps backwards on this host (see
+        `_log_rows`), so its entry is picked by the id of the row `_log_rows` names rather than by position."""
+        row_id = self._log_rows()[index]["id"]
         with self._use_db_path():
-            return sync_module.sync_diagnostics()["entries"][index]["skipped_breakdown"]
+            entries = sync_module.sync_diagnostics()["entries"]
+        return next(e for e in entries if e["id"] == row_id)["skipped_breakdown"]
 
     def _txn(self, txn_id, external_account_id=None):
         return {

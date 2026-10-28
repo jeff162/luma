@@ -107,6 +107,11 @@ function buildResponseError(body, status) {
   return error
 }
 
+// No timeout. A request the server accepts and then stalls on waits indefinitely; `backendLiveness`
+// catches a refused connection and a dead socket after a wake, but not that. A blanket timeout would have
+// to exempt every legitimately long request (sync, import, backup, demo load), and that list breaks a
+// feature whenever it is wrong. If a timeout is ever needed, it is an opt-in per call, set by a caller
+// that knows its own duration.
 async function request(path, options = {}) {
   const { suppressMutationSignal = false, ...fetchOptions } = options
   const res = await trackedFetch(`${BASE}${path}`, {
@@ -1238,19 +1243,23 @@ export const api = {
   updateImportProfileWatch: (id, data) =>
     request(`/import-export/profiles/${id}/watch`, { method: 'PATCH', body: JSON.stringify(data) }),
   // The subdirectories of one folder on the *server*, for the folder picker. Read-only and admin-gated,
-  // like naming the folder itself. No path = the starting roots only.
-  browseServerDirectories: (path) =>
-    request(`/import-export/watch/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  // like naming the folder itself. No path = the starting roots only. `profileId` decides which files
+  // the listing names, since a source takes only its own kinds of file.
+  browseServerDirectories: (path, profileId) => {
+    const q = new URLSearchParams(Object.entries({ path, profile_id: profileId }).filter(([, v]) => v)).toString()
+    return request(`/import-export/watch/browse${q ? `?${q}` : ''}`)
+  },
   dismissWatchedFile:   (fileId) => request(`/import-export/watch/files/${fileId}`, { method: 'DELETE' }),
-  // A parked file's own text, so the ordinary import flow can be opened with it in hand — the file is on
-  // the server, and everything downstream of the drop zone works from a File.
-  getWatchedFileText:   (fileId) =>
+  // A parked file's own bytes, so the ordinary import flow can be opened with it in hand — the file is on
+  // the server, and everything downstream of the drop zone works from a File. A Blob rather than text,
+  // because a parked file may be a PDF.
+  getWatchedFile:       (fileId) =>
     trackedFetch(`${BASE}/import-export/watch/files/${fileId}/content`).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         throw buildResponseError(err, res.status)
       }
-      return res.text()
+      return res.blob()
     }),
   exportTransactionsCsv: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))

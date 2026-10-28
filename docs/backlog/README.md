@@ -150,8 +150,5 @@ scale — rather than by feature.
   on a 60 MB DB; note the former does **not** cover foreign keys). The larger half is an invariant
   checker for the semantic inconsistencies those pragmas call "ok" — kept deliberately separate.
 - [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file:
-  the unwritten CHANGELOG entry for the category-owner → tag migration, a denser Connections-tab card
-  layout, SimpleFIN's 90-day window becoming a silent cap, whether timestamps should ever be relative,
-  the stalled-request gap a blanket request timeout was rejected for, and what checking a tag on a
-  transaction should *mean* — the open question being whether a hand-checked tag survives a later
-  recategorization, with a concrete hole in bulk `add_tags` to look at first.
+  showing every source a transaction's tag comes from (hand, rule, category) rather than only the
+  winner, and a per-rule *stop matching* option that keeps lower-ranked rules from contributing.

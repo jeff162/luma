@@ -190,6 +190,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Logs](operations.md#logs)
 - [LAN server](operations.md#lan-server)
 - [Containers](operations.md#containers)
+- [Watched folders on a server](operations.md#watched-folders-on-a-server)
 - [Where the data lives, and how the app decides](operations.md#where-the-data-lives-and-how-the-app-decides)
 - [Restore is a destructive operation](operations.md#restore-is-a-destructive-operation)
 - [Locked out](operations.md#locked-out)

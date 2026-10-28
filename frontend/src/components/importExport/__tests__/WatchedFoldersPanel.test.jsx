@@ -13,7 +13,7 @@ import userEvent from '@testing-library/user-event'
 const autoScanWatchedFolders = vi.fn(async () => ({ sources: [] }))
 const scanWatchedFolders = vi.fn(async () => ({ sources: [{ imported: 1 }] }))
 const getWatchStatus = vi.fn()
-const getWatchedFileText = vi.fn(async () => 'Date,Amount\n2026-02-01,1.00\n')
+const getWatchedFile = vi.fn(async () => new Blob(['Date,Amount\n2026-02-01,1.00\n'], { type: 'text/csv' }))
 const dismissWatchedFile = vi.fn(async () => ({ ok: true }))
 
 vi.mock('../../../lib/api.js', () => ({
@@ -21,7 +21,7 @@ vi.mock('../../../lib/api.js', () => ({
     autoScanWatchedFolders: (...args) => autoScanWatchedFolders(...args),
     scanWatchedFolders: (...args) => scanWatchedFolders(...args),
     getWatchStatus: (...args) => getWatchStatus(...args),
-    getWatchedFileText: (...args) => getWatchedFileText(...args),
+    getWatchedFile: (...args) => getWatchedFile(...args),
     dismissWatchedFile: (...args) => dismissWatchedFile(...args),
   },
 }))
@@ -39,7 +39,7 @@ afterEach(() => {
   autoScanWatchedFolders.mockClear()
   scanWatchedFolders.mockClear()
   getWatchStatus.mockReset()
-  getWatchedFileText.mockClear()
+  getWatchedFile.mockClear()
   dismissWatchedFile.mockClear()
 })
 
@@ -72,6 +72,21 @@ describe('WatchedFoldersPanel', () => {
     const [file, profileId] = onOpenFile.mock.calls[0]
     expect(file.name).toBe('january.csv')
     expect(profileId).toBe('src-1')
+  })
+
+  it('hands a parked statement PDF over as a PDF, not as text', async () => {
+    getWatchStatus.mockResolvedValue({
+      sources: [SOURCE], files: [{ ...PARKED, filename: 'statement-Apr-2026.pdf' }], attention: { total: 1 },
+    })
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0xff])
+    getWatchedFile.mockResolvedValueOnce(new Blob([pdf], { type: 'application/pdf' }))
+    const onOpenFile = vi.fn()
+    render(<WatchedFoldersPanel onOpenFile={onOpenFile} />)
+    await userEvent.click(await screen.findByRole('button', { name: /Import…/ }))
+    await waitFor(() => expect(onOpenFile).toHaveBeenCalled())
+    const [file] = onOpenFile.mock.calls[0]
+    expect(file.type).toBe('application/pdf')
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(pdf)
   })
 
   it('offers no import for a file that failed to be deleted, since there is nothing to import', async () => {

@@ -29,6 +29,7 @@ from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS, M
 
 from .core import (
     IMPORTED_CATEGORY_SCOPE_ALL,
+    PAYPAL_SOURCE_KIND,
     UNKNOWN_SOURCE_FALLBACK_KEY,
     _annotate_imported_category_settings,
     _get_imported_category_settings,
@@ -37,6 +38,7 @@ from .core import (
     insert_csv_account,
     save_batch_snapshot,
 )
+from .paypal_statement import statement_account_pairs
 
 router = APIRouter()
 
@@ -308,11 +310,17 @@ def list_profiles():
             WHERE  p.source_kind IS NULL OR p.source_kind NOT LIKE 'marketplace:%'
             ORDER BY p.name
         """).fetchall()
+        # The PayPal source's statements are paired with accounts by what was imported, not by a setting,
+        # so the pairing is listed with the source as the one place it can be seen.
+        statement_pairs = (statement_account_pairs(conn)
+                           if any(r["source_kind"] == PAYPAL_SOURCE_KIND for r in rows) else [])
     result = []
     for r in rows:
         d = dict(r)
         d["column_map"] = safe_json_dict(d["column_map"])
         d = _annotate_imported_category_settings(d, _get_imported_category_settings(d))
+        if d["source_kind"] == PAYPAL_SOURCE_KIND:
+            d["statement_accounts"] = statement_pairs
         result.append(d)
     return result
 

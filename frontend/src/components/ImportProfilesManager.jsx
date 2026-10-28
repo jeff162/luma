@@ -1400,6 +1400,22 @@ export default function ImportProfilesManager({
                           {profile.filename_pattern ? <span>📁 {profile.filename_pattern} · </span> : null}
                           {profile.account_name ? <span>🏦 {profile.account_name}</span> : null}
                         </div>
+                        {/* Which account each PayPal account's statements go into. Set by the first statement
+                            imported for it rather than by anything in the editor, so this is the only place
+                            the pairing shows outside the statement import itself. */}
+                        {profile.statement_accounts?.length ? (() => {
+                          const pairs = profile.statement_accounts
+                            .map(pair => `${pair.paypal_account_id} → ${pair.account_name || 'a removed account'}`)
+                            .join(' · ')
+                          return (
+                            <div
+                              style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, ...TRUNCATED_CELL_STYLE }}
+                              title={`Statements go into: ${pairs}`}
+                            >
+                              Statements: <span style={{ color: 'var(--text)' }}>{pairs}</span>
+                            </div>
+                          )
+                        })() : null}
                         {profile.watch_dir ? (
                           // Truncated with the whole path on hover, rather than wrapped: a path broken
                           // across three ragged lines is what made a narrow window unreadable.

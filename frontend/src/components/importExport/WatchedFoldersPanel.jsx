@@ -84,8 +84,8 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
   async function openInImportFlow(file) {
     setOpening(file.id)
     try {
-      const text = await api.getWatchedFileText(file.id)
-      await onOpenFile?.(new File([text], file.filename, { type: 'text/csv' }), file.profile_id)
+      const blob = await api.getWatchedFile(file.id)
+      await onOpenFile?.(new File([blob], file.filename, { type: blob.type }), file.profile_id)
     } finally {
       setOpening('')
     }

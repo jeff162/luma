@@ -93,6 +93,9 @@ function getTransactionsNavigationType() {
   return navigationEntry?.type || ''
 }
 
+// The ledger's filters are session state rather than a saved preference: they survive moving around the
+// app and reset on reload or relaunch, because opening the app to a ledger narrowed by a filter nobody
+// remembers setting is worse than choosing it again.
 function loadTransactionsSessionState() {
   if (typeof window === 'undefined') return null
   if (!transactionsSessionInitialized) {

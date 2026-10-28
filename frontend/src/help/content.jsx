@@ -3029,9 +3029,22 @@ export const HELP_TOPICS = [
           rejected-row and rule-suggestion review on it.
         </p>
         <p>
+          The PayPal data source also takes PayPal&apos;s monthly statement PDFs, so one folder can hold
+          both its activity downloads and its statements. A statement goes into the account earlier
+          statements for the same PayPal account went into, so the first statement for each PayPal
+          account is imported by hand, where that account is chosen. A zip of statements is not opened
+          from a folder; drop it on the import page instead.
+        </p>
+        <p>
           The folder is read on the machine that runs the application. On a desktop installation that is
           the same machine the page is open on. On a server, or in a container, it is a folder there
           &mdash; a container additionally needs it mounted, or the path names nothing.
+        </p>
+        <p>
+          A server watches only inside the folders its operator names with <code>WATCH_FOLDER_ROOTS</code> in
+          its <code>.env</code> file, and no folder until one is named; the <strong>Folder</strong> dialog
+          says so when none is. The account the server runs as has to be able to read the folder and the
+          files saved into it, and to delete them there when a data source deletes files after import.
         </p>
         <p>
           <strong>Browse</strong> walks that machine&apos;s folders rather than this one&apos;s, which is
@@ -3069,6 +3082,8 @@ export const HELP_TOPICS = [
             from its editor creates the account</li>
           <li>a file whose columns are not the ones the data source expects, which usually means a file
             from somewhere else landed in the folder</li>
+          <li>a PayPal statement for a PayPal account with no statement imported yet, or a PDF that is not
+            a PayPal statement</li>
         </ul>
         <p>
           The fix is made wherever it belongs &mdash; pointing a value whose account was deleted at
@@ -3548,6 +3563,12 @@ export const HELP_TOPICS = [
           time that PayPal account is seen it is given an account here &mdash; a PayPal account, or a new one.
           From then on its statements always go into that account, and that account takes no other PayPal
           account&apos;s statements.
+        </p>
+        <p>
+          The PayPal data source&apos;s row on the <strong>File Sources</strong> tab lists each PayPal
+          account and the account its statements go into. The pairing comes from the statements imported,
+          not from a setting, so undoing every statement imported for a PayPal account removes it, and the
+          next statement for that PayPal account asks again.
         </p>
         <p>
           Each statement becomes its own card under the PayPal data source. A transaction already in the

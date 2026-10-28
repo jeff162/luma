@@ -150,6 +150,15 @@ def _statement_accounts(conn) -> tuple[dict[str, str], dict[str, str]]:
     return by_paypal_id, by_account
 
 
+def statement_account_pairs(conn) -> list[dict]:
+    """Each PayPal Account ID with the account its statements go into, for showing on the PayPal data
+    source — the pairing `_statement_accounts` reads back, which nothing else displays."""
+    by_paypal_id, _ = _statement_accounts(conn)
+    names = _account_names(conn, list(by_paypal_id.values()))
+    return [{"paypal_account_id": pid, "account_id": aid, "account_name": names.get(aid)}
+            for pid, aid in sorted(by_paypal_id.items())]
+
+
 def _currency_refusals(statement: Statement, ledger_currency: str) -> dict[int, str]:
     """The rows in the ledger's currency that only moved money for a row in another currency — a card
     deposit that paid for a payment in pounds, say. The payment is refused for its currency, and its card

@@ -300,7 +300,7 @@ class SimpleFinSim:
                 and float(t.amount) != 0}
 
 
-def build_ledger(accounts=("Demo Checking", "Demo Savings"), start="2024-01-01", end="2026-08-08"):
+def build_ledger(accounts=("Demo Checking", "Demo Savings"), start="2020-01-01", end="2026-08-08"):
     """A ledger spread over a couple of years, deliberately uneven.
 
     Three properties matter more than volume, and none of them appear in the captured demo data:
@@ -314,14 +314,18 @@ def build_ledger(accounts=("Demo Checking", "Demo Savings"), start="2024-01-01",
       in some cases and less in others. This is what the overlap window exists for, and what makes two
       sources disagree about a transaction's date.
     - **Different depths per account**, so a pull that treats every account alike is visibly wrong.
+
+    The first account is deeper than one day's allowance of windows can reach, so a full backfill has to
+    pause and resume.
     """
     ledger = []
     n = 0
     day = date.fromisoformat(start)
     last = date.fromisoformat(end)
     while day <= last:
-        # A quiet stretch in the first account's history, deliberately under two windows wide (see above).
-        quiet = date(2025, 3, 1) <= day <= date(2025, 4, 20)
+        # A quiet stretch in the first account's history, deliberately under two windows wide (see above),
+        # and older than the monthly rows in `_deliberate_patterns`, which would otherwise fill it.
+        quiet = date(2024, 2, 10) <= day <= date(2024, 6, 15)
         for account in accounts:
             if quiet and account == accounts[0]:
                 continue
@@ -353,7 +357,7 @@ def build_ledger(accounts=("Demo Checking", "Demo Savings"), start="2024-01-01",
 # Window stride the deliberate boundary rows are placed against. Kept as a literal rather than imported
 # from the adapter on purpose: importing it would make these rows follow a changed window size, and then a
 # change to that constant could never be caught by them.
-_WALK_STRIDE_DAYS = 45
+_WALK_STRIDE_DAYS = 89
 
 
 def _deliberate_patterns(accounts, end):

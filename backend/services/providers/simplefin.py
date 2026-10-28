@@ -69,26 +69,24 @@ from backend.services.source_capabilities import CURRENCY_PER_ACCOUNT, REJECT_ZE
 
 # The stride of a history walk, and the widest single date-range query made.
 #
-# Set from what the live server says rather than from the documentation, because only one of the two is
-# enforced. What it says has changed, and the change matters:
+# The Bridge enforces a range limit on one request (`RANGE_LIMIT_DAYS`) and caps a wider request to it
+# without failing. Staying under it is what matters, more than the requests a wider window saves: the
+# walk advances each account's frontier by the window it *asked for*, so a capped response would record
+# coverage over days nothing fetched — the over-claim that makes duplicate detection reject genuine
+# transactions (`data-model.md` → *Coverage has two shapes*).
 #
-#   2026-08-07  "exceeds recommended range of 45 days. In the future, this may be capped."
-#   2026-08-08  "[gen.api] Requested date range exceeds limit of 90 days and was capped."
+# A request is a range of *instants* (see `_fetch_window`). Every older window of a walk ends at midnight
+# and is exactly `WINDOW_DAYS` on the wire, but the window carrying a pull's newest bound runs to the close
+# of its day, so it is `WINDOW_DAYS` plus 23:59:59. One day under the limit keeps that window under it as
+# well, with no special case.
 #
-# So the limit is now the published 90, and it is no longer advisory — an over-wide request is **silently
-# truncated**. That is the dangerous shape: the walk would advance its frontier by the window it *asked
-# for* while the server returned less, recording coverage over days nothing fetched. Staying at 45 keeps a
-# wide margin under the cap and cannot trip it; raising it toward 90 would need the response's own range
-# checked against the request before any coverage is recorded, which nothing does today.
-#
-# Note also that the request is a range of *instants*. Only the window carrying a pull's newest bound runs
-# its end to the close of that day (see `_fetch_window`); every older one ends at midnight, where the next
-# window forward already picks the day up. So a walk's older windows are exactly N days on the wire rather
-# than N plus a further 23:59:59 — which is what used to make every one of them trip the 45-day advisory
-# above. The newest window still carries that extra day and still trips it, once per pull that reaches
-# today. Narrowing *that one window* by a day is the remaining lever if the advisory ever becomes a cap;
-# it is deliberately not spent yet, since the enforced limit is 90 and the message is still advice.
-WINDOW_DAYS = 45
+# The Bridge also recommends a narrower range (`RECOMMENDED_RANGE_DAYS`) and answers every wider request
+# with a notice that it may be capped in future. A walk window draws that notice on every request; it is
+# recorded as an advisory on the sync log and is expected there. The routine top-up, which runs on every
+# sync, keeps within the recommendation (`_fetch_recent`).
+RANGE_LIMIT_DAYS = 90
+RECOMMENDED_RANGE_DAYS = 45
+WINDOW_DAYS = RANGE_LIMIT_DAYS - 1
 
 # A routine top-up re-asks for a few days it already has. The Bridge's own developer guidance recommends
 # the overlap: a transaction can post with a date earlier than the moment it becomes visible, so a window
@@ -909,7 +907,7 @@ class SimpleFinAdapter(ProviderAdapter):
         # re-fetched the boundary day in full: harmless to correctness (the insert is idempotent on the
         # provider transaction id) but not free, since it inflated every response by a day and, because the
         # bounds are instants, stretched a nominal N-day window to N days plus 23:59:59 on the wire — which
-        # is what made a 45-day walk trip the server's own 45-day range advisory.
+        # put every walk window a second short of a day past a server range limit of the same width.
         # Recorded here because this is the one place every dated request passes through, so a window can
         # never be asked for without being reported. What it feeds is the sync log: "which days did this
         # actually go and look at" is the question a walking, budgeted adapter leaves open, and the resume
@@ -998,36 +996,55 @@ class SimpleFinAdapter(ProviderAdapter):
         return state if isinstance(state, dict) else {}
 
     def _fetch_recent(self, credential: str, state: dict, today: date, warnings: dict,
-                      advisories: dict, dropped: dict[str, str], ledger_currency: str,
-                      requested: list | None = None, pending_since: str | None = None,
-                      listed: list | None = None) -> list[dict]:
-        """The recent window — one request, overlapping what is already held.
+                      advisories: dict, dropped: dict[str, str], ledger_currency: str, added: list[dict], *,
+                      budget: dict, now: float, checkpoint=None, requested: list | None = None,
+                      pending_since: str | None = None, listed: list | None = None) -> bool:
+        """The recent window, overlapping what is already held. Returns False when the shared allowance ran
+        out before the window reached today.
 
         The overlap is the provider's own guidance and covers a real case: a transaction can post with a
         date earlier than the moment it becomes visible, so a window starting exactly where the last one
-        ended would step over it. `through` advances only here and only after the fetch, because it is a
+        ended would step over it. `through` advances only here and only after each fetch, because it is a
         claim about data actually in hand.
 
         The window also reaches back to the oldest held pending row (`pending_since`), within
-        `WINDOW_DAYS`, because it is the only window listed completely: a pending row outside it can never
-        be seen to have gone, and a hold can stay pending longer than the overlap.
+        `RECOMMENDED_RANGE_DAYS`, because it is the only window listed completely: a pending row outside it
+        can never be seen to have gone, and a hold can stay pending longer than the overlap.
+
+        **Normally one request, and never one wider than the server's limit.** The window starts from the
+        last top-up, so a connection left unsynced for months would otherwise ask for months in one request,
+        which the server caps without failing — and `through`, set to today, would then claim the days it
+        dropped. A gap that wide is fetched oldest first in `WINDOW_DAYS` slices, each charged to the shared
+        pool and each advancing `through` as it lands, so an allowance running out partway leaves `through`
+        at the last slice fetched and the next sync continues from there. Rows land in `added` as each slice
+        arrives, so a rate-limit refusal partway keeps what came before it.
         """
         through = date.fromisoformat(state["through"]) if state.get("through") else today
         window_start = min(through - timedelta(days=INCREMENTAL_OVERLAP_DAYS), today)
         if pending_since:
             window_start = min(window_start, max(date.fromisoformat(pending_since),
-                                                 today - timedelta(days=WINDOW_DAYS)))
-        rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
-            credential, window_start, today, ledger_currency=ledger_currency,
-            # The top-up is always the newest bound there is, so its end runs to the close of today —
-            # otherwise every sync would miss whatever posted since midnight and never come back for it.
+                                                 today - timedelta(days=RECOMMENDED_RANGE_DAYS)))
+        while True:
+            window_end = min(window_start + timedelta(days=WINDOW_DAYS), today)
+            newest = window_end == today
             # Charged to the shared bucket: the top-up is unfiltered, covering every account at once.
-            end_of_day=True, pool=_SHARED_POOL, requested=requested, listed=listed)
-        warnings.update(dict.fromkeys(window_warnings))
-        _merge_advisories(advisories, window_advisories)
-        dropped.update(window_dropped)
-        state["through"] = today.isoformat()
-        return rows
+            if not _take_request(budget, _SHARED_POOL, now, checkpoint):
+                return False
+            rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
+                credential, window_start, window_end, ledger_currency=ledger_currency,
+                # Only the slice holding today runs to the close of its day — otherwise every sync would
+                # miss whatever posted since midnight and never come back for it. An older slice is
+                # abutted by the next one, which starts at its midnight.
+                end_of_day=newest, pool=_SHARED_POOL, requested=requested,
+                listed=listed if newest else None)
+            added.extend(rows)
+            warnings.update(dict.fromkeys(window_warnings))
+            _merge_advisories(advisories, window_advisories)
+            dropped.update(window_dropped)
+            state["through"] = window_end.isoformat()
+            if newest:
+                return True
+            window_start = window_end
 
     def _walk_history(self, credential: str, budget: dict, targets: list[dict], today: date, now: float,
                       warnings: dict, advisories: dict, dropped: dict[str, str],
@@ -1104,10 +1121,18 @@ class SimpleFinAdapter(ProviderAdapter):
             added.extend(rows)
             return {r["external_account_id"] for r in rows}
 
-        def advance(account: str, window_start: date, delivered: set[str]) -> None:
+        # Accounts this call fetched a window ending today for, which is the one way a walk window also
+        # brings an account current. Reported as that account's `through`, so the caller can extend its
+        # trailing edge on the strength of the fetch rather than of the calendar.
+        fetched_today: set[str] = set()
+
+        def advance(account: str, window_start: date, delivered: set[str], window_end: date) -> None:
             streaks[account] = 0 if account in delivered else streaks[account] + 1
             frontier[account] = max(window_start, reach[account])
+            if window_end == today:
+                fetched_today.add(account)
             coverage[account] = {
+                **({"through": today.isoformat()} if account in fetched_today else {}),
                 "reached": frontier[account].isoformat(),
                 # Only an account whose own windows came back empty has *ended*; one that merely hit the
                 # depth asked for has more behind it, and saying otherwise would stop a later, deeper
@@ -1150,7 +1175,7 @@ class SimpleFinAdapter(ProviderAdapter):
                         rate_limited = resume_later = True
                         break
                     windows_fetched += 1
-                    advance(account, window_start, delivered)
+                    advance(account, window_start, delivered, window_end)
                 if rate_limited:
                     break
                 continue
@@ -1195,7 +1220,7 @@ class SimpleFinAdapter(ProviderAdapter):
             for account in active:
                 if frontier[account] != window_end:
                     continue  # this account had already gone deeper; the window told it nothing new
-                advance(account, window_start, delivered)
+                advance(account, window_start, delivered, window_end)
         # Whether anything is still owed data. Distinct from `resume_later`: this says "come straight back
         # for another page", that says "stop asking until the allowance refills".
         #
@@ -1253,40 +1278,34 @@ class SimpleFinAdapter(ProviderAdapter):
         complete_listings: list[dict] = []
 
         if account_targets:
-            # Where the walk will begin: the newest point any account still wants data from.
-            walk_from = max(
-                (date.fromisoformat(t["reached"]) if t.get("reached") else today)
-                for t in account_targets
-            )
-            # Opens a *pull*, not a page — hence `continuing`. A walk is delivered a page at a time, so
-            # from the second page onward every call looks exactly like a resuming walk (`walk_from` has
-            # moved back from today by then), and guarding on `walk_from` alone bought a fresh unfiltered
-            # top-up on every page: metered requests spent re-fetching one window, and rows arriving for
-            # accounts the walk had deliberately filtered out. The state cannot answer this on its own —
-            # "a new pull started today" and "another page of the pull already running" look identical from
-            # in here — so the caller, which is the only thing that knows, says which it is.
-            if walk_from < today and not continuing:
-                # The walk has already moved back from today, so every window it fetches is old and no
-                # *new* transaction would arrive for however many days the walk takes to finish. One
-                # request on the recent window first keeps the ledger current — which is the part a user
-                # actually looks at — while history fills in behind it.
-                # Charged to the shared pool because it is an unfiltered window: it covers every account at
-                # once, which is exactly what makes it worth one request instead of one per account.
-                if _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
-                    try:
-                        added.extend(self._fetch_recent(
+            # A pull that walks history first spends one request on the recent window, so new
+            # transactions keep arriving while history fills in behind them; every window the walk fetches
+            # after that is old.
+            #
+            # Once per *pull*, not per page — hence `continuing`. A walk is delivered a page at a time, and
+            # a top-up on every page spent metered requests re-fetching one window and delivered rows for
+            # accounts the walk had deliberately filtered out. "A new pull started today" and "another page
+            # of the pull already running" look identical from in here, so the caller, which is the only
+            # thing that knows, says which it is.
+            #
+            # Only the very first pull may skip it: nothing is held yet, every account the connection
+            # carries is a target, and each target's first window runs to the close of today. Any later
+            # pull has accounts whose recent days only the top-up fetches — one that finished its history
+            # is no longer a target at all, and a narrow walk is fetched per account, each from its own
+            # frontier — so walking from today does not bring them current.
+            first_pull = not state.get("through") and not any(t.get("reached") for t in account_targets)
+            if not continuing and not first_pull:
+                try:
+                    if not self._fetch_recent(
                             credential, state, today, warnings, advisories, dropped_currency,
-                            ledger_currency, requested_windows, pending_since, complete_listings))
-                    except SimpleFinRateLimited:
-                        # Refused before the walk even started, so there is nothing to walk with either.
-                        # `through` is untouched, so the next run re-asks for this same window.
-                        rate_limited = resume_later = True
-                else:
-                    resume_later = True
-            else:
-                # The walk still starts at today, so its first window already covers the recent period;
-                # a separate top-up would re-fetch a subset of it for nothing.
-                state["through"] = today.isoformat()
+                            ledger_currency, added, budget=budget, now=now, checkpoint=budget_checkpoint,
+                            requested=requested_windows, pending_since=pending_since,
+                            listed=complete_listings):
+                        resume_later = True
+                except SimpleFinRateLimited:
+                    # Refused before the walk even started, so there is nothing to walk with either.
+                    # `through` stands at the last window fetched, so the next run re-asks from there.
+                    rate_limited = resume_later = True
 
             if not rate_limited:
                 walk_added, coverage, walk_resume, more_to_walk, walk_rate_limited = self._walk_history(
@@ -1296,15 +1315,20 @@ class SimpleFinAdapter(ProviderAdapter):
                 added.extend(walk_added)
                 resume_later = resume_later or walk_resume
                 rate_limited = rate_limited or walk_rate_limited
-        elif _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
+                # The first pull's watermark: set once every target has fetched its window ending today,
+                # since only then is every account the connection carries held through today.
+                if not state.get("through") and all(
+                        t.get("reached") or t["external_account_id"] in coverage for t in account_targets):
+                    state["through"] = today.isoformat()
+        else:
             try:
-                added.extend(self._fetch_recent(
-                    credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
-                    requested_windows, pending_since, complete_listings))
+                if not self._fetch_recent(
+                        credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
+                        added, budget=budget, now=now, checkpoint=budget_checkpoint,
+                        requested=requested_windows, pending_since=pending_since, listed=complete_listings):
+                    resume_later = True
             except SimpleFinRateLimited:
                 rate_limited = resume_later = True
-        else:
-            resume_later = True
         _prune_full_pools(budget)
 
         # Every targeted account either reached the depth asked of it or ran out of history — which is
@@ -1352,6 +1376,9 @@ class SimpleFinAdapter(ProviderAdapter):
             "resume_later":  resume_later,
             # Per account, and only what this pull actually reached — never what it set out to reach.
             "account_coverage": coverage,
+            # How far the unfiltered recent window has been fetched, for every account on the credential —
+            # the caller's trailing edge. Not today unless today was fetched.
+            "covered_through": state.get("through"),
             # The date ranges this call actually asked the server for. Optional in the page contract, and
             # meaningful only for an adapter that pulls ranges: a cursor provider asks for "everything since
             # this token" and has no window to report.

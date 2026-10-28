@@ -66,26 +66,34 @@ unlock secret ⇒ no KEK ⇒ nothing opens.
 ## Reading and deleting outside the data directory
 
 Everything else the app touches on disk is its own. **A watched import folder is the one exception** — a
-data source names a directory, and the server lists it, reads the CSVs in it and, if the source says so,
-deletes the ones it imported. That is a new capability class, so what is defended is stated here.
+data source names a directory, and the server lists it, reads the files of the kinds that source takes
+(CSVs, and for the PayPal source statement PDFs) and, if the source says so, deletes the ones it
+imported. That is a new capability class, so what is defended is stated here.
 
 **What is defended.** Setting the path is admin-or-local (`require_admin_or_local`): a directory on the
-server is global app configuration, not ledger data a member edits. The delete is constrained further —
+server is global app configuration, not ledger data a member edits. **On an installation other devices
+can reach, where it may be is the operator's**: watching is confined to the folders named in
+`WATCH_FOLDER_ROOTS` and is off until some are, because an administrator in the app need not have a shell
+on the machine, and with sign-in protection off the admin check passes everyone. The confinement is
+checked on every way in — saving a path, the picker, the scan, the delete, handing a parked file back —
+against the path resolved through symbolic links (`operations.md` → *Watched folders on a server*). The delete is constrained further —
 only a file this app recorded importing is eligible, and its recorded content hash is re-checked against
 the bytes on disk immediately before the unlink, so a file swapped in under the same name is never
 removed. A restore from another instance switches watching off rather than carrying another machine's
 paths onto this one (`data-model.md` → *Watched import folders*).
 
-**What is not.** There is no allow-list of directories and no confinement: an administrator may name any
-path the server process can reach. Nothing here defends an administrator against themselves — on an
-operator-controlled machine, an operator who can name a directory can already read it.
+**What is not.** An installation only this computer can open has no confinement unless the setting is
+given: there, whoever can open the app is at the machine and can already read what it can. Inside the
+roots nothing is narrower — any folder under one may be named — and the roots themselves are the
+operator's to choose; nothing stops naming `/`.
 
 **The folder picker is the same capability, not a wider one.** `GET /import-export/watch/browse` lists
 one directory's subdirectories behind the same `require_admin_or_local` gate, so that a path on a machine
 the person cannot see need not be typed blind. It is read-only and creates nothing, which is strictly
 less than naming that path and scanning it already does — that lists the directory *and* attempts imports
 from it. What it does change is *reach without intent*: it enumerates directories nobody named, where the
-path field only ever listed one that was.
+path field only ever listed one that was. Where watching is confined, so is the walk: it starts at the
+roots and goes no higher.
 
 **The condition to reopen this.** If the login perimeter ever admits an account class that is neither
 administrator nor trusted operator — a guest, a read-only sharer, an API token with narrowed scope —

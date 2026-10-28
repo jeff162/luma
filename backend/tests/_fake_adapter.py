@@ -61,6 +61,7 @@ class FakeCursorAdapter(ProviderAdapter):
             # None, as a cursor provider reports: it maintains one window across the whole item, so the
             # caller's requested depth is the accurate claim and there is nothing per-account to correct.
             "account_coverage": page.get("account_coverage"),
+            **({"covered_through": page["covered_through"]} if "covered_through" in page else {}),
             "warnings":      page.get("warnings", []),
             "unsupported_currency": page.get("unsupported_currency", {}),
             # Included only when a page scripts it, so the default shape is an adapter that predates the

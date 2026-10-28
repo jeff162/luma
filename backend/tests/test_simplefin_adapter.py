@@ -12,10 +12,9 @@ walk that has to *discover* where history ends because nothing reports it, a req
 for being exceeded is the provider disabling the token, and — see `SimpleFinTransportTests` — the HTTP
 layer every other test in this file mocks away, which is where a real outage came from.
 
-Two facts came from the live server rather than the documentation, and are worth stating because the
-documentation still disagrees with them: the recommended date-range width is **45 days**, not the 90 the
-developer guide gives (a 90-day request is answered with a deprecation notice), and the server fronts
-itself with a CDN that rejects unnamed HTTP clients outright.
+Two facts are worth stating because the developer guide does not: a request wider than the Bridge's
+recommended range is answered with a notice, though the limit it enforces is the wider one the guide gives
+(`RANGE_LIMIT_DAYS`), and the server fronts itself with a CDN that rejects unnamed HTTP clients outright.
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ from backend.services.providers.simplefin import (
     _merge_advisories,
     FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
+    RANGE_LIMIT_DAYS,
     REQUEST_BUDGET_CAPACITY,
     REQUEST_BUDGET_REFILL_PER_HOUR,
     WINDOW_DAYS,
@@ -865,6 +865,9 @@ class SimpleFinWalkTests(unittest.TestCase):
         # A first connect starts its walk at today, so request 0 is the one carrying the newest bound.
         self.assertEqual(server.requested_windows[0][1].isoformat(), self.TODAY)
         self.assertEqual(server.requested_spans[0], WINDOW_DAYS * 86400 + 86399)
+        # The long end still has to fit the server's limit, which caps a wider request without failing it
+        # and would leave the walk recording coverage over days nothing fetched.
+        self.assertLess(server.requested_spans[0], RANGE_LIMIT_DAYS * 86400)
 
     def test_a_resuming_top_up_also_runs_to_the_close_of_today(self):
         # The top-up is always the newest bound there is. Losing today's late postings here would be worse
@@ -879,6 +882,42 @@ class SimpleFinWalkTests(unittest.TestCase):
         # above. What this test is for is the trailing 86399 — the close-of-day bound.
         self.assertGreaterEqual((end - start).days, INCREMENTAL_OVERLAP_DAYS)
         self.assertEqual(server.requested_spans[0], (end - start).days * 86400 + 86399)
+
+    def test_a_top_up_after_a_long_gap_is_split_to_fit_the_servers_limit(self):
+        # A connection left unsynced for months. One request from the last top-up to today would be wider
+        # than the server's limit, which caps it without failing, and `through` would then claim the days it
+        # dropped. The gap is fetched oldest first in abutting requests that each fit.
+        through = date.fromisoformat("2026-01-01")
+        first_start = through - timedelta(days=INCREMENTAL_OVERLAP_DAYS)
+        server = _Server(windows={
+            (first_start.isoformat(), (first_start + timedelta(days=WINDOW_DAYS)).isoformat()):
+                [_txn("old", "2026-01-15", "-4.00", "SHOP")],
+        })
+        result = self._sync(server, None, cursor=json.dumps({"through": through.isoformat()}))
+        windows = server.requested_windows
+        self.assertGreater(len(windows), 1, "this gap must need more than one request")
+        self.assertEqual(windows[0][0], first_start)
+        self.assertEqual(windows[-1][1].isoformat(), self.TODAY)
+        for older, newer in zip(windows, windows[1:]):
+            self.assertEqual(newer[0], older[1], "the slices must abut, leaving no day unasked")
+        for span in server.requested_spans:
+            self.assertLess(span, RANGE_LIMIT_DAYS * 86400)
+        self.assertIn(_ext_id("old"), {r["external_transaction_id"] for r in result["added"]})
+        self.assertEqual(json.loads(result["next_cursor"])["through"], self.TODAY)
+        self.assertFalse(result["resume_later"])
+
+    def test_a_long_gap_the_allowance_cannot_cover_claims_only_what_was_fetched(self):
+        through = date.fromisoformat("2026-01-01")
+        first_start = through - timedelta(days=INCREMENTAL_OVERLAP_DAYS)
+        server = _Server(windows={})
+        one_request = {"pools": {"shared": {"tokens": 1.0, "as_of": self._moment()}}}
+        result = self._sync(server, None, cursor=json.dumps({"through": through.isoformat()}),
+                            budget=one_request)
+        self.assertEqual(len(server.requested_windows), 1)
+        self.assertTrue(result["resume_later"])
+        self.assertEqual(json.loads(result["next_cursor"])["through"],
+                         (first_start + timedelta(days=WINDOW_DAYS)).isoformat(),
+                         "the watermark stops where the fetched window ended, not at today")
 
     def test_a_walk_resumes_from_where_the_account_already_reached(self):
         # No separate parking state: an account's own recorded reach is where it starts again. Window 0 is

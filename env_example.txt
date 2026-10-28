@@ -105,6 +105,14 @@
 # it off. Default: false
 # SESSION_COOKIE_SECURE=false
 
+# WATCH_FOLDER_ROOTS [all]
+# The folders a data source may watch, with everything inside them. Several are separated by : on Linux
+# and macOS, or ; on Windows. An installation other devices can reach watches no folder until this is
+# set; one only this computer can open watches any folder unless it is set. The server's account has to
+# be able to read the folders (and delete from them, if a source deletes files after import); in a
+# container, name the folder's path inside the container. Default: empty
+# WATCH_FOLDER_ROOTS=/home/luma/imports
+
 # CORS_ORIGINS [source] [docker]
 # Other web origins whose pages may call this API from a browser, with cookies attached. Needed only for
 # a deployment that serves the interface and the API from different origins. Default: empty

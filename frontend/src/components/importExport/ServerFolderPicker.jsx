@@ -49,7 +49,7 @@ function CentredEmptyState({ message }) {
   )
 }
 
-export default function ServerFolderPicker({ path, onPathChange, onDone, onCancel }) {
+export default function ServerFolderPicker({ path, profileId, onPathChange, onDone, onCancel }) {
   const [listing, setListing] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -67,7 +67,7 @@ export default function ServerFolderPicker({ path, onPathChange, onDone, onCance
     }
     setLoading(true)
     const timer = setTimeout(() => {
-      api.browseServerDirectories(trimmed)
+      api.browseServerDirectories(trimmed, profileId)
         .then(result => {
           if (requestToken.current !== token) return
           setListing(result); setError('')
@@ -79,7 +79,7 @@ export default function ServerFolderPicker({ path, onPathChange, onDone, onCance
         .finally(() => { if (requestToken.current === token) setLoading(false) })
     }, TYPING_SETTLE_MS)
     return () => clearTimeout(timer)
-  }, [trimmed])
+  }, [trimmed, profileId])
 
   // Roots survive a listing that failed, so the way out of a bad path is still on screen.
   const [roots, setRoots] = useState([])
@@ -89,9 +89,8 @@ export default function ServerFolderPicker({ path, onPathChange, onDone, onCance
 
   const entries = (listing?.entries || []).filter(entry => showHidden || !entry.hidden)
   const hiddenCount = (listing?.entries || []).length - entries.length
-  // The files this folder would import. *Which* files that is belongs to the server, which filters on
-  // the same constant the scan does — this only renders what it is handed, so the set growing (a
-  // statement PDF next) never reaches here.
+  // The files this folder would import for this source. *Which* files that is belongs to the server,
+  // which filters on the same table the scan does — this only renders what it is handed.
   const files = listing?.files || []
   const fileCount = Number(listing?.file_count || 0)
   const nothingHere = entries.length === 0 && files.length === 0

@@ -30,6 +30,7 @@ This document does not repeat a sequence any of those hold. It records what the 
   - [On Windows](#on-windows)
   - [macOS](#macos)
 - [Containers](#containers)
+- [Watched folders on a server](#watched-folders-on-a-server)
 - [Where the data lives, and how the app decides](#where-the-data-lives-and-how-the-app-decides)
 - [Restore is a destructive operation](#restore-is-a-destructive-operation)
 - [Locked out](#locked-out)
@@ -204,6 +205,10 @@ What the two files rely on, for a proxy or supervisor other than these:
   failure. A refused start — a busy port, a name another machine answers for — exits nonzero with the
   reason in the journal, and is retried.
 - **The unit passes `--server`**, so the service is a server whatever `.env` says.
+- **The unit runs as `User=` the account that printed it** (`getpass.getuser()`), which is why the
+  install steps are run as the user the server should run as. That account owns what the server can
+  read and write, the data directory and any watched folder included; editing `User=` and reloading the
+  unit changes it, and the data directory has to follow.
 - **SQLite is adequate at household concurrency.** No database change is needed for this shape.
 
 **A proxy kept beside the executable is run by the server** (`backend/managed_proxy.py`). Placing a
@@ -269,6 +274,30 @@ is read only to say so in Settings → About → **Copy details**.
 - **It is for a Linux host.** Under Docker Desktop on Windows and macOS the host's network is that of a
   virtual machine, so neither the advertised name nor another device's address arrives where the
   containers are.
+
+## Watched folders on a server
+
+A data source may watch a folder on the machine running Luma, which is the one place the app reads or
+deletes outside its data directory (`security-model.md` → *Reading and deleting outside the data
+directory*). **An installation other devices can reach watches only inside the folders named in
+`WATCH_FOLDER_ROOTS`, and no folder until one is named.** An administrator in the app need not be
+anyone with a shell on the machine, and `.env` is reached only by someone who is, so that is where the
+filesystem reach is granted. An installation only this computer can open watches anywhere unless the
+setting is given, in which case it is confined the same way.
+
+- **Several roots are separated by the system's path separator** (`:` on Linux, `;` on Windows). A folder
+  is inside a root when its resolved path is, so a symbolic link inside a root that leads elsewhere is
+  outside it.
+- **The setting confines every way in**: the path a source can save, the folders the picker walks (it
+  starts at the roots and goes no higher), the scan, and the delete after import. A folder saved before
+  the roots changed is no longer read or deleted from; its source reports why.
+- **The server's account has to be able to read the folder and the files in it**, and to delete files
+  there when a source is set to delete them after import. That is the systemd unit's `User=` on Linux,
+  the signed-in user or the scheduled task's account on Windows, and root in the container. A folder it
+  cannot read is reported on the source rather than failing the scan.
+- **In a container the folder has to be mounted**, and the root is named by its path inside the
+  container: a `volumes:` line such as `/home/sam/imports:/imports` beside `./data:/data`, with
+  `WATCH_FOLDER_ROOTS=/imports`.
 
 ## Where the data lives, and how the app decides
 

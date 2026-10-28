@@ -215,7 +215,7 @@ class ProviderAdapter(ABC):
         """One pull's worth of change, plus the state the sync loop needs to decide what happens next:
 
             {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
-             update_status, backfill_complete, resume_later, account_coverage, warnings, advisories,
+             update_status, backfill_complete, resume_later, account_coverage, covered_through, warnings, advisories,
              unsupported_currency, requested_windows, complete_listings}
 
         Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
@@ -321,8 +321,15 @@ class ProviderAdapter(ABC):
         account.** The caller owns the database, so it decides what is needed and passes
         `[{external_account_id, from_date}]` — "this account still wants data back to here". The adapter
         fetches and answers with what it actually got:
-        `{external_account_id: {"reached": iso_date, "complete": bool}}`, where `complete` means *this
-        account has no older data*, a different claim from "we stopped here" (which is what `reached` says).
+        `{external_account_id: {"reached": iso_date, "complete": bool, "through"?: iso_date}}`, where
+        `complete` means *this account has no older data*, a different claim from "we stopped here" (which is
+        what `reached` says).
+
+        `covered_through` is the trailing edge to match: the newest date this provider's data has been
+        fetched through for every account it offers, and an entry's own `through` is that account's when a
+        window for it alone reached further. An adapter reporting `account_coverage` reports these too, since
+        the caller extends `coverage_through_date` only on their strength — a pull that fetched nothing
+        recent must not read as current.
 
         Both are optional and default to the pre-existing behaviour: `account_targets=None` means the
         provider's ordinary delta, and omitting `account_coverage` leaves the caller to record coverage from
@@ -376,6 +383,8 @@ class ProviderAdapter(ABC):
                 t["external_account_id"]: {"reached": start.isoformat(), "complete": False}
                 for t in (account_targets or [])
             },
+            # The window ran to today for every account the provider offers.
+            "covered_through": end.isoformat(),
             "warnings": [],
             "advisories": [],
             # An adapter that cannot report an account's denomination cannot know it dropped anything for
