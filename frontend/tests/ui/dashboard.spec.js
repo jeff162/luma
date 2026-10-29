@@ -47,8 +47,16 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
   await scroller.evaluate(el => { el.style.maxWidth = '220px' })
   await expect.poll(() => scroller.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(180)
   // The page answers the narrowing by re-centring the trend, and a tooltip gives way to any scroll. That
-  // scroll has to land before the hover, and the overflow above is there before it does.
-  await expect.poll(() => scroller.evaluate(el => el.scrollLeft)).toBeGreaterThan(0)
+  // scroll has to land before the hover, and the overflow above is there before it does. The trend can
+  // also be redrawn after its first paint (under load, its data was seen landing after the hover), so
+  // wait for the plot's width and scroll to read the same twice running.
+  let lastReading = null
+  await expect.poll(async () => {
+    const reading = await scroller.evaluate(el => `${el.scrollWidth}:${el.scrollLeft}`)
+    const settled = reading === lastReading && !reading.endsWith(':0')
+    lastReading = reading
+    return settled
+  }, { intervals: [250] }).toBe(true)
   await scroller.evaluate(el => el.scrollIntoView({ block: 'center' }))
 
   const area = await scroller.boundingBox()
