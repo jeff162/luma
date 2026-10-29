@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { cloneElement, forwardRef, isValidElement, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
@@ -76,8 +76,28 @@ function fittedTooltipWidth(el) {
   return fitted < el.getBoundingClientRect().width - 1 ? fitted : null
 }
 
-export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0 }) {
+// The tooltip's own box, apart from where it is placed and how wide it is: for a hint that cannot use
+// `Tooltip` itself, such as one that follows the pointer through a drag.
+export function getTooltipSurfaceStyle({ tone = 'neutral' } = {}) {
+  return {
+    background: 'var(--surface)',
+    border: `1px solid ${tone === 'warning'
+      ? 'color-mix(in srgb, var(--danger) 55%, var(--border))'
+      : 'color-mix(in srgb, var(--text) 24%, var(--border))'}`,
+    borderRadius: 8,
+    padding: '6px 10px',
+    fontSize: 12,
+    color: 'var(--text)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+  }
+}
+
+// `describeTrigger` also gives the hint to assistive technology, as the trigger's description, for a
+// plain-text hint on a single control. A disabled control needs it: the hover is its only way to say why,
+// and a screen reader never sees a hover.
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0, describeTrigger = false }) {
   const triggerRef = useRef(null)
+  const descriptionId = useId()
   const tipRef = useRef(null)
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null)
@@ -166,6 +186,11 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     setPos({ top, left })
   }, [open, content, align, bare, fit])
   if (!content) return children
+  const triggerChild = describeTrigger && isValidElement(children)
+    ? cloneElement(children, {
+      'aria-describedby': [children.props['aria-describedby'], descriptionId].filter(Boolean).join(' '),
+    })
+    : children
   function show() {
     clearTimeout(closeTimer.current)
     // Before anything that can open, so a right-click arriving in the same frame as the hover is still
@@ -189,9 +214,6 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
       disarmDismissal()
     }
   }
-  const borderColor = tone === 'warning'
-    ? 'color-mix(in srgb, var(--danger) 55%, var(--border))'
-    : 'color-mix(in srgb, var(--text) 24%, var(--border))'
   // Render hidden until measured so the first frame never flashes at an unclamped spot.
   const positionStyle = {
     position: 'fixed',
@@ -204,12 +226,7 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   // `bare` lets the content supply its own card; otherwise wrap it in the themed hint box.
   const boxStyle = bare ? positionStyle : {
     ...positionStyle,
-    background: 'var(--surface)',
-    border: `1px solid ${borderColor}`,
-    borderRadius: 8,
-    padding: '6px 10px',
-    fontSize: 12,
-    color: 'var(--text)',
+    ...getTooltipSurfaceStyle({ tone }),
     // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget; once
     // measured, a wrapped hint takes its widest line instead (`fittedTooltipWidth`).
     ...(fit?.content === content && fit.width
@@ -221,7 +238,6 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     textWrap: 'balance',
     whiteSpace: 'normal',
     wordBreak: 'break-word',
-    boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
     textAlign: 'left',
   }
   return (
@@ -235,7 +251,8 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
       onFocus={show}
       onBlur={hide}
     >
-      {children}
+      {triggerChild}
+      {describeTrigger ? <span id={descriptionId} style={VISUALLY_HIDDEN_STYLE}>{content}</span> : null}
       {open ? createPortal(
         <div
           ref={tipRef}
@@ -1574,17 +1591,20 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
   const ref = useRef(null)
   useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate }, [indeterminate])
   return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      onChange={onChange}
-      // A controlled checkbox needs a handler *or* `readOnly`, else React warns. When a caller renders
-      // this without an `onChange` (a read-only/display table), mark it read-only rather than warning.
-      readOnly={!onChange}
-      title={title}
-      style={{ cursor: 'pointer', margin: 0 }}
-    />
+    <Tooltip content={title}>
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        // A controlled checkbox needs a handler *or* `readOnly`, else React warns. When a caller renders
+        // this without an `onChange` (a read-only/display table), mark it read-only rather than warning.
+        readOnly={!onChange}
+        // The checkbox has no visible label, so the hint is also its name.
+        aria-label={title}
+        style={{ cursor: 'pointer', margin: 0 }}
+      />
+    </Tooltip>
   )
 }
 

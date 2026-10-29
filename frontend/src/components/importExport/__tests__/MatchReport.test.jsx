@@ -112,7 +112,7 @@ describe('MatchReport selection stays scoped to the full entry list', () => {
     const onToggleAll = vi.fn()
     renderReport({ selectable: true, selectedIds: new Set(), onToggleAll, allVisibleSelected: false })
 
-    await userEvent.click(screen.getByTitle('Select all visible'))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all visible' }))
 
     // MatchReport must not compute a selection itself — the owning report resolves what "all" means.
     expect(onToggleAll).toHaveBeenCalledTimes(1)
@@ -132,7 +132,7 @@ describe('MatchReport selection stays scoped to the full entry list', () => {
 
     const firstRowCheckbox = rowElements(container)[0].querySelector('input[type="checkbox"]')
     expect(firstRowCheckbox.checked).toBe(true)
-    expect(screen.getByTitle('Select all visible').indeterminate).toBe(true)
+    expect(screen.getByRole('checkbox', { name: 'Select all visible' }).indeterminate).toBe(true)
   })
 
   it('toggles the entry object for the clicked row', async () => {

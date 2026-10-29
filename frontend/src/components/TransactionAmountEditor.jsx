@@ -87,7 +87,7 @@ export default function TransactionAmountEditor({ txn, onSave }) {
           {offered && !editable ? (
             // A span rather than a disabled <button>: an inert control receives no pointer events, so
             // the hover it needs has to reach a wrapper around it (`ui-patterns.md` → *Loading and feedback*).
-            <Tooltip content={reason} maxWidth={260}>
+            <Tooltip describeTrigger content={reason} maxWidth={260}>
               <span
                 aria-disabled="true"
                 style={{

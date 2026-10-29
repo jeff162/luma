@@ -14,7 +14,7 @@ import {
 import { localIsoDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
-import { AppDialog, Button, Input, SegmentedToggle, Spinner } from './ui.jsx'
+import { AppDialog, Button, Input, SegmentedToggle, Spinner, Tooltip } from './ui.jsx'
 
 /*
  * Recording a transaction by hand: cash, a cheque, a charge on an account nothing syncs.
@@ -218,16 +218,18 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
                   </div>
                 )}
                 {splitParts?.length ? null : (
-                  <Button
-                    variant="secondary"
-                    onClick={() => setSplitOpen(true)}
-                    // There is nothing to divide until an amount is entered, and the editor's whole
-                    // interaction model is allocating against that figure.
-                    disabled={preview === null}
-                    title={preview === null
-                      ? 'Enter an amount first — a split divides it'
-                      : 'Divide this amount across several categories'}
-                  >Split…</Button>
+                  <Tooltip describeTrigger content={preview === null
+                    ? 'Enter an amount first — a split divides it'
+                    : 'Divide this amount across several categories'}
+                  >
+                    <Button
+                      variant="secondary"
+                      onClick={() => setSplitOpen(true)}
+                      // There is nothing to divide until an amount is entered, and the editor's whole
+                      // interaction model is allocating against that figure.
+                      disabled={preview === null}
+                    >Split…</Button>
+                  </Tooltip>
                 )}
               </div>
             </div>

@@ -606,7 +606,7 @@ describe('why Save is unavailable', () => {
     await user.type(fields[1], '40')
 
     await hoverSave(user)
-    expect(await screen.findByText('Choose a category for part 2')).toBeTruthy()
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Choose a category for part 2')
   })
 
   it('names what is left to allocate once every part is filled in', async () => {
@@ -621,6 +621,6 @@ describe('why Save is unavailable', () => {
     await user.type(fields[1], '30')
 
     await hoverSave(user)
-    expect(await screen.findByText(/\$10\.00 left to allocate/)).toBeTruthy()
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(/\$10\.00 left to allocate/)
   })
 })

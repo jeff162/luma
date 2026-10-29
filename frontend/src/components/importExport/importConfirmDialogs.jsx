@@ -415,7 +415,7 @@ export function PossibleAccountMatchChooserDialog({
             against the intent that opened the dialog, since the way in is pressing `+New`. The accent has
             a better home on the selected radio, which is what the user is actually manipulating. */}
         <div style={{ display: 'grid', gap: 8 }}>
-          <Tooltip content={needsAccount ? 'Choose which account above this one is' : ''}>
+          <Tooltip describeTrigger content={needsAccount ? 'Choose which account above this one is' : ''}>
             <Button
               variant="secondary"
               disabled={needsAccount}
@@ -430,7 +430,7 @@ export function PossibleAccountMatchChooserDialog({
               It had no analogue anywhere else in the app and asserted the two were the same physical
               account while deliberately keeping them apart; "Map to existing account" says that
               properly. Don't reintroduce it. */}
-          <Tooltip content={needsAccount ? 'Choose which account above to group the new one under' : ''}>
+          <Tooltip describeTrigger content={needsAccount ? 'Choose which account above to group the new one under' : ''}>
             <Button
               variant="secondary"
               disabled={needsAccount}

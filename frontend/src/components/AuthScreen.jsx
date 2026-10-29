@@ -339,7 +339,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
 
         {/* Full-width trigger: the tooltip wraps its child only while it has something to say, and its
             default inline wrapper would shrink this full-width button exactly when it greys out. */}
-        <Tooltip content={passwordStepIssue && !submitting ? passwordStepIssue : ''} triggerStyle={{ display: 'flex', width: '100%' }}>
+        <Tooltip describeTrigger content={passwordStepIssue && !submitting ? passwordStepIssue : ''} triggerStyle={{ display: 'flex', width: '100%' }}>
           <Button type="submit" disabled={submitting || !!passwordStepIssue} style={{ width: '100%', marginTop: 18 }}>
             {buttonLabel}
           </Button>

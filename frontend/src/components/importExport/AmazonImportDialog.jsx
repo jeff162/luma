@@ -323,7 +323,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
       actions={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={loading}>Cancel</Button>
-          <Tooltip content={importHint}>
+          <Tooltip describeTrigger content={importHint}>
             <Button onClick={run} disabled={!canImport}>
               {loading ? 'Importing…' : `Import ${files.length} file${files.length === 1 ? '' : 's'}`}
             </Button>

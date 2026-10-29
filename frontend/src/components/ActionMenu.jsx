@@ -4,7 +4,7 @@
 import React, { useMemo, useRef } from 'react'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
-import { IconButton } from './ui.jsx'
+import { IconButton, Tooltip } from './ui.jsx'
 
 /*
  * The shared "⋯" overflow menu: a small popover of actions anchored under the control that opened it.
@@ -21,8 +21,9 @@ import { IconButton } from './ui.jsx'
  * actually does the thing lives. Spending the color on recoverable actions would leave nothing to
  * distinguish the permanent ones.
  *
- * Items render in order; `separatorBefore` draws a rule above one to group them. Dismissal (outside
- * click / Escape) is the shared `useDismissibleLayer`.
+ * Items render in order; `separatorBefore` draws a rule above one to group them. A `disabled` item's
+ * `disabledReason` shows on hover in place of its `title`, which a disabled button never opens.
+ * Dismissal (outside click / Escape) is the shared `useDismissibleLayer`.
  *
  * It is anchored to the element that opened it (`anchorElement`), or to the pointer for a right-click
  * menu (`anchorPoint`, `{ x, y }`), and the browser keeps it there (useAnchoredPopup): right-aligned to
@@ -69,25 +70,27 @@ export function ActionMenu({ anchorElement = null, anchorPoint = null, items = [
             {item.separatorBefore && index > 0 ? (
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
             ) : null}
-            <button
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              title={item.title}
-              onClick={() => { item.onClick?.(); onClose?.() }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                background: 'none', border: 'none', padding: '6px 10px',
-                borderRadius: 6, fontSize: 13,
-                cursor: item.disabled ? 'default' : 'pointer',
-                opacity: item.disabled ? 0.5 : 1,
-                color: item.danger ? 'var(--danger)' : 'var(--text)',
-              }}
-              onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-            >
-              {item.label}
-            </button>
+            <Tooltip describeTrigger content={item.disabled ? item.disabledReason : ''} triggerStyle={{ display: 'flex' }}>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                title={item.disabled && item.disabledReason ? undefined : item.title}
+                onClick={() => { item.onClick?.(); onClose?.() }}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  background: 'none', border: 'none', padding: '6px 10px',
+                  borderRadius: 6, fontSize: 13,
+                  cursor: item.disabled ? 'default' : 'pointer',
+                  opacity: item.disabled ? 0.5 : 1,
+                  color: item.danger ? 'var(--danger)' : 'var(--text)',
+                }}
+                onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = 'var(--surface2)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              >
+                {item.label}
+              </button>
+            </Tooltip>
           </React.Fragment>
         ))}
       </div>

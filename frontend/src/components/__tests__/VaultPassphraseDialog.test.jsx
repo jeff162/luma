@@ -207,7 +207,7 @@ describe('the passphrase floor is enforced, not suggested', () => {
     renderDialog({ mode: 'set', onSubmit })
     await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'too-short')
 
-    expect(await screen.findByText('11 more characters needed (at least 20).')).toBeTruthy()
+    expect(await screen.findByText('11 more characters needed (at least 20).', { selector: 'div' })).toBeTruthy()
     await clickIsIgnored('Set passphrase', onSubmit)
   })
 
@@ -218,7 +218,7 @@ describe('the passphrase floor is enforced, not suggested', () => {
     renderDialog({ mode: 'set', onSubmit })
     await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'passwordpassword1234')
     await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'passwordpassword1234')
-    expect(await screen.findByText('This is a very common password. Add another word or two.')).toBeTruthy()
+    expect(await screen.findByText('This is a very common password. Add another word or two.', { selector: 'div' })).toBeTruthy()
     await clickIsIgnored('Set passphrase', onSubmit)
   })
 
@@ -284,7 +284,7 @@ describe('changing the passphrase', () => {
     const onSubmit = vi.fn()
     renderDialog({ mode: 'change', onSubmit })
     await userEvent.type(screen.getByPlaceholderText('New passphrase'), 'too-short')
-    expect(await screen.findByText('11 more characters needed (at least 20).')).toBeTruthy()
+    expect(await screen.findByText('11 more characters needed (at least 20).', { selector: 'div' })).toBeTruthy()
     await clickIsIgnored('Change passphrase', onSubmit)
   })
 })

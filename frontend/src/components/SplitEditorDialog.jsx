@@ -300,7 +300,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           {/* A disabled button takes no pointer events, so the reason hangs off a wrapper (ui-patterns.md
               → Loading and feedback). */}
-          <Tooltip content={saveBlocker} align="right">
+          <Tooltip describeTrigger content={saveBlocker} align="right">
             <Button onClick={save} disabled={!complete || saving}>Save split</Button>
           </Tooltip>
         </>
@@ -520,7 +520,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
               >Undo</Button>
             ) : (
               <>
-                <Tooltip content={distributable
+                <Tooltip describeTrigger content={distributable
                   ? 'Share what is left among the amounts above, in proportion to each'
                   : 'Enter an amount above to share the remainder by'}>
                   <Button
@@ -530,7 +530,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                     disabled={!distributable}
                   >Distribute remainder</Button>
                 </Tooltip>
-                <Tooltip content={selectedKey
+                <Tooltip describeTrigger content={selectedKey
                   ? 'Add what is left over to the highlighted amount'
                   : 'Click a line above to choose where the remainder goes'}>
                   <Button

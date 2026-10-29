@@ -48,7 +48,7 @@ describe('forced password change', () => {
     await reachForcedChange(user)
 
     await user.type(screen.getByPlaceholderText('New password'), 'mytest1')
-    expect(screen.getByText('1 more character needed (at least 8).')).toBeTruthy()
+    expect(screen.getByText('1 more character needed (at least 8).', { selector: '[role="status"]' })).toBeTruthy()
 
     await user.type(screen.getByPlaceholderText('Confirm new password'), 'mytest1')
     await user.click(screen.getByRole('button', { name: 'Set password' }))
@@ -74,7 +74,7 @@ describe('forced password change', () => {
 
     await user.type(screen.getByPlaceholderText('New password'), 'mytest1234')
     await user.type(screen.getByPlaceholderText('Confirm new password'), 'my')
-    expect(screen.getByText('The passwords do not match.')).toBeTruthy()
+    expect(screen.getByText('The passwords do not match.', { selector: '[role="status"]' })).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Set password' }))
     expect(api.changePassword).not.toHaveBeenCalled()
@@ -103,7 +103,7 @@ describe('first account', () => {
 
     await user.type(screen.getByPlaceholderText('Username'), 'tester')
     await user.type(screen.getByPlaceholderText('Password'), 'abc')
-    expect(screen.getByText('5 more characters needed (at least 8).')).toBeTruthy()
+    expect(screen.getByText('5 more characters needed (at least 8).', { selector: '[role="status"]' })).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Create first account' }))
     expect(api.bootstrap).not.toHaveBeenCalled()

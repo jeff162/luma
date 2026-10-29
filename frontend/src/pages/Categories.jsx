@@ -1748,7 +1748,7 @@ export default function Categories() {
             {addingStarter ? 'Adding…' : 'Add starter categories'}
           </Button>
         ) : null}
-        <Tooltip content={importedCategoryWork.total === 0
+        <Tooltip describeTrigger content={importedCategoryWork.total === 0
           ? 'No imported categories are waiting to be grouped'
           : 'Sort imported categories into reporting groups'}>
           <Button

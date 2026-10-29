@@ -105,7 +105,7 @@ export function ImportHistorySection({
             {notice}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', }}>
               <div style={{ fontSize: 16, fontWeight: 600, marginRight: 'auto' }}>Import history</div>
-              <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
+              <Tooltip describeTrigger content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
                 <Button
                   variant="secondary"
                   onClick={openSystemCategoryWorkspace}
@@ -117,7 +117,7 @@ export function ImportHistorySection({
                   </span>
                 </Button>
               </Tooltip>
-              <Tooltip content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
+              <Tooltip describeTrigger content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
                 <Button
                   variant="secondary"
                   onClick={() => openRuleSuggestionReview()}

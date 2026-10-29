@@ -449,7 +449,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
       primary = <Button onClick={addRecipient} disabled={nameTaken || !label.trim()}>Retry</Button>
     } else {
       primary = (
-        <Tooltip content={addState === 'adding' ? '' : 'Download or copy the private key first'}>
+        <Tooltip describeTrigger content={addState === 'adding' ? '' : 'Download or copy the private key first'}>
           <Button disabled>{addState === 'adding' ? 'Adding…' : 'Done'}</Button>
         </Tooltip>
       )

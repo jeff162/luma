@@ -70,7 +70,7 @@ function Ambiguity({ item, busy, onPair, onDismiss }) {
             greyed-out control in the app. The Tooltip wrapper is what makes that reachable at all: a
             `title` on a disabled button renders nothing, because the element is inert to pointer
             events. */}
-        <Tooltip content={picked ? 'Record this as the other half' : 'Choose the matching transaction first'}>
+        <Tooltip describeTrigger content={picked ? 'Record this as the other half' : 'Choose the matching transaction first'}>
           <Button variant="primary" disabled={busy || !picked} onClick={() => onPair(item, picked)}>
             {busy ? 'Working…' : 'Accept'}
           </Button>

@@ -87,7 +87,7 @@ function OwnPasswordPanel({ user, passwordPolicy }) {
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(passwordPolicy)}</div>
           {error && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
-            <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
+            <Tooltip describeTrigger content={blockingIssue && !saving ? blockingIssue : ''}>
               <Button type="submit" disabled={saving || !!blockingIssue}>
                 {saving ? 'Changing...' : 'Change password'}
               </Button>

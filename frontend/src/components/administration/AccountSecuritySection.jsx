@@ -319,7 +319,7 @@ function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey
       {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
+        <Tooltip describeTrigger content={blockingIssue && !saving ? blockingIssue : ''}>
           <Button type="submit" disabled={saving || !!blockingIssue}>
             {saving ? 'Enabling...' : 'Enable sign-in protection'}
           </Button>

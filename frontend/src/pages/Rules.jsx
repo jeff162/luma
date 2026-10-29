@@ -750,7 +750,7 @@ export default function Rules() {
             pendingCount={recategorizePendingCount}
             onRun={async () => { await runRecategorize(); loadRules() }}
           />
-          <Tooltip content={hasImportedRuleSuggestionWork
+          <Tooltip describeTrigger content={hasImportedRuleSuggestionWork
             ? 'Review rules suggested from your imported transactions'
             : 'Mark a categorized import as clean to generate rule suggestions'}>
             <Button
@@ -769,7 +769,7 @@ export default function Rules() {
               filter and sort. Enabled as soon as either check can say anything: a single rule with an
               amount range can have a charge drift out of it, while the overlap half needs a pair to
               compare. The badge counts drifted charges and recorded conflicts (see `loadCheckupCounts`). */}
-          <Tooltip content={rules.length < 2 && !checkupCount
+          <Tooltip describeTrigger content={rules.length < 2 && !checkupCount
             ? 'Nothing to check until there are two rules, or a charge drifts out of one'
             : checkupCount
               ? [

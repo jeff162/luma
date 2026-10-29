@@ -22,7 +22,7 @@ import { CategoryCell, MerchantCell, TransactionMarkersCell, TransactionAmountCe
 import { transactionRowKey } from '../lib/splitRows.js'
 import PillGridTable from './PillGridTable.jsx'
 import WindowedRows from './WindowedRows.jsx'
-import { SelectAllCheckbox } from './ui.jsx'
+import { SelectAllCheckbox, Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
@@ -286,21 +286,29 @@ export default function TransactionListTable({
             onRulePrompt={setRulePrompt}
           />
         )
-      case 'account':
+      case 'account': {
+        const accountLabel = `${txn.account_name}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`
         return (
-          <span
-            title={`${txn.account_name}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`}
-            style={{
-              color: 'var(--muted)',
-              fontSize: 12,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
+          <Tooltip
+            content={accountLabel}
+            openDelay={ROW_HOVER_OPEN_DELAY_MS}
+            triggerStyle={{ display: 'flex', maxWidth: '100%' }}
           >
-            {txn.account_name}{txn.account_mask ? ` ···${txn.account_mask}` : ''}
-          </span>
+            <span
+              style={{
+                color: 'var(--muted)',
+                fontSize: 12,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {accountLabel}
+            </span>
+          </Tooltip>
         )
+      }
       case 'sourceAccount':
         return (
           <span

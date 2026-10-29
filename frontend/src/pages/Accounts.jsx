@@ -5,7 +5,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton } from '../components/ui.jsx'
+import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
@@ -536,31 +536,32 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   }
 
   return (
-    <button
-      type="button"
-      onClick={onStartEdit}
-      onContextMenu={shared ? (e => e.preventDefault()) : onContextMenu}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: 28,
-        padding: '0 10px',
-        borderRadius: 999,
-        border: '1px solid var(--border)',
-        background: 'var(--surface2)',
-        color: 'var(--text)',
-        fontSize: 12,
-        fontStyle: shared ? 'italic' : 'normal',
-        cursor: shared ? 'default' : 'text',
-        whiteSpace: 'nowrap',
-        opacity: shared ? 0.86 : 1,
-      }}
-      title={shared ? 'Built-in shared owner' : 'Click to rename'}
-      disabled={shared}
-    >
-      {owner.name}
-    </button>
+    <Tooltip describeTrigger content={shared ? 'Built-in shared owner' : 'Click to rename'}>
+      <button
+        type="button"
+        onClick={onStartEdit}
+        onContextMenu={shared ? (e => e.preventDefault()) : onContextMenu}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 28,
+          padding: '0 10px',
+          borderRadius: 999,
+          border: '1px solid var(--border)',
+          background: 'var(--surface2)',
+          color: 'var(--text)',
+          fontSize: 12,
+          fontStyle: shared ? 'italic' : 'normal',
+          cursor: shared ? 'default' : 'text',
+          whiteSpace: 'nowrap',
+          opacity: shared ? 0.86 : 1,
+        }}
+        disabled={shared}
+      >
+        {owner.name}
+      </button>
+    </Tooltip>
   )
 }
 
@@ -1577,6 +1578,11 @@ export default function Accounts() {
   // null = no owner filter (show all); empty string = unassigned-only; otherwise the selected owner_id.
   const [ownerFilter, setOwnerFilter] = useState(null)
   const dragTooltipTimerRef = useRef(null)
+  // The row the pending or showing merge hint is about, and the hint's element, which follows the pointer
+  // without re-rendering the page on every move.
+  const dragHintTargetRef = useRef(null)
+  const dragPointRef = useRef(null)
+  const dragTooltipElRef = useRef(null)
   const listRef = useRef(null)
   const accountsPanelRef = useRef(null)
   const initialSortSeedRef = useRef('')
@@ -1982,11 +1988,16 @@ export default function Accounts() {
     notifyAccountsChanged()
   }
 
+  function clearDragHint() {
+    dragHintTargetRef.current = null
+    clearTimeout(dragTooltipTimerRef.current)
+    setDragTooltip(null)
+  }
+
   function clearDragState() {
     setDraggingAccountId(null)
     setDropIntent(null)
-    clearTimeout(dragTooltipTimerRef.current)
-    setDragTooltip(null)
+    clearDragHint()
   }
 
   // If target is a child account, return its parent instead — dropping anywhere on a
@@ -2094,9 +2105,7 @@ export default function Accounts() {
     onOver: (dragged, point) => handleListDragOver(dragged, point),
     onLeave: () => {
       setDropIntent(null)
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+      clearDragHint()
     },
     onDrop: (dragged, point) => handleListDrop(dragged, point),
   })
@@ -2104,8 +2113,6 @@ export default function Accounts() {
     listRef.current = element
     listDropRef(element)
   }, [listDropRef])
-
-  const dragInvalidSinceRef = useRef(null)
 
   // Drag-over handler — child accounts can return to top level by being pulled
   // into the left gutter; otherwise drag intent falls back to regroup detection.
@@ -2116,9 +2123,7 @@ export default function Accounts() {
     const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH
     if (dragged.parent_account_id && point.clientX <= detachZoneRight) {
       setDropIntent({ kind: 'detach', accountId: dragged.id })
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+      clearDragHint()
       return
     }
     const el = document.elementFromPoint(
@@ -2131,9 +2136,7 @@ export default function Accounts() {
 
     if (!target) {
       setDropIntent(null)
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+      clearDragHint()
       return
     }
 
@@ -2142,18 +2145,14 @@ export default function Accounts() {
     const targetGroupRootId = target.parent_account_id || (childAccountsByParent.get(target.id)?.length > 0 && !collapsedGroups.has(target.id) ? target.id : null)
     if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
       setDropIntent({ kind: 'merge', targetId: draggingGroupRootId })
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+      clearDragHint()
       return
     }
 
     const mergeTarget = resolveDropTarget(target)
     if (canAttachAccount(dragged, mergeTarget)) {
       setDropIntent({ kind: 'merge', targetId: mergeTarget.id })
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+      clearDragHint()
       return
     }
 
@@ -2176,17 +2175,23 @@ export default function Accounts() {
       ownerMismatch ? 'different owners' : null,
       typeMismatch ? 'different account types' : null,
     ].filter(Boolean).join(', ')
-    if (reasons && dragInvalidSinceRef.current === null) {
-      dragInvalidSinceRef.current = Date.now()
-      clearTimeout(dragTooltipTimerRef.current)
-      dragTooltipTimerRef.current = setTimeout(() => {
-        setDragTooltip({ x: point.clientX, y: point.clientY, message: `Can't merge with this account: ${reasons}` })
-      }, 600)
-    } else if (!reasons) {
-      dragInvalidSinceRef.current = null
-      clearTimeout(dragTooltipTimerRef.current)
-      setDragTooltip(null)
+    if (!reasons) {
+      clearDragHint()
+      return
     }
+    const at = { x: point.clientX, y: point.clientY }
+    if (dragHintTargetRef.current !== mergeTarget.id) {
+      // A new row starts the delay over, so the hint always names the row under the pointer.
+      clearDragHint()
+      dragHintTargetRef.current = mergeTarget.id
+      dragTooltipTimerRef.current = setTimeout(() => {
+        setDragTooltip({ ...dragPointRef.current, message: `Can't merge with this account: ${reasons}` })
+      }, 600)
+    } else if (dragTooltipElRef.current) {
+      dragTooltipElRef.current.style.left = `${at.x + 14}px`
+      dragTooltipElRef.current.style.top = `${at.y + 14}px`
+    }
+    dragPointRef.current = at
   }
 
   // Drop handler — child accounts may detach in the left gutter, otherwise drops
@@ -2292,21 +2297,14 @@ export default function Accounts() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       {dragTooltip ? (
-        <div style={{
+        <div ref={dragTooltipElRef} style={{
+          ...getTooltipSurfaceStyle(),
           position: 'fixed',
           left: dragTooltip.x + 14,
           top: dragTooltip.y + 14,
           zIndex: 400,
-          background: 'var(--surface)',
-          border: '1.5px solid color-mix(in srgb, var(--text) 24%, var(--border))',
-          borderRadius: 6,
-          padding: '5px 10px',
-          fontSize: 12,
-          color: 'var(--text)',
-          boxShadow: '0 4px 12px rgba(15, 23, 42, 0.35)',
           pointerEvents: 'none',
           maxWidth: 260,
-          lineHeight: 1.4,
         }}>
           {dragTooltip.message}
         </div>
@@ -2391,9 +2389,8 @@ export default function Accounts() {
               danger: true,
               separatorBefore: true,
               disabled: accounts.some(a => a.parent_account_id === rowMenu.account.id),
-              title: accounts.some(a => a.parent_account_id === rowMenu.account.id)
-                ? 'Remove or ungroup the merged child accounts first.'
-                : 'Remove this account, choosing where its transactions go. This cannot be undone.',
+              disabledReason: 'Remove or ungroup the merged child accounts first.',
+              title: 'Remove this account, choosing where its transactions go. This cannot be undone.',
               onClick: () => setPendingRemoval(rowMenu.account),
             },
           ]}

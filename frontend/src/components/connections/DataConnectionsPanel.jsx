@@ -112,7 +112,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Tooltip content={syncing
+          <Tooltip describeTrigger content={syncing
             ? 'A sync is already running'
             : `Pull new and changed transactions for all ${allConnections.length} connection${allConnections.length === 1 ? '' : 's'}`}>
             <Button onClick={() => syncAll(connected)} disabled={syncing}>

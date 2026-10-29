@@ -244,11 +244,11 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A press looks pressed.** The shared buttons push in while held and `RefreshButton` always turns.
   On a button the user just clicked, a `Saving…` label is kept wherever nothing else on screen changes
   when the action succeeds.
-- **A disabled control says why.** Wrap it in `Tooltip`, because a disabled button receives no pointer
-  events and its own `title` never opens. Derive the reason and the disabling condition from one
-  expression. Where a capability simply does not apply, remove the control instead.
+- **A disabled control says why.** Wrap it in `Tooltip` with `describeTrigger`, because a disabled button
+  receives no pointer events and its own `title` never opens, and a screen reader never sees a hover.
+  Derive the reason and the disabling condition from one expression. Where a capability simply does not apply, remove the control instead.
 - **Tooltips.** `Tooltip` is the default for hover content. A native `title` is fine for a plain-text
-  hint. Converting a `title` to `Tooltip` needs an `aria-label` or `aria-describedby` added with it. A
+  hint. Converting a `title` to `Tooltip` needs an `aria-label`, or `describeTrigger` for a description. A
   hint on a row of a scrolling list takes `openDelay={ROW_HOVER_OPEN_DELAY_MS}`.
 - **A bulk action reports partial success as partial** (`Promise.allSettled` with
   `summarizeBulkOutcome`). Rows that failed stay selected and the reload runs regardless.

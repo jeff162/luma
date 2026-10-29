@@ -120,3 +120,16 @@ describe('Tooltip scroll handling', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })
+
+describe('Tooltip describeTrigger', () => {
+  it('gives a disabled control its reason as the accessible description without a hover', () => {
+    render(
+      <Tooltip describeTrigger content="Enter an amount first">
+        <button type="button" disabled aria-describedby="other-note">Split</button>
+      </Tooltip>,
+    )
+    const button = screen.getByRole('button', { name: 'Split' })
+    expect(button).toHaveAccessibleDescription(/Enter an amount first/)
+    expect(button.getAttribute('aria-describedby')).toMatch(/^other-note /)
+  })
+})

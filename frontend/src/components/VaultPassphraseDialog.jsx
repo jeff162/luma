@@ -218,14 +218,14 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
               has been typed. Then the typed path is the one being taken, Enter already submits it, and
               leaving the passkey highlighted points at the button not about to be pressed. */}
           {canUsePasskey ? (
-            <Tooltip content={passkeyBlocked ? newPassphraseIssue : ''} align="right">
+            <Tooltip describeTrigger content={passkeyBlocked ? newPassphraseIssue : ''} align="right">
               <Button variant={passkeyLeads ? 'primary' : 'secondary'} onClick={onPasskey}
                 disabled={busy || passkeyBusy || passkeyBlocked}>
                 {passkeyLabel}
               </Button>
             </Tooltip>
           ) : null}
-          <Tooltip content={blocked && !busy ? newPassphraseIssue : ''} align="right">
+          <Tooltip describeTrigger content={blocked && !busy ? newPassphraseIssue : ''} align="right">
             <Button variant={passkeyLeads ? 'secondary' : 'primary'}
               onClick={submit} disabled={blocked || passkeyBusy}>
               {busy ? 'Working…'

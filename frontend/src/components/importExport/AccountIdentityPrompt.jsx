@@ -65,7 +65,7 @@ export function AccountIdentityPrompt({ pair, onMerge, onMarkDistinct, onDismiss
             compatible owners, neither already grouped. Decided server-side (`can_merge`) so this and the
             Accounts page cannot disagree about whether it is possible. Shown disabled rather than hidden:
             "you can't do that here, and here's why" beats an option that silently isn't there. */}
-        <Tooltip content={pair.can_merge
+        <Tooltip describeTrigger content={pair.can_merge
           ? 'Merge the two accounts. Identical matches between them resolve as duplicates; anything that only looks similar stays for review.'
           : 'These accounts cannot be merged from here — they differ in type or owner, or one is already grouped. Merge them on the Accounts page.'}>
           <Button

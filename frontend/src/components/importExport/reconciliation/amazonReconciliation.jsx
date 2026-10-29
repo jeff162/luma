@@ -371,7 +371,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       if (entry.kind !== 'unmatched') return null
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <Tooltip content={unaccounted.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
+          <Tooltip describeTrigger content={unaccounted.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
             <Button variant="secondary" disabled={busy || !unaccounted.length} onClick={() => openLink(entry)}>
               Link charges…
             </Button>

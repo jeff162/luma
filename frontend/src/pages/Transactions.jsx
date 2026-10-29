@@ -896,7 +896,7 @@ export default function Transactions() {
               >
                 {copying ? 'Copying…' : 'Copy as CSV'}
               </Button>
-              <Tooltip content={
+              <Tooltip describeTrigger content={
                 selection.allMatching
                   ? 'Pick the individual payments to group them as one purchase'
                   : 'Several payments for one thing — a deposit and a balance, or an instalment plan'

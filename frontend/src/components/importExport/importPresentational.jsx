@@ -15,6 +15,7 @@ import {
 } from '../../lib/importExport/constants.js'
 import { coverageSourceLabel, formatCoverageRange } from '../../lib/importExport/importHistoryWindow.js'
 import { StatusPill } from '../connections/ConnectionStatus.jsx'
+import { Tooltip } from '../ui.jsx'
 
 export function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
@@ -124,36 +125,37 @@ export function DataSourcePill({
 
 export function InlineFilterPill({ onClick, disabled = false, title = '' }) {
   return (
-    <button
-      type="button"
-      onClick={event => {
-        event.preventDefault()
-        event.stopPropagation()
-        if (!disabled) onClick?.()
-      }}
-      disabled={disabled}
-      title={title}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        padding: '0 6px',
-        borderRadius: 999,
-        border: `1px solid ${disabled
-          ? 'color-mix(in srgb, var(--border) 82%, transparent)'
-          : 'color-mix(in srgb, var(--accent) 28%, var(--border))'}`,
-        background: disabled
-          ? 'color-mix(in srgb, var(--surface2) 72%, var(--surface))'
-          : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-        color: disabled ? 'var(--muted)' : 'var(--accent2)',
-        fontSize: '0.92em',
-        fontWeight: 600,
-        lineHeight: '1.3',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {IMPORTED_CATEGORY_FILTER_PILL_LABEL}
-    </button>
+    <Tooltip describeTrigger content={title}>
+      <button
+        type="button"
+        onClick={event => {
+          event.preventDefault()
+          event.stopPropagation()
+          if (!disabled) onClick?.()
+        }}
+        disabled={disabled}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '0 6px',
+          borderRadius: 999,
+          border: `1px solid ${disabled
+            ? 'color-mix(in srgb, var(--border) 82%, transparent)'
+            : 'color-mix(in srgb, var(--accent) 28%, var(--border))'}`,
+          background: disabled
+            ? 'color-mix(in srgb, var(--surface2) 72%, var(--surface))'
+            : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+          color: disabled ? 'var(--muted)' : 'var(--accent2)',
+          fontSize: '0.92em',
+          fontWeight: 600,
+          lineHeight: '1.3',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {IMPORTED_CATEGORY_FILTER_PILL_LABEL}
+      </button>
+    </Tooltip>
   )
 }
 

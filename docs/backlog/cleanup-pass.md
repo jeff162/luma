@@ -2,56 +2,7 @@
 
 > **Status: backlog.** Small, non-urgent cleanups to do together in a dedicated pass — none block
 > current work. Verify with `cd frontend && npm run lint` + the browser console per page.
-> Reconciled against the tree on 2026-06-24.
-
-## 1. Native `title` → shared `Tooltip` migration (final step)
-
-A single shared hover/focus tooltip already exists — `Tooltip` in `frontend/src/components/ui.jsx`:
-themed (matches dark/light, unlike native `title`), portaled + `position: fixed` so it escapes
-`overflow` clipping, distinct border, `tone="warning"` variant, focus/blur for keyboard. The earlier
-steps migrated the `TransactionRow.jsx` tag / tag-stack / note-glyph / duplicate-marker sites and the
-Transactions row action icons (merchant + category `↗`, edit `✎`) and deleted the local `HoverTooltip`.
-
-**Done since this note was first written (2026-06-24):**
-- `Tooltip` gained a **`triggerStyle`** prop — the wrapper-shrink/ellipsize enabler this item said was
-  needed before wrapping truncating flex cells.
-- `MerchantCell`'s merchant text-cell hint (full-text-on-truncation) was migrated off native `title`
-  onto the shared `Tooltip` as part of the import-source origin hover (it now shows the full name plus
-  the captured source text). So the merchant text cell is handled.
-
-**Remaining:** ~257 native `title=` occurrences across ~55 frontend files (heaviest in
-Settings / ImportExport / Categories / Accounts / UnifiedDuplicatesDialog), plus a few specific
-stragglers:
-- `CategoryCell`'s "click to change category" text-cell hint, and the account cell — both
-  ellipsis-in-flex, so use `triggerStyle` to preserve truncation and verify visually.
-- the bulk-select checkboxes, which go through the shared `SelectAllCheckbox` — convert that component
-  once, consistently, rather than piecemeal.
-- re-skin the Accounts drag "can't merge" tooltip and `FeatureExplainer` to the shared tokens (keep
-  their distinct trigger/tone).
-
-Migration is mechanical (`title="x"` → wrap with `<Tooltip content="x">`), in batches, highest-visibility
-first — and each batch owes the accessibility parity the shared `Tooltip` does not give for free (see
-[`../ui-patterns.md`](../ui-patterns.md) → *Loading and feedback*), which is what keeps it from being a
-find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`). Native `title` is also a *legitimate* choice where its viewport-escaping edge
-behavior matters (see `ui-patterns.md`) — this migration is about consistency, not eradication.
-
-## 2. Opt-in per-detail-panel Refresh
-
-After a bulk edit the detail panels reconcile rows in place, so a row recategorized out of scope
-*lingers* until the panel is re-drilled. Transactions + Categories have their own reload/Refresh; the
-detail panels don't. Deliberately **not** added preemptively — lingering rows are correctable in place
-and a mis-tap stays visible. Add when a real need shows up.
-
-The seam is an **opt-in `onRefresh`** callback on `lib/useBulkTransactionEditing.jsx`; `BulkEditChrome`
-renders a `↻ Refresh` next to the bar only when a host passes one (shared half ≈5 lines). Per-host wiring
-(Categories is the reference — it bumps `matchingReloadNonce` into the paging key):
-- PeriodDetail / TagDetail: add a `refreshNonce` to the fetch `useEffect` deps.
-- CategoryDetail / AccountDetail / ImportBatchDetail: thread a nonce into the `usePaged…Transactions`
-  `activeKey` (ImportBatchDetail also re-fetches its count).
-- Dashboard: re-invoke its drill fn.
-
-Nothing structural — a prop plus per-host one-liners. See `ui-patterns.md` → *Transaction lists*
-for the in-place reconcile contract this complements.
+> Reconciled against the tree on 2026-10-29.
 
 ## The file report's *Not imported* view, on batches older than it
 

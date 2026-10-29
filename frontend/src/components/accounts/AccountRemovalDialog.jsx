@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo, useRef, useState } from 'react'
-import { AppDialog, Button } from '../ui.jsx'
+import { AppDialog, Button, Tooltip } from '../ui.jsx'
 import ImportNewAccountFields from '../ImportNewAccountFields.jsx'
 import {
   findExactAccountNameMatch,
@@ -147,14 +147,15 @@ export default function AccountRemovalDialog({ account, accounts, onCancel, onSu
       actions={(
         <>
           <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button
-            variant="danger"
-            onClick={submit}
-            disabled={busy || !!blocked}
-            title={blocked || undefined}
-          >
-            {chosen === DELETE ? `Delete ${transactionCount === 1 ? 'it' : 'them'} and remove` : 'Move and remove'}
-          </Button>
+          <Tooltip describeTrigger content={blocked || ''} align="right">
+            <Button
+              variant="danger"
+              onClick={submit}
+              disabled={busy || !!blocked}
+            >
+              {chosen === DELETE ? `Delete ${transactionCount === 1 ? 'it' : 'them'} and remove` : 'Move and remove'}
+            </Button>
+          </Tooltip>
         </>
       )}
     >

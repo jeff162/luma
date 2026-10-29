@@ -46,7 +46,7 @@ const CONFIG_PILL_STYLE = {
 // carries the reason to press it, since neither "Reset" nor "Regenerate" says when it would be wanted.
 function ConfigRowAction({ label, hint, disabled, onClick }) {
   return (
-    <Tooltip content={hint}>
+    <Tooltip describeTrigger content={hint}>
       <button
         type="button"
         disabled={disabled}

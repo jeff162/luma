@@ -216,7 +216,7 @@ export default function UserAdminSection({ passwordPolicy }) {
               <option value="admin">Admin</option>
             </select>
           </div>
-          <Tooltip content={createIssue && !creating ? createIssue : ''} align="right">
+          <Tooltip describeTrigger content={createIssue && !creating ? createIssue : ''} align="right">
             <Button type="submit" disabled={creating || !!createIssue}>
               {creating ? 'Creating...' : 'Add user'}
             </Button>
@@ -293,7 +293,7 @@ export default function UserAdminSection({ passwordPolicy }) {
                 Require a password change at next sign-in
               </label>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <Tooltip content={editIssue && savingUserId !== user.id ? editIssue : ''} align="right">
+                <Tooltip describeTrigger content={editIssue && savingUserId !== user.id ? editIssue : ''} align="right">
                   <Button
                     onClick={() => handleSaveUser(user.id)}
                     disabled={savingUserId === user.id || !!editIssue}

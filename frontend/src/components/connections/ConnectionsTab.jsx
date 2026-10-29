@@ -1169,7 +1169,7 @@ export default function ConnectionsTab({ onShowHistory }) {
             title="What every sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
             Sync log
           </Button>
-          <Tooltip content={syncingAny
+          <Tooltip describeTrigger content={syncingAny
             ? 'A sync is already running'
             : `Pull new and changed transactions for all ${connectionCount} connection${connectionCount === 1 ? '' : 's'}`}>
             <Button onClick={() => syncAll(connected)} disabled={syncingAny}>
@@ -1196,7 +1196,7 @@ export default function ConnectionsTab({ onShowHistory }) {
         // goes on to connect. What still disables is what no dialog here can resolve — missing HTTPS,
         // and a vault this user cannot open yet, whether because they have not asked for access or
         // because the request has not been approved. Both of those are answered on the strip above,
-        // which is where the button's title points.
+        // which is where the button's hover points.
         const noVaultSlot = vault.configured && !vault.hasPassphrase
         const connectDisabled = noVaultSlot || httpsBlocked
         const connectTitle = vault.accessPending ? 'Waiting for your vault access to be approved'
@@ -1302,9 +1302,11 @@ export default function ConnectionsTab({ onShowHistory }) {
                     to name — that button stays a bare "+ Connect". The provider's own name is not it: it
                     already labels the card this button sits in. Never "account", which means a ledger
                     account everywhere else in the app. */}
-                <Button onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
-                  {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
-                </Button>
+                <Tooltip describeTrigger content={connectTitle}>
+                  <Button onClick={() => connect(p)} disabled={connectDisabled}>
+                    {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
+                  </Button>
+                </Tooltip>
                 {/* Scoped to this provider, since that is what the card it sits in is about — by provider
                     rather than by its connections' ids, so the scope takes in what has no live connection
                     to name: a failed connect, and a disconnected connection's record. Offered with no
@@ -1449,10 +1451,11 @@ export default function ConnectionsTab({ onShowHistory }) {
                                   beside it. Hidden without a stored credential — there is no Item to
                                   re-authorize, so the button could only ever fail. */}
                               {p.provider === 'plaid' && c.has_credential !== false ? (
-                                <Button disabled={connectDisabled} title={connectTitle}
-                                  onClick={() => reconnect(c)}>
-                                  Reconnect this bank
-                                </Button>
+                                <Tooltip describeTrigger content={connectTitle}>
+                                  <Button disabled={connectDisabled} onClick={() => reconnect(c)}>
+                                    Reconnect this bank
+                                  </Button>
+                                </Tooltip>
                               ) : null}
                               <Button variant="secondary" onClick={() => setDisconnectTarget({
                                 provider: p.provider,
