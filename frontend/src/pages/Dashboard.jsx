@@ -410,7 +410,7 @@ const DASH_SELECT_SM = { ...getFormControlStyle({ size: 'sm', clickable: true })
 async function fetchPeriodGroupTotals(period, accountId, tagIds, ownerIds, filters) {
   const months = periodMonths(period)
   const results = await Promise.all(
-    months.map(m => api.getGroupTotals(m, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, filters))
+    months.map(m => api.getGroupTotals(m, accountId || undefined, undefined, undefined, ownerIds, tagIds, filters))
   )
   const merged = {}
   for (const monthRows of results) {
@@ -2333,9 +2333,9 @@ export default function Dashboard() {
     // breakdown it reads; the spending and income frames each keep to their own half.
     const isCashFlowView = activeFrame === DASHBOARD_VIEW_CASH_FLOW
     const [g, tr, c] = await Promise.all([
-      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, summaryFilters),
+      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters),
       api.getMonthlyTrend(120, undefined, accountId || undefined, ALL_TIME_START, undefined, tagIds, activeFrame, ownerIds, summaryFilters),
-      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds,
+      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds,
         !isCashFlowView && !isIncomeView, !isCashFlowView && isIncomeView, summaryFilters),
     ])
     if (!isLatest()) return
@@ -2534,7 +2534,7 @@ export default function Dashboard() {
     if (!trendWindowStart || !trendWindowEnd) return
     const wantIncome = activeFrame === DASHBOARD_VIEW_INCOME
     const isLatest = beginTrendGroups()
-    const g = await api.getGroupTotals(undefined, accountId || undefined, trendWindowStart, trendWindowEnd, ownerIds, undefined, tagIds, summaryFilters)
+    const g = await api.getGroupTotals(undefined, accountId || undefined, trendWindowStart, trendWindowEnd, ownerIds, tagIds, summaryFilters)
     if (!isLatest()) return
     setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
   }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame, trendWindowStart, trendWindowEnd, beginTrendGroups])

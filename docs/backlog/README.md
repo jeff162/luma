@@ -38,9 +38,8 @@ scale — rather than by feature.
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
   resuming next time rules are in focus.
-- [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
-  the rest of the native-`title` → shared-`Tooltip` migration, and an opt-in
-  per-detail-panel Refresh seam.
+- [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: the rest of the
+  native-`title` → shared-`Tooltip` migration, and an opt-in per-detail-panel Refresh seam.
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount

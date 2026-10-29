@@ -388,14 +388,13 @@ export const api = {
     }
     return result
   },
-  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, opts = {}) => {
+  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, tag_ids, opts = {}) => {
     const p = {
       ...(month               ? { month }               : {}),
       ...(date_start          ? { date_start }          : {}),
       ...(date_end            ? { date_end }            : {}),
       ...(account_id          ? { account_id }          : {}),
       ...csvParam('owner_ids', owner_ids),
-      ...csvParam('category_owner_ids', category_owner_ids),
       ...csvParam('tag_ids', tag_ids),
       ...summaryFilterParams(opts),
     }
@@ -414,14 +413,13 @@ export const api = {
     }
     return request(`/transactions/summary/by-category-in-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, exclude_income, exclude_expense, opts = {}) => {
+  getCategoryTotals: (month, account_id, date_start, date_end, owner_ids, tag_ids, exclude_income, exclude_expense, opts = {}) => {
     const p = {
       ...(month        ? { month }        : {}),
       ...(date_start   ? { date_start }   : {}),
       ...(date_end     ? { date_end }     : {}),
       ...(account_id   ? { account_id }   : {}),
       ...csvParam('owner_ids', owner_ids),
-      ...csvParam('category_owner_ids', category_owner_ids),
       ...csvParam('tag_ids', tag_ids),
       ...(exclude_income ? { exclude_income: 'true' } : {}),
       ...(exclude_expense ? { exclude_expense: 'true' } : {}),

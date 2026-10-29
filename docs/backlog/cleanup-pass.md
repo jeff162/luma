@@ -4,16 +4,7 @@
 > current work. Verify with `cd frontend && npm run lint` + the browser console per page.
 > Reconciled against the tree on 2026-06-24.
 
-## 1. Console-cleanliness pass
-
-Load each main page in the browser, collect console errors + warnings, and knock out the cheap/recurring
-ones so the baseline console is quiet — the point is **signal preservation**: a clean console means a
-*new* real error stands out instead of being lost in known noise. Prioritize React warnings (they
-usually flag real latent bugs) and accessibility advisories; ignore one-off third-party/extension noise.
-(Example already fixed: the Categories search input lacked `name`/`id` → added
-`name="category-search"` + `autoComplete="off"`.)
-
-## 2. Native `title` → shared `Tooltip` migration (final step)
+## 1. Native `title` → shared `Tooltip` migration (final step)
 
 A single shared hover/focus tooltip already exists — `Tooltip` in `frontend/src/components/ui.jsx`:
 themed (matches dark/light, unlike native `title`), portaled + `position: fixed` so it escapes
@@ -44,7 +35,7 @@ first — and each batch owes the accessibility parity the shared `Tooltip` does
 find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`). Native `title` is also a *legitimate* choice where its viewport-escaping edge
 behavior matters (see `ui-patterns.md`) — this migration is about consistency, not eradication.
 
-## 3. Opt-in per-detail-panel Refresh
+## 2. Opt-in per-detail-panel Refresh
 
 After a bulk edit the detail panels reconcile rows in place, so a row recategorized out of scope
 *lingers* until the panel is re-drilled. Transactions + Categories have their own reload/Refresh; the
@@ -61,17 +52,6 @@ renders a `↻ Refresh` next to the bar only when a host passes one (shared half
 
 Nothing structural — a prop plus per-host one-liners. See `ui-patterns.md` → *Transaction lists*
 for the in-place reconcile contract this complements.
-
-## 4. `category_owner_ids` — the client half
-
-The dead `category_owner_ids` query parameter was removed from `/summary/by-group` (it was declared and
-never read; its three sibling summary endpoints never had it). The client half is still there:
-`getGroupTotals` and `getCategoryTotals` in `frontend/src/lib/api.js` both take it as a **positional**
-argument, and all four call sites in `Dashboard.jsx` pass `undefined`. Nothing is sent, so this is tidying
-rather than a fix. It was left out of the backend change deliberately: removing a positional argument
-shifts every call site, and a miscount silently swaps `dateStart`/`ownerIds` — a change that wants the app
-in front of someone, not a lint run. `getCategoryTotals` is the clearer of the two, since
-`/summary/by-category` never declared the parameter at all.
 
 ## The file report's *Not imported* view, on batches older than it
 
