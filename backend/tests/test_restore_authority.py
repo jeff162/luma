@@ -9,6 +9,9 @@ server agrees with the Settings section that offers it. Pointing a data source a
 is here for a different reason of the same shape: it names a directory on the server's filesystem, which is
 global app configuration rather than ledger data, and the folder can be set to delete the files it imports.
 The folder *picker* that fills that field in is held to the same bar, for the same reason.
+The database check, its repair and compaction are an administrator's too (Settings -> Database), since each
+acts on the files of the whole installation rather than on ledger data, and so is clearing what imports kept
+of the rows they refused, the one ledger operation held to the gate (`docs/security-model.md`).
 
 Checked over HTTP rather than by calling the router functions, because the guard is a route dependency and
 a direct call never passes through it. Each request is shaped to get past body validation, so a refusal
@@ -36,6 +39,13 @@ GUARDED = [
     # Listing the server's folders is held to the same bar as naming one: it reads a filesystem that is
     # not the ledger, and it is the sharper of the two for anyone who should not be reading it at all.
     ("get", "/api/import-export/watch/browse?path=/tmp", {}),
+    # Settings -> Database: repairing or compacting locks a database for everyone.
+    ("get", "/api/diagnostics/database", {}),
+    ("get", "/api/diagnostics/database/check", {}),
+    ("post", "/api/diagnostics/database/repair-indexes", {}),
+    ("post", "/api/diagnostics/database/compact", {}),
+    # Clearing what imports kept: the one ledger operation held to the admin gate.
+    ("post", "/api/import-export/batches/clear-detail", {"json": {"batch_ids": []}}),
 ]
 
 ADMIN_PASSWORD = "admin-password-123"

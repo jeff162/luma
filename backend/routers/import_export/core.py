@@ -42,12 +42,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend import app_config
+from backend.authorization import require_admin_or_local
 from backend.app_logging import log_warning
 from backend.db.database import (SHARED_OWNER_ID, compact_database, compact_if_worthwhile, get_db,
                                  get_tenant_workflow_state, set_tenant_workflow_state)
@@ -5212,7 +5213,9 @@ def preview_batch_detail_clearing(body: BatchDetailClearRequest):
         return summarize_detail_clearing(conn, body.batch_ids)
 
 
-@router.post("/batches/clear-detail")
+# Admin-only, the one ledger operation held to that gate (`docs/security-model.md` → *Identity and the
+# network perimeter*). The reads that feed its screen stay open, like every other ledger read.
+@router.post("/batches/clear-detail", dependencies=[Depends(require_admin_or_local)])
 def clear_batch_detail_records(body: BatchDetailClearRequest):
     """Clear these cards' detail records, keeping the cards and every transaction they imported. See
     `services/import_detail_storage.py` for what survives and why each survivor has to."""

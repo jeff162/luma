@@ -13,6 +13,9 @@
  * Where the backup was a plain download, the server recorded it before the browser saved it and cannot see
  * the save, so an entry can name a file that was never kept, or kept under another name (a second backup on
  * one day is usually saved as `… (1).zip`). The `⋯` menu corrects the one and trashes the other.
+ *
+ * An entry made from a database that failed its check says so, because the file may be missing rows and
+ * nothing else about it would show that.
  */
 
 import { useState } from 'react'
@@ -62,6 +65,10 @@ export function BackupHistoryEntry({ row, first = false, filename, actions }) {
           {/* Only when there were credentials to carry and they were held back. */}
           {row.credentials_left_out
             ? <span style={{ color: 'var(--warning, #d97706)' }}>· credentials omitted</span>
+            : null}
+          {/* Made anyway from a database that failed its check, so the file may be missing rows. */}
+          {row.database_check === 'failed'
+            ? <span style={{ color: 'var(--danger)' }}>· made from a database that failed its check</span>
             : null}
         </div>
       </div>

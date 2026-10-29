@@ -87,7 +87,7 @@ from backend.db.control_database import auth_required
 from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
-from backend.services import accounts_backup, backup_history, crypto_service
+from backend.services import accounts_backup, backup_history, crypto_service, database_health
 from backend.services.preferences import forget_startup_routes
 from backend.services.documents import (
     copy_document_file_from,
@@ -1164,6 +1164,10 @@ def export_backup(
     A browser with a save picker has the file named before it asks (`saved_as`), so the history records that
     name rather than the suggested one. The response names the history row (`X-Backup-Id`), so a save that
     fails after the row is written can move it to the trash.
+
+    The databases are checked first and the outcome goes on the history row (`services/database_health.py`).
+    A failed check never stops the backup: the page has already warned, and a backup of a failing database
+    is worth more than none.
     """
     user = getattr(request.state, "user", None)
     if saved_as is not None:
@@ -1180,6 +1184,7 @@ def export_backup(
         accounts_part = accounts_backup.collect(conn, encrypted)
 
     made_by = (user or {}).get("display_name") or (user or {}).get("username")
+    check_passed = database_health.check_passed()
     artifact = backup_temp_file()
     try:
         with get_db() as conn:
@@ -1219,6 +1224,7 @@ def export_backup(
                 credentials_left_out=(accounts_part.get("credentials_left_out") or {}).get("code"),
                 total_bytes=size, ledger_bytes=written["ledger_bytes"], accounts_bytes=written["accounts_bytes"],
                 documents_bytes=written["documents_bytes"], document_count=written["document_count"],
+                database_check=None if check_passed is None else ("passed" if check_passed else "failed"),
             )
     except Exception as exc:                                        # pragma: no cover - defensive
         log_error(f"[backup] could not record the backup in the history: {exc}", exc_info=exc)
@@ -2101,7 +2107,8 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
     documents = _restore_documents(None)
     forget_startup_routes()
     compact_if_worthwhile(reason="restored a backup")
-    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
+    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents,
+            "database_check_passed": database_health.check_passed()}
 
 
 def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None, *,
@@ -2122,6 +2129,10 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     as a file without credentials restores (`accounts_backup.apply`). Everything that can refuse — the digests, the
     compatibility guard and the restoring administrator's password — runs before anything is touched.
     The financial data then commits and the accounts part follows (`accounts_backup.apply`).
+
+    A restore rewrites the tables inside the existing files rather than replacing them, so a file that was
+    damaged before can still be damaged after. Both databases are checked once it is done, and the result
+    says whether they passed (`database_check_passed`, None when the check could not run).
     """
     meta = _read_archive_meta(zf)
     kind = meta.get("kind") or BACKUP_KIND_DATA
@@ -2169,6 +2180,7 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
             result["credentials_withheld"] = withheld
     forget_startup_routes()
     result["restored_at"] = utcnow_iso()
+    result["database_check_passed"] = database_health.check_passed()
     return result
 
 

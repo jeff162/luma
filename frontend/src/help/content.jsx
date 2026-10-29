@@ -4110,13 +4110,6 @@ export const HELP_TOPICS = [
             removed from Backup / Restore.
           </li>
           <li>
-            <strong>Import storage</strong> clears the record each import keeps of the rows it
-            refused: duplicates still flagged for review, matches against another source, the
-            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
-            longer appear in the duplicates view and cannot be imported anyway. Imported
-            transactions are not affected.
-          </li>
-          <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
             <strong>Dismissed duplicate pairs</strong> lists the pairs of transactions that have
             been marked as not duplicates. These are stored so a subsequent pass does not
@@ -4168,6 +4161,18 @@ export const HELP_TOPICS = [
             <strong>Error log</strong> lists the errors recorded in the "console log" file.
             A new error adds a task to the Tasks page, which clears once the error log has been
             opened.
+          </li>
+          <li>
+            *needs review* <strong>Database</strong> checks both database files for damage, shows the space each one
+            uses table by table, and gives space back. <strong>Compact now</strong> returns the free
+            space inside the data file to the disk. <strong>Import storage</strong> clears the record
+            each import keeps of every row it did not bring in: the duplicates it caught, matches against
+            another source, what an enrichment changed, and the rows it rejected. That record is often the
+            largest part of the database, and every backup carries it. Clearing it leaves the imported
+            transactions alone, and each import stays in the import history, marked as cleared. Its
+            refused rows can no longer be reviewed, imported anyway or used to undo an enrichment, and a
+            transaction it removed as a duplicate moves to Settings → Trash. Clearing cannot be undone.
+            See <HelpLink to="/help/data-and-backups#checking">checking the databases</HelpLink>.
           </li>
         </ul>
         <HelpHeading anchor="about">About</HelpHeading>
@@ -4509,7 +4514,7 @@ export const HELP_TOPICS = [
     id: 'data-and-backups',
     section: 'general-concepts',
     title: 'Data on disk, and backups',
-    surfaces: ['Backup / Restore (Settings)'],
+    surfaces: ['Backup / Restore (Settings)', 'Database (Settings)'],
     summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
     body: () => (
       <>
@@ -4578,7 +4583,8 @@ export const HELP_TOPICS = [
           <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
           name, its size, how much of that is attached documents, and the backup keys an encrypted
           file was sealed to. <strong>credentials omitted</strong> marks a backup that left out the data
-          provider credentials stored here. In Chrome and Edge, opened on the
+          provider credentials stored here, and <strong>made from a database that failed its check</strong>{' '}
+          a backup made after the check below found damage. In Chrome and Edge, opened on the
           computer running {APP_NAME} or over HTTPS, the backup is saved through a save dialog, which opens in the folder last used for backups: the history
           records the name chosen there, and the page says when the file is saved. Other browsers
           download it, so a backup that was not kept, or was saved under another name, is not reflected
@@ -4648,6 +4654,32 @@ export const HELP_TOPICS = [
           in <HelpLink to="/help/vault-settings#exposure">Vault settings</HelpLink> holds credentials
           the providers no longer accept.
         </p>
+
+        <HelpHeading anchor="checking">Checking the databases</HelpHeading>
+        <p>*needs review*</p>
+        <p>
+          <strong>Database</strong> in the Server group of Settings checks both files: that nothing in
+          either one is damaged, and that no row refers to another row that is gone. It does not check
+          that the data itself makes sense. The check also runs before every backup and after every
+          restore.
+        </p>
+        <ul>
+          <li>
+            When the only problem is an index out of step with its table, <strong>Rebuild
+            indexes</strong> repairs it without losing anything.
+          </li>
+          <li>
+            Anything else is repaired from a backup. The section names the newest backup made from
+            databases that passed. A backup can still be made from a database that failed, after a
+            confirmation, but it may be missing rows the damage hides, and its history entry says so.
+          </li>
+          <li>
+            A restore rewrites the tables inside the existing files, so damage to a file itself can
+            outlast it, and the restore says so when the check afterwards fails. To start from clean
+            files, stop {APP_NAME}, move its database files aside (Startup configuration shows where
+            they are), start it again and restore the backup into the new, empty databases.
+          </li>
+        </ul>
 
         <HelpHeading anchor="credentials-restore-passphrase">Restoring an older credentials backup</HelpHeading>
         <p>

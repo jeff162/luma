@@ -350,12 +350,13 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # v84 drops `merchant_rename`, a pattern → clean-name table nothing ever wrote or read; a category rule's
 # `clean_name` is the rename. v85 adds `category_rule.priority_level`, the user's own precedence term.
 # v86 adds `csv_import_profile.decimal_separator`, how a source's files write a number.
+# v87 adds `backup_history.database_check`, whether the databases passed their check as a backup was made.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 86
+CURRENT_VERSION = 87
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2637,6 +2638,15 @@ def _add_profile_decimal_separator(conn):
         conn.execute("ALTER TABLE csv_import_profile ADD COLUMN decimal_separator TEXT NOT NULL DEFAULT 'point'")
 
 
+@migration(87)
+def _add_backup_history_database_check(conn):
+    # See the baseline CREATE. NULL on every existing row: no backup made before it was checked.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(backup_history)")}
+    if columns and "database_check" not in columns:
+        conn.execute("ALTER TABLE backup_history ADD COLUMN database_check TEXT "
+                     "CHECK (database_check IN ('passed', 'failed'))")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3828,7 +3838,9 @@ def init_db(db_path: str | None = None):
             -- The backups this system made, and the file its data was last restored from
             -- (services/backup_history.py). Sizes are bytes as stored in the archive; `key_labels` is a
             -- JSON list of the backup keys an encrypted file was sealed to. `restored_at` is set only on the
-            -- row for the file a restore came from. `deleted_at` is the history's trash.
+            -- row for the file a restore came from. `deleted_at` is the history's trash. `database_check` is
+            -- how the check of both databases came out as the backup was made: 'passed', 'failed', or NULL
+            -- when it was not run (a row older than the check, or the file a restore came from).
             CREATE TABLE IF NOT EXISTS backup_history (
                 id                   TEXT PRIMARY KEY,
                 made_at              TEXT NOT NULL,
@@ -3844,7 +3856,8 @@ def init_db(db_path: str | None = None):
                 documents_bytes      INTEGER,
                 document_count       INTEGER,
                 restored_at          TEXT,
-                deleted_at           TEXT
+                deleted_at           TEXT,
+                database_check       TEXT CHECK (database_check IN ('passed', 'failed'))
             );
 
             -- Typed links between transactions: a general association primitive (services/txn_links.py).

@@ -86,7 +86,7 @@ If the list gets slow, memoize the card render first, so that one edit stops re-
   load and running it over all history would rewrite every batch on each call.
 - **Duplicate reports are the largest thing the history stores.** Two things hold them down. A source
   restating its own earlier import is counted and not recorded (`data-model.md` → *What a batch
-  counts*). And Settings → *Import storage* clears a card's stored detail on request (`data-model.md` →
+  counts*). And Settings → *Database* → *Import storage* clears a card's stored detail on request (`data-model.md` →
   *Clearing a card's stored detail*).
 - **Nothing sweeps stored detail on a schedule.** The clearing cannot be undone, so it is always a
   selection someone made on that screen.

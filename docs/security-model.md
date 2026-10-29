@@ -186,7 +186,13 @@ out. Once inside, every user sees and edits the same data, and no data route che
 the install and the perimeter, not the ledger** — user management, provider and environment settings, and
 the operations that replace the workspace wholesale: every restore path, and the backup keys that decide
 who can read a backup. A restore swaps out every row, the connections and the provider configuration at
-once, so it is a settings-scale act. Creating a backup is held to the same gate. The guards live in
+once, so it is a settings-scale act. Creating a backup is held to the same gate, and so is checking,
+repairing and compacting the database files, which act on the install's files rather than the ledger's
+rows and lock them for everyone while they run. Clearing the record imports keep of the rows they refused
+(Settings → Database → Import storage) is the one ledger operation held to the same gate: it cannot be
+undone, it removes what every member's imports kept rather than one member's work, and it closes the
+duplicate report's restore path for all of them, so it is a decision about the installation's data rather
+than an edit within it. The guards live in
 `backend/authorization.py`; with sign-in protection off there is no role to hold, and they pass. An
 authorization check at the data layer would have no scoping model behind it to enforce.
 

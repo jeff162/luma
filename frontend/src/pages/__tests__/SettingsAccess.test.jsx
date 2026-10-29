@@ -24,7 +24,7 @@ vi.mock('../../components/settings/ThemeSection.jsx', () => section('appearance'
 vi.mock('../../components/settings/CurrencySection.jsx', () => section('currency'))
 vi.mock('../../components/settings/DisplayFormatSection.jsx', () => section('display format'))
 vi.mock('../../components/settings/SignInFactorsSection.jsx', () => section('security'))
-vi.mock('../../components/settings/ImportStorageSection.jsx', () => section('import storage'))
+vi.mock('../../components/administration/DatabaseSection.jsx', () => section('database'))
 vi.mock('../../components/settings/AboutSection.jsx', () => section('about'))
 vi.mock('../../components/settings/DuplicateExceptionSections.jsx', () => ({
   DismissedDuplicatePairsSection: () => null,
@@ -38,6 +38,7 @@ vi.mock('../../components/settings/TrashSections.jsx', () => ({
 }))
 vi.mock('../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../lib/useErrorLog.js', () => ({ useErrorLog: () => ({ log: null, error: '', loading: false, load: () => {} }) }))
+vi.mock('../../lib/useDatabaseState.js', () => ({ useDatabaseState: () => ({ state: null, loading: false, load: () => {} }) }))
 vi.mock('../../lib/serverCertificate.js', () => ({ useServerCertificate: () => [null, () => {}] }))
 vi.mock('../../lib/api.js', () => ({ api: { getStorageSummary: () => new Promise(() => {}) } }))
 

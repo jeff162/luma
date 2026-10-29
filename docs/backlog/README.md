@@ -137,11 +137,10 @@ scale — rather than by feature.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
-- [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
-  ever checks that the databases are intact — no health surface, and notably no check of the *target*
-  before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms
-  on a 60 MB DB; note the former does **not** cover foreign keys). The larger half is an invariant
-  checker for the semantic inconsistencies those pragmas call "ok" — kept deliberately separate.
+- [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-10-29).** An
+  invariant checker for the semantic inconsistencies the structural check in Settings → Database calls
+  "ok" (a cursor ahead of a restored ledger, a coverage claim disagreeing with its rows, a mapping to a
+  merged account). Needs its own design: which invariants, warning or error, report or repair.
 - [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file:
   showing every source a transaction's tag comes from (hand, rule, category) rather than only the
   winner, and a per-rule *stop matching* option that keeps lower-ranked rules from contributing.

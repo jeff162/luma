@@ -35,6 +35,7 @@ This document does not repeat a sequence any of those hold. It records what the 
 - [Restore is a destructive operation](#restore-is-a-destructive-operation)
 - [Locked out](#locked-out)
 - [Diagnosing a running instance](#diagnosing-a-running-instance)
+  - [Checking the databases](#checking-the-databases)
 - [Obstacles](#obstacles)
 - [Open](#open)
 
@@ -401,8 +402,11 @@ so every backup made before it, the restored file included, reads afterwards as 
 needs the different-system confirmation (`data-model.md` → *The compatibility guard*). The backup to rely
 on after a restore is one taken after it.
 
-**Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
-is not. See *Open*.
+**A restore rewrites the tables inside the existing files, so it does not mend a damaged file.** Both
+databases are checked once it finishes and the result says whether they passed. The check runs after the
+restore rather than before it, because restoring is how a damaged database is put right. Clean files come
+from restoring into new, empty databases: stop the server, move the database files aside, start it again
+and restore (*Checking the databases*).
 
 ## Locked out
 
@@ -423,6 +427,7 @@ perimeter*.
 | The connection sync log (**Sync log** on Import → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
+| Settings → **Database** | whether either database file is damaged, the space each uses table by table, and compacting the data file |
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing
 else on screen distinguishes a checkout pointed at a restored backup from one pointed at real data. The
@@ -433,8 +438,25 @@ read the paths in Settings anyway.
 between two releases. The **Build** row in Settings → About and both log files' start lines carry it
 (`releasing.md` → *What identifies a build*).
 
-**There is no integrity check of either database.** No health check, no startup check, and none before
-a destructive restore. See *Open*.
+### Checking the databases
+
+**The check is structural** (`backend/services/database_health.py`): SQLite's `integrity_check` and
+`foreign_key_check`, against both databases, through a read-only connection. It says whether a file is
+damaged and whether a row refers to one that is gone, never whether the ledger is coherent. At ledger
+scale it takes about a tenth of a second, so it runs on demand and is never backgrounded. It is an
+administrator's, like the rest of Settings → Database, because a repair or a compaction locks a database
+for everyone.
+
+**It runs at the two moments a damaged file does the most harm.** Before every backup, because a row
+export over a damaged index can quietly come out short: the page asks before making one, the backup is
+still made when asked, and its history row records the outcome (`backup_history.database_check`). After
+every restore, for the reason under *Restore is a destructive operation*.
+
+**Every failure names its next step.** When every problem is an index out of step with its table,
+`REINDEX` repairs it completely, since an index holds no data of its own, and the section offers it.
+Anything else is a backup: the section names the newest one made from databases that passed. Orphaned
+rows are reported per table and parent, with no repair, because each case is a decision about what the
+data means.
 
 ---
 
@@ -446,13 +468,15 @@ a destructive restore. See *Open*.
   a restored ledger, a coverage claim disagreeing with the rows it covers, a mapping pointing at a
   merged account — all read as `ok`. A green diagnostic that implies more than it checked is worse than
   no diagnostic.
+- **Per-table sizes come from SQLite's `dbstat` table, which not every build of SQLite includes.** Where
+  it is missing, Settings → Database lists row counts only and says so.
+- **SQLite's own salvage (`.recover`) lives in the `sqlite3` command-line program**, not in Python's
+  `sqlite3` module, so a file damaged past a rebuild of its indexes cannot be salvaged from inside the
+  app. A backup made from it carries every row the export can still read.
 
 ## Open
 
-- **Database diagnostics are not built.** The structural half is small — both pragmas against both
-  databases, reported next to the connection sync log — but four things need deciding first: whether it
-  is user-facing or developer-gated; what a failure tells someone to *do*, given a structural failure is
-  not user-repairable; whether the pre-restore check refuses or warns-with-force; and whether anything
-  periodic is wanted. A semantic invariant checker over the cases a structural check cannot see is a
-  separate, much larger project.
+- **No check of the app's own invariants.** The structural check cannot see the cases under *Obstacles*.
+  An invariant checker over them needs its own design: which invariants to assert, warning or error, and
+  whether anything can be repaired or only reported.
   → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

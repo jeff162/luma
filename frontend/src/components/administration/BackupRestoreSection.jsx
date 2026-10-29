@@ -126,6 +126,10 @@ export default function BackupRestoreSection() {
   const [restoreMsg, setRestoreMsg] = useState(null)
   const [restoreSuccess, setRestoreSuccess] = useState(null)
   const [restoreGaveNewIdentifier, setRestoreGaveNewIdentifier] = useState(false)
+  // Whether the databases failed the check run after the restore finished.
+  const [restoreCheckFailed, setRestoreCheckFailed] = useState(false)
+  // The backup waiting on an answer because the databases failed the check run before it.
+  const [backupCheckWarning, setBackupCheckWarning] = useState(null)
   const [history, setHistory] = useState(null)
   const [historyRetention, setHistoryRetention] = useState(null)
   const [savingRetention, setSavingRetention] = useState(false)
@@ -292,11 +296,26 @@ export default function BackupRestoreSection() {
     startBackup(true, chosen)
   }
 
+  // The databases are checked first. A failure asks rather than refuses, since a backup of a failing database
+  // is worth more than none; the server records the outcome on the history entry either way. A check that
+  // cannot run does not hold the backup up. The save picker still opens within the click's activation, as
+  // the check takes a fraction of a second, and after a warning the confirming click is the gesture.
+  async function startBackup(encrypted, recipientIds = null) {
+    setDownloading(true)
+    const check = await api.checkDatabases().catch(() => null)
+    setDownloading(false)
+    if (check && !check.ok) {
+      setBackupCheckWarning({ encrypted, recipientIds })
+      return
+    }
+    saveBackup(encrypted, recipientIds)
+  }
+
   // Where the browser has a save picker the file is chosen first, while the click still counts as one: a
   // cancel then makes no backup at all, the history records the name it was saved under, and the page can
   // say it was saved. Elsewhere, or if the picker refuses, the backup is a download and nothing reports
   // what became of it.
-  async function startBackup(encrypted, recipientIds = null) {
+  async function saveBackup(encrypted, recipientIds = null) {
     setBackupMsg(null)
     setBackupSavedAs(null)
     let handle = null
@@ -461,6 +480,7 @@ export default function BackupRestoreSection() {
       setRestoreMsg(null)
       setAdminPassword('')
       setRestoreGaveNewIdentifier(!!result.restored_counts)
+      setRestoreCheckFailed(result.database_check_passed === false)
       setRestoreSuccess(`Restore completed. ${sentences.join(' ')}`)
     }
     catch (e) {
@@ -637,6 +657,20 @@ export default function BackupRestoreSection() {
         >
           {ownPassphraseAction(() => setConfirmingPlainBackup(false))}
         </AppConfirmDialog>
+      ) : null}
+      {backupCheckWarning ? (
+        <AppConfirmDialog
+          title="Back up a database that failed its check?"
+          description="The check found damage. A backup made now may be missing rows the damage hides, and its history entry will say it was made from a database that failed its check. Settings → Database shows what was found."
+          confirmLabel="Back up anyway"
+          onConfirm={() => {
+            const { encrypted, recipientIds } = backupCheckWarning
+            setBackupCheckWarning(null)
+            saveBackup(encrypted, recipientIds)
+          }}
+          onCancel={() => setBackupCheckWarning(null)}
+          width="min(520px, 100%)"
+        />
       ) : null}
       {recipientChoice ? (
         <AppDialog
@@ -1010,6 +1044,14 @@ export default function BackupRestoreSection() {
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>{restoreSuccess}</div>
             {restoreGaveNewIdentifier ? (
               <div style={{ fontSize: 13, lineHeight: 1.5 }}>This restore gave the system a new backup identifier.</div>
+            ) : null}
+            {restoreCheckFailed ? (
+              <div role="alert" style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--danger)' }}>
+                The databases failed their check afterwards. A restore rewrites the tables inside the existing
+                files, so damage to a file can outlast it. To start from a clean file, stop {APP_NAME}, move its
+                database files aside, start it again and restore this backup into the new, empty database.
+                Settings → Database shows what failed.
+              </div>
             ) : null}
             <div style={{
               fontSize: 12,

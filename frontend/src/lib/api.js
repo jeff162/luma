@@ -345,16 +345,22 @@ export const api = {
   getInstallationDetails: () => request('/app/installation-details'),
   // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown, detail, link }.
   getSecurityChecklist: () => request('/app/security-checklist'),
-  // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   // The TLS proxy's root certificate, where a server installation has one: { available } and, when it
   // does, the fingerprint and whether it is the certificate on record. Public — a device needs it before
   // sign-in.
   getProxyCertificate: () => request('/app/proxy-certificate'),
   acceptProxyCertificate: () => request('/app/proxy-certificate/accept', { method: 'POST' }),
+  // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   getErrorLog: () => request('/diagnostics/log/errors'),
   // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.
   acknowledgeErrorLog: (through) =>
     request('/diagnostics/log/errors/acknowledge', { method: 'POST', body: JSON.stringify({ through }) }),
+  // Settings -> Database, admin-only: { check, usage } for both databases (`services/database_health.py`).
+  getDatabaseState: () => request('/diagnostics/database'),
+  // The check alone, run before a backup: { ok, databases }.
+  checkDatabases: () => request('/diagnostics/database/check'),
+  repairDatabaseIndexes: () => request('/diagnostics/database/repair-indexes', { method: 'POST' }),
+  compactDatabase: () => request('/diagnostics/database/compact', { method: 'POST' }),
   listUsers: () => request('/auth/users'),
   createUser: (data) => request('/auth/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

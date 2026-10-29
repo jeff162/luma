@@ -7,6 +7,8 @@
 //   * Where the browser has a save picker, the file is chosen before the backup is made: a cancel makes
 //     nothing, the history is told the name chosen, and a backup that could not be written leaves the
 //     history (it would name a file that does not exist).
+//   * The databases are checked before a backup. A failure asks first rather than refusing, since a backup of
+//     a failing database is worth more than none, and a restore that leaves them failing says so.
 //   * A failed download reports itself. It used to be a browser navigation, so a refused export replaced
 //     the app with a raw JSON error page; nothing in the section could say anything about it.
 //   * Restoring follows from what the file is: a backup holding both parts offers each, and restoring
@@ -34,6 +36,8 @@ let recipients = []
 let inspection = { kind: 'credentials', container: 'zip', encrypted: false }
 const NOTHING_LEFT_OUT = { credentials_left_out: null, encrypted_credentials_left_out: null, passphrases_left_out: [] }
 let backupStatus = NOTHING_LEFT_OUT
+const PASSED = { ok: true, databases: {} }
+let databaseCheck = PASSED
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
@@ -43,6 +47,7 @@ vi.mock('../../../lib/api.js', () => ({
     getBackupRecipients: async () => recipients,
     getAuthStatus: async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
     getBackupStatus: async () => backupStatus,
+    checkDatabases: async () => databaseCheck,
     getBackupHistory: async () => ({ backups: [], retention_days: 365 }),
     exportBackup: (encrypted, ids, savedAs) => (
       encrypted
@@ -95,6 +100,7 @@ afterEach(() => {
   recipients = []
   inspection = { kind: 'credentials', container: 'zip', encrypted: false }
   backupStatus = NOTHING_LEFT_OUT
+  databaseCheck = PASSED
 })
 
 const KEYS = [
@@ -188,6 +194,19 @@ describe('the backup', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Generate backup' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(downloadUrl).toHaveBeenCalledWith('/api/import-export/backup'))
+  })
+
+  it('asks before backing up databases that failed their check, and makes nothing on cancel', async () => {
+    databaseCheck = { ok: false, databases: {} }
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+    await screen.findByText('Back up a database that failed its check?')
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(downloadUrl).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Generate backup' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Back up anyway' }))
     await waitFor(() => expect(downloadUrl).toHaveBeenCalledWith('/api/import-export/backup'))
   })
 
@@ -412,6 +431,16 @@ describe('restoring a backup that holds both parts', () => {
     await restore(user, 'Restore everything')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(true, true)))
     expect(await screen.findByText(/Everyone has been signed out/)).toBeTruthy()
+  })
+
+  it('says when the databases failed their check after the restore', async () => {
+    const user = userEvent.setup()
+    restoreBackupFile.mockResolvedValue({ restored_counts: {}, accounts: { users: 2 }, signed_out: true, database_check_passed: false })
+    renderSection()
+    await choose(user)
+
+    await restore(user, 'Restore everything')
+    expect(await screen.findByText(/The databases failed their check afterwards/)).toBeTruthy()
   })
 
   it('restores only what is ticked, and nothing when nothing is', async () => {

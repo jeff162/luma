@@ -16,8 +16,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
+import { useDatabaseState } from '../lib/useDatabaseState.js'
 import { useServerCertificate } from '../lib/serverCertificate.js'
-import { formatBytes, formatShare } from '../lib/storageFormat.js'
+import { formatBytes } from '../lib/storageFormat.js'
 import { RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import SectionListPage, { Subsection, useSectionParam } from '../components/SectionListPage.jsx'
@@ -28,12 +29,12 @@ import SecurityChecklistSection from '../components/administration/SecurityCheck
 import { ServerCertificateSection } from '../components/ServerCertificate.jsx'
 import ConfigurationSection from '../components/administration/ConfigurationSection.jsx'
 import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
+import DatabaseSection from '../components/administration/DatabaseSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import DisplayFormatSection from '../components/settings/DisplayFormatSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
-import ImportStorageSection from '../components/settings/ImportStorageSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
 import {
   BackupHistoryTrashSection, RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection,
@@ -42,6 +43,7 @@ import AboutSection from '../components/settings/AboutSection.jsx'
 import { formatCount } from '../lib/displayFormat.js'
 
 const ERROR_LOG_SECTION = 'errorLog'
+const DATABASE_SECTION = 'database'
 
 export default function Settings() {
   const {
@@ -62,10 +64,11 @@ export default function Settings() {
   // refresh control goes. It still reads only while the section is open.
   const requestedSection = useSectionParam()
   const errorLog = useErrorLog(canAdminister && requestedSection === ERROR_LOG_SECTION)
+  const databaseState = useDatabaseState(canAdminister && requestedSection === DATABASE_SECTION)
   const [serverCertificate, setServerCertificate] = useServerCertificate()
 
-  // What the two housekeeping sections hold, read once here so the list can say it before either is
-  // opened, and again whenever one of them changes it. A failed read leaves the names without figures.
+  // What the trash holds and how large the database is, read once here so the list can say it before either
+  // section is opened, and again whenever one of them changes it. A failed read leaves the names without figures.
   const [storage, setStorage] = useState(null)
   const loadStorage = useCallback(() => {
     api.getStorageSummary().then(setStorage).catch(() => { })
@@ -73,8 +76,6 @@ export default function Settings() {
   useEffect(() => { loadStorage() }, [loadStorage])
   const trash = storage?.trash
   const trashTotal = trash ? trash.transactions + trash.duplicates + trash.rules + (trash.backup_history || 0) : 0
-  const detailBytes = storage?.import_detail?.bytes || 0
-  const detailShare = formatShare(detailBytes, storage?.database_bytes).replace('about ', '')
   const counted = (title, count) => (trash ? `${title} (${formatCount(count)})` : title)
 
   const groups = [
@@ -134,13 +135,6 @@ export default function Settings() {
               ) : null}
             </div>
           ),
-        },
-        {
-          key: 'importStorage',
-          title: 'Import storage',
-          note: detailBytes ? [formatBytes(detailBytes), detailShare].filter(Boolean).join(' · ') : '',
-          description: 'The record each import keeps of the rows it refused, and the space it uses.',
-          content: <ImportStorageSection storage={storage} onChanged={loadStorage} />,
         },
         {
           key: 'duplicateExceptions',
@@ -213,6 +207,14 @@ export default function Settings() {
           description: 'Errors the server recorded, newest first, for when something did not work and the screen did not say why.',
           refresh: <RefreshButton onRefresh={errorLog.load} loading={errorLog.loading} />,
           content: <ErrorLogSection log={errorLog.log} error={errorLog.error} />,
+        },
+        {
+          key: DATABASE_SECTION,
+          title: 'Database Maintenance',
+          note: storage?.database_bytes ? formatBytes(storage.database_bytes) : '',
+          description: 'Database compaction and integrity check',
+          refresh: <RefreshButton onRefresh={databaseState.load} loading={databaseState.loading} />,
+          content: <DatabaseSection db={databaseState} storage={storage} onStorageChanged={loadStorage} />,
         },
       ],
     },

@@ -127,8 +127,8 @@ attaching that they only want the document searchable — keep the original, or 
 text. Explicit, and costs nothing.
 
 **Where the view lives is open.** It fits this feature, but it is equally a *database maintenance*
-surface, and [`database-diagnostics.md`](database-diagnostics.md) is already the home for "what is the
-state of the stored data" — which would also let it sit beside the orphan reconciliation that the
+surface, and Settings → Database is already the home for "what is the state of the stored data"
+(`../operations.md` → *Checking the databases*) — which would also let it sit beside the orphan reconciliation that the
 file-versus-row write order makes possible. Decide when either is built; do not build two.
 
 ## Open questions
@@ -145,5 +145,6 @@ file-versus-row write order makes possible. Decide when either is built; do not 
 
 - [`online-categorizer.md`](online-categorizer.md) — the shared opt-in / LLM / approval subsystem
 - [`document-incremental-backups.md`](document-incremental-backups.md) — incremental document backups
-- [`database-diagnostics.md`](database-diagnostics.md) — the other candidate home for reclamation
+- [`../operations.md`](../operations.md) → *Checking the databases* — Settings → Database, the other
+  candidate home for reclamation
 - [`../building-a-connector.md`](../building-a-connector.md) — the capability-declaration pattern to copy

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The maintenance screen behind Settings → Import storage: what each import kept beyond the transactions
-// it brought in, and the means to clear it.
+// The maintenance screen behind Settings → Database → Import storage: what each import kept beyond the
+// transactions it brought in, and the means to clear it.
 //
 // It is a screen rather than a control on each card because of what the action is. The thing being
 // removed is a *duplicate report* — the per-row record of what an import refused — and on a card

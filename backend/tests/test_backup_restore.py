@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException, UploadFile
 
 from backend.db import control_database
-from backend.services import backup_history
+from backend.services import backup_history, database_health
 from backend.db.control_database import auth_required
 from backend.time_utils import utcnow_iso
 from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
@@ -421,9 +421,9 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO backup_history (id, made_at, made_by, filename, encrypted, key_labels, "
                     "credentials_included, credentials_left_out, total_bytes, ledger_bytes, accounts_bytes, "
-                    "documents_bytes, document_count, restored_at) "
+                    "documents_bytes, document_count, restored_at, database_check) "
                     "VALUES (?, ?, 'Robin', 'luma_backup.encrypted.zip', 1, '[\"Offsite key\"]', 0, "
-                    "'weak_passphrase', 9000, 5000, 1000, 3000, 2, ?)",
+                    "'weak_passphrase', 9000, 5000, 1000, 3000, 2, ?, 'failed')",
                     (str(uuid.uuid4()), utcnow_iso(), utcnow_iso()),
                 )
 
@@ -858,6 +858,26 @@ class BackupRestoreTests(BackupFixtureTestCase):
         self.assertEqual(row["documents_bytes"], sum(i.compress_size for i in documents))
         self.assertGreater(row["ledger_bytes"], 0)
         self.assertGreater(row["accounts_bytes"], 0)
+
+    def test_an_export_records_whether_the_databases_passed_their_check(self):
+        """A backup of a database that failed its check is still made, and its row says so, so the file is
+        never later taken for a good one."""
+        with self._use_db_path():
+            self._drain(export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as=None))
+            with mock.patch.object(database_health, "check_databases", return_value={"ok": False, "databases": {}}):
+                self._drain(export_backup(NO_USER_REQUEST, encrypted=False, recipients=None, saved_as=None))
+        self.assertEqual([row["database_check"] for row in self._history()], ["passed", "failed"])
+
+    def test_a_restore_reports_whether_the_databases_passed_their_check_afterwards(self):
+        """A restore rewrites the tables inside the existing file, so it does not by itself mend a damaged one."""
+        self._seed_complete()
+        payload = self._export_payload()
+        with self._use_db_path():
+            self.assertIs(restore_backup(RestoreRequest(data=payload))["database_check_passed"], True)
+            with mock.patch.object(database_health, "check_databases", return_value={"ok": False, "databases": {}}):
+                payload = self._export_payload()
+                result = restore_backup(RestoreRequest(data=payload, force=True))
+        self.assertIs(result["database_check_passed"], False)
 
     def test_an_export_records_the_name_it_is_saved_under(self):
         """A browser with a save picker names the file before asking, so the history holds that name, and the

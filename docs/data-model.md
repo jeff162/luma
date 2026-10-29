@@ -1230,7 +1230,7 @@ source, by Rule 2 otherwise.
 
 ### Clearing a card's stored detail
 
-`detail_cleared_at` marks a batch whose duplicate report was cleared (Settings → *Import storage*). The
+`detail_cleared_at` marks a batch whose duplicate report was cleared (Settings → *Database* → *Import storage*). The
 report holds, per refused row, the raw values, the matched transaction and the payload that would have
 been inserted, and is the largest thing the import history stores. Everything else stays, because each
 part is read elsewhere:
@@ -2157,6 +2157,11 @@ the signal that documents are becoming the bulk of a backup
   read from the archive and its maker from `meta.json`'s `made_by`.
 - **Retention is by age**, a ledger setting in the shared preference scope, and the newest row outside the
   trash is never purged.
+- **`database_check` is how the check of both databases came out as the backup was made**: `passed`,
+  `failed`, or NULL where it was not run (a row older than the check, and the row a restore adds for its
+  file). A failed check never stops a backup, since a copy of a failing database is worth more than none,
+  so this is what keeps such a file from later being trusted as a good one (`operations.md` → *Checking
+  the databases*).
 - **A row can be wrong, so it can be corrected or trashed.** It is written before the file is saved. With a
   save picker (Chromium, in a secure context) the file is chosen first and the page writes it, so a cancel
   makes no backup and a failed write trashes the row (`X-Backup-Id` names it); otherwise the backup is a

@@ -7,7 +7,10 @@ A row is written when a backup file is complete on the server, before it is save
 made rather than that it arrived anywhere. Where the browser has a save picker the file was named before the
 backup was asked for and the row has that name; otherwise it has the one the server suggested, which the
 browser may change. Each row splits the file's size into the ledger, the accounts part and the attached
-documents, which is what shows whether documents are becoming the bulk of a backup.
+documents, which is what shows whether documents are becoming the bulk of a backup. It also says whether the
+databases passed their check as the file was made (`services/database_health.py`): a backup can be taken
+from a database that failed, since a partial copy of a failing database is better than none, and the row is
+what keeps such a file from later being trusted as a good one.
 
 **The history rides the data backup, and a restore decides whose history survives.** Restoring a backup
 this system made keeps the live history, which already holds everything the file's copy does and every
@@ -46,7 +49,7 @@ MAX_FILENAME_LENGTH = 255
 _COLUMNS = (
     "made_at", "made_by", "filename", "encrypted", "key_labels", "credentials_included",
     "credentials_left_out", "total_bytes", "ledger_bytes", "accounts_bytes", "documents_bytes",
-    "document_count", "restored_at",
+    "document_count", "restored_at", "database_check",
 )
 
 
