@@ -583,7 +583,6 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
   const [newOwnerDraft, setNewOwnerDraft] = useState('')
   const [ownerMenu, setOwnerMenu] = useState(null)
   const newOwnerInputRef = useRef(null)
-  const ownerMenuRef = useRef(null)
 
   useEffect(() => {
     if (disabled) {
@@ -594,13 +593,6 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
       setOwnerMenu(null)
     }
   }, [disabled])
-
-  useDismissibleLayer({
-    open: !!ownerMenu,
-    onClose: () => setOwnerMenu(null),
-    refs: [ownerMenuRef],
-    closeOnBlur: true,
-  })
 
   useLayoutEffect(() => {
     if (!creatingOwner) return
@@ -828,62 +820,36 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
             +New owner
           </Button>
         )}
-        {ownerMenu ? (
-          <div
-            ref={ownerMenuRef}
-            onMouseDown={e => e.stopPropagation()}
-            style={{
-              position: 'fixed',
-              left: Math.min(ownerMenu.x, window.innerWidth - 160),
-              top: Math.min(ownerMenu.y, window.innerHeight - 100),
-              zIndex: 260,
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 10,
-              boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-              padding: 4,
-              minWidth: 150,
-            }}
-          >
-            <button
-              onClick={() => {
-                if (isSharedOwner(ownerMenu.owner)) {
-                  setOwnerMenu(null)
-                  return
-                }
-                setOwnerMenu(null)
-                setCreatingOwner(false)
-                setEditingOwnerId(ownerMenu.owner.id)
-                setOwnerDraft(ownerMenu.owner.name)
-              }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                background: 'none', border: 'none', color: 'var(--text)',
-                fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
-              }}
-            >
-              Rename
-            </button>
-            <button
-              onClick={async () => {
-                const owner = ownerMenu.owner
-                setOwnerMenu(null)
-                if (isSharedOwner(owner)) return
-                try {
-                  await onDeleteOwner(owner)
-                } catch (error) {
-                  onError('Could not delete owner', error)
-                }
-              }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                background: 'none', border: 'none', color: 'var(--danger)',
-                fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
-              }}
-            >
-              Delete
-            </button>
-          </div>
+        {ownerMenu && !isSharedOwner(ownerMenu.owner) ? (
+          <ActionMenu
+            anchorPoint={ownerMenu}
+            align="start"
+            minWidth={150}
+            label="Owner actions"
+            onClose={() => setOwnerMenu(null)}
+            items={[
+              {
+                label: 'Rename',
+                onClick: () => {
+                  setCreatingOwner(false)
+                  setEditingOwnerId(ownerMenu.owner.id)
+                  setOwnerDraft(ownerMenu.owner.name)
+                },
+              },
+              {
+                label: 'Delete',
+                danger: true,
+                separatorBefore: true,
+                onClick: async () => {
+                  try {
+                    await onDeleteOwner(ownerMenu.owner)
+                  } catch (error) {
+                    onError('Could not delete owner', error)
+                  }
+                },
+              },
+            ]}
+          />
         ) : null}
       </div>
     </SectionCard>
@@ -1024,7 +990,6 @@ function AccountRow({
   const ownerCreateRef = useRef(null)
   const ownerInputRef = useRef(null)
   const ownerAnchorRef = useRef(null)
-  const ownerMenuRef = useRef(null)
   // The name button's tooltip shows the edit hint normally, but the full account name when the label is
   // ellipsized by a narrow column — measured on hover so it stays correct as the column/window resizes.
   const nameTextRef = useRef(null)
@@ -1092,13 +1057,6 @@ function AccountRow({
       setOwnerDraft('')
     },
     refs: [ownerCreateRef, ownerAnchorRef],
-  })
-
-  useDismissibleLayer({
-    open: !!ownerMenu,
-    onClose: () => setOwnerMenu(null),
-    refs: [ownerMenuRef],
-    closeOnBlur: true,
   })
 
   const typeValue = account.type || 'other'
@@ -1440,59 +1398,24 @@ function AccountRow({
             </div>
           ) : null}
           {ownerMenu && canShowOwnerControls ? (
-            <div
-              ref={ownerMenuRef}
-              onMouseDown={e => e.stopPropagation()}
-              style={{
-                position: 'fixed',
-                left: Math.min(ownerMenu.x, window.innerWidth - 160),
-                top: Math.min(ownerMenu.y, window.innerHeight - 100),
-                zIndex: 260,
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 10,
-                boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-                padding: 4,
-                minWidth: 150,
-              }}
-            >
-              <button
-                onClick={handleRenameOwner}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: 'none', border: 'none', color: 'var(--text)',
-                  fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
-                }}
-              >
-                Rename
-              </button>
-              <button
-                onClick={handleDeleteOwner}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: 'none', border: 'none', color: 'var(--danger)',
-                  fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
-                }}
-              >
-                Delete
-              </button>
-              <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
-              <button
-                onClick={() => {
-                  setOwnerMenu(null)
-                  setOwnerDraft('')
-                  setShowOwnerCreate(true)
-                }}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: 'none', border: 'none', color: 'var(--accent2)',
-                  fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                +New owner
-              </button>
-            </div>
+            <ActionMenu
+              anchorPoint={ownerMenu}
+              align="start"
+              minWidth={150}
+              label="Owner actions"
+              onClose={() => setOwnerMenu(null)}
+              items={[
+                { label: 'Rename', onClick: handleRenameOwner },
+                {
+                  label: '+New owner',
+                  onClick: () => {
+                    setOwnerDraft('')
+                    setShowOwnerCreate(true)
+                  },
+                },
+                { label: 'Delete', danger: true, separatorBefore: true, onClick: handleDeleteOwner },
+              ]}
+            />
           ) : null}
         </div>
 

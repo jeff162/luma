@@ -2,24 +2,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { LinkButton } from '../ui.jsx'
-import { useAnchoredPopup } from '../../lib/anchoredPopup.js'
-import { useDismissibleLayer } from '../../lib/uiInteractions.js'
+import { ActionMenu } from '../ActionMenu.jsx'
 
 /*
  * The "N imported files" count of a multi-file review, opening a list of those files. Choosing one calls
  * `onOpenFile` with its batch, which the page passes to `useBatchDetailPanels` to open that file's
- * transactions. Portaled because the count sits inside the page's scroll container.
+ * transactions.
  */
 export default function ImportedFilesPopover({ files, label, describeFile, onOpenFile }) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef(null)
-  const popoverRef = useRef(null)
-  const close = () => setOpen(false)
-
-  useDismissibleLayer({ open, onClose: close, refs: [popoverRef, triggerRef] })
-  const { popupStyle, contentRef } = useAnchoredPopup({ open, anchorRef: triggerRef, minWidth: 260 })
 
   return (
     <>
@@ -32,47 +25,26 @@ export default function ImportedFilesPopover({ files, label, describeFile, onOpe
       >
         {label} ▾
       </LinkButton>
-      {open && createPortal(
-        <div
-          ref={popoverRef}
-          role="menu"
-          style={{
-            ...popupStyle,
-            zIndex: 1400,
-            maxWidth: 'min(480px, calc(100vw - 16px))',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            padding: 4,
-            boxShadow: '0 12px 36px rgba(15, 23, 42, 0.32)',
-          }}
-        >
-          <div ref={contentRef}>
-            {files.map(file => (
-              <button
-                key={file.id}
-                type="button"
-                role="menuitem"
-                onClick={() => { close(); onOpenFile(file) }}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: 'none', border: 'none', padding: '6px 10px',
-                  borderRadius: 6, cursor: 'pointer', color: 'var(--text)',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-              >
-                <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
-                  {file.filename || 'Import'}
-                  <span aria-hidden="true" style={{ marginLeft: 6, color: 'var(--accent2)' }}>↗</span>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{describeFile(file)}</div>
-              </button>
-            ))}
-          </div>
-        </div>,
-        document.body,
-      )}
+      {open ? (
+        <ActionMenu
+          anchorElement={triggerRef.current}
+          align="start"
+          minWidth={260}
+          label="Imported files"
+          onClose={() => setOpen(false)}
+          items={files.map(file => ({
+            key: file.id,
+            label: (
+              <>
+                {file.filename || 'Import'}
+                <span aria-hidden="true" style={{ marginLeft: 6, color: 'var(--accent2)' }}>↗</span>
+              </>
+            ),
+            description: describeFile(file),
+            onClick: () => onOpenFile(file),
+          }))}
+        />
+      ) : null}
     </>
   )
 }

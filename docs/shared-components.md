@@ -20,7 +20,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | Use | For | Where |
 | --- | --- | --- |
 | `TransactionListTable` | Any list of transactions. | `components/TransactionListTable.jsx` |
-| `TransactionRow.jsx` cells | A surface that draws its own rows: `CategoryCell`, `MerchantCell`, `TransactionAmountCell`, the name helpers (`getTxnMerchantLabel`, `getTxnName`, `NamelessMerchant`) and the right-click `ContextMenu`. | `components/TransactionRow.jsx` |
+| `TransactionRow.jsx` cells | A surface that draws its own rows: `CategoryCell`, `MerchantCell`, `TransactionAmountCell`, the name helpers (`getTxnMerchantLabel`, `getTxnName`, `NamelessMerchant`) and the row's right-click `ContextMenu` (its items, on `ActionMenu`). | `components/TransactionRow.jsx` |
 | `usePagedTransactions` | A transaction list that loads in pages. It sorts on the server, and its `copy` goes to the list's copy button so a copy reaches past the loaded pages. | `components/detailShared.jsx` |
 | `usePagedRowSlots` | A paged list that isn't a `TransactionListTable`. | `lib/usePagedRowSlots.js` |
 | `useTransactionTableLayout` | The column order and widths of a `TransactionListTable`. | `lib/transactionTablePreferences.js` |
@@ -94,7 +94,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `SplitButton` | A common action with its alternatives behind a caret. | `components/SplitButton.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
-| `ActionMenu` + `ActionMenuButton` | The `⋯` menu of rarely used actions, opened from a button (`anchorElement`) or at the pointer (`anchorPoint`). | `components/ActionMenu.jsx` |
+| `ActionMenu` + `ActionMenuButton` | Every pop-up menu: the `⋯` menu of rarely used actions, a right-click menu (`anchorPoint`), a split button's caret, a short list to open one of. Plain, checked, disabled-with-reason and danger items, and arrow-key navigation. | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 | `startPointerDrag` + `useDropZone` | Dragging an item onto a target, by mouse or by finger. | `lib/pointerDrag.js` |
 | `trackPointer` | A handle that follows a press: a splitter, a resize grip, a panel header. | `lib/pointerDrag.js` |

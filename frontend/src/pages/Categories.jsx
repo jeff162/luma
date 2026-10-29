@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
@@ -26,6 +26,7 @@ import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import { ActionMenu } from '../components/ActionMenu.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
@@ -249,215 +250,39 @@ function ContextMenu({
   onDelete,
   onClose,
 }) {
-  const ref = useRef(null)
-  const [menuHeight, setMenuHeight] = useState(0)
-  useDismissibleLayer({
-    open: true,
-    onClose,
-    refs: [ref],
-  })
-
-  useLayoutEffect(() => {
-    if (!ref.current) return
-    setMenuHeight(ref.current.getBoundingClientRect().height || 0)
-  }, [target])
-
-  const menuW = 220
-  const viewportPadding = 8
-  const left = Math.max(viewportPadding, Math.min(x, window.innerWidth - menuW - viewportPadding))
-  const wouldOverflowBottom = menuHeight > 0 && y + menuHeight + viewportPadding > window.innerHeight
-  const top = wouldOverflowBottom
-    ? Math.max(viewportPadding, y - menuHeight)
-    : Math.max(viewportPadding, Math.min(y, window.innerHeight - menuHeight - viewportPadding))
-  const itemStyle = {
-    padding: '4px 11px',
-    fontSize: 12,
-    cursor: 'pointer',
-    borderRadius: 5,
-    display: 'block',
-    width: '100%',
-    textAlign: 'left',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text)',
-  }
-  const divider = <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
-
+  const nothingSelected = selectionCount === 0 ? 'Select categories first' : ''
+  const items = bulkSelectMode ? [
+    {
+      label: `Move to here${target.groupName ? ` (${target.groupName})` : ''}`,
+      onClick: () => onMoveHere(target),
+      disabled: !canMoveHere,
+      disabledReason: nothingSelected || 'Right-click a group to move the selection into it',
+    },
+    { label: 'Bulk delete', onClick: onBulkDelete, disabled: selectionCount === 0, disabledReason: nothingSelected },
+    { label: 'Cancel', onClick: onCancelBulkSelect, separatorBefore: true },
+  ] : [
+    target.groupId
+      ? { label: `+ Add category to "${target.groupName}"`, onClick: () => onAddCategory(target) }
+      : { label: '+ Add category', disabled: true, disabledReason: 'Right-click a group to add a category to it' },
+    { label: `+ New ${SECTION_META[target.sectionType].label.toLowerCase()} group`, onClick: () => onAddGroup(target) },
+    { label: 'Expand', onClick: () => onExpandAll(target), separatorBefore: true },
+    { label: 'Collapse', onClick: () => onCollapseAll(target) },
+    { label: 'Alphabetize', onClick: () => onAlphabetize(target) },
+    target.categoryId ? { label: 'Add categorization rule', onClick: () => onAddRule(target) } : null,
+    { label: 'Bulk select', onClick: () => onStartBulkSelect(target), separatorBefore: true },
+    target.removableId
+      ? { label: 'Remove', onClick: () => onDelete(target), danger: target.removeInUse, separatorBefore: true }
+      : null,
+  ]
   return (
-    <div
-      ref={ref}
-      style={{
-        position: 'fixed',
-        left,
-        top,
-        zIndex: 500,
-        visibility: menuHeight ? 'visible' : 'hidden',
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        padding: 3,
-        boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-        minWidth: menuW,
-      }}
-    >
-      {bulkSelectMode ? (
-        <>
-          {selectionCount > 0 ? (
-            <>
-              {canMoveHere ? (
-                <button
-                  style={itemStyle}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-                  onMouseDown={e => {
-                    e.preventDefault()
-                    onMoveHere(target)
-                  }}
-                >
-                  Move to here{target.groupName ? ` (${target.groupName})` : ''}
-                </button>
-              ) : (
-                <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
-                  Move to here — right-click a group
-                </div>
-              )}
-              <button
-                style={itemStyle}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-                onMouseDown={e => {
-                  e.preventDefault()
-                  onBulkDelete()
-                }}
-              >
-                Bulk delete
-              </button>
-            </>
-          ) : (
-            <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
-              Select categories, then choose an action
-            </div>
-          )}
-          {divider}
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onCancelBulkSelect()
-            }}
-          >
-            Cancel
-          </button>
-        </>
-      ) : (
-        <>
-          {target.groupId ? (
-            <button
-              style={itemStyle}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onAddCategory(target)
-              }}
-            >
-              + Add category to &quot;{target.groupName}&quot;
-            </button>
-          ) : (
-            <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.55 }}>
-              + Add category (right-click a group)
-            </div>
-          )}
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onAddGroup(target)
-            }}
-          >
-            + New {SECTION_META[target.sectionType].label.toLowerCase()} group
-          </button>
-
-          {divider}
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onExpandAll(target)
-            }}
-          >
-            Expand
-          </button>
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onCollapseAll(target)
-            }}
-          >
-            Collapse
-          </button>
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onAlphabetize(target)
-            }}
-          >
-            Alphabetize
-          </button>
-          {target.categoryId ? (
-            <button
-              style={itemStyle}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onAddRule(target)
-              }}
-            >
-              Add categorization rule
-            </button>
-          ) : null}
-          {target.removableId ? (
-            <button
-              style={{ ...itemStyle, color: target.removeInUse ? 'var(--danger)' : 'var(--text)' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onDelete(target)
-              }}
-            >
-              Remove
-            </button>
-          ) : null}
-
-          {divider}
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-            onMouseDown={e => {
-              e.preventDefault()
-              onStartBulkSelect(target)
-            }}
-          >
-            Bulk select
-          </button>
-        </>
-      )}
-    </div>
+    <ActionMenu
+      anchorPoint={{ x, y }}
+      align="start"
+      minWidth={220}
+      label="Category actions"
+      onClose={onClose}
+      items={items}
+    />
   )
 }
 

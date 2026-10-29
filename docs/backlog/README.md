@@ -48,9 +48,6 @@ scale — rather than by feature.
   (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
   `txn`; the revisit threshold is roughly 50,000 rows.
-- [menu-consolidation.md](menu-consolidation.md) — **not started.** Four separate pop-up menu
-  implementations, each with its own rows, hover and placement; settle one shell and row and move them
-  onto it.
 - [transaction-attachments.md](transaction-attachments.md) — **reduced 2026-09-03 to the unbuilt
   extraction tiers.** Phase 1 shipped 2026-08-24 — the `document` table and on-disk store, the
   format-agnostic ingestion seam (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text

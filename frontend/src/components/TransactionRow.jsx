@@ -19,6 +19,7 @@ import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { ActionMenu } from './ActionMenu.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton, HighlightedText, MatchExcerpt } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields.js'
@@ -137,77 +138,41 @@ export function useContextMenu() {
 }
 
 export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onOpenSplit, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
-  const ref = useRef(null)
-  useDismissibleLayer({
-    open: !!menu,
-    onClose,
-    refs: [ref],
-  })
-
-  const x = Math.min(menu.x, window.innerWidth - 180)
-  const y = Math.min(menu.y, window.innerHeight - 240)
-
-  const item = (label, onClick, danger) => (
-    <div
-      onClick={() => { onClick(); onClose() }}
-      style={{
-        padding: '5px 14px', cursor: 'pointer', fontSize: 13,
-        color: danger ? 'var(--danger)' : 'var(--text)',
-        borderRadius: 6,
-      }}
-      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-    >
-      {label}
-    </div>
-  )
-
+  const { txn } = menu
+  // Recurring: a member edits/views its series; a row the user previously removed offers a targeted
+  // restore back into that same series; otherwise "Mark as recurring…" (which starts a new one).
+  const restorable = onRestoreRecurring && !txn.recurring_series_id && txn.recurring_excluded_series_id
+  const items = [
+    { label: '✎ Edit transaction…', onClick: () => onOpenDetail(txn) },
+    { label: ruleActionLabel, onClick: () => onOpenRule(txn) },
+    // Named for what the row ends up as, not for the mechanism: an ordinary row is being divided, a
+    // split one is being adjusted. Sits with the rule item because both are categorization.
+    onOpenSplit ? { label: txn.is_split ? '◧ Edit split…' : '◧ Split…', onClick: () => onOpenSplit(txn) } : null,
+    restorable ? { label: '↻ Restore to recurring series', onClick: () => onRestoreRecurring(txn) } : null,
+    !restorable && onMarkRecurring ? {
+      label: txn.recurring_series_id
+        ? (txn.recurring_rule_id ? '↻ Edit recurring rule…' : '↻ View recurring series')
+        : '↻ Mark as recurring…',
+      onClick: () => onMarkRecurring(txn),
+    } : null,
+    onRemoveFromRecurring && txn.recurring_series_id
+      ? { label: '↻ Remove from recurring series', onClick: () => onRemoveFromRecurring(txn) }
+      : null,
+    { label: txn.notes ? '📝 Edit note' : '📝 Add note', onClick: () => onEditNote(txn), separatorBefore: true },
+    txn.notes ? { label: 'Remove note', onClick: () => onEditNote(txn, true), danger: true } : null,
+    onEditTags ? { label: '🏷 Tags…', onClick: () => onEditTags(txn) } : null,
+    onMarkReviewed && txn.needs_review ? { label: '✓ Mark reviewed', onClick: () => onMarkReviewed(txn) } : null,
+    onTrash ? { label: '🗑 Send to trash…', onClick: () => onTrash(txn), danger: true, separatorBefore: true } : null,
+  ]
   return (
-    <div
-      ref={ref}
-      style={{
-        position: 'fixed', zIndex: 600, left: x, top: y,
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-        padding: '4px', minWidth: 160,
-      }}
-    >
-      {item('✎ Edit transaction…', () => onOpenDetail(menu.txn))}
-      {item(ruleActionLabel, () => onOpenRule(menu.txn))}
-      {/* Named for what the row ends up as, not for the mechanism: an ordinary row is being divided,
-          a split one is being adjusted. Sits with the rule item because both are categorization. */}
-      {onOpenSplit ? item(
-        menu.txn.is_split ? '◧ Edit split…' : '◧ Split…',
-        () => onOpenSplit(menu.txn),
-      ) : null}
-      {/* Recurring: a member edits/views its series; a row the user previously removed offers a targeted
-          restore back into that same series; otherwise "Mark as recurring…" (which starts a new one). */}
-      {onRestoreRecurring && !menu.txn.recurring_series_id && menu.txn.recurring_excluded_series_id
-        ? item('↻ Restore to recurring series', () => onRestoreRecurring(menu.txn))
-        : (onMarkRecurring ? item(
-          menu.txn.recurring_series_id
-            ? (menu.txn.recurring_rule_id ? '↻ Edit recurring rule…' : '↻ View recurring series')
-            : '↻ Mark as recurring…',
-          () => onMarkRecurring(menu.txn),
-        ) : null)}
-      {onRemoveFromRecurring && menu.txn.recurring_series_id
-        ? item('↻ Remove from recurring series', () => onRemoveFromRecurring(menu.txn))
-        : null}
-      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-      {item(
-        menu.txn.notes ? '📝 Edit note' : '📝 Add note',
-        () => onEditNote(menu.txn)
-      )}
-      {menu.txn.notes && item('Remove note', () => onEditNote(menu.txn, true), true)}
-      {onEditTags ? item('🏷 Tags…', () => onEditTags(menu.txn)) : null}
-      {onMarkReviewed && menu.txn.needs_review ? item('✓ Mark reviewed', () => onMarkReviewed(menu.txn)) : null}
-      {onTrash ? (
-        <>
-          <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-          {item('🗑 Send to trash…', () => onTrash(menu.txn), true)}
-        </>
-      ) : null}
-    </div>
+    <ActionMenu
+      anchorPoint={{ x: menu.x, y: menu.y }}
+      align="start"
+      minWidth={160}
+      label="Transaction actions"
+      onClose={onClose}
+      items={items}
+    />
   )
 }
 

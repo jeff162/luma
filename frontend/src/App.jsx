@@ -62,6 +62,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
+import { ActionMenu } from './components/ActionMenu.jsx'
 import { AppConfirmDialog, AppDialog, Button, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
@@ -591,16 +592,9 @@ function LocalPreferenceProfileScreen({
   // (it renders as a full-screen route, so a dialog rendered by the parent app tree would be hidden).
   const [pendingDelete, setPendingDelete] = useState(null)
   const deletingSoleVaultMember = useSoleVaultMember(pendingDelete?.id, () => api.getIdentities().then(r => r.identities))
-  const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
   const trimmedName = name.trim()
-
-  useDismissibleLayer({
-    open: !!menu,
-    onClose: () => setMenu(null),
-    refs: [menuRef],
-  })
 
   // First-run data-entry choices. Each card creates the user and sends them once to that surface; the
   // catch-all completion contract is { name, destination, loadDemo } (see handleCompleteWelcomeSetup).
@@ -987,64 +981,23 @@ function LocalPreferenceProfileScreen({
         )}
       </div>
       {menu ? (
-        <div
-          ref={menuRef}
-          onMouseDown={e => e.stopPropagation()}
-          style={{
-            position: 'fixed',
-            left: Math.min(menu.x, window.innerWidth - 160),
-            top: Math.min(menu.y, window.innerHeight - 100),
-            zIndex: 20,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 10,
-            boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-            padding: 4,
-            minWidth: 150,
-          }}
-        >
-          <button
-            onClick={() => {
-              setEditingId(menu.profile.id)
-              setEditingName(menu.profile.name)
-              setMenu(null)
-            }}
-            style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'left',
-              background: 'none',
-              border: 'none',
-              color: 'var(--text)',
-              fontSize: 13,
-              padding: '8px 10px',
-              borderRadius: 6,
-              cursor: 'pointer',
-            }}
-          >
-            Rename
-          </button>
-          <button
-            onClick={() => {
-              setPendingDelete(menu.profile)
-              setMenu(null)
-            }}
-            style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'left',
-              background: 'none',
-              border: 'none',
-              color: 'var(--danger)',
-              fontSize: 13,
-              padding: '8px 10px',
-              borderRadius: 6,
-              cursor: 'pointer',
-            }}
-          >
-            Delete
-          </button>
-        </div>
+        <ActionMenu
+          anchorPoint={menu}
+          align="start"
+          minWidth={150}
+          label="User actions"
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: 'Rename',
+              onClick: () => {
+                setEditingId(menu.profile.id)
+                setEditingName(menu.profile.name)
+              },
+            },
+            { label: 'Delete', danger: true, separatorBefore: true, onClick: () => setPendingDelete(menu.profile) },
+          ]}
+        />
       ) : null}
       {pendingDelete ? (
         <AppConfirmDialog
@@ -1165,7 +1118,6 @@ export default function App() {
   const [startupRouteApplied, setStartupRouteApplied] = useState(false)
   const [bootPreferences, setBootPreferences] = useState(null)
   const [bootPreferenceSubjectId, setBootPreferenceSubjectId] = useState('')
-  const navProfileMenuRef = useRef(null)
   const recurringAutoScanScopeRef = useRef(null)
   const savedStartupRouteRef = useRef('')
   const savedStartupRouteSubjectRef = useRef('')
@@ -1235,12 +1187,6 @@ export default function App() {
       setStartupRouteApplied(true)
     }
   }
-
-  useDismissibleLayer({
-    open: !!navProfileMenu,
-    onClose: () => setNavProfileMenu(null),
-    refs: [navProfileMenuRef],
-  })
 
   // Before anything else, and unconditionally: a backend that stops does so regardless of whether
   // anyone is signed in, and the tab that has to be told may be sitting on the sign-in screen. The
@@ -2189,49 +2135,25 @@ export default function App() {
                                   </div>
                                 </div>
                               </div>
-                              {navProfileMenu && activeLocalProfile && (
-                                <div
-                                  ref={navProfileMenuRef}
-                                  onMouseDown={e => e.stopPropagation()}
-                                  style={{
-                                    position: 'fixed',
-                                    left: Math.min(navProfileMenu.x, window.innerWidth - 160),
-                                    top: Math.min(navProfileMenu.y, window.innerHeight - 100),
-                                    zIndex: 30,
-                                    background: 'var(--surface)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 10,
-                                    boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-                                    padding: 4,
-                                    minWidth: 150,
-                                  }}
-                                >
-                                  <button
-                                    onClick={() => {
-                                      setNavProfileMenu(null)
+                              {navProfileMenu && activeLocalProfile ? (
+                                <ActionMenu
+                                  anchorPoint={navProfileMenu}
+                                  align="start"
+                                  minWidth={150}
+                                  label="User actions"
+                                  onClose={() => setNavProfileMenu(null)}
+                                  items={[{
+                                    label: 'Rename',
+                                    onClick: () => {
                                       // The inline editor has no room in the icon column, so a rename from a
                                       // collapsed pane opens it.
                                       setNavCollapsed(false)
                                       setNavProfileDraft(activeLocalProfile.name)
                                       setNavProfileEditing(true)
-                                    }}
-                                    style={{
-                                      display: 'block',
-                                      width: '100%',
-                                      textAlign: 'left',
-                                      background: 'none',
-                                      border: 'none',
-                                      borderRadius: 8,
-                                      padding: '8px 10px',
-                                      fontSize: 13,
-                                      cursor: 'pointer',
-                                      color: 'var(--text)',
-                                    }}
-                                  >
-                                    Rename
-                                  </button>
-                                </div>
-                              )}
+                                    },
+                                  }]}
+                                />
+                              ) : null}
                             </SyncStatusProvider>
                           </VaultGateProvider>
                         </ImportedCategoryWorkspaceProvider>

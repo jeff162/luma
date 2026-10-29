@@ -21,6 +21,7 @@ import {
   reconcileSnapshotGroupsWithCategories,
 } from '../lib/categoryImportState.js'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
+import { ActionMenu } from './ActionMenu.jsx'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 
 export { createCategoryImportDraftState }
@@ -592,9 +593,6 @@ export default function CategoryImportWorkspace({
     rightPanelScrollRef.current = element
     rightPanelDropRef(element)
   }, [rightPanelDropRef])
-  const panelMenuRef = useRef(null)
-  const groupMenuRef = useRef(null)
-  const sourceMenuRef = useRef(null)
   const floatingGroupDraftRef = useRef(null)
   const [rightPanelHeight, setRightPanelHeight] = useState(720)
   const sourceValuesKey = useMemo(() => JSON.stringify(sourceValues || []), [sourceValues])
@@ -628,27 +626,6 @@ export default function CategoryImportWorkspace({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existingGroupsKey])
-
-  useDismissibleLayer({
-    open: !!panelMenu,
-    onClose: () => setPanelMenu(null),
-    refs: [panelMenuRef],
-    closeOnScrollResize: true,
-  })
-
-  useDismissibleLayer({
-    open: !!groupMenu,
-    onClose: () => setGroupMenu(null),
-    refs: [groupMenuRef],
-    closeOnScrollResize: true,
-  })
-
-  useDismissibleLayer({
-    open: !!sourceMenu,
-    onClose: () => setSourceMenu(null),
-    refs: [sourceMenuRef],
-    closeOnScrollResize: true,
-  })
 
   useDismissibleLayer({
     open: !!floatingGroupDraft,
@@ -1610,176 +1587,48 @@ export default function CategoryImportWorkspace({
           </div>
         </div>
         {panelMenu ? (
-          <div
-            ref={panelMenuRef}
-            style={{
-              position: 'fixed',
-              left: panelMenu.x,
-              top: panelMenu.y,
-              zIndex: 1300,
-              minWidth: 170,
-              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 86%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              boxShadow: '0 18px 42px rgba(15, 23, 42, 0.32)',
-              padding: 6,
-            }}
-            onMouseDown={event => event.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                startFloatingGroupDraft(panelMenu.sectionType, panelMenu.x, panelMenu.y)
-                setPanelMenu(null)
-              }}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text)',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              + New group
-            </button>
-            <div style={{ height: 1, background: 'color-mix(in srgb, var(--border) 82%, transparent)', margin: '4px 2px' }} />
-            <button
-              onClick={() => setAllGroupsCollapsed(panelMenu.sectionType, false)}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text)',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Expand all
-            </button>
-            <button
-              onClick={() => setAllGroupsCollapsed(panelMenu.sectionType, true)}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text)',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Collapse all
-            </button>
-          </div>
+          <ActionMenu
+            anchorPoint={panelMenu}
+            align="start"
+            minWidth={170}
+            label="Group actions"
+            onClose={() => setPanelMenu(null)}
+            items={[
+              { label: '+ New group', onClick: () => startFloatingGroupDraft(panelMenu.sectionType, panelMenu.x, panelMenu.y) },
+              { label: 'Expand all', onClick: () => setAllGroupsCollapsed(panelMenu.sectionType, false), separatorBefore: true },
+              { label: 'Collapse all', onClick: () => setAllGroupsCollapsed(panelMenu.sectionType, true) },
+            ]}
+          />
         ) : null}
-        {groupMenu ? (
-          <div
-            ref={groupMenuRef}
-            style={{
-              position: 'fixed',
-              left: groupMenu.x,
-              top: groupMenu.y,
-              zIndex: 1300,
-              minWidth: 170,
-              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 86%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              boxShadow: '0 18px 42px rgba(15, 23, 42, 0.32)',
-              padding: 6,
-            }}
-            onMouseDown={event => event.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                if (!activeGroupMenuGroup) return
-                toggleGroupCollapse(groupMenu.groupId)
-                setGroupMenu(null)
-              }}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text)',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {snapshot.collapsedGroups?.[groupMenu.groupId] ? 'Expand' : 'Collapse'}
-            </button>
-          </div>
+        {groupMenu && activeGroupMenuGroup ? (
+          <ActionMenu
+            anchorPoint={groupMenu}
+            align="start"
+            minWidth={170}
+            label="Group actions"
+            onClose={() => setGroupMenu(null)}
+            items={[{
+              label: snapshot.collapsedGroups?.[groupMenu.groupId] ? 'Expand' : 'Collapse',
+              onClick: () => toggleGroupCollapse(groupMenu.groupId),
+            }]}
+          />
         ) : null}
         {sourceMenu ? (
-          <div
-            ref={sourceMenuRef}
-            style={{
-              position: 'fixed',
-              left: sourceMenu.x,
-              top: sourceMenu.y,
-              zIndex: 1300,
-              minWidth: 168,
-              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 86%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              boxShadow: '0 18px 42px rgba(15, 23, 42, 0.32)',
-              padding: 6,
-            }}
-            onMouseDown={event => event.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                if (sourceMenu.mode === 'restore') restoreSelectedSources()
-                else moveSelectedSourcesToSetAside()
-              }}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text)',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {sourceMenu.mode === 'restore' ? 'Restore' : 'Set aside'}
-            </button>
-            {typeof onDeleteSources === 'function' ? (
-              <button
-                onClick={deleteSelectedSources}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--danger)',
-                  borderRadius: 8,
-                  padding: '8px 10px',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                Delete…
-              </button>
-            ) : null}
-          </div>
+          <ActionMenu
+            anchorPoint={sourceMenu}
+            align="start"
+            minWidth={168}
+            label="Category actions"
+            onClose={() => setSourceMenu(null)}
+            items={[
+              sourceMenu.mode === 'restore'
+                ? { label: 'Restore', onClick: restoreSelectedSources }
+                : { label: 'Set aside', onClick: moveSelectedSourcesToSetAside },
+              typeof onDeleteSources === 'function'
+                ? { label: 'Delete…', onClick: deleteSelectedSources, danger: true, separatorBefore: true }
+                : null,
+            ]}
+          />
         ) : null}
         {floatingGroupDraft ? (
           <div

@@ -153,16 +153,7 @@ function NotRecurringSplit({ onSuppress, onEnd }) {
     <SplitButton
       onClick={onSuppress}
       menuLabel="More options"
-      renderMenu={close => (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => { close(); onEnd() }}
-          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text)', padding: '6px 10px', borderRadius: 6 }}
-        >
-          Mark canceled
-        </button>
-      )}
+      menuItems={[{ label: 'Mark canceled', onClick: onEnd }]}
     >
       Not recurring
     </SplitButton>

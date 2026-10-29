@@ -11,7 +11,7 @@ test('an income group can be created while uncategorized income exists', async (
 
   try {
     await page.getByText('Income', { exact: true }).first().click({ button: 'right' })
-    await page.getByRole('button', { name: '+ New income group' }).click()
+    await page.getByRole('menuitem', { name: '+ New income group' }).click()
     await page.getByPlaceholder('Group name').fill(name)
     await page.getByPlaceholder('Group name').press('Enter')
 

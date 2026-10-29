@@ -6,9 +6,13 @@
 // the one styling hook carrying meaning — it marks an action with no way back, so a refactor that
 // dropped it would silently flatten the distinction between "delete this permanently" and the
 // reversible items sitting next to it.
+//
+// Keyboard is pinned too, since every menu in the app now gets it from here: arrows move through the
+// items and wrap, a disabled item is still reached (its reason is only readable that way), and closing
+// by choosing or by Escape puts focus back on the trigger so the keyboard user is not dropped on <body>.
 
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ActionMenu } from '../ActionMenu.jsx'
 
@@ -66,5 +70,64 @@ describe('ActionMenu', () => {
       <ActionMenu anchorElement={null} onClose={() => {}} items={[{ label: 'Rename', onClick: () => {} }]} />,
     )
     expect(container.innerHTML).toBe('')
+  })
+
+  it('moves through the items with the arrow keys, wrapping, and reaches disabled items', () => {
+    render(
+      <ActionMenu anchorPoint={{ x: 0, y: 0 }} onClose={() => {}} items={[
+        { label: 'Rename', onClick: () => {} },
+        { label: 'Fetch more history', onClick: () => {}, disabled: true, disabledReason: 'Nothing older' },
+        { label: 'Delete', onClick: () => {}, danger: true },
+      ]} />,
+    )
+    const menu = screen.getByRole('menu')
+    expect(document.activeElement).toBe(menu)
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Rename' }))
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Fetch more history' }))
+    fireEvent.keyDown(menu, { key: 'End' })
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Rename' }))
+    fireEvent.keyDown(menu, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Delete' }))
+  })
+
+  it('returns focus to the trigger when an item is chosen from the keyboard', async () => {
+    const user = userEvent.setup()
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    const onClick = vi.fn()
+    render(<ActionMenu anchorElement={trigger} onClose={() => {}} items={[{ label: 'Rename', onClick }]} />)
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' })
+    await user.keyboard('{Enter}')
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+
+  it('returns focus to the trigger on Escape', () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    const onClose = vi.fn()
+    render(<ActionMenu anchorElement={trigger} onClose={onClose} items={[{ label: 'Rename', onClick: () => {} }]} />)
+    expect(document.activeElement).toBe(screen.getByRole('menu'))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+
+  it('marks the current choice in a one-of-many menu', () => {
+    render(
+      <ActionMenu anchorPoint={{ x: 0, y: 0 }} onClose={() => {}} items={[
+        { label: 'Recurring', checked: true, onClick: () => {} },
+        { label: 'Split', checked: false, onClick: () => {} },
+      ]} />,
+    )
+    expect(screen.getByRole('menuitemradio', { name: 'Recurring' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('menuitemradio', { name: 'Split' }).getAttribute('aria-checked')).toBe('false')
   })
 })

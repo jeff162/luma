@@ -32,26 +32,15 @@ export default function AttributeFilterControl({ attributes, value, active, onCh
 
   // Picking always turns the filter on: reaching into the menu is itself the request to apply it, and
   // landing on a chosen-but-inert filter would read as the control having failed.
-  function renderMenu(close) {
-    if (options.length === 0) return <div style={{ padding: '6px 10px', fontSize: 13, color: 'var(--muted)' }}>None.</div>
-    return options.map(attribute => (
-      <div
-        key={attribute.key}
-        role="menuitemradio"
-        aria-checked={attribute.key === value}
-        onClick={() => { onChange({ attribute: attribute.key, active: true }); close() }}
-        title={attribute.description}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-          padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13,
-          background: attribute.key === value ? 'color-mix(in srgb, var(--accent) 22%, var(--surface2))' : 'transparent',
-        }}
-      >
-        <span>{attribute.label}</span>
-        {attribute.key === value && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-      </div>
-    ))
-  }
+  const menuItems = options.length === 0
+    ? [{ label: 'None', disabled: true }]
+    : options.map(attribute => ({
+      key: attribute.key,
+      label: attribute.label,
+      title: attribute.description,
+      checked: attribute.key === value,
+      onClick: () => onChange({ attribute: attribute.key, active: true }),
+    }))
 
   // Until something is picked there is nothing to toggle, so the whole button opens the picker.
   return (
@@ -63,7 +52,7 @@ export default function AttributeFilterControl({ attributes, value, active, onCh
         : 'Filter the ledger to one kind of transaction'}
       menuLabel={selected ? 'Choose what to filter on' : 'Filter the ledger by attribute'}
       menuMinWidth={260}
-      renderMenu={renderMenu}
+      menuItems={menuItems}
     >
       {selected ? `${on ? '✕ ' : ''}${selected.label}` : 'Only…'}
     </SplitButton>

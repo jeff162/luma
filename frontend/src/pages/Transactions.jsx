@@ -24,7 +24,7 @@ import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/us
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
-import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { ActionMenu } from '../components/ActionMenu.jsx'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -239,7 +239,6 @@ export default function Transactions() {
   })
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
-  const categoryHeaderMenuRef = useRef(null)
   // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
   // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
   // load effect / localStorage — the setter persists straight through the context.
@@ -249,12 +248,6 @@ export default function Transactions() {
   const [showSourceInCategorySlot, setShowSourceInCategorySlot] = useState(false)
   const totalDetailPanelCount = detailPanels.length + batchDetailPanels.length
   const multiDetailMode = totalDetailPanelCount > 1
-
-  useDismissibleLayer({
-    open: !!categoryHeaderMenu,
-    onClose: () => setCategoryHeaderMenu(null),
-    refs: [categoryHeaderMenuRef],
-  })
 
   function openDetailPanel(type, item) {
     if (!item?.id) return
@@ -1015,46 +1008,19 @@ export default function Transactions() {
 
         <TransactionRowActionsChrome controller={rowActions} />
 
-        {categoryHeaderMenu && (
-          <div
-            ref={categoryHeaderMenuRef}
-            style={{
-              position: 'fixed',
-              zIndex: 620,
-              left: Math.min(categoryHeaderMenu.x, window.innerWidth - 220),
-              top: Math.min(categoryHeaderMenu.y, window.innerHeight - 120),
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 10,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-              padding: 4,
-              minWidth: 200,
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setShowSourceInCategorySlot(value => !value)
-                setCategoryHeaderMenu(null)
-              }}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                padding: '8px 14px',
-                cursor: 'pointer',
-                fontSize: 13,
-                color: 'var(--text)',
-                borderRadius: 6,
-                border: 'none',
-                background: 'transparent',
-              }}
-              onMouseEnter={event => { event.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
-            >
-              {showSourceInCategorySlot ? 'Switch to category' : 'Switch to source'}
-            </button>
-          </div>
-        )}
+        {categoryHeaderMenu ? (
+          <ActionMenu
+            anchorPoint={categoryHeaderMenu}
+            align="start"
+            minWidth={200}
+            label="Column options"
+            onClose={() => setCategoryHeaderMenu(null)}
+            items={[{
+              label: showSourceInCategorySlot ? 'Switch to category' : 'Switch to source',
+              onClick: () => setShowSourceInCategorySlot(value => !value),
+            }]}
+          />
+        ) : null}
 
         {detailPanels.map((panel, index) => {
           if (panel.type === 'txn') {
