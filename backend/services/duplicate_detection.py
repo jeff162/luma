@@ -4822,7 +4822,7 @@ def reinstate_displaced_posted(conn: sqlite3.Connection, pending_id: str) -> Opt
 
     For a pending row about to leave the ledger: without this, the charge it stood in for would leave
     with it. A resolution chose the pending copy when the user kept it in the duplicate report, or when it
-    predates `_promote_posted_over_pending`."""
+    predates `promote_posted_over_pending`."""
     row = conn.execute(
         """
         SELECT id FROM txn

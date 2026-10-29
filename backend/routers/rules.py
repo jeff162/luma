@@ -797,7 +797,10 @@ def _resolve_matcher(clauses, alternatives, keyword_field) -> tuple[str, Optiona
     the canonical matcher and stores a match_expr; a single text (or neither list at all) is a plain
     single-substring rule with no expr."""
     if clauses is not None or alternatives is not None:
-        match_expr, derived = build_match_expr(clauses, alternatives)
+        try:
+            match_expr, derived = build_match_expr(clauses, alternatives)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
         if match_expr is not None:
             return derived, match_expr
         return (derived or (keyword_field or "").lower().strip()), None

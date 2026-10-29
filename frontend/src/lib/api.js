@@ -934,10 +934,6 @@ export const api = {
   // the same saved reports; only the current selection (spendingViewBy) stays per-user.
   getDashboardTagReports:  ()        => request('/tags/dashboard-reports'),
   saveDashboardTagReports: (reports) => request('/tags/dashboard-reports', { method: 'PUT', body: JSON.stringify({ reports }) }),
-  getOwnerSummary: (params = {}) => {
-    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
-    return request(`/owners/summary?${q}`)
-  },
   updateAccount: (id, data) => request(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // The mapping table's amounts. Parsed server-side by the same code the import runs, so the preview

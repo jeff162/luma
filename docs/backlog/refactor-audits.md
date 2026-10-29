@@ -9,9 +9,10 @@
 >    high-signal, 2026-07-03. Next scope: **backend**.
 > 2. **[Doc conformance](#doc-conformance-audit-data-modelmd)** — does the code do what
 >    `data-model.md` says it does. First run: 2026-10-15, twelve of the doc's seventeen sections.
->    Second run: 2026-10-15, the remaining five. **All seventeen are now covered; nothing is carried.**
->    Next scope: a re-run, which is worth it once the sections have moved — or the same lens over
->    `architecture.md`, whose cross-subsystem contracts have never had one.
+>    Second run: 2026-10-15, the remaining five. Third run: 2026-10-29, the subsections whose text
+>    changed since the second (rules, backups, import and dedupe, the facet registry). **Nothing is
+>    carried.** Next scope: the same lens over `architecture.md`, whose cross-subsystem contracts have
+>    never had one.
 
 ## Why this exists
 
@@ -73,6 +74,8 @@ Settings CRUD (`invalidateTags`). **Intentionally left**, each for a reason:
   (and ImportRuleSuggestions refetches after rule ops). Different shape; migrate only if it simplifies.
 - `pages/Categories.jsx` — the category-tag management context (own list + optimistic add). Migratable
   but lower value; do in a later pass.
+- `components/TagsDialog.jsx` — the tag management surface: fetches its own list and calls
+  `invalidateTags()` after each edit, the same shape as `Categories.jsx`. Migratable; lower value.
 - `components/TransactionDetail.jsx` — has a `providedAvailableTags` host-override path; a clean
   migration must serve both the fed and self-fetched cases. Worth doing, just branchier — next pass.
 
@@ -138,6 +141,13 @@ third run, because it is not what the first run's was:
 - **A veto is where a widened mechanism rots.** Refund pairing required a PayPal-shaped `Type`, so the
   CSV path the doc advertised paired nothing, silently. When a mechanism is documented as general and
   implemented against one source, the gate is usually a predicate borrowed from that source.
+
+### What the third run changed
+
+Two code defects and three stale claims, in the same two shapes as before. The starter rules were a
+second implementation of rule creation, with their own existence check, so they forked a second live
+rule beside the user's on one matcher. The matcher cap cut a fourth text silently, and a test asserted
+the cut. A test that encodes the defect is what a conformance audit is for: it read as coverage.
 
 ### Obstacles
 

@@ -303,7 +303,7 @@ describe('section order', () => {
     renderSection()
     await screen.findByRole('button', { name: 'Generate backup' })
 
-    const headings = ['Backup', 'Restore', 'Backup encryption keys']
+    const headings = ['Backup', 'Restore', 'Backup file encryption keys']
       .map(text => screen.getByText(text))
     const [backup, restore, keys] = headings
     // Node.compareDocumentPosition: 4 === the argument follows this node in the document.

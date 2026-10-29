@@ -427,8 +427,10 @@ flag (see [Soft duplicates](#soft-duplicates)).
   (`import_export/core.py`) does this for a file's Undo, a re-import replace, and the removal of a
   connection's synced data, and it reads `suspect_duplicate_of` before the sweep that clears dangling
   pointers. A detach, by contrast, leaves the canonical row in place and restores `auto_merge` only.
-- A row hard-rejected at import (`import_batch_duplicate`) was never inserted, so nothing restores it;
-  *Import anyway* on its card is the path.
+- A row hard-rejected at import (`import_batch_duplicate`) was never inserted, so no trash restore
+  reaches it. *Import anyway* on its card is the path, and when the import its verdict leaned on leaves
+  the ledger the row is judged again (`rejudge_orphaned_rejections`; `architecture.md` → *Records are
+  revisited*).
 
 ## Categories
 
@@ -641,7 +643,8 @@ category, a rename (`clean_name`), tags, a recurring series, or any combination.
   `contains`, in any order. It is how one rule claims the several descriptors one payee arrives under.
   A plain rule is a single `keyword`. Filters alone are stored as
   `{"op":"and","clauses":[{"type":"contains","text":"…"}]}`; with alternatives, as
-  `{"op":"any_and","any":[…],"all":[…]}`. `MAX_MATCH_CLAUSES` caps each list.
+  `{"op":"any_and","any":[…],"all":[…]}`. `MAX_MATCH_CLAUSES` caps each list, and a longer one is
+  refused rather than cut, since a dropped filter would store a broader rule than the one written.
 - **The text matched is the names as they arrived**: `merchant_name` and `raw_name`
   (`categorizer.name_match_text`), plus the import evidence for a `match_source_text` rule. Never
   `display_name`, which holds what a rule's `clean_name` or the user last wrote: matching it would let
@@ -799,7 +802,8 @@ carry the same actions (`_actions_agree`).
   category are left out; so are pending and trashed transactions, as evidence.
 - **`rule_overlap_dismissal`**, keyed by the finding's fingerprint, is the check's only stored answer.
   `rule_overlaps.DISMISSIBLE_KINDS` admits the kinds whose winner changes nothing (nestings and the two
-  benign variants) and the priority shadow, whose winner the user picked. A live amount overlap or co-match is settled only by the ordering's last terms:
+  benign variants), and the scope split and priority shadow, whose winner is decided by a limit or a
+  priority the user set. A live amount overlap or co-match is settled only by the ordering's last terms:
   reproducibly, but on no basis that is about the two rules. The key carries the pair and the
   redundancy verdict, so a dismissal lapses when the situation changes. It is not a foreign key; a
   dismissal whose pair dissolves stops matching. It is shared across users and rides the data backup.
@@ -835,9 +839,11 @@ unaffected.
 
 ### How rules come into being
 
-Three paths write `category_rule`, and all go through the matcher reconciliation above: turning a
-manual categorization into a rule; *Generate rules*, which derives suggestions from rows that arrived
-categorized by their file (see [Rule suggestions](#rule-suggestions)); and the opt-in starter rules.
+Four paths write `category_rule`, and all go through the matcher reconciliation above
+(`create_rule_core`): turning a manual categorization into a rule; *Generate rules*, which derives
+suggestions from rows that arrived categorized by their file (see [Rule suggestions](#rule-suggestions));
+the opt-in starter rules, which are created only where no live rule holds the matcher; and the managed
+money-movement `Type` rules.
 Rules mutate transactions, so both bulk paths are reviewed per rule before anything is created.
 
 ### Concurrent writes

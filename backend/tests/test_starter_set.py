@@ -9,6 +9,7 @@ from pathlib import Path
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.categories import GenerateStarterSet, generate_starter_set, list_starter_rules
+from backend.routers.rules import RuleCreate, create_rule_core
 from backend.services.categorizer import DEFAULT_RULE_SEEDS
 
 
@@ -84,6 +85,34 @@ class StarterSetTests(unittest.TestCase):
             again = generate_starter_set(GenerateStarterSet(include_leaves=True, rule_keywords=["netflix"]))
         self.assertEqual(again["categories_added"], 0)
         self.assertEqual(again["rules_added"], 0)
+
+    def _live_rules(self, keyword):
+        with self._use_db_path(), get_db() as conn:
+            return conn.execute(
+                "SELECT category_id FROM category_rule WHERE keyword = ? AND deleted_at IS NULL", (keyword,)
+            ).fetchall()
+
+    def test_a_users_rule_on_the_matcher_is_left_alone(self):
+        # One live rule per matcher: a starter rule must not fork a second one beside the user's.
+        with self._use_db_path():
+            generate_starter_set(GenerateStarterSet(include_leaves=True))
+            with get_db() as conn:
+                other = conn.execute(
+                    "SELECT id FROM category WHERE parent_id IS NOT NULL AND name <> 'Salary' LIMIT 1"
+                ).fetchone()["id"]
+                create_rule_core(conn, RuleCreate(keyword="payroll", category_id=other))
+            result = generate_starter_set(GenerateStarterSet(rule_keywords=["payroll"]))
+        self.assertEqual(result["rules_added"], 0)
+        self.assertEqual([row["category_id"] for row in self._live_rules("payroll")], [other])
+
+    def test_a_trashed_starter_rule_does_not_block_adding_it_again(self):
+        with self._use_db_path():
+            generate_starter_set(GenerateStarterSet(rule_keywords=["netflix"]))
+            with get_db() as conn:
+                conn.execute("UPDATE category_rule SET deleted_at = datetime('now') WHERE keyword = 'netflix'")
+            result = generate_starter_set(GenerateStarterSet(rule_keywords=["netflix"]))
+        self.assertEqual(result["rules_added"], 1)
+        self.assertEqual(len(self._live_rules("netflix")), 1)
 
 
 if __name__ == "__main__":

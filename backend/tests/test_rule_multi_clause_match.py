@@ -16,6 +16,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import (
     SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path,
 )
@@ -42,8 +44,13 @@ class BuildMatchExprUnitTests(unittest.TestCase):
         self.assertEqual(keyword, "amazon flash shoebox")  # sorted, lowercased, space-joined
         self.assertEqual(merchant_matcher(keyword, expr).filters, ("amazon", "flash", "shoebox"))
 
-    def test_normalize_dedupes_trims_and_caps_at_three(self):
-        self.assertEqual(normalize_match_clauses([" A ", "a", "b", "c", "d"]), ["a", "b", "c"])
+    def test_normalize_dedupes_and_trims(self):
+        self.assertEqual(normalize_match_clauses([" C ", "a", "c", "b"]), ["a", "b", "c"])
+
+    def test_a_fourth_text_is_refused_not_dropped(self):
+        # Dropping a filter would store a broader rule than the one written.
+        with self.assertRaises(ValueError):
+            normalize_match_clauses(["a", "b", "c", "d"])
 
     def test_clause_order_is_canonical(self):
         # Reordering the same clauses yields the same expr + keyword (identity-stable).
@@ -185,6 +192,13 @@ class MultiClauseMatchTests(unittest.TestCase):
         with self._use_db(), get_db() as conn:
             b = create_rule_core(conn, RuleCreate(keyword="", clauses=["flash", "amazon"], category_id=self.cat_b))
         self.assertEqual(b["status"], "duplicate", "reordered clauses share the canonical matcher")
+
+    def test_a_rule_over_the_clause_cap_is_refused(self):
+        with self.assertRaises(HTTPException) as raised:
+            self._rule(["amazon", "flash", "prime", "video"], self.cat_b)
+        self.assertEqual(raised.exception.status_code, 400)
+        with self._use_db(), get_db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0], 0)
 
     def test_multiclause_and_single_keyword_are_distinct_matchers(self):
         # A single contains-"amazon flash" and a two-clause {amazon, flash} derive the same keyword but mean

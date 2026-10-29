@@ -129,7 +129,10 @@ class MerchantMatcher(NamedTuple):
 def normalize_match_clauses(clauses) -> list[str]:
     """Canonicalize one list of raw matcher texts: trim, lowercase, drop blanks, de-duplicate, and sort.
     Both lists are order-independent, so the sorted list is the canonical form used for both storage and
-    matcher identity. Capped at MAX_MATCH_CLAUSES."""
+    matcher identity.
+
+    More than MAX_MATCH_CLAUSES texts is a ValueError rather than a truncation: dropping a filter would
+    store a rule broader than the one written, and dropping an alternative a narrower one."""
     seen: set[str] = set()
     out: list[str] = []
     for clause in (clauses or []):
@@ -138,8 +141,10 @@ def normalize_match_clauses(clauses) -> list[str]:
             continue
         seen.add(text)
         out.append(text)
+    if len(out) > MAX_MATCH_CLAUSES:
+        raise ValueError(f"A rule takes at most {MAX_MATCH_CLAUSES} texts in each list.")
     out.sort()
-    return out[:MAX_MATCH_CLAUSES]
+    return out
 
 
 def build_match_expr(clauses, alternatives=None) -> tuple[Optional[str], str]:
@@ -890,9 +895,15 @@ DEFAULT_RULE_SEEDS: list[tuple[str, str, float | None, float | None]] = [
 
 def seed_default_rules(conn: sqlite3.Connection, *, keywords: list[str] | None = None) -> int:
     """Seed built-in starter rules (opt-in). `keywords` optionally restricts seeding to a subset by
-    keyword (the user's checkbox selection); None seeds the whole catalog. Existing keyword+category
-    pairs are left untouched, so this is safe to re-run. Returns the number of rules actually created."""
-    import uuid
+    keyword (the user's checkbox selection); None seeds the whole catalog. Returns the number of rules
+    actually created.
+
+    Each goes through `create_rule_core`, so a starter rule is created only where no live rule holds its
+    matcher. A rule the user already has there is left as it is, whatever it files to, which also makes
+    this safe to re-run. A trashed rule does not hold its matcher."""
+    # Lazy import, as in `money_movement.create_money_movement_rules`: `rules` is a router that imports
+    # this module.
+    from backend.routers.rules import RuleCreate, create_rule_core
 
     def cat_id(name: str) -> str | None:
         # Rules target leaf categories; restrict to leaves so a group sharing a leaf's name isn't picked.
@@ -909,16 +920,9 @@ def seed_default_rules(conn: sqlite3.Connection, *, keywords: list[str] | None =
         cid = cat_id(cat_name)
         if not cid:
             continue
-        existing = conn.execute(
-            "SELECT id FROM category_rule WHERE keyword = ? AND category_id = ?",
-            (keyword, cid),
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                """INSERT INTO category_rule
-                   (id, category_id, keyword, amount_min, amount_max)
-                   VALUES (?,?,?,?,?)""",
-                (str(uuid.uuid4()), cid, keyword, amt_min, amt_max),
-            )
+        result = create_rule_core(
+            conn, RuleCreate(keyword=keyword, category_id=cid, amount_min=amt_min, amount_max=amt_max),
+        )
+        if result["status"] == "created":
             created += 1
     return created
