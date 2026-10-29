@@ -12,6 +12,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import FilterBar from '../FilterBar.jsx'
 import { FilterProvider, useFilters } from '../../lib/FilterContext.jsx'
+import { UserPreferencesProvider } from '../../lib/UserPreferencesContext.jsx'
 
 vi.mock('../../lib/api.js', () => ({
   api: new Proxy({}, { get: () => () => Promise.resolve([]) }),
@@ -27,10 +28,12 @@ function DateApplies({ applies }) {
 
 function renderBar(applies) {
   const tree = value => (
-    <FilterProvider>
-      <DateApplies applies={value} />
-      <FilterBar />
-    </FilterProvider>
+    <UserPreferencesProvider initialPreferences={{}}>
+      <FilterProvider>
+        <DateApplies applies={value} />
+        <FilterBar />
+      </FilterProvider>
+    </UserPreferencesProvider>
   )
   const view = render(tree(applies))
   return { ...view, setApplies: value => view.rerender(tree(value)), user: userEvent.setup() }

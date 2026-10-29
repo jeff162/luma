@@ -2313,9 +2313,9 @@ one facade.
 differ per person: columns, collapse and sort state, which dashboard view they prefer. State that
 describes the shared data lives in `import_workflow_state`, the workspace-wide store, because every
 user reads the same data and a restore into another profile would orphan a per-user copy. Examples of
-shared state: the category workspace draft (`system_category_workspace_draft`), the saved tag reports
-(`system_dashboard_tag_reports`) and the ledger currency. Which report a user has open
-(`ui.dashboard.spendingViewBy`) is per user.
+shared state: the category workspace draft (`system_category_workspace_draft`) and the ledger currency.
+Saved tag reports (`ui.dashboard.tagReports`) and saved filters (`ui.filterBar.savedFilters`) are per
+user: they are each person's own views of the data, not part of it.
 
 **How dates and numbers are written is per person; the currency is not.** The currency says what the
 stored numbers mean, so it is shared (*One ledger currency*). The date order (`ui.format.dateOrder`) and

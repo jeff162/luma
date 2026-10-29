@@ -4,38 +4,38 @@
 /*
  * FilterBar owns only the local popover UI. The actual filter meaning lives in FilterContext so every page can
  * interpret the same active chips through its own API calls while the user's current slice survives navigation.
+ * Saved filters (`lib/savedFilters.js`) lead the bar: clicking one replaces the filters in force, and Save
+ * beside Clear all names the filters in force as a new one.
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
-import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
-         startOfYear, endOfYear } from 'date-fns'
+import { createPortal } from 'react-dom'
+import { format, startOfMonth } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
 import { EMPTY_AMOUNT_FILTER, amountFilterIsActive } from '../lib/filterParams.js'
-import { CategoryMarker, Button, IconButton, LinkButton } from './ui.jsx'
+import {
+  AppConfirmDialog, AppTextEntryDialog, Button, CategoryMarker, FilterChip as ToggleChip, IconButton, LinkButton,
+} from './ui.jsx'
+import { ActionMenu, ActionMenuButton } from './ActionMenu.jsx'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import {
+  makeSavedFilterId, reconcileSelections, savedFilterContent, savedFilterDate, savedFilterMatches, tidySavedFilterName,
+  useSavedFilters,
+} from '../lib/savedFilters.js'
 import { AmountCondition, amountConditionSummary } from './RuleForm.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { TagGlyph } from './TagUi.jsx'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { formatDateRange } from '../lib/utils.js'
+import { DATE_PRESETS, datePresetFilter } from '../lib/datePresets.js'
+import {
+  accountSelection, attributeSelection, categorySelection, groupSelection, ownerSelection, tagSelection,
+} from '../lib/filterSelections.js'
 
-const fmt   = d => format(d, 'yyyy-MM-dd')
+const fmt = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
-
-const DATE_PRESETS = [
-  { label: 'Month to date',   fn: () => ({ start: fmt(startOfMonth(today)), end: fmt(today) }) },
-  { label: 'Last month',      fn: () => ({ start: fmt(startOfMonth(subMonths(today,1))), end: fmt(endOfMonth(subMonths(today,1))) }) },
-  { label: 'Year to date',    fn: () => ({ start: fmt(startOfYear(today)),  end: fmt(today) }) },
-  { label: 'Last year',       fn: () => ({ start: fmt(startOfYear(subYears(today,1))), end: fmt(endOfYear(subYears(today,1))) }) },
-  { label: 'Past 12 months',  fn: () => ({ start: fmt(subYears(today, 1)),  end: fmt(today) }) },
-  { label: 'Last 30 days',    fn: () => ({ start: fmt(subDays(today, 29)),  end: fmt(today) }) },
-  { label: 'Last 60 days',    fn: () => ({ start: fmt(subDays(today, 59)),  end: fmt(today) }) },
-  { label: 'Last 90 days',    fn: () => ({ start: fmt(subDays(today, 89)),  end: fmt(today) }) },
-  // Explicit all-time: a truthy value with no range, so it *overrides* a page's default period (unlike
-  // "unset", which falls back to the default). This is the discoverable form of the old Clear button.
-  { label: 'All time',        fn: () => ({ start: null, end: null }) },
-]
 
 function dateLabel(date) {
   if (!date) return 'Date'
@@ -145,16 +145,16 @@ function DatePickerPopover({ onClose }) {
   // even before the user has picked anything explicitly.
   const effectivePreset = getDate()?.preset
   const [customStart, setCustomStart] = useState(filters.date?.start || fmt(startOfMonth(today)))
-  const [customEnd,   setCustomEnd]   = useState(filters.date?.end   || fmt(today))
+  const [customEnd, setCustomEnd] = useState(filters.date?.end || fmt(today))
 
   function applyPreset(p) {
-    setDate({ ...p.fn(), preset: p.label })
+    setDate(datePresetFilter(p.label))
     onClose()
   }
 
   function applyCustom() {
     const s = customStart < customEnd ? customStart : customEnd
-    const e = customStart < customEnd ? customEnd   : customStart
+    const e = customStart < customEnd ? customEnd : customStart
     setDate({ start: s, end: e, preset: null })
     onClose()
   }
@@ -179,8 +179,10 @@ function DatePickerPopover({ onClose }) {
         })}
       </div>
       <div style={{ borderTop: '1px solid var(--border)', padding: '10px 14px' }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6,
-          textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custom range</div>
+        <div style={{
+          fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6,
+          textTransform: 'uppercase', letterSpacing: '0.05em'
+        }}>Custom range</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input
             type="date"
@@ -212,12 +214,12 @@ function DatePickerPopover({ onClose }) {
 }
 
 const FILTER_TABS = [
-  { id: 'accounts',   label: 'Accounts'   },
+  { id: 'accounts', label: 'Accounts' },
   // Groups and Categories are one collapsible tree now — the old standalone Groups tab folded in here.
   { id: 'categories', label: 'Categories' },
-  { id: 'tags',       label: 'Tags'       },
-  { id: 'owners',     label: 'Owners'     },
-  { id: 'payee',      label: 'Payee'      },
+  { id: 'tags', label: 'Tags' },
+  { id: 'owners', label: 'Owners' },
+  { id: 'payee', label: 'Payee' },
   // What a row *is* (has an attachment, is recurring, needs review) rather than what it is filed
   // under. The vocabulary comes from the backend so this tab never keeps its own copy — see
   // services/transaction_attributes.py.
@@ -226,16 +228,16 @@ const FILTER_TABS = [
 
 function FilterPopover({ onClose }) {
   const { filters, addSelection, addSelections, removeSelection, removeSelections, clearSelections } = useFilters()
-  const [tab, setTab]                       = useState('accounts')
-  const [categories, setCategories]         = useState([])
-  const [accounts, setAccounts]             = useState([])
-  const [owners, setOwners]                 = useState([])
-  const [tags, setTags]                     = useState([])
-  const [attributes, setAttributes]         = useState([])
-  const [payeeSearch, setPayeeSearch]       = useState('')
+  const [tab, setTab] = useState('accounts')
+  const [categories, setCategories] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [owners, setOwners] = useState([])
+  const [tags, setTags] = useState([])
+  const [attributes, setAttributes] = useState([])
+  const [payeeSearch, setPayeeSearch] = useState('')
   const [payeeSuggestions, setPayeeSuggestions] = useState([])
   // Category tree UI state (the merged Groups+Categories tab): per-group collapse + a type-to-filter box.
-  const [catSearch, setCatSearch]           = useState('')
+  const [catSearch, setCatSearch] = useState('')
   const [expandedGroups, setExpandedGroups] = useState(() => new Set())
 
   useEffect(() => {
@@ -308,7 +310,7 @@ function FilterPopover({ onClose }) {
         // A top-level group is income or expense (NULL defaults to expense, matching the backend) — this
         // is what nests each group under the right super-category in the tree.
         categoryType: g.category_type === 'income' ? 'income' : 'expense',
-        groupSel: { type: 'group', id: g.id, label: g.name },
+        groupSel: groupSelection(g),
         leaves: [...lvs.filter(c => c.parent_id === g.id), ...syntheticLeaf],
       }
     })
@@ -338,7 +340,7 @@ function FilterPopover({ onClose }) {
 
   // `muted` when the account's whole type is already included, as a leaf under a selected group is.
   function renderAccountRow(a, muted) {
-    const sel = { type: 'account', id: a.id, label: `${a.name}${a.mask ? ` ···${a.mask}` : ''}` }
+    const sel = accountSelection(a)
     return (
       <div key={a.id} onClick={() => pickInclude(sel)} style={{
         ...rowStyle,
@@ -426,7 +428,7 @@ function FilterPopover({ onClose }) {
                   <RowTrailing mode={selectionOf(node.groupId)?.mode} excludable onExclude={() => pickExclude(node.groupSel)} />
                 </div>
                 {expanded && shownLeaves.map(c => {
-                  const sel = { type: 'category', id: c.id, label: c.name }
+                  const sel = categorySelection(c)
                   return (
                     <div key={c.id} onClick={() => pickInclude(sel)} style={{ ...rowStyle, paddingLeft: 46, background: rowBg(c.id), justifyContent: 'space-between' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -495,7 +497,7 @@ function FilterPopover({ onClose }) {
               No owners defined — add them on the Accounts page.
             </div>
           ) : owners.map(o => {
-            const sel = { type: 'owner', id: o.id, label: o.name }
+            const sel = ownerSelection(o)
             return (
               <div key={o.id} onClick={() => pickInclude(sel)} style={{
                 ...rowStyle,
@@ -530,7 +532,7 @@ function FilterPopover({ onClose }) {
                   No tags yet — create them under Tags on the Transactions page.
                 </div>
               ) : tags.map(tag => {
-                const sel = { type: 'tag', id: tag.id, label: tag.name, color: tag.color }
+                const sel = tagSelection(tag)
                 return (
                   <div key={tag.id} onClick={() => pickInclude(sel)} style={{
                     ...rowStyle,
@@ -587,7 +589,7 @@ function FilterPopover({ onClose }) {
             // tab already offers that bucket, and two identical-looking controls in one popover is a
             // question the user should never have to answer.
             attributes.filter(a => a.in_filter_bar).map(attribute => {
-              const sel = { type: 'attribute', id: attribute.key, label: attribute.label }
+              const sel = attributeSelection(attribute)
               return (
                 <div key={attribute.key} onClick={() => pickInclude(sel)} title={attribute.description} style={{
                   ...rowStyle,
@@ -618,10 +620,13 @@ function FilterPopover({ onClose }) {
 function FilterChip({ sel, onRemove, onFlipMode }) {
   const excluded = sel.mode === 'exclude'
   const accent = excluded ? 'var(--danger)' : 'var(--accent2)'
+  const modeHint = excluded ? 'Excluded (is not) — click to include' : 'Included — click to exclude'
+  // A saved filter's chip whose account, category, tag or owner has since been deleted (`savedFilters.js`).
+  const missingHint = excluded ? 'No longer exists, so it excludes nothing.' : 'No longer exists, so nothing matches it.'
   return (
     <span
       onClick={() => onFlipMode(sel.id)}
-      title={excluded ? 'Excluded (is not) — click to include' : 'Included — click to exclude'}
+      title={sel.missing ? `${missingHint} ${modeHint}` : modeHint}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         padding: '3px 8px', borderRadius: 99, fontSize: 12,
@@ -635,7 +640,8 @@ function FilterChip({ sel, onRemove, onFlipMode }) {
       }}>
       {excluded ? <span style={{ fontWeight: 700 }}>≠</span> : null}
       {sel.type === 'tag' && sel.color ? <TagGlyph color={sel.color} size={12} /> : null}
-      {sel.label}
+      <span style={sel.missing ? { textDecoration: 'line-through', opacity: 0.7 } : undefined}>{sel.label}</span>
+      {sel.missing ? <span style={{ fontStyle: 'italic', opacity: 0.85 }}>missing</span> : null}
       <IconButton size="compact" aria-label={`Remove ${sel.label}`} onClick={e => { e.stopPropagation(); onRemove(sel.id) }}>×</IconButton>
     </span>
   )
@@ -671,12 +677,35 @@ function AmountPopover({ onClose }) {
         onChange={setDraft}
         strictBounds
       />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12,
-        borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12,
+        borderTop: '1px solid var(--border)', paddingTop: 10
+      }}>
         <LinkButton tone="danger" onClick={clear} disabled={!active} style={{ fontSize: 13 }}>✕ Clear amount filter</LinkButton>
         <Button onClick={apply}>Apply</Button>
       </div>
     </Popover>
+  )
+}
+
+// The saved filters' toggle. Drawn rather than an emoji because the emoji set has no funnel, and the
+// 🔍 already names the Filter button.
+function FunnelIcon() {
+  return (
+    <svg aria-hidden="true" focusable="false" width={14} height={14} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <path d="M3 4h18l-7 8.5V19l-4 2v-8.5z" />
+    </svg>
+  )
+}
+
+function CountBadge({ count }) {
+  return (
+    <span style={{
+      background: 'var(--accent)', color: '#fff',
+      borderRadius: 99, fontSize: 11, fontWeight: 600,
+      padding: '1px 6px',
+    }}>{count}</span>
   )
 }
 
@@ -691,22 +720,172 @@ function FilterButton({ active, count, children, onClick, inapplicable = false, 
       style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', opacity: inapplicable ? 0.45 : 1 }}
     >
       {children}
-      {count > 0 && (
-        <span style={{
-          background: 'var(--accent)', color: '#fff',
-          borderRadius: 99, fontSize: 11, fontWeight: 600,
-          padding: '1px 6px',
-        }}>{count}</span>
-      )}
+      {count > 0 && <CountBadge count={count} />}
     </Button>
+  )
+}
+
+const SAVED_FILTERS_COLLAPSED_PREF_KEY = 'ui.filterBar.savedFiltersCollapsed'
+
+const sameName = (a, b) => tidySavedFilterName(a).toLowerCase() === tidySavedFilterName(b).toLowerCase()
+
+// The name prompt for saving and for renaming. A name another saved filter already has is refused, since two
+// chips with one name cannot be told apart.
+function SavedFilterNameDialog({ title, initialName = '', confirmLabel, otherNames, onSave, onCancel }) {
+  const [name, setName] = useState(initialName)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const trimmed = tidySavedFilterName(name)
+  const taken = otherNames.some(other => sameName(other, trimmed))
+  const unchanged = initialName !== '' && initialName.trim() === trimmed
+
+  async function confirm() {
+    setSaving(true)
+    try {
+      await onSave(trimmed)
+    } catch (e) {
+      setError(e?.message || 'The saved filter could not be saved.')
+      setSaving(false)
+    }
+  }
+
+  const problem = taken ? 'A saved filter with this name already exists.' : error
+  return createPortal(
+    <AppTextEntryDialog
+      title={title}
+      value={name}
+      onChange={value => { setName(value); setError(null) }}
+      placeholder="Saved filter name"
+      confirmLabel={saving ? 'Saving…' : confirmLabel}
+      confirmDisabled={!trimmed || taken || unchanged || saving}
+      onConfirm={confirm}
+      onCancel={onCancel}
+      width="min(380px, 100%)"
+      helpText={problem ? <span style={{ color: 'var(--danger)' }}>{problem}</span> : null}
+    />,
+    document.body,
+  )
+}
+
+// The saved filters as a row of chips, collapsible to a count. A chip applies its filter; its `⋯` menu (or a
+// right-click) renames it, writes the filters in force back into it, or deletes it.
+function SavedFilterChips({ savedFilters, updateSavedFilters }) {
+  const { filters, replaceFilters } = useFilters()
+  const [collapsed, setCollapsed] = useUserPreference(SAVED_FILTERS_COLLAPSED_PREF_KEY, false)
+  const [menu, setMenu] = useState(null)
+  const [renaming, setRenaming] = useState(null)
+  const [deleting, setDeleting] = useState(null)
+
+  const content = savedFilterContent(filters)
+  const hasFilters = !!(content.date || content.selections.length || content.amount)
+
+  async function apply(saved) {
+    const selections = await reconcileSelections(saved.selections || [])
+    replaceFilters({ date: savedFilterDate(saved.date), selections, amount: saved.amount })
+  }
+
+  function replaceWithCurrent(saved) {
+    updateSavedFilters(list => list.map(f => (f.id === saved.id ? { ...f, ...content } : f))).catch(() => { })
+  }
+
+  function menuItems(saved) {
+    const matches = savedFilterMatches(saved, filters)
+    return [
+      { label: 'Rename…', onClick: () => setRenaming(saved) },
+      {
+        label: 'Replace with current filters',
+        onClick: () => replaceWithCurrent(saved),
+        disabled: !hasFilters || matches,
+        disabledReason: !hasFilters ? 'No filters are set.' : 'Already the filters in force.',
+      },
+      { label: 'Delete…', onClick: () => setDeleting(saved), danger: true, separatorBefore: true },
+    ]
+  }
+
+  if (savedFilters.length === 0) return null
+  const menuTarget = menu && savedFilters.find(f => f.id === menu.id)
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', alignContent: 'center', gap: 6, flexWrap: 'wrap',
+      flex: '0 1 auto', maxWidth: '40%', paddingRight: 10, borderRight: '1px solid var(--border)',
+    }}>
+      <Button
+        variant="quiet"
+        size="compact"
+        pressed={!collapsed}
+        aria-expanded={!collapsed}
+        aria-label={`Saved filters (${savedFilters.length})`}
+        title={collapsed ? 'Show saved filters' : 'Hide saved filters'}
+        onClick={() => setCollapsed(!collapsed)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+      >
+        <FunnelIcon /> <CountBadge count={savedFilters.length} />
+      </Button>
+      {!collapsed && savedFilters.map(saved => (
+        <span key={saved.id} style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <ToggleChip
+            selected={savedFilterMatches(saved, filters)}
+            onClick={() => apply(saved)}
+            onContextMenu={e => { e.preventDefault(); setMenu({ id: saved.id, anchorPoint: { x: e.clientX, y: e.clientY } }) }}
+            title="Apply these filters in place of the current ones"
+          >
+            {saved.name}
+          </ToggleChip>
+          <ActionMenuButton
+            title={`Actions for ${saved.name}`}
+            open={menu?.id === saved.id && !!menu.anchorElement}
+            onOpen={anchorElement => setMenu({ id: saved.id, anchorElement })}
+          />
+        </span>
+      ))}
+      {menuTarget && (
+        <ActionMenu
+          anchorElement={menu.anchorElement || null}
+          anchorPoint={menu.anchorPoint || null}
+          label={`Actions for ${menuTarget.name}`}
+          items={menuItems(menuTarget)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {renaming && (
+        <SavedFilterNameDialog
+          title="Rename saved filter"
+          initialName={renaming.name}
+          confirmLabel="Rename"
+          otherNames={savedFilters.filter(f => f.id !== renaming.id).map(f => f.name)}
+          onCancel={() => setRenaming(null)}
+          onSave={async name => {
+            await updateSavedFilters(list => list.map(f => (f.id === renaming.id ? { ...f, name } : f)))
+            setRenaming(null)
+          }}
+        />
+      )}
+      {deleting && createPortal(
+        <AppConfirmDialog
+          title="Delete filter"
+          description={`"${deleting.name}" will be deleted.`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => {
+            updateSavedFilters(list => list.filter(f => f.id !== deleting.id)).catch(() => { })
+            setDeleting(null)
+          }}
+        />,
+        document.body,
+      )}
+    </div>
   )
 }
 
 export default function FilterBar() {
   const { filters, removeSelection, clearAll, dateApplies, toggleSelectionMode, getDate, dateIsDefault } = useFilters()
-  const [showDate,   setShowDate]   = useState(false)
+  const { savedFilters, updateSavedFilters } = useSavedFilters()
+  const [showDate, setShowDate] = useState(false)
   const [showAmount, setShowAmount] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
+  const [naming, setNaming] = useState(false)
 
   // A view that stops reading the date (the Dashboard's Trends tab) closes an open date picker as well, so
   // it is not left standing under a button that no longer opens it.
@@ -715,64 +894,89 @@ export default function FilterBar() {
   }, [dateApplies])
 
   const effectiveDate = getDate()
-  const hasDate       = !!filters.date
+  const hasDate = !!filters.date
   const hasSelections = filters.selections.length > 0
-  const amount        = filters.amount
-  const hasAmount     = amountFilterIsActive(amount)
-  const hasAny        = hasDate || hasSelections || hasAmount
+  const amount = filters.amount
+  const hasAmount = amountFilterIsActive(amount)
+  const hasAny = hasDate || hasSelections || hasAmount
+  // Nothing to save when the filters in force are already one of the saved ones.
+  const canSave = hasAny && !savedFilters.some(saved => savedFilterMatches(saved, filters))
 
   return (
+    // Two areas side by side, each wrapping within itself, so a filter chip that overflows continues under
+    // the Date button rather than under the saved filters.
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      display: 'flex', alignItems: 'stretch', gap: 10,
       padding: '8px 32px', borderBottom: '1px solid var(--border)',
       background: 'var(--surface)', minHeight: 48,
     }}>
-      <div style={{ position: 'relative', flexShrink: 0 }}>
-        <FilterButton
-          active={hasDate}
-          inapplicable={!dateApplies}
-          title={dateApplies ? undefined : 'The date filter does not apply to this view.'}
-          onClick={() => { setShowDate(v => !v); setShowAmount(false); setShowFilter(false) }}
-        >
-          📅 {dateIsDefault
-            ? <span style={{ color: 'var(--muted)' }}>{effectiveDate.preset || 'Default'} <span style={{ opacity: 0.7 }}>· default</span></span>
-            : dateLabel(filters.date)}
-        </FilterButton>
-        {showDate && <DatePickerPopover onClose={() => setShowDate(false)} />}
+      <SavedFilterChips savedFilters={savedFilters} updateSavedFilters={updateSavedFilters} />
+
+      <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <FilterButton
+            active={hasDate}
+            inapplicable={!dateApplies}
+            title={dateApplies ? undefined : 'The date filter does not apply to this view.'}
+            onClick={() => { setShowDate(v => !v); setShowAmount(false); setShowFilter(false) }}
+          >
+            📅 {dateIsDefault
+              ? <span style={{ color: 'var(--muted)' }}>{effectiveDate.preset || 'Default'} <span style={{ opacity: 0.7 }}>· default</span></span>
+              : dateLabel(filters.date)}
+          </FilterButton>
+          {showDate && <DatePickerPopover onClose={() => setShowDate(false)} />}
+        </div>
+
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <FilterButton
+            active={hasAmount}
+            onClick={() => { setShowAmount(v => !v); setShowDate(false); setShowFilter(false) }}
+          >
+            💲 Amount
+            {hasAmount && (
+              <span style={{ opacity: 0.85 }}>
+                · {amountConditionSummary(amount.low, amount.lowOp, amount.high, amount.highOp, amount.side)}
+              </span>
+            )}
+          </FilterButton>
+          {showAmount && <AmountPopover onClose={() => setShowAmount(false)} />}
+        </div>
+
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <FilterButton
+            active={hasSelections}
+            count={hasSelections ? filters.selections.length : 0}
+            onClick={() => { setShowFilter(v => !v); setShowDate(false); setShowAmount(false) }}
+          >
+            🔍 Filter
+          </FilterButton>
+          {showFilter && <FilterPopover onClose={() => setShowFilter(false)} />}
+        </div>
+
+        {filters.selections.map(s => (
+          <FilterChip key={s.id} sel={s} onRemove={removeSelection} onFlipMode={toggleSelectionMode} />
+        ))}
+
+        {hasAny && (
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+            {canSave && <Button size="compact" variant="secondary" onClick={() => setNaming(true)}>Save…</Button>}
+            <Button size="compact" variant="secondary" onClick={clearAll}>Clear all</Button>
+          </div>
+        )}
       </div>
 
-      <div style={{ position: 'relative', flexShrink: 0 }}>
-        <FilterButton
-          active={hasAmount}
-          onClick={() => { setShowAmount(v => !v); setShowDate(false); setShowFilter(false) }}
-        >
-          💲 Amount
-          {hasAmount && (
-            <span style={{ opacity: 0.85 }}>
-              · {amountConditionSummary(amount.low, amount.lowOp, amount.high, amount.highOp, amount.side)}
-            </span>
-          )}
-        </FilterButton>
-        {showAmount && <AmountPopover onClose={() => setShowAmount(false)} />}
-      </div>
-
-      <div style={{ position: 'relative', flexShrink: 0 }}>
-        <FilterButton
-          active={hasSelections}
-          count={hasSelections ? filters.selections.length : 0}
-          onClick={() => { setShowFilter(v => !v); setShowDate(false); setShowAmount(false) }}
-        >
-          🔍 Filter
-        </FilterButton>
-        {showFilter && <FilterPopover onClose={() => setShowFilter(false)} />}
-      </div>
-
-      {filters.selections.map(s => (
-        <FilterChip key={s.id} sel={s} onRemove={removeSelection} onFlipMode={toggleSelectionMode} />
-      ))}
-
-      {hasAny && (
-        <Button size="compact" variant="secondary" onClick={clearAll} style={{ marginLeft: 'auto', flexShrink: 0 }}>Clear all</Button>
+      {naming && (
+        <SavedFilterNameDialog
+          title="Save filters"
+          confirmLabel="Save"
+          otherNames={savedFilters.map(f => f.name)}
+          onCancel={() => setNaming(false)}
+          onSave={async name => {
+            const entry = { id: makeSavedFilterId(), name, ...savedFilterContent(filters) }
+            await updateSavedFilters(list => [...list, entry])
+            setNaming(false)
+          }}
+        />
       )}
     </div>
   )

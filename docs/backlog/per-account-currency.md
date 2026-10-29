@@ -147,7 +147,7 @@ Each has a recommendation; settle them before the go.
 3. **Accounts page.** *Recommended:* scoped to the selected currency like the other pages, with the
    account's currency shown and set there. A new currency is introduced by creating or mapping an
    account in it.
-4. **Saved dashboard tag reports** (`system_dashboard_tag_reports`). *Recommended:* each report belongs
+4. **Saved dashboard tag reports** (`ui.dashboard.tagReports`). *Recommended:* each report belongs
    to the currency it was saved in, and the picker shows only those. A report is a set of tags, so a
    "copy to another currency" is cheap if it is ever wanted. It is not built up front.
 5. **Rules page with an account-type scope** (`account_type = 'paypal'`). A type spans currencies, so a

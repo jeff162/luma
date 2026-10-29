@@ -109,9 +109,8 @@ scale — rather than by feature.
 
 ### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
 
-- [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Four dashboard tag-report
-  follow-ups: a Settings-page manager mirror, capturing filters in a preset, cross-user sharing
-  (a real `tag_report` table), and a richer (drag/NL) report builder.
+- [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Two dashboard tag-report
+  follow-ups: a Settings-page manager mirror and a richer (drag/NL) report builder.
 - [dashboard-reporting.md](dashboard-reporting.md) — **reduced 2026-09-02 to what has not started.**
   The cash-flow work shipped 2026-08-25 and its durable half is now in the topic docs: chart behaviour in
   the comments beside the chart code, reporting semantics (including

@@ -216,6 +216,21 @@ chip. Back restores only the date. `describeDateFilter` names a value for UI and
 shapes: `null` (unset, falls back to a page's registered default), the `{start:null,end:null}` sentinel
 (explicit all-time, overrides that default), and a real range.
 
+#### Saved filters
+
+A saved filter is a name for one setting of the FilterBar (date, chips and amount), shown as a chip at the
+start of the bar. Clicking it replaces the filters in force (`replaceFilters`, which resets the date
+back-step like any explicit pick); from then on they are ordinary filters, and the saved copy changes only
+through its menu's *Replace with current filters*. Save sits beside Clear all and appears only when the
+filters in force are not already a saved filter. The list and whether it is collapsed are per-user
+preferences. `lib/savedFilters.js` holds the rules:
+
+- **A preset date is stored by its label and worked out again on apply** (`lib/datePresets.js`), so a
+  saved *Year to date* is always the current year. A custom range is fixed.
+- **Chips are rebuilt from what they name on apply** (`lib/filterSelections.js`, the same builders the
+  picker uses), so a rename shows. A chip whose target no longer exists is kept and marked `missing`
+  rather than dropped, because dropping it would widen the filter silently.
+
 ### Rules and categorization
 
 - **Storage:** `category_rule`. **Runtime:** the categorizer service.

@@ -176,12 +176,18 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   function clearSelections() { setFilters(f => ({ ...f, selections: [] })) }
   function setAmount(amount) { setFilters(f => ({ ...f, amount: normalizeAmountFilter(amount) })) }
   function clearAll()        { setDateHistory([]); setFilters(DEFAULT_FILTERS) }
+  // Every filter at once, as a saved filter applies them. An explicit pick like any other, so it resets the
+  // date history.
+  function replaceFilters({ date = null, selections = [], amount = null }) {
+    setDateHistory([])
+    setFilters({ date, selections, amount: normalizeAmountFilter(amount) })
+  }
 
   return (
     <FilterContext.Provider value={{
       filters, setDate, pinDateFromChart, clearDate, getDate, getRawDate, dateIsDefault, setDefaultDate,
       goBackDate, canGoBackDate, previousDate,
-      addSelection, addSelections, removeSelection, removeSelections, clearSelections, clearAll,
+      addSelection, addSelections, removeSelection, removeSelections, clearSelections, clearAll, replaceFilters,
       setSelectionMode, toggleSelectionMode, setAmount,
       dateApplies, setDateApplies,
     }}>

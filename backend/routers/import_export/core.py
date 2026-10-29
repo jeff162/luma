@@ -2466,8 +2466,8 @@ def normalize_effective_imported_category(value: str) -> str:
 
 
 # Thin import-module aliases over the shared tenant-state KV accessors (the canonical pair lives in
-# db.database, since this store is shared app-wide state — demo marker, workspace draft, tag-report
-# catalog — not an import-only concern). Kept as names the import flows already call.
+# db.database, since this store is shared app-wide state — demo marker, workspace draft — not an
+# import-only concern). Kept as names the import flows already call.
 _get_import_workflow_state = get_tenant_workflow_state
 _save_import_workflow_state = set_tenant_workflow_state
 

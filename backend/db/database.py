@@ -351,12 +351,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `clean_name` is the rename. v85 adds `category_rule.priority_level`, the user's own precedence term.
 # v86 adds `csv_import_profile.decimal_separator`, how a source's files write a number.
 # v87 adds `backup_history.database_check`, whether the databases passed their check as a backup was made.
+# v88 gives every user their own copy of the shared saved tag reports and saved filters, which became
+# per-user preferences.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 87
+CURRENT_VERSION = 88
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2647,6 +2649,55 @@ def _add_backup_history_database_check(conn):
                      "CHECK (database_check IN ('passed', 'failed'))")
 
 
+# The saved dashboard tag reports, and briefly the saved filters, were once one list shared by every user,
+# kept in `import_workflow_state`. Each is now a per-user preference: (state key, list field, preference key).
+_SHARED_VIEW_LISTS = (
+    ("system_dashboard_tag_reports", "reports", "ui.dashboard.tagReports"),
+    ("system_saved_filters", "filters", "ui.filterBar.savedFilters"),
+)
+
+
+def _copy_shared_views_to_users(conn):
+    """Give every user of this ledger their own copy of each shared list, then drop the shared one.
+
+    The users are the preference scopes already present, the reserved ledger scope aside: the data database
+    does not hold the user list, and anyone who has opened the app has written preferences. A user who
+    already has the per-user list keeps it. Registered in `POST_RESTORE_DATA_INIT`, so a restored backup
+    older than this has its shared lists handed out to the users it carries."""
+    from backend.services.preferences import SHARED_SCOPE_ID
+
+    tables = _table_names(conn)
+    if "import_workflow_state" not in tables or "ui_preference" not in tables:
+        return
+    scopes = [row["scope_id"] for row in conn.execute(
+        "SELECT DISTINCT scope_id FROM ui_preference WHERE scope_id != ?", (SHARED_SCOPE_ID,),
+    )]
+    for state_key, field, pref_key in _SHARED_VIEW_LISTS:
+        row = conn.execute("SELECT payload_json FROM import_workflow_state WHERE key = ?", (state_key,)).fetchone()
+        if row is None:
+            continue
+        try:
+            items = json.loads(row["payload_json"]).get(field)
+        except (TypeError, ValueError, AttributeError):
+            items = None
+        if isinstance(items, list) and items:
+            value = json.dumps(items)
+            conn.executemany(
+                """
+                INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(scope_id, pref_key) DO NOTHING
+                """,
+                [(scope, pref_key, value) for scope in scopes],
+            )
+        conn.execute("DELETE FROM import_workflow_state WHERE key = ?", (state_key,))
+
+
+@migration(88)
+def _move_shared_views_to_users(conn):
+    _copy_shared_views_to_users(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2691,6 +2742,7 @@ POST_RESTORE_DATA_INIT = {
     75: _release_missing_rule_suggestion_rows,
     77: _normalize_leaf_category_type,
     80: _backfill_amazon_batch_account,
+    88: _copy_shared_views_to_users,
 }
 
 
@@ -2755,8 +2807,8 @@ def new_db_instance_id(conn) -> str:
 def get_tenant_workflow_state(conn, key: str) -> dict:
     """Read a shared (tenant-wide, not per-user) state blob from `import_workflow_state`. This is the
     one place app-wide *data state* lives that is neither a transaction-graph row nor a per-user
-    preference — e.g. the demo marker, the category-workspace draft, and the dashboard tag-report
-    catalog. Returns {} when absent or un-parseable."""
+    preference — e.g. the demo marker and the category-workspace draft. Returns {} when absent or
+    un-parseable."""
     row = conn.execute(
         "SELECT payload_json FROM import_workflow_state WHERE key = ?", (key,)
     ).fetchone()

@@ -934,10 +934,6 @@ export const api = {
   createTag:   (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTag:   (id) => request(`/tags/${id}`, { method: 'DELETE' }),
-  // Shared (tenant-wide) dashboard tag-report catalog. Not a per-user preference — every user sees
-  // the same saved reports; only the current selection (spendingViewBy) stays per-user.
-  getDashboardTagReports:  ()        => request('/tags/dashboard-reports'),
-  saveDashboardTagReports: (reports) => request('/tags/dashboard-reports', { method: 'PUT', body: JSON.stringify({ reports }) }),
   updateAccount: (id, data) => request(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // The mapping table's amounts. Parsed server-side by the same code the import runs, so the preview

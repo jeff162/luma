@@ -500,7 +500,8 @@ export const HELP_TOPICS = [
           </li>
           <li>
             The <strong>Date</strong> and <strong>filter</strong> controls at the top of the page affect which transactions are included
-            for all of the reports.
+            for all of the reports. A combination used often can be kept as
+            a <HelpLink to="/help/saved-filters">saved filter</HelpLink>.
           </li>
         </ul>
         <p>
@@ -604,6 +605,35 @@ export const HELP_TOPICS = [
         </p>
         <p>
           See also: <HelpLink to="/help/tags">How tags work</HelpLink>
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'saved-filters',
+    section: 'dashboard',
+    title: 'Saved filters',
+    surfaces: ['Filter bar'],
+    summary: 'A named set of filters (period, amount and filter chips) that is applied with one click from the filter bar.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          With any filter set, <strong>Save&hellip;</strong> beside <strong>Clear all</strong> names the current
+          period, amount and filter chips. The saved filter appears as a chip beside the funnel button
+          at the start of the filter bar. Clicking it replaces the filters in force, and the chip stays highlighted
+          while the filters match it. The filters it sets can be adjusted like any others without changing
+          the saved copy.
+        </p>
+        <p>
+          Right-click a saved filter (or use its &middot;&middot;&middot; menu) to rename it, delete it, or
+          <strong> Replace with current filters</strong> to update it with whatever is set now.
+          The funnel button shows how many filters are saved and hides or shows them.
+        </p>
+        <p>
+          A period picked from the list, such as <em>Year to date</em>, is relative: it means the current year
+          whenever the filter is applied. A custom range stays fixed. An account, category, tag or owner that
+          has been deleted since the filter was saved shows as <em>missing</em> and matches nothing.
         </p>
       </>
     ),
