@@ -106,6 +106,10 @@ scale — rather than by feature.
   individuals (Akahu, Enable Banking's restricted production), the **server profile** that makes "named
   server" and "paste any token" one mechanism rather than two, and why accepting an unlisted host leaks
   nothing — so the fixed host allowlist is not re-imposed out of caution.
+- [per-account-currency.md](per-account-currency.md) — **proposal, not started (2026-10-27).** One
+  currency per account. Accounts and rules interact only within their currency, and a per-user selector
+  scopes the app to one currency at a time. Categories, tags and Tasks stay app-wide. Nothing is
+  converted. Five decisions are owed, each with a recommendation.
 
 ### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
 
