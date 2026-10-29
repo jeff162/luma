@@ -674,9 +674,9 @@ address from outside and needs no list.
 
 Decisions owed on this topic, each naming the live backlog item that will feed it.
 
-- **New *file* ingestion formats: XLSX, then the OFX/QFX/QBO family.** The parse seam they waited on is
-  extracted (`ParsedFile`). XLSX reuses the whole downstream unchanged; the OFX family additionally needs
-  a `FITID` rung in duplicate detection, and follows the PayPal statement import as its mapping-free path.
+- **New *file* ingestion formats: QIF, XLSX and the OFX/QFX/QBO family.** The parse seam they waited on
+  is extracted (`ParsedFile`). XLSX reuses the whole downstream unchanged. QIF and the OFX family follow
+  the PayPal statement import as their mapping-free path, and OFX's `FITID` is a source transaction id.
   → [`backlog/import-input-formats.md`](backlog/import-input-formats.md)
 - **OFX Direct Connect as a provider adapter** — a pull with no aggregator in the middle. Researched and
   parked on institution coverage. It would declare `revokes_on_disconnect = False` with no provider-side

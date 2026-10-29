@@ -117,9 +117,9 @@ neutral contract in `backend/services/providers/base.py`. Notes, not a spec:
 
 ## Cross-refs
 
-- [`import-input-formats.md`](import-input-formats.md) — the SimpleFIN entry owns the provider-seam
-  generalizations OFX would also need; its Tier-2 entry covers OFX/QFX/QBO **file** import, which is a
-  separate, much cheaper track with no credential custody at all (`ofxtools` is a parser candidate there
-  too).
+- [`import-input-formats.md`](import-input-formats.md) — its OFX / QFX / QBO entry covers **file**
+  import, which is a separate, much cheaper track with no credential custody at all (`ofxtools` is a
+  parser candidate there too). The provider-seam generalizations OFX would also need shipped with
+  SimpleFIN and are in [`../building-a-connector.md`](../building-a-connector.md).
 - [`../security-model.md`](../security-model.md) — the custody rule this inherits, and *Revocation, in
   both directions* for the disclosure it owes.

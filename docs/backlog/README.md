@@ -39,7 +39,7 @@ scale — rather than by feature.
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
   resuming next time rules are in focus.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: the rest of the
-  native-`title` → shared-`Tooltip` migration, and an opt-in per-detail-panel Refresh seam.
+  native-`title` → shared-`Tooltip` migration.
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount
@@ -124,10 +124,10 @@ scale — rather than by feature.
   question was settled and built 2026-10-07.
 - [import-input-formats.md](import-input-formats.md) — **reduced 2026-09-03 to the file formats,
   unstarted.** The **parse-seam extraction** they shared is done (2026-09-18, with the PayPal statement
-  import as the second front end): XLSX first, reusing the entire downstream unchanged, then OFX/QFX/QBO,
-  which follows the statement import's mapping-free path plus a `FITID` rung in dedupe, then QIF for
-  moving from Quicken (added 2026-10-23), mapping-free too, with splits and transfers. SimpleFIN — the Plaid-parallel connection track that
-  shared this file — shipped 2026-08-07 and everything it taught is in
+  import as the second front end). QIF, for moving from Quicken, has the most value: mapping-free, with
+  splits and transfers. XLSX is the cheapest, reusing the entire downstream unchanged. OFX/QFX/QBO is
+  mapping-free too, with `FITID` going through the existing source-transaction-id rung. SimpleFIN, the
+  Plaid-parallel connection track that shared this file, shipped 2026-08-07 and everything it taught is in
   [`../building-a-connector.md`](../building-a-connector.md).
 - [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** A
   duplicate-resolution history view + batch undo, convenience only — per-row restore already prevents
