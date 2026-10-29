@@ -8,6 +8,7 @@ import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { onEnter } from '../lib/formKeys.js'
 import { amountEditState } from '../lib/amountEdit.js'
+import { formatAmountInput } from '../lib/displayFormat.js'
 
 /*
  * Correcting the amount of a transaction that was entered by hand — the mistyped figure noticed just
@@ -45,7 +46,7 @@ export default function TransactionAmountEditor({ txn, onSave }) {
   const canSave = !saving && next !== null && next !== current
 
   function begin() {
-    setMagnitude(Math.abs(current).toFixed(2))
+    setMagnitude(formatAmountInput(Math.abs(current), { cents: true }))
     setDirection(current < 0 ? 'in' : 'out')
     setError('')
     setEditing(true)

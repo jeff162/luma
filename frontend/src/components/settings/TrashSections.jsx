@@ -7,6 +7,9 @@ import { txnMutations } from '../../lib/txnMutations.js'
 import { Card, Button, Spinner, EmptyState, AppConfirmDialog } from '../ui.jsx'
 import { RuleMatcherText } from '../RuleSummary.jsx'
 import { BackupHistoryEntry } from '../administration/BackupHistoryList.jsx'
+import { formatDate, formatTimestamp } from '../../lib/utils.js'
+import { formatCount } from '../../lib/displayFormat.js'
+import { formatSignedMoneyAmount, getTransactionDisplayAmount } from '../../lib/moneyDisplay.js'
 
 // Whether a trashed transaction was removed by import reconciliation (an Amazon merge or per-copy
 // discard) rather than deleted directly by the user — the discriminator between the two
@@ -152,11 +155,11 @@ function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
           {merchant}
         </div>
         <div style={{ marginTop: 2, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-          {item.date} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {item.trashed_at || 'recently'}
+          {formatDate(item.date)} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {formatTimestamp(item.trashed_at) || 'recently'}
         </div>
       </div>
       <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
-        {amount < 0 ? '+' : ''}{amount.toFixed(2)}
+        {formatSignedMoneyAmount(getTransactionDisplayAmount(amount), { positiveSign: 'plus', negativeSign: 'none' })}
       </div>
       <Button onClick={() => onRestore(item.id)} disabled={working === item.id || emptying}>
         {working === item.id ? 'Restoring…' : 'Restore'}
@@ -171,7 +174,7 @@ function ListedOfCount({ listed, count }) {
   if (!(count > listed)) return null
   return (
     <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-      Showing the {listed.toLocaleString()} most recently trashed of {count.toLocaleString()}.
+      Showing the {formatCount(listed)} most recently trashed of {formatCount(count)}.
     </div>
   )
 }

@@ -258,6 +258,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Timestamps are absolute** (`formatTimestamp`). A relative label is right only for a single standing
   "how stale is this?" figure, with the absolute time on hover and `useRelativeTimestamp` keeping it
   current.
+- **Dates and numbers go through the format helpers** (`docs/shared-components.md`), never a raw ISO
+  date, `toLocaleString()` or `toFixed()`, because only the helpers follow the viewer's date order and
+  number format.
 - **A collapsed card still shows what needs attention and offers its routine action.** Attention counts
   go in the collapsed header. An action there is a sibling of the toggle (`SectionCard`'s
   `headerActions`), never nested inside it.

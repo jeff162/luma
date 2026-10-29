@@ -1,21 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-const DECIMAL_FORMATTER = new Intl.NumberFormat('en-US', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
+import { DISPLAY_FORMAT } from './displayFormat.js'
 
 export const DEFAULT_LEDGER_CURRENCY = 'USD'
 
 export const MONEY_DISPLAY_CONFIG = {
-  // The symbol every amount in the app is prefixed with. Mutable and set once at boot from the ledger's
-  // currency setting (`applyLedgerCurrency`) rather than passed through props: every formatter below
-  // already reads it as a *default argument*, which is evaluated per call, so assigning it propagates to
-  // everything that renders afterwards without threading a context through several hundred call sites.
-  // The cost of that is honest — a change does not re-render on its own — which is why the Settings
-  // screen reloads after saving rather than pretending the update is reactive.
-  currencySymbol: '$',
+  // The ledger's currency, which every amount in the app is written in. Mutable and set once at boot from
+  // the ledger's currency setting (`applyLedgerCurrency`) rather than passed through props: every
+  // formatter below reads it at call time, so assigning it propagates to everything that renders
+  // afterwards without threading a context through several hundred call sites. The cost of that is
+  // honest — a change does not re-render on its own — which is why the Settings screen reloads after
+  // saving rather than pretending the update is reactive. The separators and where the symbol sits come
+  // from the viewer's number format (`displayFormat.js`), applied the same way.
   currencyCode: DEFAULT_LEDGER_CURRENCY,
   transaction: {
     positiveSign: 'none',
@@ -46,12 +43,40 @@ export function currencySymbolFor(code) {
 export function applyLedgerCurrency(code) {
   const normalized = String(code || '').trim().toUpperCase() || DEFAULT_LEDGER_CURRENCY
   MONEY_DISPLAY_CONFIG.currencyCode = normalized
-  MONEY_DISPLAY_CONFIG.currencySymbol = currencySymbolFor(normalized)
-  return MONEY_DISPLAY_CONFIG.currencySymbol
+  return currencySymbolFor(normalized)
 }
 
-export function formatMoneyMagnitude(amount, { currencySymbol = MONEY_DISPLAY_CONFIG.currencySymbol } = {}) {
-  return `${currencySymbol}${DECIMAL_FORMATTER.format(Math.abs(Number(amount) || 0))}`
+// One formatter per locale, currency and shape, built on first use. A formatter is costly to construct and
+// these run for every amount in a batch of thousands, so they are never built per call. `Intl` writes the
+// currency's symbol and places it as the locale does (`$1,234.56`, `1.234,56 €`).
+const moneyFormatters = new Map()
+
+const MONEY_SHAPES = {
+  exact: {},
+  whole: { minimumFractionDigits: 0, maximumFractionDigits: 0 },
+  compact: { notation: 'compact', maximumFractionDigits: 1 },
+}
+
+function formatMoney(value, shape, currency = MONEY_DISPLAY_CONFIG.currencyCode) {
+  const locale = DISPLAY_FORMAT.numberLocale
+  const key = `${locale}|${currency}|${shape}`
+  let formatter = moneyFormatters.get(key)
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, {
+      style: 'currency', currency, currencyDisplay: 'narrowSymbol', ...MONEY_SHAPES[shape],
+    })
+    moneyFormatters.set(key, formatter)
+  }
+  return formatter.format(value)
+}
+
+export function formatMoneyMagnitude(amount) {
+  return formatMoney(Math.abs(Number(amount) || 0), 'exact')
+}
+
+// A figure in a currency the ledger may not be in yet, for the currency setting's preview.
+export function formatMoneyInCurrency(amount, currency) {
+  return formatMoney(Math.abs(Number(amount) || 0), 'exact', currency)
 }
 
 // Shared Recharts tooltip styling. Recharts colors each item's text using the
@@ -79,35 +104,27 @@ export const CHART_TOOLTIP_ITEM_STYLE = {
   color: 'var(--text)',
 }
 
-// Compact signed axis label for charts whose y-axis can span both sides of zero
-// (e.g. monthly-trend with refunds netting expense bars below zero). Renders as
-// `-$1.5k` rather than the raw `$-1500` Recharts would otherwise emit.
-export function formatSignedAxisTick(
-  value,
-  {
-    currencySymbol = MONEY_DISPLAY_CONFIG.currencySymbol,
-    decimals = 1,
-    threshold = 1000,
-  } = {},
-) {
+// Compact signed axis label for charts whose y-axis can span both sides of zero (e.g. monthly-trend with
+// refunds netting expense bars below zero). Renders as `-$1.5K` rather than the raw `$-1500` Recharts
+// would otherwise emit. Below a thousand it is a whole amount; above, the locale's own abbreviation
+// (`1,5 k €`, and none at all for a German thousand, which writes `1500 €`).
+//
+// Takes the value alone: Recharts calls a `tickFormatter` with the tick's index as a second argument.
+export function formatSignedAxisTick(value) {
   const num = Number(value) || 0
   const sign = num < 0 ? '-' : ''
   const abs = Math.abs(num)
-  if (abs >= threshold) {
-    return `${sign}${currencySymbol}${(abs / 1000).toFixed(decimals)}k`
-  }
-  return `${sign}${currencySymbol}${Math.round(abs)}`
+  return `${sign}${formatMoney(abs, abs >= 1000 ? 'compact' : 'whole')}`
 }
 
 export function formatSignedMoneyAmount(
   amount,
   {
-    currencySymbol = MONEY_DISPLAY_CONFIG.currencySymbol,
     positiveSign = MONEY_DISPLAY_CONFIG.transaction.positiveSign,
     negativeSign = MONEY_DISPLAY_CONFIG.transaction.negativeSign,
   } = {},
 ) {
-  const magnitude = formatMoneyMagnitude(amount, { currencySymbol })
+  const magnitude = formatMoneyMagnitude(amount)
   if (amount < 0) {
     if (negativeSign === 'parentheses') return `(${magnitude})`
     if (negativeSign === 'none') return magnitude

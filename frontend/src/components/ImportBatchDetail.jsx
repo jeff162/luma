@@ -44,6 +44,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './detailShared.jsx'
 import ImportBatchNotImported from './importExport/ImportBatchNotImported.jsx'
 import { summarizeImportOutcome } from '../lib/importExport/importOutcome.js'
+import { formatDateRange } from '../lib/utils.js'
 
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
 
@@ -265,7 +266,7 @@ export default function ImportBatchDetail({
   }
 
   const dateFilterLabel = (dateStart || dateEnd)
-    ? ` (filtered: ${dateStart || ''}${dateEnd && dateEnd !== dateStart ? ` … ${dateEnd}` : ''})`
+    ? ` (filtered: ${formatDateRange(dateStart || dateEnd, dateEnd || dateStart)})`
     : ''
   const scopeNoun = syncConnectionId
     ? `transaction${unfilteredCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}`

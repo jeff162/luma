@@ -11,6 +11,7 @@ import {
   signedExpectedTotal,
 } from '../lib/purchaseLinks.js'
 import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
+import { formatDate } from '../lib/utils.js'
 
 /*
  * The multi-payment purchase editor: its payments, its figures, and the repairs — drop a payment that
@@ -259,7 +260,7 @@ function PaymentRow({ payment, isThisRow, onRemove }) {
       title={payment.trashed ? 'This payment is in the trash and is not counted' : `${payment.payee} · ${payment.account_name}`}
     >
       <span style={{ color: 'var(--muted)' }}>{payment.trashed ? '—' : payment.ordinal}</span>
-      <span style={{ color: 'var(--muted)' }}>{payment.date}</span>
+      <span style={{ color: 'var(--muted)' }}>{formatDate(payment.date)}</span>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {payment.payee}
       </span>

@@ -27,7 +27,7 @@ import {
   reminderSummary,
   residualSummary,
 } from '../lib/reimbursements.js'
-import { localIsoDate } from '../lib/utils.js'
+import { localIsoDate, formatDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
 
@@ -498,7 +498,7 @@ export default function ReimbursementEditorDialog({
                     <option value="">Choose one…</option>
                     {targets.map(member => (
                       <option key={member.txn_id} value={member.txn_id}>
-                        {member.date} · {member.payee} · {formatTransactionAmount(member.amount)}
+                        {formatDate(member.date)} · {member.payee} · {formatTransactionAmount(member.amount)}
                       </option>
                     ))}
                   </select>
@@ -581,7 +581,7 @@ export default function ReimbursementEditorDialog({
               {loose.map(row => (
                 <div key={row.txn_id} style={{ display: 'grid', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, color: 'var(--muted)' }}>
-                    <span>{row.date} · {row.payee}</span>
+                    <span>{formatDate(row.date)} · {row.payee}</span>
                     <span style={{ color: getTransactionAmountColor(row.amount) }}>
                       {formatTransactionAmount(row.amount)}
                     </span>
@@ -616,7 +616,7 @@ export default function ReimbursementEditorDialog({
                     <div key={`${row.from.id}-${row.txn_id}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                       <div style={{ display: 'grid', gap: 1, minWidth: 0 }}>
                         <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {row.date} · {row.payee}
+                          {formatDate(row.date)} · {row.payee}
                           {row.claim_label ? <span style={{ color: 'var(--muted)' }}> · {row.claim_label}</span> : null}
                         </span>
                         <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
@@ -766,7 +766,7 @@ function MemberRow({ member, isThisRow, onRemove }) {
           app's usual "Spent": the label names what the row is waiting on, money spent that is still to
           be paid back. The totals below keep "Spent". */}
       <span style={{ color: 'var(--muted)' }}>{member.role === 'expense' ? 'Owed' : 'Received'}</span>
-      <span style={{ color: 'var(--muted)' }}>{member.date}</span>
+      <span style={{ color: 'var(--muted)' }}>{formatDate(member.date)}</span>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {member.payee}
         {member.claim_label ? (

@@ -76,8 +76,8 @@ describe('what it shows', () => {
   it('lists every payment, oldest first, in the ledger\'s display convention', async () => {
     renderDialog()
     await screen.findByText('Kitchen counters')
-    expect(screen.getByText('2026-03-04')).toBeTruthy()
-    expect(screen.getByText('2026-05-19')).toBeTruthy()
+    expect(screen.getByText('Mar 4, 2026')).toBeTruthy()
+    expect(screen.getByText('May 19, 2026')).toBeTruthy()
     // Spending is stored positive and displayed negative.
     expect(screen.getByText('-$2,400.00')).toBeTruthy()
     expect(screen.getByText('-$3,600.00')).toBeTruthy()
@@ -103,7 +103,7 @@ describe('what it shows', () => {
     })
     renderDialog()
     await screen.findByText('Kitchen counters')
-    expect(screen.getByText('2026-05-19')).toBeTruthy()
+    expect(screen.getByText('May 19, 2026')).toBeTruthy()
     expect(screen.getByText('Linked (1)')).toBeTruthy()
   })
 

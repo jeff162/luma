@@ -30,6 +30,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { formatRuleMatcher, ruleMatcherLists, ruleMatcherTerms } from '../lib/ruleMatcher.js'
 import { RULE_PRIORITY_NORMAL } from '../lib/rulePriority.js'
 import RulePrioritySelect from './RulePrioritySelect.jsx'
+import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 
 const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
 
@@ -82,10 +83,10 @@ export function amountConditionSummary(low, lowOp, high, highOp, side) {
   const parts = []
   if (side && side !== 'both') parts.push(side === 'debit' ? 'debit' : 'credit')
   if (low != null && high != null && low === high) {
-    parts.push(`= $${low}`)
+    parts.push(`= ${formatMoneyMagnitude(low)}`)
   } else {
-    if (low != null) parts.push(`${lowOp ?? '>='} $${low}`)
-    if (high != null) parts.push(`${highOp ?? '<='} $${high}`)
+    if (low != null) parts.push(`${lowOp ?? '>='} ${formatMoneyMagnitude(low)}`)
+    if (high != null) parts.push(`${highOp ?? '<='} ${formatMoneyMagnitude(high)}`)
   }
   return parts.length ? parts.join(', ') : null
 }

@@ -34,6 +34,8 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `NoteEditor` (+ `NotePopover`) | Editing a transaction's note. | `components/NoteEditor.jsx`, `components/TransactionRow.jsx` |
 | `OriginFields` + `importSourceFields` | Showing the import-source detail captured for a row. | `components/OriginFields.jsx`, `lib/importSourceFields.js` |
 | `moneyDisplay` | Formatting and coloring an amount. | `lib/moneyDisplay.js` |
+| `formatDate` / `formatDateRange` / `monthLabel`, `formatCount` / `formatDecimal` | Writing a date, a span of dates, a count or a plain number in the viewer's format. | `lib/utils.js`, `lib/displayFormat.js` |
+| `parseAmountInput` / `formatAmountInput` | Reading an amount typed into a box, and filling a box with one, in the viewer's number format. | `lib/displayFormat.js` |
 | `TransactionDetail` | The detail panel for a transaction or a payee. | `components/TransactionDetail.jsx` |
 
 ## Tables and long lists

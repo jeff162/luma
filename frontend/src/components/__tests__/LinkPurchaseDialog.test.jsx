@@ -40,8 +40,8 @@ afterEach(() => { cleanup(); vi.clearAllMocks() })
 describe('creating a purchase from unlinked payments', () => {
   it('lists the payments and their total so an extra row is visible before saving', () => {
     renderDialog([deposit, balance])
-    expect(screen.getByText('2026-03-04')).toBeTruthy()
-    expect(screen.getByText('2026-05-19')).toBeTruthy()
+    expect(screen.getByText('Mar 4, 2026')).toBeTruthy()
+    expect(screen.getByText('May 19, 2026')).toBeTruthy()
     expect(screen.getByText('Purchase total (2 payments)')).toBeTruthy()
     expect(screen.getByText('-$6,000.00')).toBeTruthy()
   })

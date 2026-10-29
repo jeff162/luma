@@ -18,6 +18,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { TagGlyph } from './TagUi.jsx'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
+import { formatDateRange } from '../lib/utils.js'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -38,7 +39,7 @@ const DATE_PRESETS = [
 
 function dateLabel(date) {
   if (!date) return 'Date'
-  return date.preset || `${date.start} → ${date.end}`
+  return date.preset || formatDateRange(date.start, date.end)
 }
 
 const inputStyle = {

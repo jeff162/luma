@@ -39,9 +39,13 @@ _NUMBER_BY_SEPARATOR = {
 _SIGNED = re.compile(r"(?P<sign>[+\-−]?)(?P<body>[\d.,]+)|\((?P<paren>[\d.,]+)\)")
 
 
-def parse_amount_text(text: str, decimal_separator: str) -> float:
-    """The signed number `text` writes in the given convention. Raises `ValueError` for anything that is
-    not one, including a blank cell."""
+def amount_text_parts(text: str, decimal_separator: str) -> tuple[str, str]:
+    """`(sign, digits)` for the number `text` writes in the given convention: the sign is `-`, `+` or empty,
+    and the digits are ungrouped with a `.` decimal mark, keeping as many decimals as were written (`12,5`
+    in the comma convention is `("", "12.5")`). Raises `ValueError` for anything that is not a number.
+
+    For a caller that needs what was typed and not only its value, such as the ledger's search box, which
+    reads `77.4` as a range of cents that `77.40` is not."""
     try:
         number, group, decimal = _NUMBER_BY_SEPARATOR[decimal_separator]
     except KeyError:
@@ -55,6 +59,15 @@ def parse_amount_text(text: str, decimal_separator: str) -> float:
     body = match.group("body") or match.group("paren")
     if not number.fullmatch(body) or not any(ch.isdigit() for ch in body):
         raise ValueError(f"not an amount: {text!r}")
-    value = float(body.replace(group, "").replace(decimal, "."))
-    negative = match.group("paren") is not None or match.group("sign") in ("-", "−")
-    return -value if negative else value
+    digits = body.replace(group, "").replace(decimal, ".")
+    if match.group("paren") is not None or match.group("sign") in ("-", "−"):
+        return "-", digits
+    return match.group("sign"), digits
+
+
+def parse_amount_text(text: str, decimal_separator: str) -> float:
+    """The signed number `text` writes in the given convention. Raises `ValueError` for anything that is
+    not one, including a blank cell."""
+    sign, digits = amount_text_parts(text, decimal_separator)
+    value = float(digits)
+    return -value if sign == "-" else value

@@ -10,6 +10,7 @@
 
 import { createContext, useContext, useState, useCallback } from 'react'
 import { normalizeAmountFilter } from './filterParams.js'
+import { formatDateRange } from './utils.js'
 
 const DEFAULT_FILTERS = {
   date: null,
@@ -42,7 +43,7 @@ function sameDateFilter(a, b) {
 export function describeDateFilter(date) {
   if (!date) return 'the default period'
   if (!date.start || !date.end) return 'All time'
-  return date.preset || `${date.start} → ${date.end}`
+  return date.preset || formatDateRange(date.start, date.end)
 }
 
 const FilterContext = createContext(null)

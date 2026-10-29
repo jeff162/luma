@@ -4,10 +4,6 @@
 import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../../lib/theme.js'
 
-// Compact segmented chooser for the color theme. Writes the choice straight through the preference
-// store; ThemeController (App.jsx) reacts to the change and applies it to <html>, so this stays a
-// pure selection control. Built inline (no shared segmented primitive exists yet); extract to ui.jsx
-// if a second one appears.
 export default function ThemeSection() {
   const [themeChoice, setThemeChoice] = useUserPreference(THEME_PREF_KEY, THEME_SYSTEM)
   return (

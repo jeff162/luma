@@ -82,7 +82,7 @@ describe('the ledger purchase marker', () => {
     await user.click(screen.getByLabelText(/open this purchase/))
     // The editor's own fields and its payment list — the same dialog the detail panel opens.
     expect(await screen.findByLabelText('Expected total')).toBeTruthy()
-    expect(screen.getByText('2026-05-19')).toBeTruthy()
+    expect(screen.getByText('May 19, 2026')).toBeTruthy()
   })
 
   it('reports the result up so the row follows an ungroup without a page refetch', async () => {

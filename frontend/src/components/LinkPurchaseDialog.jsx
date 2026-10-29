@@ -13,6 +13,7 @@ import {
 } from '../lib/purchaseLinks.js'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import { AppDialog, Button, Input } from './ui.jsx'
+import { formatDate } from '../lib/utils.js'
 
 /*
  * "These payments are one purchase" — the dialog behind the ledger's bulk action.
@@ -129,7 +130,7 @@ export default function LinkPurchaseDialog({ rows, onClose, onLinked }) {
                   padding: '4px 8px', borderRadius: 6, background: 'var(--surface2)',
                 }}
               >
-                <span style={{ color: 'var(--muted)' }}>{row.date}</span>
+                <span style={{ color: 'var(--muted)' }}>{formatDate(row.date)}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {getTxnMerchantLabel(row)}
                 </span>

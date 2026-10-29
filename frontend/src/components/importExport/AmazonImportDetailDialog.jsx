@@ -10,6 +10,7 @@ import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { MerchantOriginHoverCard } from '../OriginFields.jsx'
 import { MatchReport } from './MatchReport.jsx'
 import { TransactionMatchCell } from './TransactionMatchCell.jsx'
+import { formatDate } from '../../lib/utils.js'
 
 // The "what did this import do" report for one Amazon batch — the investigative companion to the
 // reconciliation report. It answers "which file did this come from?" for every category of the import
@@ -73,7 +74,7 @@ const CATEGORIES = [
     columns: [
       { key: 'order_id', label: 'Order id', width: 220, render: (e) => <span style={{ fontSize: 12 }}>{e.order_id}</span> },
       { key: 'desc', label: 'Item', render: (e) => <span style={{ fontSize: 12 }}>{e.description || '—'}</span> },
-      { key: 'date', label: 'Order date', width: 140, render: (e) => <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date || '—'}</span> },
+      { key: 'date', label: 'Order date', width: 140, render: (e) => <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date ? formatDate(e.date) : '—'}</span> },
       { key: 'file', label: 'Source file', width: 220, render: (e) => <SourceFile value={e.source_file} /> },
     ],
     getRowId: (e, i) => `${e.order_id}:${i}`,
@@ -86,7 +87,7 @@ const CATEGORIES = [
       {
         key: 'order', label: 'Amazon order', width: 380,
         render: (e) => (e.id ? <OrderCell txn={e} />
-          : <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date || '—'}</span>),
+          : <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date ? formatDate(e.date) : '—'}</span>),
       },
       { key: 'order_id', label: 'Order id', width: 170, render: (e) => <span style={{ fontSize: 12 }}>{e.order_id}</span> },
       { key: 'file', label: 'Source file', render: (e) => <SourceFile value={e.source_file} /> },

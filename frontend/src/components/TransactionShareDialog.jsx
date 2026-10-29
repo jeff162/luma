@@ -26,6 +26,7 @@ import {
   buildListShareHtml,
   copyShare,
 } from '../lib/transactionShare.js'
+import { formatCount } from '../lib/displayFormat.js'
 
 const LIST_DESCRIPTION = 'A clipboard copy of the transactions shown.'
 
@@ -153,7 +154,7 @@ export default function TransactionShareDialog({ mode, txn, rows, loadRows = nul
     listBody = (
       <div style={{ fontSize: 13, color: 'var(--muted)', display: 'grid', gap: 6 }}>
         <div>
-          This list contains {listSize.toLocaleString()} transactions which exceeds the maximum of {TRANSACTION_COPY_ROW_LIMIT} that can be
+          This list contains {formatCount(listSize)} transactions which exceeds the maximum of {TRANSACTION_COPY_ROW_LIMIT} that can be
           copied to the clipboard.
         </div><div>
           Choices are: {onDownload
@@ -173,7 +174,7 @@ export default function TransactionShareDialog({ mode, txn, rows, loadRows = nul
   let description = 'A clipboard copy of this transaction.'
   if (isList) {
     if (refusing || waiting) description = LIST_DESCRIPTION
-    else if (firstRowsOnly) description = `A clipboard copy of the first ${count} of the ${listSize.toLocaleString()} transactions.`
+    else if (firstRowsOnly) description = `A clipboard copy of the first ${count} of the ${formatCount(listSize)} transactions.`
     else description = `A clipboard copy of the ${count} transaction${count === 1 ? '' : 's'}.`
   }
 

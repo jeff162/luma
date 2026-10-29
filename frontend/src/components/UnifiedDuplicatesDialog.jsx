@@ -55,6 +55,7 @@ import { notifyAccountsChanged } from '../App.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import HelpHoverCard from '../help/HelpHoverCard.jsx'
+import { formatDate, formatDateRange } from '../lib/utils.js'
 
 // Sticky UI state for the dialog. Sort survives close/reopen so a user who prefers
 // merchant-asc gets it on the next visit; panel geometry is restored if the user has dragged
@@ -554,7 +555,7 @@ export default function UnifiedDuplicatesDialog({
     if (matched.covered) {
       const covered = matched.covered || {}
       const candidates = Array.isArray(matched.candidates) ? matched.candidates : []
-      const range = `${covered.start_date || ''}${covered.end_date && covered.end_date !== covered.start_date ? `..${covered.end_date}` : ''}`
+      const range = covered.start_date ? formatDateRange(covered.start_date, covered.end_date || covered.start_date) : ''
       const sourceInfo = covered.source_filename ? {
         filename:   covered.source_filename,
         batchId:    covered.source_batch_id,
@@ -611,7 +612,7 @@ export default function UnifiedDuplicatesDialog({
             <div key={c.id || idx} style={{ fontSize: 11, paddingLeft: 6, borderLeft: '2px solid color-mix(in srgb, var(--accent2) 30%, var(--border))' }}>
               {withOriginHover((
                 <div>
-                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{c.date || ''}</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatDate(c.date)}</span>
                   {c.day_offset ? (
                     <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
                       ({Math.abs(c.day_offset)} day{Math.abs(c.day_offset) === 1 ? '' : 's'} {c.day_offset < 0 ? 'earlier' : 'later'})

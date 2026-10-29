@@ -41,9 +41,10 @@ describe('formatSignedMoneyAmount sign conventions', () => {
 })
 
 describe('formatSignedAxisTick', () => {
-  it('uses compact k-notation above the threshold, signed', () => {
-    expect(formatSignedAxisTick(1500)).toBe('$1.5k')
-    expect(formatSignedAxisTick(-2000)).toBe('-$2.0k')
+  it('uses the locale\'s compact notation from a thousand up, signed', () => {
+    expect(formatSignedAxisTick(1500)).toBe('$1.5K')
+    expect(formatSignedAxisTick(-2000)).toBe('-$2K')
+    expect(formatSignedAxisTick(1500000)).toBe('$1.5M')
   })
   it('rounds to a whole number below the threshold', () => {
     expect(formatSignedAxisTick(500)).toBe('$500')

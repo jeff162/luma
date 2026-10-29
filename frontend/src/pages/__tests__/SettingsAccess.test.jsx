@@ -22,6 +22,7 @@ vi.mock('../../components/administration/AccountSecuritySection.jsx', () => ({
 vi.mock('../../components/ServerCertificate.jsx', () => ({ ServerCertificateSection: () => null }))
 vi.mock('../../components/settings/ThemeSection.jsx', () => section('appearance'))
 vi.mock('../../components/settings/CurrencySection.jsx', () => section('currency'))
+vi.mock('../../components/settings/DisplayFormatSection.jsx', () => section('display format'))
 vi.mock('../../components/settings/SignInFactorsSection.jsx', () => section('security'))
 vi.mock('../../components/settings/ImportStorageSection.jsx', () => section('import storage'))
 vi.mock('../../components/settings/AboutSection.jsx', () => section('about'))

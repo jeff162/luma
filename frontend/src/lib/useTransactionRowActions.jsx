@@ -43,6 +43,7 @@ import { wholeTransactionRow } from './splitRows.js'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 import { useVisibleViewport, visibleLayerBox } from './visibleViewport.js'
+import { formatDate } from './utils.js'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, onMembershipChange, categories, onAddCategory } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
@@ -452,7 +453,7 @@ export function TransactionRowActionsChrome({ controller }) {
       {pendingTrash ? (
         <AppConfirmDialog
           title="Send transaction to trash?"
-          description={`Send "${getTxnMerchantLabel(pendingTrash)}" (${pendingTrash.date}) to the trash? You can restore it later from Settings → Trash.`}
+          description={`Send "${getTxnMerchantLabel(pendingTrash)}" (${formatDate(pendingTrash.date)}) to the trash? You can restore it later from Settings → Trash.`}
           confirmLabel="Send to trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"

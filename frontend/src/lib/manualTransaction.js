@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { parseAmountInput } from './displayFormat.js'
+
 /*
  * Turning a filled-in form into a transaction the ledger will store correctly.
  *
@@ -43,7 +45,7 @@ export function round2(value) {
 export function signedAmount(raw, direction) {
   const text = String(raw ?? '').trim()
   if (!text) return null
-  const value = Number.parseFloat(text.replace(/[^0-9.]/g, ''))
+  const value = parseAmountInput(text)
   if (!Number.isFinite(value) || value === 0) return null
   return round2(direction === 'in' ? -Math.abs(value) : Math.abs(value))
 }

@@ -15,6 +15,7 @@
 // (`docs/scale-and-limits.md` → *Import history: retention*).
 
 import { endOfMonth, format, parseISO } from 'date-fns'
+import { formatDateRange } from '../utils.js'
 
 export const RECENT_CARD_COUNT = 4
 export const RECENT_WINDOW_DAYS = 30
@@ -103,22 +104,13 @@ export function partitionImportHistory(batches, {
 export const archivedCardCount = archive =>
   (archive || []).reduce((total, group) => total + group.batches.length, 0)
 
-// A card's span, collapsed to what actually varies: one day reads as a date, one month drops the
-// repeated month, one year drops the repeated year. Returns null when there is nothing to show.
+// A card's span, collapsed to what actually varies (`formatDateRange`). Returns null when there is nothing
+// to show.
 export function formatCoverageRange(batch) {
   const start = batch?.covers_start
   const end = batch?.covers_end
   if (!start || !end) return null
-  try {
-    const from = parseISO(start)
-    const to = parseISO(end)
-    if (start === end) return format(from, 'MMM d, yyyy')
-    if (start.slice(0, 7) === end.slice(0, 7)) return `${format(from, 'MMM d')} – ${format(to, 'd, yyyy')}`
-    if (start.slice(0, 4) === end.slice(0, 4)) return `${format(from, 'MMM d')} – ${format(to, 'MMM d, yyyy')}`
-    return `${format(from, 'MMM d, yyyy')} – ${format(to, 'MMM d, yyyy')}`
-  } catch {
-    return null
-  }
+  return formatDateRange(start, end)
 }
 
 // What the span is an answer to, for the card's hover — a statement declares its period, everything

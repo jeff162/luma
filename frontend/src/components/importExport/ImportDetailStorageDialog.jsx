@@ -30,8 +30,9 @@ import { buildDataSourceRows } from '../../lib/importExport/dataSourceRows.js'
 import { describeDataSourceRow, formatCoverageRange } from '../../lib/importExport/importHistoryWindow.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
 import { formatBytes, formatShare } from '../../lib/storageFormat.js'
+import { formatCount } from '../../lib/displayFormat.js'
 
-const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`
+const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`
 
 // Card rows and the column header share one inset, which puts a card's checkbox a step in from its
 // source's — the source row leads with its collapse toggle, then its checkbox.
@@ -42,10 +43,10 @@ const CARD_ROW_PADDING = '6px 10px 6px 54px'
 function describeStored(stored) {
   const duplicates = Math.max(0, stored.report_rows - stored.unreviewed_rows - (stored.enriched_rows || 0))
   return [
-    stored.unreviewed_rows > 0 ? `${stored.unreviewed_rows.toLocaleString()} to review` : null,
+    stored.unreviewed_rows > 0 ? `${formatCount(stored.unreviewed_rows)} to review` : null,
     stored.enriched_rows > 0 ? plural(stored.enriched_rows, 'enrichment') : null,
     duplicates > 0 ? plural(duplicates, 'duplicate') : null,
-    stored.rejected_rows > 0 ? `${stored.rejected_rows.toLocaleString()} rejected` : null,
+    stored.rejected_rows > 0 ? `${formatCount(stored.rejected_rows)} rejected` : null,
   ].filter(Boolean).join(' · ')
 }
 
@@ -317,13 +318,13 @@ export function ImportDetailStorageDialog({ onClose, onChanged }) {
                         <span style={{ fontWeight: 400, color: 'var(--muted)' }}>
                           {group.qualifier ? ` · ${group.qualifier}` : ''}
                           {' · '}{plural(group.cards.length, 'import')}
-                          {selectedCount > 0 && !allSelected ? ` · ${selectedCount.toLocaleString()} selected` : ''}
+                          {selectedCount > 0 && !allSelected ? ` · ${formatCount(selectedCount)} selected` : ''}
                         </span>
                         {/* On the source row as well as each import's, so a folded source still says it
                             holds refusals nobody has looked at — the ones a clear would lose unseen. */}
                         {group.unreviewed > 0 ? (
                           <HistoryAttentionPill title={`${plural(group.unreviewed, 'row')} in these imports still flagged for review`}>
-                            ⚠ {group.unreviewed.toLocaleString()} to review
+                            ⚠ {formatCount(group.unreviewed)} to review
                           </HistoryAttentionPill>
                         ) : null}
                       </span>

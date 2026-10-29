@@ -132,6 +132,7 @@ import {
   findLikelyAccountMatch,
   buildAccountImportStateSnapshot,
 } from '../lib/importExport/importAccountMatching.js'
+import { formatCount } from '../lib/displayFormat.js'
 
 // `UnifiedDuplicatesDialog` lives at the App level so it can stay open while the user navigates
 // between Import, Accounts, Transactions, etc. — see
@@ -151,7 +152,7 @@ function isPaypalStatementCandidate(file) {
 
 // The Import button's label while it runs: which file of a multi-file run, and how far through its rows.
 function formatImportingLabel(fileProgress, rowProgress) {
-  const rows = rowProgress ? `${rowProgress.done.toLocaleString()} / ${rowProgress.total.toLocaleString()}` : null
+  const rows = rowProgress ? `${formatCount(rowProgress.done)} / ${formatCount(rowProgress.total)}` : null
   if (fileProgress) {
     return rows
       ? `File ${fileProgress.current}/${fileProgress.total} · ${rows}…`
@@ -2885,7 +2886,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     // it is most of what a routine overlapping export does, and the headline alone reads as a small file.
     const alreadyHeld = result.multiFile ? Number(result.ignored || 0) : summary.ignoredCount
     const heldNote = alreadyHeld > 0 && (result.multiFile || summary.importedCount > 0)
-      ? ` ${alreadyHeld.toLocaleString()} row${alreadyHeld === 1 ? '' : 's'} already in the ledger.`
+      ? ` ${formatCount(alreadyHeld)} row${alreadyHeld === 1 ? '' : 's'} already in the ledger.`
       : ''
     const calloutStyle = tone => ({
       marginTop: 12,

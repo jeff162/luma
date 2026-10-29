@@ -137,12 +137,6 @@ scale — rather than by feature.
 - [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not
   needed yet.** Document-only backups, with each data backup carrying only the documents added since the
   last one. Started when the backup history shows documents as the bulk of a backup.
-- [i18n-display-formatting.md](i18n-display-formatting.md) — **reduced 2026-09-03 to the number/date
-  half, unstarted.** Tier-1 **formatting**, not translation. The ledger-currency setting shipped
-  2026-08-08 and its model is in [`../data-model.md`](../data-model.md) → *One ledger currency*. What stays: **Bucket A** (the `en-US`
-  formatter, a date-format preference, and the ~9 raw ISO renders the central helpers never reach —
-  cosmetic) and **Bucket B**, the only correctness risk: the ledger search parses dates MDY-first and
-  amounts with fixed separator roles.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.

@@ -5,6 +5,7 @@ import React from 'react'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { PendingMarker } from '../AmountDisplay.jsx'
 import { IconButton } from '../ui.jsx'
+import { formatDate, formatTimestamp, formatDateRange } from '../../lib/utils.js'
 
 // The shared record cell for a match report (duplicate detection, Amazon reconciliation, …): one
 // transaction rendered as "date · merchant · amount" with its account underneath, plus an optional
@@ -17,7 +18,7 @@ export function SourceFileLink({ filename, batchId, importedAt, dateStart, dateE
   if (!filename) return null
   const short = filename.length > 32 ? `${filename.slice(0, 12)}…${filename.slice(-16)}` : filename
   const tipParts = [filename]
-  if (importedAt) tipParts.push(`imported ${(importedAt || '').slice(0, 16).replace('T', ' ')}`)
+  if (importedAt) tipParts.push(`imported ${formatTimestamp(importedAt) || importedAt}`)
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: 'var(--muted)', fontSize: 11 }}>
       <span title={tipParts.join(' — ')} style={{ whiteSpace: 'nowrap' }}>from {short}</span>
@@ -25,7 +26,7 @@ export function SourceFileLink({ filename, batchId, importedAt, dateStart, dateE
         <IconButton
           size="compact"
           tone="accent"
-          aria-label={`Open ${filename} ledger${dateStart ? ` (${dateStart}…${dateEnd || dateStart})` : ''}`}
+          aria-label={`Open ${filename} ledger${dateStart ? ` (${formatDateRange(dateStart, dateEnd || dateStart)})` : ''}`}
           onClick={() => onDrillThrough({ batchId, dateStart, dateEnd, filename })}
         >↗</IconButton>
       ) : null}
@@ -51,7 +52,7 @@ export function TransactionMatchCell({ record, onDrillThrough }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.3 }} title={rawDetail || undefined}>
       <div>
-        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{record.date || ''}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatDate(record.date)}</span>
         {' · '}
         <span>{record.merchant || ''}</span>
         {' · '}

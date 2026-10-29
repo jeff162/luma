@@ -2312,6 +2312,16 @@ shared state: the category workspace draft (`system_category_workspace_draft`), 
 (`system_dashboard_tag_reports`) and the ledger currency. Which report a user has open
 (`ui.dashboard.spendingViewBy`) is per user.
 
+**How dates and numbers are written is per person; the currency is not.** The currency says what the
+stored numbers mean, so it is shared (*One ledger currency*). The date order (`ui.format.dateOrder`) and
+the number format (`ui.format.number`) say how one person writes them, so two people can read the same
+ledger as `1 Feb` and `Feb 1`. The frontend applies both to its shared formatters before anything
+renders (`lib/displayFormat.js`). The backend reads the same two keys to read the ledger's search box
+(`services/input_format.py`): a typed `01/02/2026` or `1.234` means something different in each format.
+They are read from the store and not sent with a request, so the list, the CSV export and a bulk action
+over everything matching all read a search the same way. A `2026-02-01` date is read the same in every
+order.
+
 **Column layouts are also per kind of screen**, because widths that fit a desktop do not fit a tablet. A
 table's order and widths are saved under `<key>@<device>`, where the device is the primary pointer and
 the screen size, shorter side first, plus the orientation on a touch screen (`@mouse-1080x1920`,
@@ -2726,9 +2736,6 @@ short repayment cannot be told from an unpaid one by amount, so settling is an e
 Decisions still owed, each naming the backlog item that will settle it. See `AGENTS.md` → *Obstacles
 and owed decisions*.
 
-- **Number and date display formatting**, and the free-text parse bucket behind it. The correctness
-  risk is the ledger search's date/amount ambiguity.
-  → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
 - **Incremental backups for attached documents**, once documents are the bulk of a backup.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:

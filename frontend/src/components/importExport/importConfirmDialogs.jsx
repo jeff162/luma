@@ -24,7 +24,8 @@ import {
   Tooltip,
 } from '../ui.jsx'
 import { DataSourcePill } from './importPresentational.jsx'
-import { formatImportBatchTimestamp } from '../../lib/importExport/importDraft.js'
+import { formatTimestamp } from '../../lib/utils.js'
+import { formatCount } from '../../lib/displayFormat.js'
 
 export function DataSourceMismatchDialog({
   profileName,
@@ -258,7 +259,7 @@ export function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attac
               <div key={batch.id} style={{ padding: '10px 12px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)' }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{batch.filename}</div>
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-                  {formatImportBatchTimestamp(batch.imported_at)} · {batch.row_count} rows
+                  {formatTimestamp(batch.imported_at)} · {formatCount(batch.row_count)} rows
                 </div>
               </div>
             ))}

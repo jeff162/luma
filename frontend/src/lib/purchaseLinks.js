@@ -21,6 +21,7 @@
  */
 
 import { formatTransactionAmount } from './moneyDisplay.js'
+import { parseAmountInput, formatAmountInput } from './displayFormat.js'
 
 // What a purchase with no name of its own is called. Naming is optional on purpose: a purchase found
 // while reconciling is worth grouping before it is worth titling.
@@ -51,11 +52,10 @@ export function round2(value) {
 export function signedExpectedTotal(raw, payments) {
   const text = String(raw ?? '').trim()
   if (!text) return null
-  const value = Number.parseFloat(text.replace(/[^0-9.-]/g, ''))
+  const value = parseAmountInput(text)
   if (!Number.isFinite(value)) return null
   if (value === 0) return 0
-  const explicitlyNegative = /-/.test(text)
-  if (explicitlyNegative) return round2(value < 0 ? value : -value)
+  if (value < 0) return round2(value)
   // Money out is the overwhelming case and the sensible default when a set of payments nets to nothing
   // (two rows that cancel), which carries no direction to take.
   const direction = livePaymentsTotal(payments) < 0 ? -1 : 1
@@ -66,7 +66,7 @@ export function signedExpectedTotal(raw, payments) {
 // the inverse of the rule above, so a re-save round-trips instead of flipping sign each time.
 export function expectedTotalInputValue(expectedTotal) {
   if (expectedTotal === null || expectedTotal === undefined) return ''
-  return String(Math.abs(round2(expectedTotal)))
+  return formatAmountInput(Math.abs(round2(expectedTotal)))
 }
 
 /*

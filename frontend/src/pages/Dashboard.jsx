@@ -19,7 +19,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
-import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
+import { formatCurrency, monthLabel, lastNMonths, formatDateRange } from '../lib/utils.js'
 import {
   shiftMonth, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
   trendsWindowOptions, isTrendsYearWindow, rowsMonthSpan,
@@ -70,6 +70,7 @@ import AvgPill from '../components/AvgPill.jsx'
 import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
 import AxisAvgPill from '../components/AxisAvgPill.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
+import { formatDecimal } from '../lib/displayFormat.js'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -391,7 +392,8 @@ function presetToPeriod(preset) {
   return null
 }
 
-const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
+// Built when rendered, not at import: the labels follow the viewer's date format, applied after load.
+const recentMonths = () => lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
 
 // The period/compare/drill dropdowns share the app's form-control styling (components/ui.jsx). MD keeps
 // its slightly rounder radius (8 vs the helper's 6) so the look is unchanged; SM is the compact
@@ -878,7 +880,7 @@ function PeriodPicker({ label, onChange }) {
             onChange={e => setCustomStart(e.target.value)}
             style={DASH_SELECT_SM}
           >
-            {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {recentMonths().map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>to</span>
           <select
@@ -886,7 +888,7 @@ function PeriodPicker({ label, onChange }) {
             onChange={e => setCustomEnd(e.target.value)}
             style={DASH_SELECT_SM}
           >
-            {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {recentMonths().map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <Button size="compact" onClick={applyCustom}>Go</Button>
         </div>
@@ -920,7 +922,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
             onChange={e => onCustomStartChange(e.target.value)}
             style={DASH_SELECT_SM}
           >
-            {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {recentMonths().map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>to</span>
           <select
@@ -928,7 +930,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
             onChange={e => onCustomEndChange(e.target.value)}
             style={DASH_SELECT_SM}
           >
-            {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {recentMonths().map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <Button size="compact" onClick={onCustomApply}>Go</Button>
         </div>
@@ -1694,7 +1696,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
           })
         })().map(s => {
           const grandTotal = avgBySeries.reduce((sum, x) => sum + x.total, 0)
-          const pct = grandTotal > 0 ? (s.total / grandTotal * 100).toFixed(1) : 0
+          const pct = formatDecimal(grandTotal > 0 ? s.total / grandTotal * 100 : 0, 1)
           // A group row drills to its categories — the same drill as the group picker above — and a
           // category row, the bottom of the hierarchy, opens the transactions behind its figure.
           const drillsToCategories = !drillGroup
@@ -1878,7 +1880,7 @@ export default function Dashboard() {
   // The period shown on the single-view totals cards. The effective period (explicit pick or the
   // Dashboard default) drives it; a rangeless value (all-time, explicit or default) reads "All time".
   const singlePeriodLabel = (effectiveDate && effectiveDate.start && effectiveDate.end)
-    ? (effectiveDate.preset || `${effectiveDate.start} → ${effectiveDate.end}`)
+    ? (effectiveDate.preset || formatDateRange(effectiveDate.start, effectiveDate.end))
     : 'All time'
   // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), which
   // splits each facet by mode so an exclude chip can never leak into an include list and invert its

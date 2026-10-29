@@ -19,6 +19,11 @@ from decimal import Decimal
 import re
 import uuid
 from backend.db.database import compact_if_worthwhile, get_db
+from backend.services.amount_text import DECIMAL_POINT, amount_text_parts
+from backend.services.input_format import (
+    DATE_ORDER_DMY, DATE_ORDER_MDY, DATE_ORDER_YMD, DEFAULT_INPUT_FORMAT, InputFormat,
+    caller_input_format, coerce_input_format,
+)
 from backend.services.recurring_detection import owe_recurring_rescan, payee_keys_for_ids, settle_owed_rescans
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
@@ -355,7 +360,7 @@ def _split_quick_filter_field(value: str):
     return field, match.group(2).strip()
 
 
-def _build_quick_filter_clause(value: str, *, expanded: bool = False):
+def _build_quick_filter_clause(value: str, *, expanded: bool = False, input_format: InputFormat = DEFAULT_INPUT_FORMAT):
     text = (value or "").strip()
     if not text:
         return None
@@ -411,7 +416,8 @@ def _build_quick_filter_clause(value: str, *, expanded: bool = False):
                 params.append(f"% {normalized_account_text} %")
 
     if want("date"):
-        iso_date = _parse_quick_filter_date(search_text)
+        date_order = input_format.date_order
+        iso_date = _parse_quick_filter_date(search_text, date_order)
         if iso_date:
             or_clauses.append("t.date = ?")
             params.append(iso_date)
@@ -427,7 +433,7 @@ def _build_quick_filter_clause(value: str, *, expanded: bool = False):
         # year — e.g. "9/29" finds Sept 29 across all years, "9" finds every September. Stored dates
         # are ISO YYYY-MM-DD, so the leading "-" anchors the match to the month/day fields and keeps
         # a bare month like "09" from also matching a day or a year fragment.
-        month_day = _parse_quick_filter_month_day(search_text)
+        month_day = _parse_quick_filter_month_day(search_text, date_order)
         if month_day:
             or_clauses.append("t.date LIKE ?")
             params.append(f"%-{month_day}")
@@ -442,13 +448,13 @@ def _build_quick_filter_clause(value: str, *, expanded: bool = False):
         # row lacks the term — and the answer is to *show* the cause rather than to hide the match: the
         # list feed carries `matched_document` for these rows and the ledger marks them. `doc:` remains
         # as the way to search documents *only*.
-        match_query = _fts_match_query(search_text)
+        match_query = _fts_match_query(search_text, input_format.date_order)
         if match_query:
             or_clauses.append(DOCUMENT_MATCH_SQL)
             params.append(match_query)
 
     if want("amount"):
-        amount = _parse_quick_filter_amount(search_text)
+        amount = _parse_quick_filter_amount(search_text, input_format.decimal_separator)
         if amount is not None:
             low_cents, high_cents, direction = amount
             # Stored money out is positive (docs/data-model.md), the reverse of how it is typed, so a typed sign
@@ -590,7 +596,7 @@ def hidden_text_match_sql(quick_filter: Optional[str]):
     return f"({hidden_sql} AND {VISIBLE_NAME_SQL} NOT LIKE ?)", [*hidden_params, pattern]
 
 
-def document_match_query(quick_filter: Optional[str]) -> Optional[str]:
+def document_match_query(quick_filter: Optional[str], input_format: InputFormat = DEFAULT_INPUT_FORMAT) -> Optional[str]:
     """The FTS query a quick filter implies for document text, or None if it implies none.
 
     Used by the list feed to project the match reason. Returns None for a prefixed filter that is not
@@ -603,10 +609,10 @@ def document_match_query(quick_filter: Optional[str]) -> Optional[str]:
     field, remainder = _split_quick_filter_field(text)
     if field is not None and field != "doc":
         return None
-    return _fts_match_query(remainder if field is not None else text)
+    return _fts_match_query(remainder if field is not None else text, input_format.date_order)
 
 
-def _fts_match_query(value: str) -> Optional[str]:
+def _fts_match_query(value: str, date_order: str = DATE_ORDER_MDY) -> Optional[str]:
     """Turn what someone typed into an FTS5 MATCH expression, or None if nothing usable is left.
 
     **Every token is quoted rather than passed through.** FTS5 MATCH is a query language — `AND`, `*`,
@@ -627,7 +633,7 @@ def _fts_match_query(value: str) -> Optional[str]:
     **A date is searched as the date, not as its spelling**, with or without its year — see
     `_fts_date_phrases`.
     """
-    date_phrases = _fts_date_phrases(value)
+    date_phrases = _fts_date_phrases(value, date_order)
     if date_phrases:
         return " OR ".join(f'"{phrase}"' for phrase in date_phrases)
     terms = []
@@ -638,19 +644,21 @@ def _fts_match_query(value: str) -> Optional[str]:
     return " ".join(terms) or None
 
 
-def _fts_date_phrases(value: str) -> list[str]:
+def _fts_date_phrases(value: str, date_order: str = DATE_ORDER_MDY) -> list[str]:
     """The ways a receipt may print the date `value` names, as FTS5 phrases, or [] if it names no date.
 
     A receipt's date is free text in whatever form its issuer chose, so the form typed is rarely the form
     printed: `8/25/2026` has to find `08/25/2026`, `8/25/26`, `2026-08-25` and `Aug 25, 2026`. Punctuation
     is not listed because the tokenizer drops it, which also covers `Aug. 25, 2026` and `08-25-2026`. The
-    numeric forms are month-first, as the date facet reads them.
+    numeric forms are written in the searcher's date order, on the assumption that a receipt they hold
+    prints dates the way they write them; a named month is listed both ways round, since it cannot be
+    misread.
 
     A month and day with no year (`8/25`, `Aug 25`) gets the same forms without one, and a phrase matches
     wherever it sits, so those find the date in any year.
     """
-    iso_date = _parse_quick_filter_date(value)
-    month_day = None if iso_date else _parse_fts_month_day(value)
+    iso_date = _parse_quick_filter_date(value, date_order)
+    month_day = None if iso_date else _parse_fts_month_day(value, date_order)
     if not iso_date and not month_day:
         return []
     year, month, day = iso_date.split("-") if iso_date else (None, *month_day.split("-"))
@@ -659,28 +667,37 @@ def _fts_date_phrases(value: str) -> list[str]:
     # Named from a fixed leap year: only the month is read, and Feb 29 has to be constructible.
     named = datetime(2000, int(month), 1)
     names = sorted({named.strftime("%b").lower(), named.strftime("%B").lower()})
+    day_first = date_order == DATE_ORDER_DMY
     if not year:
-        phrases = [f"{m} {d}" for m in months for d in days]
+        phrases = [f"{d} {m}" if day_first else f"{m} {d}" for m in months for d in days]
         phrases += [f"{name} {d}" for name in names for d in days]
         phrases += [f"{d} {name}" for name in names for d in days]
         return phrases
+    years = (year, year[2:])
     phrases = [f"{year} {month} {day}"]
-    phrases += [f"{m} {d} {y}" for m in months for d in days for y in (year, year[2:])]
+    if date_order == DATE_ORDER_YMD:
+        phrases += [f"{year} {m} {d}" for m in months for d in days if (m, d) != (month, day)]
+    else:
+        phrases += [f"{d} {m} {y}" if day_first else f"{m} {d} {y}" for m in months for d in days for y in years]
     phrases += [f"{name} {d} {year}" for name in names for d in days]
     phrases += [f"{d} {name} {year}" for name in names for d in days]
     return phrases
 
 
-def _parse_fts_month_day(value: str) -> Optional[str]:
+# A named month is unambiguous, so it is read either way round in every date order.
+_NAMED_MONTH_DAY_FORMATS = ("%b %d", "%B %d", "%d %b", "%d %B")
+
+
+def _parse_fts_month_day(value: str, date_order: str = DATE_ORDER_MDY) -> Optional[str]:
     """A month and day with no year as "MM-DD" — `_parse_quick_filter_month_day`, plus a named month."""
-    numeric = _parse_quick_filter_month_day(value)
+    numeric = _parse_quick_filter_month_day(value, date_order)
     if numeric:
         return numeric
     text = (value or "").strip()
-    for fmt in ("%b %d %Y", "%B %d %Y"):
+    for fmt in _NAMED_MONTH_DAY_FORMATS:
         try:
             # Parsed against a leap year so Feb 29 is not refused.
-            return datetime.strptime(f"{text} 2000", fmt).strftime("%m-%d")
+            return datetime.strptime(f"{text} 2000", f"{fmt} %Y").strftime("%m-%d")
         except ValueError:
             continue
     return None
@@ -690,21 +707,25 @@ def _normalize_quick_filter_text(value: str) -> str:
     return " ".join(re.sub(r"[()./_-]+", " ", str(value or "").strip().lower()).split())
 
 
-def _parse_quick_filter_date(value: str) -> Optional[str]:
+# **The parse order follows the searcher's date order**, because `02/01/2026` is Feb 1 to one person and
+# 1 Feb to another and nothing in the text says which. ISO `2026-02-01` is read first in every order: it
+# cannot be misread, and it is what the help names as the form that always works. A named month is read
+# either way round, for the same reason.
+_NUMERIC_DATE_FORMATS = {
+    DATE_ORDER_MDY: ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y", "%m.%d.%Y", "%m.%d.%y"),
+    DATE_ORDER_DMY: ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%d.%m.%Y", "%d.%m.%y"),
+    DATE_ORDER_YMD: ("%Y/%m/%d", "%Y.%m.%d"),
+}
+_NAMED_DATE_FORMATS = (
+    "%b %d %Y", "%b %d, %Y", "%B %d %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y",
+)
+
+
+def _parse_quick_filter_date(value: str, date_order: str = DATE_ORDER_MDY) -> Optional[str]:
     text = (value or "").strip()
     if not text:
         return None
-    formats = [
-        "%Y-%m-%d",
-        "%m/%d/%Y",
-        "%m/%d/%y",
-        "%m-%d-%Y",
-        "%m-%d-%y",
-        "%b %d %Y",
-        "%b %d, %Y",
-        "%B %d %Y",
-        "%B %d, %Y",
-    ]
+    formats = ("%Y-%m-%d", *_NUMERIC_DATE_FORMATS.get(date_order, _NUMERIC_DATE_FORMATS[DATE_ORDER_MDY]), *_NAMED_DATE_FORMATS)
     for fmt in formats:
         try:
             return datetime.strptime(text, fmt).date().isoformat()
@@ -714,10 +735,11 @@ def _parse_quick_filter_date(value: str) -> Optional[str]:
 
 
 def _parse_quick_filter_year_month(value: str) -> Optional[str]:
+    # A four-digit year cannot be mistaken for a month, so these read the same in every date order.
     text = (value or "").strip()
     if not text:
         return None
-    formats = ["%Y-%m", "%m/%Y", "%m-%Y"]
+    formats = ["%Y-%m", "%Y/%m", "%m/%Y", "%m-%Y"]
     for fmt in formats:
         try:
             return datetime.strptime(text, fmt).date().strftime("%Y-%m")
@@ -733,13 +755,15 @@ def _parse_quick_filter_year(value: str) -> Optional[str]:
     return text if re.fullmatch(r"(?:19|20)\d{2}", text) else None
 
 
-def _parse_quick_filter_month_day(value: str) -> Optional[str]:
-    # A month/day with no year (mm/dd or mm-dd) returns "MM-DD" for an any-year match. Validated by
-    # range rather than strptime so leap days like 2/29 are not rejected against an arbitrary year.
+def _parse_quick_filter_month_day(value: str, date_order: str = DATE_ORDER_MDY) -> Optional[str]:
+    # A month/day with no year (mm/dd or mm-dd, dd/mm in a day-first order) returns "MM-DD" for an any-year
+    # match. Validated by range rather than strptime so leap days like 2/29 are not rejected against an
+    # arbitrary year.
     match = re.fullmatch(r"\s*(\d{1,2})[/-](\d{1,2})\s*", value or "")
     if not match:
         return None
-    month, day = int(match.group(1)), int(match.group(2))
+    first, second = int(match.group(1)), int(match.group(2))
+    month, day = (second, first) if date_order == DATE_ORDER_DMY else (first, second)
     if 1 <= month <= 12 and 1 <= day <= 31:
         return f"{month:02d}-{day:02d}"
     return None
@@ -754,10 +778,9 @@ def _parse_quick_filter_month(value: str) -> Optional[str]:
     return None
 
 
-_QUICK_FILTER_AMOUNT_RE = re.compile(r"([+-]?)(\d+(?:\.\d*)?|\.\d+)")
-
-
-def _parse_quick_filter_amount(value: str) -> Optional[tuple[int, int, Optional[str]]]:
+def _parse_quick_filter_amount(
+    value: str, decimal_separator: str = DECIMAL_POINT,
+) -> Optional[tuple[int, int, Optional[str]]]:
     """`(low_cents, high_cents, direction)` for text that reads as an amount, else None: the inclusive range of
     magnitudes, in cents, the typed text could still become. Direction is "out", "in" or None.
 
@@ -771,20 +794,18 @@ def _parse_quick_filter_amount(value: str) -> Optional[tuple[int, int, Optional[
     `+42.10` money received, and a bare `42.10` either. Accounting parentheses mean a minus. Storage runs the
     other way round (`amount > 0` is money out), and the flip belongs to the clause that compares against it.
 
-    **Matched against a strict pattern rather than handed to `Decimal`**, which also accepts `inf`, `nan` and
-    `1e3`: the first two then raised out of the list query, so typing the start of a name like "Nantucket"
-    returned a server error, and the third silently searched for $1,000.
+    **Read in the searcher's number format** by the import's strict parser (`services/amount_text.py`):
+    `1.234` is twelve hundred with a decimal comma and one and a quarter with a decimal point, so the
+    same text means a different number in each, and a form that is well-formed in neither (`12,50` with a
+    decimal point) is not an amount at all rather than a guess. Strict also keeps out what `Decimal` would
+    accept — `inf`, `nan` and `1e3` — the first two of which raised out of the list query on the way to
+    typing a name like "Nantucket".
     """
-    text = (value or "").strip().replace(",", "").replace("$", "")
-    parenthesized = len(text) > 2 and text.startswith("(") and text.endswith(")")
-    if parenthesized:
-        text = text[1:-1]
-    match = _QUICK_FILTER_AMOUNT_RE.fullmatch(text)
-    if not match or (parenthesized and match.group(1)):
+    try:
+        sign, digits = amount_text_parts(value or "", decimal_separator)
+    except ValueError:
         return None
-    sign = "-" if parenthesized else match.group(1)
     direction = {"-": "out", "+": "in"}.get(sign)
-    digits = match.group(2)
     dollars, _, cents = digits.partition(".")
     if len(cents) >= 2:
         exact = int((Decimal(digits) * 100).quantize(Decimal("1")))
@@ -803,7 +824,7 @@ def _build_transaction_filter(
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, import_evidence_type=None,
     amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
-    recurring_only=None,
+    recurring_only=None, input_format=None,
     **facet_kwargs,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
@@ -963,7 +984,9 @@ def _build_transaction_filter(
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if quick_filter:
-        quick_filter_clause = _build_quick_filter_clause(quick_filter, expanded=expanded)
+        quick_filter_clause = _build_quick_filter_clause(
+            quick_filter, expanded=expanded, input_format=coerce_input_format(input_format),
+        )
         if quick_filter_clause:
             clause, clause_params = quick_filter_clause
             clauses.append(clause)
@@ -1047,6 +1070,7 @@ def transaction_list_filters(
     import_evidence_type: Optional[str] = Query(None),
     needs_review: bool          = Query(False),
     include_trashed: bool       = Query(False),
+    input_format: InputFormat   = Depends(caller_input_format),
 ) -> dict:
     """The list feed's non-facet filters as a dependency, for an endpoint that must resolve the same rows.
 
@@ -1130,9 +1154,11 @@ def list_transactions(
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, ge=0, le=1000, description="rows per page (max 1000); 0 = no limit — returns all matching rows, for known-bounded scopes only"),
     offset:       int           = Query(0),
+    input_format: InputFormat   = Depends(caller_input_format),
 ):
-    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    # Direct (non-HTTP) callers may omit the dependencies; over HTTP FastAPI always supplies them.
     facets = coerce_facets(facets) or TransactionFacets()
+    input_format = coerce_input_format(input_format)
     # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
     # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
     # The exception is `view`, which asks for exactly the rows behind a Dashboard figure and so takes the
@@ -1152,12 +1178,13 @@ def list_transactions(
             import_evidence_type=import_evidence_type,
             amount_min=amount_min, amount_max=amount_max,
             amount_min_op=amount_min_op, amount_max_op=amount_max_op,
+            input_format=input_format,
         ),
     )
 
     # Why a row came back, for the rows whose reason is invisible. Each is projected only when the filter
     # actually has that component, so the ordinary listing pays nothing for it.
-    doc_query = document_match_query(quick_filter)
+    doc_query = document_match_query(quick_filter, input_format)
     document_match_column = f"{DOCUMENT_MATCH_SQL} AS matched_document," if doc_query else ""
     document_match_params = [doc_query] if doc_query else []
     hidden_text_match = hidden_text_match_sql(quick_filter)
@@ -2025,7 +2052,7 @@ def _chunk(seq, size=400):
         yield seq[start:start + size]
 
 
-def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
+def _resolve_bulk_target_ids(conn, selection: BulkSelection, input_format: InputFormat = DEFAULT_INPUT_FORMAT) -> list[str]:
     # Always resolves to existing, non-trashed rows so the returned count is the real number changed
     # and a stale client id can't act on something already gone.
     if selection.mode == "ids":
@@ -2044,7 +2071,8 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
 
     if selection.mode == "filter":
         flt = _bulk_filter_params(selection.filter)
-        clauses, params = _build_transaction_filter(**flt, expanded=True)  # include_trashed defaults False
+        # Read in the caller's format, so "everything matching" is the set their list showed.
+        clauses, params = _build_transaction_filter(**flt, expanded=True, input_format=input_format)  # include_trashed defaults False
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # Expanded, so a "select all matching" under a category filter resolves the same rows the
         # ledger showed — including split transactions that matched on one part. DISTINCT because a
@@ -2226,10 +2254,10 @@ _RECURRING_RELEVANT_BULK_ACTIONS = {"set_category", "set_merchant", "set_date", 
 
 
 @router.post("/bulk")
-def bulk_update_transactions(body: BulkUpdateRequest):
+def bulk_update_transactions(body: BulkUpdateRequest, input_format: InputFormat = Depends(caller_input_format)):
     # One transaction so a multi-field apply (e.g. set category + add tag) is all-or-nothing.
     with get_db() as conn:
-        target_ids = _resolve_bulk_target_ids(conn, body.selection)
+        target_ids = _resolve_bulk_target_ids(conn, body.selection, coerce_input_format(input_format))
         if not target_ids:
             return {"updated_count": 0}
         kinds = {a.type for a in body.actions}

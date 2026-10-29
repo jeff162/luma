@@ -53,6 +53,7 @@ import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
+import { formatCount } from '../lib/displayFormat.js'
 
 // How many trailing days of an export are treated as still filling in. Most sources lag the thing they
 // describe, so the default assumes a lag; 1 — only the export day itself — is the opt-in for a
@@ -1433,7 +1434,7 @@ export default function ImportProfilesManager({
                       <div style={{ display: 'grid', gap: 2 }}>
                         <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Imported</span>
                         <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                          {stats.fileCount} {stats.fileCount === 1 ? 'file' : 'files'} · {stats.rowCount.toLocaleString()} {stats.rowCount === 1 ? 'row' : 'rows'}
+                          {stats.fileCount} {stats.fileCount === 1 ? 'file' : 'files'} · {formatCount(stats.rowCount)} {stats.rowCount === 1 ? 'row' : 'rows'}
                         </span>
                       </div>
                       {/* The actions column is a fixed width, so a control too wide for it takes a line

@@ -26,6 +26,7 @@ import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { NOT_IMPORTED_ROWS_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
+import { formatDate } from '../../lib/utils.js'
 
 // Every reason a row can be left out, in the order the filter pills offer them: the ones that mean
 // something went wrong first, then the ones the user asked for. `trailing_text` stands for a whole
@@ -174,7 +175,7 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
       )
     }
     const value = col.key === '__date__'
-      ? row.date
+      ? formatDate(row.date)
       : col.key === '__description__'
         ? row.description
         : row?.values?.[col.key.slice(5)]

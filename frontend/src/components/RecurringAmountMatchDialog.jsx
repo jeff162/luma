@@ -32,6 +32,7 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AppDialog, Button, Input, Toggle } from './ui.jsx'
 import { formatCurrency } from '../lib/utils.js'
+import { parseAmountInput, formatAmountInput } from '../lib/displayFormat.js'
 
 // The dialog is opened from a card in a long list, so it portals to the body: a fixed overlay is
 // positioned and stacked against whatever ancestor established a containing block, not the viewport.
@@ -48,16 +49,16 @@ export default function RecurringAmountMatchDialog({ series, suggested = null, o
 
   const [gated, setGated] = useState(series.amount_mode === 'fixed' || !!suggested)
   const [usePin, setUsePin] = useState(pinned || !!suggested)
-  const [low, setLow] = useState(String(startLow))
-  const [high, setHigh] = useState(String(startHigh))
+  const [low, setLow] = useState(formatAmountInput(startLow))
+  const [high, setHigh] = useState(formatAmountInput(startHigh))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   // The series' own direction, applied to typed magnitudes so the user never types a minus sign.
   const sign = (series.expected_amount ?? 0) < 0 ? -1 : 1
   const parsed = (value) => {
-    const n = Number.parseFloat(String(value).replace(/[^0-9.]/g, ''))
-    return Number.isFinite(n) ? n : null
+    const n = parseAmountInput(value)
+    return Number.isFinite(n) ? Math.abs(n) : null
   }
   const lowValue = parsed(low)
   const highValue = parsed(high)

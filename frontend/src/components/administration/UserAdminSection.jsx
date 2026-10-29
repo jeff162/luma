@@ -8,6 +8,7 @@ import SoleVaultMemberWarning from '../SoleVaultMemberWarning.jsx'
 import { useSoleVaultMember } from '../../lib/useSoleVaultMember.js'
 import { Card, Button, Spinner, FieldIssue, FormLabel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Tooltip } from '../ui.jsx'
 import { passwordIssue, passwordPolicyHelpText, usePasswordChecks } from '../../lib/passwordPolicy.js'
+import { formatTimestamp } from '../../lib/utils.js'
 
 export default function UserAdminSection({ passwordPolicy }) {
   const fieldIdBase = useId()
@@ -329,7 +330,7 @@ export default function UserAdminSection({ passwordPolicy }) {
               </div>
               <span style={{ textTransform: 'capitalize' }}>{user.role}</span>
               <span style={{ textTransform: 'capitalize' }}>{user.status}</span>
-              <span style={{ color: 'var(--muted)' }}>{user.last_login_at || 'Never'}</span>
+              <span style={{ color: 'var(--muted)' }}>{formatTimestamp(user.last_login_at) || 'Never'}</span>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <Button variant="secondary" onClick={() => startEditing(user)}>Edit</Button>
               </div>

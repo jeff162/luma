@@ -12,6 +12,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { formatTimestamp } from '../lib/utils.js'
 
 const IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.merchantFilterOpen'
 const IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.ownerFilterOpen'
@@ -23,10 +24,6 @@ function formatImportSummary(batch) {
   if (batch.skipped_count) parts.push(`${batch.skipped_count} skipped`)
   if (batch.deduped_count) parts.push(`${batch.deduped_count} deduped`)
   return parts.join(' · ')
-}
-
-function formatImportedAt(value) {
-  return value ? value.slice(0, 16).replace('T', ' ') : ''
 }
 
 export default function ImportRuleSuggestions() {
@@ -585,7 +582,7 @@ export default function ImportRuleSuggestions() {
     : isProfileContext
       ? (profile?.name || 'Data source')
       : (batch?.filename || 'Import')
-  const describeBatch = item => [formatImportedAt(item?.imported_at), formatImportSummary(item)].filter(Boolean).join(' · ')
+  const describeBatch = item => [formatTimestamp(item?.imported_at), formatImportSummary(item)].filter(Boolean).join(' · ')
   const contextFiles = isSystemContext ? systemCleanBatches : profileBatches
   const contextFilesLink = (
     <ImportedFilesPopover

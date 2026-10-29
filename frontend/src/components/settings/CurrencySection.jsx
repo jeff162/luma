@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api.js'
 import { Button, Spinner, getFormControlStyle, AppConfirmDialog } from '../ui.jsx'
-import { DEFAULT_LEDGER_CURRENCY, applyLedgerCurrency, currencySymbolFor } from '../../lib/moneyDisplay.js'
+import { DEFAULT_LEDGER_CURRENCY, applyLedgerCurrency, formatMoneyInCurrency } from '../../lib/moneyDisplay.js'
 
 export default function CurrencySection() {
   // The ledger holds one currency at a time, and this is it. Nothing about the stored data changes when
@@ -60,7 +60,6 @@ export default function CurrencySection() {
       : <Spinner />
   }
 
-  const symbol = currencySymbolFor(selected)
   const options = state.common || []
   // A code the user set that is not on the shortlist still has to be selectable, or saving anything else
   // would silently drop it. The list is a convenience, never a whitelist.
@@ -83,7 +82,7 @@ export default function CurrencySection() {
           ))}
         </select>
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-          Amounts show as <strong style={{ color: 'var(--text)' }}>{symbol}1,234.56</strong>
+          Amounts show as <strong style={{ color: 'var(--text)' }}>{formatMoneyInCurrency(1234.56, selected)}</strong>
         </span>
         <Button
           disabled={saving || selected === state.code}

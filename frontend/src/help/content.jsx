@@ -796,6 +796,11 @@ export const HELP_TOPICS = [
           <li>a <strong>month</strong> or <strong>month/day</strong> with no year &mdash; <code>03</code> or <code>03/15</code> &mdash; matches that date in every year</li>
         </ul>
         <p>
+          The examples are month first. Numeric dates are read in the order chosen
+          in <strong>Settings &rarr; Appearance</strong>, so with day first <code>15/03/2023</code> is the
+          same day. A date written <code>2023-03-15</code> is read the same way in every order.
+        </p>
+        <p>
           A number is also tried as an amount, so <code>2023</code> finds transactions of $2,023.00 to
           $2,023.99 as well, and <code>03</code> ones of $3.00 to $3.99. <code>date:2023</code> searches dates alone.
         </p>
@@ -810,7 +815,8 @@ export const HELP_TOPICS = [
           The dollars in an amount are exact, and the cents narrow as they are typed: <code>77</code> finds
           every amount from $77.00 to $77.99 (never $770), <code>77.4</code> those from $77.40 to $77.49,
           and <code>77.45</code> that amount alone. A dollar sign and thousands separators are fine
-          (<code>$1,250.00</code>), and parentheses read as a minus, the way a statement writes a payment:
+          (<code>$1,250.00</code>), written in the number format chosen in <strong>Settings &rarr;
+          Appearance</strong> (<code>1.250,00</code> with a decimal comma), and parentheses read as a minus, the way a statement writes a payment:
           <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter at the top of
           the page.
         </p>
@@ -4082,7 +4088,8 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="personal">Personal</HelpHeading>
         <ul>
           <li>
-            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
+            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc., and how dates and numbers
+            are written. Dates and amounts typed into {APP_NAME} are read in the same format.
           </li>
           <li>
             <strong>Security</strong> holds the password, passkeys and two-factor sign-in of the user

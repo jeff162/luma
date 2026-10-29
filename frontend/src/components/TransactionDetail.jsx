@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
-import { formatCurrency } from '../lib/utils.js'
+import { formatCurrency, formatDate } from '../lib/utils.js'
 import { AppConfirmDialog, AppNoticeDialog, Button, IconButton, Spinner, LinkButton } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, NamelessMerchant, getTxnMerchantLabel, getTxnName } from './TransactionRow.jsx'
@@ -501,7 +501,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                   Transaction
                 </div>
                 <TransactionAmountEditor txn={detailTxn} onSave={handleSaveAmount} />
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{detailTxn.date}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{formatDate(detailTxn.date)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
@@ -714,7 +714,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       {trashConfirmOpen && (
         <AppConfirmDialog
           title="Send transaction to trash?"
-          description={`Send "${getTxnMerchantLabel(detailTxn)}" (${detailTxn.date}) to the trash? You can restore it later from Settings → Trash.`}
+          description={`Send "${getTxnMerchantLabel(detailTxn)}" (${formatDate(detailTxn.date)}) to the trash? You can restore it later from Settings → Trash.`}
           confirmLabel="Send to trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"

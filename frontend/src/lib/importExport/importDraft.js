@@ -229,11 +229,6 @@ export function getSuggestedDataSourceName({ draftRecord = null, previewLike = n
   return inferFilenamePattern(draftRecord?.templateFilename || previewLike?.filename || '').trim()
 }
 
-export function formatImportBatchTimestamp(value) {
-  const normalized = String(value || '').trim()
-  return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
-}
-
 // A header fingerprint as the list of column names it stands for.
 export function splitHeaderFingerprint(value) {
   return String(value || '')

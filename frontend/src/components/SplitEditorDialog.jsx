@@ -38,6 +38,7 @@ import { distributeRemainder } from '../lib/splitDistribution.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppDialog, Button, Input, Tooltip, IconButton } from './ui.jsx'
+import { parseAmountInput, formatAmountInput } from '../lib/displayFormat.js'
 
 // Money reconciles at the cent, and amounts arrive as text the user is mid-way through typing, so the
 // remaining figure is compared against a half-cent rather than zero.
@@ -59,7 +60,7 @@ const GRID = 'minmax(0, 1fr) 150px 96px 24px'
 const SUGGESTION_GRID = 'minmax(0, 1fr) 92px 72px'
 
 function toAmount(raw) {
-  const value = Number.parseFloat(String(raw).replace(/[^0-9.-]/g, ''))
+  const value = parseAmountInput(raw)
   return Number.isFinite(value) ? value : 0
 }
 
@@ -138,7 +139,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     if (txn && !txn.id) {
       setRows((txn.parts || []).length
         ? txn.parts.map((p, i) => ({
-          key: `row-${i}`, category_id: p.category_id, amount: String(round2(p.amount * dir)), label: p.label || '',
+          key: `row-${i}`, category_id: p.category_id, amount: formatAmountInput(p.amount * dir), label: p.label || '',
         }))
         : Array.from({ length: MIN_ROWS }, blankRow).map((row, i) => (
           i === 0 ? { ...row, category_id: txn.category_id ?? null } : row
@@ -154,7 +155,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
         if (cancelled) return
         if (split.parts?.length) {
           setRows(split.parts.map((p, i) => ({
-            key: `row-${i}-${p.id}`, category_id: p.category_id, amount: String(p.amount * dir),
+            key: `row-${i}-${p.id}`, category_id: p.category_id, amount: formatAmountInput(p.amount * dir),
             label: p.label || '',
           })))
         } else {
@@ -204,7 +205,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     if (!selectedKey) return
     const row = rows.find(r => r.key === selectedKey)
     if (!row) return
-    const next = (Math.round((toAmount(row.amount) + remaining) * 100) / 100).toFixed(2)
+    const next = formatAmountInput(toAmount(row.amount) + remaining, { cents: true })
     setRows(prev => prev.map(r => (r.key === selectedKey ? { ...r, amount: next } : r)))
     // Stashed verbatim, not re-formatted: putting back "30" where the user typed "30" is the edit
     // being reversed; normalizing it to "30.00" would be a second change wearing an undo's label.
@@ -219,7 +220,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     if (!next) return
     const stash = {}
     rows.forEach(r => { if (holdsAmount(r)) stash[r.key] = r.amount })
-    setRows(prev => prev.map((r, i) => (r.key in stash ? { ...r, amount: next[i].toFixed(2) } : r)))
+    setRows(prev => prev.map((r, i) => (r.key in stash ? { ...r, amount: formatAmountInput(next[i], { cents: true }) } : r)))
     setRemainderUndo(stash)
   }
 
@@ -239,7 +240,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setRows(suggestion.parts.map((p, i) => ({
       key: `suggested-${i}`,
       category_id: p.category_id ?? null,
-      amount: p.amount == null ? '' : String(p.amount * dir),
+      amount: p.amount == null ? '' : formatAmountInput(p.amount * dir),
       label: p.label || '',
     })))
   }

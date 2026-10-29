@@ -31,6 +31,7 @@ import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
+import DisplayFormatSection from '../components/settings/DisplayFormatSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
 import ImportStorageSection from '../components/settings/ImportStorageSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
@@ -38,6 +39,7 @@ import {
   BackupHistoryTrashSection, RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection,
 } from '../components/settings/TrashSections.jsx'
 import AboutSection from '../components/settings/AboutSection.jsx'
+import { formatCount } from '../lib/displayFormat.js'
 
 const ERROR_LOG_SECTION = 'errorLog'
 
@@ -73,7 +75,7 @@ export default function Settings() {
   const trashTotal = trash ? trash.transactions + trash.duplicates + trash.rules + (trash.backup_history || 0) : 0
   const detailBytes = storage?.import_detail?.bytes || 0
   const detailShare = formatShare(detailBytes, storage?.database_bytes).replace('about ', '')
-  const counted = (title, count) => (trash ? `${title} (${count.toLocaleString()})` : title)
+  const counted = (title, count) => (trash ? `${title} (${formatCount(count)})` : title)
 
   const groups = [
     {
@@ -82,8 +84,13 @@ export default function Settings() {
         {
           key: 'appearance',
           title: 'Appearance',
-          description: 'Select the color theme.',
-          content: <ThemeSection />,
+          description: 'The color theme, and how dates and numbers are written.',
+          content: (
+            <div style={{ display: 'grid', gap: 18 }}>
+              <Subsection title="Theme"><ThemeSection /></Subsection>
+              <Subsection title="Dates and numbers"><DisplayFormatSection /></Subsection>
+            </div>
+          ),
         },
         // With sign-in protection off there is no sign-in for a passkey or a second factor to belong to.
         authEnabled && {
@@ -107,7 +114,7 @@ export default function Settings() {
         {
           key: 'trash',
           title: 'Trash',
-          note: trashTotal ? trashTotal.toLocaleString() : '',
+          note: trashTotal ? formatCount(trashTotal) : '',
           content: (
             <div style={{ display: 'grid', gap: 18 }}>
               <Subsection title={counted('Transactions', trash?.transactions)}>

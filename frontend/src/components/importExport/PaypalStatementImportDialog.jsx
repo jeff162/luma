@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
+import { formatDateRange, monthLabel } from '../../lib/utils.js'
 import { AppDialog, Button, Input, Select, Spinner } from '../ui.jsx'
 
 // PayPal monthly statements dropped on the importer: which PayPal account each belongs to, and the account
@@ -16,10 +17,8 @@ const NEW_ACCOUNT = '__new__'
 function periodLabel(start, end) {
   const [y, m, d] = start.split('-').map(Number)
   const last = new Date(y, m, 0).getDate()
-  if (d === 1 && end === `${start.slice(0, 8)}${String(last).padStart(2, '0')}`) {
-    return new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })
-  }
-  return `${start} – ${end}`
+  if (d === 1 && end === `${start.slice(0, 8)}${String(last).padStart(2, '0')}`) return monthLabel(start.slice(0, 7))
+  return formatDateRange(start, end)
 }
 
 function statementNote(statement) {

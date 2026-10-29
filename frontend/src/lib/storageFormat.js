@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { formatDecimal } from './displayFormat.js'
+
 // How the housekeeping surfaces say a size, and what share of the database it is.
 
 export function formatBytes(bytes) {
   const n = Number(bytes || 0)
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  if (n >= 1024 * 1024) return `${formatDecimal(n / (1024 * 1024), 1)} MB`
   if (n >= 1024) return `${Math.round(n / 1024)} KB`
   return `${n} B`
 }

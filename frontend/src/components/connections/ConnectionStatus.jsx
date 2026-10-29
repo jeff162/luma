@@ -12,6 +12,7 @@ import { OutcomeChip, SourceAccountChip } from '../importExport/SourceAccountChi
 import { allowanceSummary } from '../../lib/requestAllowance.js'
 import { HOVER_OPEN_DELAY_MS, Tooltip, IconButton } from '../ui.jsx'
 import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
+import { formatCount } from '../../lib/displayFormat.js'
 
 // When a connection last succeeded, as an age to read at a glance with the exact moment on hover. The
 // pairing is the rule, not a nicety: a relative label is computed at render and would otherwise drift on
@@ -134,7 +135,7 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
   }
   if (!lastSync) return null
   const outcome = SYNC_OUTCOMES[lastSync.outcome] || SYNC_OUTCOMES.ok
-  const n = (v) => Number(v || 0).toLocaleString()
+  const n = formatCount
   const rowTotal = (lastSync.added || 0) + (lastSync.updated || 0) + (lastSync.removed || 0)
   // Every account the connection offers, not only those that received something. An account that imported
   // nothing is exactly what this exists to surface, and it cannot appear in a tally built from what landed

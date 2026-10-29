@@ -13,6 +13,8 @@
 // as its own thing, muted with a minus, so the green check never implies rows loaded when none did. That
 // state is what makes an account silently importing nothing visible instead of merely absent.
 
+import { formatCount } from '../../lib/displayFormat.js'
+
 const TRUNCATE_AT = 22
 
 function truncate(s) {
@@ -76,7 +78,7 @@ export function SourceAccountChip({ label, mappedLabel = '', count = null, skipp
           <span style={{ color: 'var(--muted)' }}>{truncate(mappedLabel)}</span>
         </>
       ) : null}
-      {n > 0 ? <span style={{ color: 'var(--muted)' }}>{n.toLocaleString()}</span> : null}
+      {n > 0 ? <span style={{ color: 'var(--muted)' }}>{formatCount(n)}</span> : null}
     </span>
   )
 }
@@ -100,7 +102,7 @@ export function OutcomeChip({ label, count, tone = 'muted', onClick, title }) {
       }}
     >
       {label}
-      <span style={{ fontWeight: 600 }}>{Number(count || 0).toLocaleString()}</span>
+      <span style={{ fontWeight: 600 }}>{formatCount(count)}</span>
     </Tag>
   )
 }

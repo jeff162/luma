@@ -26,6 +26,19 @@ def get_preferences(scope_id: str) -> dict[str, str]:
     return {row["pref_key"]: row["pref_value"] for row in rows}
 
 
+def get_preference_values(scope_id: str, pref_keys: tuple[str, ...]) -> dict[str, str]:
+    """The stored values of just these keys, for a server-side reader that needs one or two of them."""
+    if not pref_keys:
+        return {}
+    placeholders = ",".join("?" * len(pref_keys))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT pref_key, pref_value FROM ui_preference WHERE scope_id = ? AND pref_key IN ({placeholders})",
+            (scope_id, *pref_keys),
+        ).fetchall()
+    return {row["pref_key"]: row["pref_value"] for row in rows}
+
+
 def set_preference(scope_id: str, pref_key: str, pref_value: str) -> None:
     with get_db() as conn:
         conn.execute(

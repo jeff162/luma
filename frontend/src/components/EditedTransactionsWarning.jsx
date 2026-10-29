@@ -3,6 +3,7 @@
 
 import React from 'react'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
+import { formatDate } from '../lib/utils.js'
 
 // The "you edited these after they came in" block shown before a removal that would delete them —
 // a file's Undo and a connection's Remove synced transactions. Both back the same backend guard
@@ -25,7 +26,7 @@ export function EditedTransactionsWarning({ rows, noun = 'transactions', suffix 
       <div style={{ maxHeight: 180, overflowY: 'auto' }}>
         {rows.map(t => (
           <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 80px', fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-            <span style={{ color: 'var(--muted)' }}>{t.date}</span>
+            <span style={{ color: 'var(--muted)' }}>{formatDate(t.date)}</span>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.display_name || t.merchant_name || t.raw_name}</span>
             <span style={{ textAlign: 'right', color: getTransactionAmountColor(t.amount) }}>{formatTransactionAmount(t.amount)}</span>
           </div>

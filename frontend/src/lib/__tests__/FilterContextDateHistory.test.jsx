@@ -165,6 +165,6 @@ describe('describeDateFilter', () => {
     expect(describeDateFilter(null)).toBe('the default period')
     expect(describeDateFilter(ALL_TIME)).toBe('All time')
     expect(describeDateFilter(MAY)).toBe('May 2026')
-    expect(describeDateFilter({ start: '2026-01-01', end: '2026-03-31' })).toBe('2026-01-01 → 2026-03-31')
+    expect(describeDateFilter({ start: '2026-01-01', end: '2026-03-31' })).toBe('Jan 1 – Mar 31, 2026')
   })
 })

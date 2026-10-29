@@ -10,6 +10,7 @@ import unittest
 
 from backend.routers.transactions import (
     _build_quick_filter_clause,
+    _fts_date_phrases,
     _parse_quick_filter_amount,
     _parse_quick_filter_date,
     _parse_quick_filter_month,
@@ -17,6 +18,7 @@ from backend.routers.transactions import (
     _parse_quick_filter_year,
     _parse_quick_filter_year_month,
 )
+from backend.services.input_format import InputFormat
 
 
 class QuickFilterParsingTests(unittest.TestCase):
@@ -120,3 +122,49 @@ class QuickFilterParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InputFormatParsingTests(unittest.TestCase):
+    """The quick filter reads dates and amounts in the searcher's chosen format. `01/02/2026` and `1.234`
+    each mean two different things, and reading them in the wrong convention finds the wrong rows without
+    a word."""
+
+    def test_a_numeric_date_follows_the_date_order(self):
+        self.assertEqual(_parse_quick_filter_date("01/02/2026", "mdy"), "2026-01-02")
+        self.assertEqual(_parse_quick_filter_date("01/02/2026", "dmy"), "2026-02-01")
+        self.assertEqual(_parse_quick_filter_date("31.01.2026", "dmy"), "2026-01-31")
+        self.assertEqual(_parse_quick_filter_date("2026/02/01", "ymd"), "2026-02-01")
+        self.assertIsNone(_parse_quick_filter_date("31/01/2026", "mdy"))
+
+    def test_iso_and_a_named_month_read_the_same_in_every_order(self):
+        for order in ("mdy", "dmy", "ymd"):
+            self.assertEqual(_parse_quick_filter_date("2026-02-01", order), "2026-02-01")
+            self.assertEqual(_parse_quick_filter_date("1 Feb 2026", order), "2026-02-01")
+            self.assertEqual(_parse_quick_filter_date("Feb 1, 2026", order), "2026-02-01")
+
+    def test_a_month_and_day_follow_the_date_order(self):
+        self.assertEqual(_parse_quick_filter_month_day("01/02", "mdy"), "01-02")
+        self.assertEqual(_parse_quick_filter_month_day("01/02", "dmy"), "02-01")
+        self.assertIsNone(_parse_quick_filter_month_day("25/12", "mdy"))
+        self.assertEqual(_parse_quick_filter_month_day("25/12", "dmy"), "12-25")
+
+    def test_an_amount_follows_the_decimal_separator(self):
+        self.assertEqual(_parse_quick_filter_amount("1.234,56", "comma"), (123456, 123456, None))
+        self.assertIsNone(_parse_quick_filter_amount("1.234,56", "point"))
+        # The same text, a different number in each convention.
+        self.assertEqual(_parse_quick_filter_amount("1.234", "point"), (123, 123, None))
+        self.assertEqual(_parse_quick_filter_amount("1.234", "comma"), (123400, 123499, None))
+        self.assertEqual(_parse_quick_filter_amount("12,5", "comma"), (1250, 1259, None))
+        self.assertEqual(_parse_quick_filter_amount("-1 234,56 €", "comma"), (123456, 123456, "out"))
+
+    def test_a_receipt_date_is_searched_in_the_date_order(self):
+        self.assertIn("1 2 2026", _fts_date_phrases("01/02/2026", "dmy"))  # day first, as typed
+        self.assertNotIn("2 1 2026", _fts_date_phrases("01/02/2026", "dmy"))
+        self.assertIn("2 1 2026", _fts_date_phrases("02/01/2026", "mdy"))
+        self.assertIn("2026 2 1", _fts_date_phrases("2026-02-01", "ymd"))
+
+    def test_the_clause_reads_in_the_format_it_is_given(self):
+        _, params = _build_quick_filter_clause("date:01/02/2026", input_format=InputFormat(date_order="dmy"))
+        self.assertIn("2026-02-01", params)
+        _, params = _build_quick_filter_clause("date:01/02/2026")
+        self.assertIn("2026-01-02", params)

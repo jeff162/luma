@@ -8,6 +8,7 @@ import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import { AppConfirmDialog, IconButton, LinkButton } from './ui.jsx'
+import { formatDecimal } from '../lib/displayFormat.js'
 
 /*
  * A list of documents and everything done to one in place: view, rename, edit its text, and take it away.
@@ -175,5 +176,5 @@ function formatSize(bytes) {
   if (!bytes && bytes !== 0) return ''
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${formatDecimal(bytes / (1024 * 1024), 1)} MB`
 }

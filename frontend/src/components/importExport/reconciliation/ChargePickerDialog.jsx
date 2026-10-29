@@ -4,6 +4,7 @@
 import { useMemo, useState } from 'react'
 import { AppDialog, Button } from '../../ui.jsx'
 import { formatTransactionAmount } from '../../../lib/moneyDisplay.js'
+import { formatDate } from '../../../lib/utils.js'
 
 // The reconciliation report's manual pairing window: pick the ledger row(s) that belong to one record the
 // matcher could not pair on its own. Candidates are sorted by date proximity to the record, and a running
@@ -72,7 +73,7 @@ export function ChargePickerDialog({
           <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
             borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)', cursor: 'pointer', fontSize: 13 }}>
             <input type={multiple ? 'checkbox' : 'radio'} checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-            <span style={{ width: 88, color: 'var(--muted)', flexShrink: 0 }}>{c.date}</span>
+            <span style={{ width: 88, color: 'var(--muted)', flexShrink: 0 }}>{formatDate(c.date)}</span>
             <span style={{ width: 88, textAlign: 'right', flexShrink: 0 }}>{formatTransactionAmount(c.amount)}</span>
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--muted)' }}>
               {c.account}{c.name ? ` · ${c.name}` : ''}
