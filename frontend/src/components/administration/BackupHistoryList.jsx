@@ -34,7 +34,7 @@ function entryDetails(row) {
     row.encrypted == null ? null
       : !row.encrypted ? 'unencrypted'
         : row.key_labels?.length ? `encryption keys: ${row.key_labels.join(', ')}` : 'encrypted',
-    row.restored_at ? `this system was restored from it ${formatTimestamp(row.restored_at)}` : null,
+    row.restored_at ? `this system was built from this on ${formatTimestamp(row.restored_at)}` : null,
   ].filter(Boolean)
 }
 

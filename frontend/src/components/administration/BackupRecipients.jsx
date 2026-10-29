@@ -154,8 +154,7 @@ export function BackupRecipients({ onRecipientsChange }) {
 
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', color: 'var(--muted)', fontSize: 13 }}>
-          RSA public keys used to encrypt backup files. The corresponding private key is
-          provided as part of a restore; only public keys are stored.
+          RSA public keys available for encrypting backup files
         </div>
 
         {error && (

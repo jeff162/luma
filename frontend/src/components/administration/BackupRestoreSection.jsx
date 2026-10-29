@@ -198,7 +198,7 @@ export default function BackupRestoreSection() {
     let alive = true
     api.getBackupStatus()
       .then(status => { if (alive) setBackupStatus(status || null) })
-      .catch(() => {})
+      .catch(() => { })
     return () => { alive = false }
   }, [vault])
 
@@ -268,7 +268,7 @@ export default function BackupRestoreSection() {
   // This user's own passphrase is cleared here rather than on the Connections tab. The check takes a typed
   // passphrase only: a passkey opens the vault but cannot judge one. `before` closes a panel the vault
   // dialog would otherwise open on top of.
-  function ownPassphraseAction(before = () => {}) {
+  function ownPassphraseAction(before = () => { }) {
     if (backupNotice?.ownCode === 'passphrase_unchecked') {
       return <Button onClick={() => { before(); openVault('check') }}>Validate passphrase</Button>
     }
@@ -319,7 +319,7 @@ export default function BackupRestoreSection() {
     } catch (e) {
       // Made but not saved, so its history entry names a file that does not exist.
       const backupId = e.headers?.get('X-Backup-Id')
-      if (backupId) await api.trashBackupHistoryEntry(backupId).catch(() => {})
+      if (backupId) await api.trashBackupHistoryEntry(backupId).catch(() => { })
       setBackupMsg(backupId
         ? `❌ The backup could not be saved: ${e.message || 'the file could not be written'}`
         : `❌ ${e.message || 'Could not generate the backup'}`)
@@ -495,8 +495,8 @@ export default function BackupRestoreSection() {
 
   const restoreButtonLabel = restoreIsCredentials ? 'Restore credentials'
     : restoreReplacesEverything ? 'Restore everything'
-    : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore data & user sign-in' : 'Restore user sign-in')
-    : 'Restore data'
+      : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore data & user sign-in' : 'Restore user sign-in')
+        : 'Restore data'
 
   function requestRestore() {
     if (restoreBlocked) return
@@ -914,7 +914,7 @@ export default function BackupRestoreSection() {
           fixed height and keeps its heading on screen; the key list is the only section that can grow, so
           it goes where growth pushes nothing off the page. It is also the least-visited of the three —
           configuration for the encrypted backup above rather than an action in its own right. */}
-      <Subsection title="Backup encryption keys">
+      <Subsection title="Backup file encryption keys">
         <BackupRecipients onRecipientsChange={setBackupRecipients} />
       </Subsection>
 
