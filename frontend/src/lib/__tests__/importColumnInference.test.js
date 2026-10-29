@@ -17,6 +17,7 @@ import {
   headerMatchesEvidenceKeyword,
   EVIDENCE_COLUMN_SHAPE,
   DEFAULT_IMPORT_DATE_FORMAT,
+  guessDecimalSeparatorForColumns,
 } from '../importColumnInference.js'
 
 function preview(headers, rows, extra = {}) {
@@ -208,6 +209,46 @@ describe('amount convention inference', () => {
       { Date: '2026-03-03', Amount: '7.00', Type: 'debit' },
     ])
     expect(inferImportFileCharacteristicsFromPreview(p).amountConvention).toBe('single_unsigned')
+  })
+})
+
+describe('decimal separator inference', () => {
+  it('reads a comma-decimal file as one, and still recognizes its amount column', () => {
+    const p = preview(['Date', 'Betrag'], [
+      { Date: '2026-03-01', Betrag: '-1.234,56' },
+      { Date: '2026-03-02', Betrag: '12,50 €' },
+      { Date: '2026-03-03', Betrag: '(7,00)' },
+    ])
+    expect(inferImportFileCharacteristicsFromPreview(p).decimalSeparator).toBe('comma')
+    expect(inferImportMappingFromPreview(p).columnMap.amount).toBe('Betrag')
+  })
+
+  it('reads a point-decimal file as one', () => {
+    const p = preview(['Date', 'Amount'], [
+      { Date: '2026-03-01', Amount: '-1,234.56' },
+      { Date: '2026-03-02', Amount: '$12.50' },
+    ])
+    expect(inferImportFileCharacteristicsFromPreview(p).decimalSeparator).toBe('point')
+  })
+
+  it('takes no evidence from values that read either way', () => {
+    // `1,234` and `1.234` are each a well-formed number in both conventions.
+    const p = preview(['Date', 'Amount'], [
+      { Date: '2026-03-01', Amount: '1,234' },
+      { Date: '2026-03-02', Amount: '1.234' },
+      { Date: '2026-03-03', Amount: '100' },
+    ])
+    expect(guessDecimalSeparatorForColumns(p, ['Amount'])).toBe(null)
+    expect(inferImportFileCharacteristicsFromPreview(p).decimalSeparator).toBe('point')
+  })
+
+  it('guesses from the columns it is given', () => {
+    const p = preview(['Debit', 'Credit', 'Memo'], [
+      { Debit: '5,00', Credit: '', Memo: '1.50' },
+      { Debit: '', Credit: '10,25', Memo: '2.75' },
+    ])
+    expect(guessDecimalSeparatorForColumns(p, ['Debit', 'Credit', null])).toBe('comma')
+    expect(guessDecimalSeparatorForColumns(p, ['Memo'])).toBe('point')
   })
 })
 

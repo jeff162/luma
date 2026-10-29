@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 // The preview's amounts are the backend's answer, so what matters on this side is that the right
-// question gets asked and the answer survives to the row: the request refires when the convention or
-// a mapped amount column changes, a request in flight doesn't blank the amounts already on screen,
+// question gets asked and the answer survives to the row: the request refires when the convention, the
+// decimal separator or a mapped amount column changes, a request in flight doesn't blank the amounts already on screen,
 // and a failure falls back to nulls (the raw cell) rather than a stale or invented number.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -21,14 +21,16 @@ vi.mock('../../api.js', () => ({ api: { previewAmounts: vi.fn() } }))
 const ROWS = [{ Amount: '27.52', Type: 'debit' }, { Amount: '100.00', Type: 'credit' }]
 
 describe('buildPreviewAmountsRequest', () => {
-  it('sends the rows, the convention, and the four amount columns', () => {
+  it('sends the rows, the convention, the decimal separator, and the four amount columns', () => {
     expect(buildPreviewAmountsRequest({
       rows: ROWS,
       amountConvention: 'single_unsigned',
+      decimalSeparator: 'comma',
       columnMap: { amount: 'Amount', direction: 'Type' },
     })).toEqual({
       rows: ROWS,
       amount_convention: 'single_unsigned',
+      decimal_separator: 'comma',
       column_map: { amount: 'Amount', debit: null, credit: null, direction: 'Type' },
     })
   })
@@ -85,7 +87,9 @@ describe('usePreviewAmounts', () => {
   })
 
   const mount = (props) => renderHook(
-    ({ rows, convention, columnMap }) => usePreviewAmounts(rows, convention, columnMap),
+    ({ rows, convention, decimalSeparator = 'point', columnMap }) => usePreviewAmounts({
+      rows, amountConvention: convention, decimalSeparator, columnMap,
+    }),
     { initialProps: props },
   )
 
@@ -105,6 +109,7 @@ describe('usePreviewAmounts', () => {
     expect(api.previewAmounts).toHaveBeenCalledWith({
       rows: ROWS,
       amount_convention: 'single_unsigned',
+      decimal_separator: 'point',
       column_map: { amount: 'Amount', debit: null, credit: null, direction: 'Type' },
     })
     expect(result.current).toEqual([27.52, -100])
@@ -120,6 +125,17 @@ describe('usePreviewAmounts', () => {
     await settle()
     expect(api.previewAmounts).toHaveBeenCalledTimes(2)
     expect(api.previewAmounts.mock.calls[1][0].amount_convention).toBe('single_unsigned')
+  })
+
+  it('refetches when the decimal separator changes', async () => {
+    const props = { rows: ROWS, convention: 'single_signed', columnMap: { amount: 'Amount' } }
+    const { rerender } = mount(props)
+    await settle()
+
+    rerender({ ...props, decimalSeparator: 'comma' })
+    await settle()
+    expect(api.previewAmounts).toHaveBeenCalledTimes(2)
+    expect(api.previewAmounts.mock.calls[1][0].decimal_separator).toBe('comma')
   })
 
   it('refetches when a mapped amount column changes', async () => {

@@ -766,7 +766,7 @@ class PaypalStatementWatchedFolderTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             self.profile_id = _get_or_create_paypal_profile(
                 conn, header_fingerprint="", column_map=STATEMENT_COLUMN_MAP, date_format="%m/%d/%Y",
-                amount_convention="single_signed")
+                amount_convention="single_signed", decimal_separator="point")
             conn.execute("UPDATE csv_import_profile SET watch_dir = ?, watch_enabled = 1 WHERE id = ?",
                          (str(self.watched), self.profile_id))
 

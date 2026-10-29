@@ -8,6 +8,7 @@ import {
   computeEvidenceColumnOptions,
   defaultEvidenceColumns,
   forcedEvidenceColumns,
+  DEFAULT_DECIMAL_SEPARATOR,
   DEFAULT_IMPORT_DATE_FORMAT,
   formatLikelyMatchLabel,
   inferImportFileCharacteristicsFromPreview,
@@ -33,6 +34,9 @@ import {
   normalizeImportCategoryUsageMode,
 } from '../lib/appConfig.js'
 import {
+  AMOUNT_CONVENTIONS,
+  DATE_FORMATS,
+  DECIMAL_SEPARATORS,
   SOURCE_LIST_MIN_WIDTH,
   SOURCE_ROW_GRID_COLUMNS,
   TRUNCATED_CELL_STYLE,
@@ -49,23 +53,6 @@ import WatchPausedPill from './importExport/WatchPausedPill.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
-
-const AMOUNT_CONVENTIONS = [
-  { value: 'single_signed', label: 'Single column — negative = debit' },
-  { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
-  { value: 'two_column', label: 'Two columns — separate debit / credit' },
-]
-
-const DATE_FORMATS = [
-  { value: '%m/%d/%Y', label: 'MM/DD/YYYY' },
-  { value: '%Y-%m-%d', label: 'YYYY-MM-DD' },
-  { value: '%Y/%m/%d', label: 'YYYY/MM/DD' },
-  { value: '%d/%m/%Y', label: 'DD/MM/YYYY' },
-  { value: '%m-%d-%Y', label: 'MM-DD-YYYY' },
-  { value: '%d-%m-%Y', label: 'DD-MM-YYYY' },
-  { value: '%b %d, %Y', label: 'Mon DD, YYYY' },
-  { value: '%b-%d-%Y', label: 'MMM-DD-YYYY' },
-]
 
 // How many trailing days of an export are treated as still filling in. Most sources lag the thing they
 // describe, so the default assumes a lag; 1 — only the export day itself — is the opt-in for a
@@ -175,6 +162,7 @@ function ProfileForm({
   const [newAccount, setNewAccount] = useState(initialAccount.newAccount)
   const [dateFormat, setDateFormat] = useState(profile?.date_format || DEFAULT_IMPORT_DATE_FORMAT)
   const [amtConv, setAmtConv] = useState(profile?.amount_convention || 'single_signed')
+  const [decimalSeparator, setDecimalSeparator] = useState(profile?.decimal_separator || DEFAULT_DECIMAL_SEPARATOR)
   const [skipRows] = useState(profile?.skip_rows ?? 0)
   const [applyCat, setApplyCat] = useState(profile?.apply_categorization !== false)
   const [enrichFromSource, setEnrichFromSource] = useState(!!profile?.enrich_from_source)
@@ -374,6 +362,7 @@ function ProfileForm({
       setHeaderFp(inferred.headerFingerprint || '')
       setDateFormat(inferredCharacteristics.dateFormat || DEFAULT_IMPORT_DATE_FORMAT)
       setAmtConv(nextAmountConvention)
+      setDecimalSeparator(inferredCharacteristics.decimalSeparator || DEFAULT_DECIMAL_SEPARATOR)
       applyInferredSuggestions(nextHeaders, inferred, nextAmountConvention)
     } catch (error) {
       onNotice?.({
@@ -426,7 +415,7 @@ function ProfileForm({
         account_id: creatingAccount ? null : (accountId || null),
         new_account: creatingAccount ? { name: newAccount.name.trim(), type: newAccount.type } : null,
         new_mapped_accounts: colAccount ? newMappedAccountsFromEntries(sourceAccountMap) : null,
-        date_format: dateFormat, amount_convention: amtConv,
+        date_format: dateFormat, amount_convention: amtConv, decimal_separator: decimalSeparator,
         skip_rows: parseInt(skipRows) || 0,
         apply_categorization: applyCat,
         enrich_from_source: enrichFromSource,
@@ -607,6 +596,12 @@ function ProfileForm({
           </label>
           <select id={`${fid}-amtconv`} name="data-source-amount-convention" value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
             {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor={`${fid}-decimal`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Decimal separator</label>
+          <select id={`${fid}-decimal`} name="data-source-decimal-separator" value={decimalSeparator} onChange={e => setDecimalSeparator(e.target.value)} style={selStyle}>
+            {DECIMAL_SEPARATORS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
           </select>
         </div>
         <div>

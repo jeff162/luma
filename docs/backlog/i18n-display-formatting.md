@@ -45,13 +45,8 @@ alongside `quick_filter` or by the backend reading the same stored preference.
   order off the receipt's own text: `6/7/26` is ambiguous, but `31/7/26` can only be day-first.
 - **Separator roles flip.** `_parse_quick_filter_amount` strips `,` as thousands and reads `.` as
   decimal; both invert in a `1.234,56` locale, so the same input yields a different number rather than
-  an error.
-- **CSV amount parsing carries the same hazard, and the currency setting does not touch it.**
-  `import_export/core.py` and `amazon_import.py` both strip `$` and `,` unconditionally before parsing,
-  so a `1.234,56` amount imports as `1.234` — silently, at a hundredth of the real figure. The setting
-  says what the numbers *mean*, not how a file writes them. Whether the fix is a locale-aware parser or
-  a per-source amount-format option (alongside the existing amount-convention choice, which is where a
-  user already answers a question of this shape) is undecided.
+  an error. The import's strict parser (`services/amount_text.py`) reads either convention and is the
+  piece to reuse here.
 
 ## Verified not a hazard — so it does not get over-engineered
 

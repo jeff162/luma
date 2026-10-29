@@ -20,13 +20,14 @@ export const PREVIEW_AMOUNTS_DEBOUNCE_MS = 250
 // amount-bearing columns mapped yet. This is only a "don't call the server for nothing" check; which
 // columns a convention actually requires is the server's rule, and a half-configured mapping is
 // answered there with nulls rather than second-guessed here.
-export function buildPreviewAmountsRequest({ rows, amountConvention, columnMap }) {
+export function buildPreviewAmountsRequest({ rows, amountConvention, decimalSeparator, columnMap }) {
   if (!rows?.length) return null
   const { amount = null, debit = null, credit = null, direction = null } = columnMap || {}
   if (!amount && !debit && !credit) return null
   return {
     rows,
     amount_convention: amountConvention,
+    decimal_separator: decimalSeparator,
     column_map: { amount, debit, credit, direction },
   }
 }
@@ -39,10 +40,10 @@ export function mergePreviewAmounts(rows, amounts) {
   return rows.map((row, i) => ({ ...row, amount: amounts[i] ?? null }))
 }
 
-// Signed amounts for `rows` under the current convention and column mapping, or null when nothing has
-// been fetched for that mapping yet. The serialized request doubles as the effect key: it is at most
-// ten small rows, and it refires on exactly the changes that can change an amount.
-export function usePreviewAmounts(rows, amountConvention, columnMap) {
+// Signed amounts for `rows` under the current convention, decimal separator and column mapping, or null
+// when nothing has been fetched for that mapping yet. The serialized request doubles as the effect key:
+// it is at most ten small rows, and it refires on exactly the changes that can change an amount.
+export function usePreviewAmounts({ rows, amountConvention, decimalSeparator, columnMap }) {
   const [amounts, setAmounts] = useState(null)
   const { amount, debit, credit, direction } = columnMap || {}
 
@@ -50,10 +51,11 @@ export function usePreviewAmounts(rows, amountConvention, columnMap) {
     const request = buildPreviewAmountsRequest({
       rows,
       amountConvention,
+      decimalSeparator,
       columnMap: { amount, debit, credit, direction },
     })
     return request ? JSON.stringify(request) : null
-  }, [rows, amountConvention, amount, debit, credit, direction])
+  }, [rows, amountConvention, decimalSeparator, amount, debit, credit, direction])
 
   useEffect(() => {
     if (!requestKey) {

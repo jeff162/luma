@@ -349,12 +349,13 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `backup_history`, the backups this system made. v83 adds `backup_history.deleted_at`, the history's trash.
 # v84 drops `merchant_rename`, a pattern → clean-name table nothing ever wrote or read; a category rule's
 # `clean_name` is the rename. v85 adds `category_rule.priority_level`, the user's own precedence term.
+# v86 adds `csv_import_profile.decimal_separator`, how a source's files write a number.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 85
+CURRENT_VERSION = 86
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2628,6 +2629,14 @@ def _add_rule_priority_level(conn):
         conn.execute("ALTER TABLE category_rule ADD COLUMN priority_level INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(86)
+def _add_profile_decimal_separator(conn):
+    # See the baseline CREATE. Every existing source was read point-decimal, so that is what each states.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(csv_import_profile)")}
+    if columns and "decimal_separator" not in columns:
+        conn.execute("ALTER TABLE csv_import_profile ADD COLUMN decimal_separator TEXT NOT NULL DEFAULT 'point'")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3480,6 +3489,9 @@ def init_db(db_path: str | None = None):
                 account_id           TEXT REFERENCES account(id) ON DELETE SET NULL,
                 date_format          TEXT NOT NULL DEFAULT '%Y-%m-%d',
                 amount_convention    TEXT NOT NULL DEFAULT 'single_signed',
+                -- How the source's files write a number: 'point' (1,234.56) or 'comma' (1.234,56). Read
+                -- strictly by services/amount_text.py, so a cell malformed in it is refused, not guessed.
+                decimal_separator    TEXT NOT NULL DEFAULT 'point',
                 skip_rows            INTEGER NOT NULL DEFAULT 0,
                 apply_categorization INTEGER NOT NULL DEFAULT 1,
                 enrich_from_source   INTEGER NOT NULL DEFAULT 0,

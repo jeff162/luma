@@ -641,3 +641,33 @@ test('a finished import lands on its card in the import history and frees the im
     for (const account of accounts) await request.delete(`/api/accounts/${account.id}?transactions=delete`)
   }
 })
+
+test('a comma-decimal file is read as one and imports at full value', async ({ page, request }) => {
+  const label = 'Euro Wallet (...4242)'
+  const commaCsv = `${SAMPLE_HEADER}
+2026-05-03,Grocer,"-1.234,56",${label},Weekly shop
+2026-05-04,Refund,"12,50",${label},Returned item
+`
+  await page.goto('/import-export')
+  await page.locator('#csv-file-input').setInputFiles(csvFile('comma-transactions.csv', commaCsv))
+  const mapping = page.getByRole('dialog', { name: 'Import file' })
+  await mapping.getByRole('button', { name: /Advanced/ }).click()
+  await expect(mapping.locator('select[name="import-decimal-separator"]')).toHaveValue('comma')
+  for (const suggestion of ['Accept Date', 'Accept Description', 'Accept Amount', 'Accept Account']) {
+    await page.getByText(suggestion).click()
+  }
+  await page.getByRole('button', { name: '+New' }).click()
+  await page.locator(`select[name="account-map-type-${label}"]`).selectOption('depository')
+  await page.getByRole('button', { name: /Import 2 rows/ }).click()
+
+  try {
+    await expect(page.getByText('Import complete')).toBeVisible()
+    const feed = await (await request.get('/api/transactions?limit=10')).json()
+    expect(feed.transactions.map(t => t.amount).sort((a, b) => a - b)).toEqual([-12.5, 1234.56])
+  } finally {
+    const batches = await (await request.get('/api/import-export/batches')).json()
+    for (const batch of batches) await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    for (const account of accounts) await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+  }
+})

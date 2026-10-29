@@ -11,7 +11,7 @@ best-matching saved profile and the most recent completed batch for the same fil
 re-import can restore the previous column/account configuration. It writes nothing.
 
 `/preview/amounts` serves the same stage: it answers what the amount of each previewed row will be
-under the current convention and column mapping. It exists because a preview computed by a second
+under the current convention, decimal separator and column mapping. It exists because a preview computed by a second
 implementation can disagree with the import precisely when that matters — the client used to parse
 amounts itself and got `single_unsigned`, `DR`/`CR` suffixes and blank two-column cells wrong — so
 the amounts shown come from the same `parse_amount` the import runs. It posts rows rather than a
@@ -27,6 +27,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.services.amount_text import DECIMAL_POINT, DecimalSeparator
 
 from .core import (
     MAX_DISTINCT_VALUES_PER_COLUMN,
@@ -45,6 +46,7 @@ MAX_PREVIEW_AMOUNT_ROWS = 50
 class PreviewAmountsRequest(BaseModel):
     rows:              list[dict]
     amount_convention: str = "single_signed"
+    decimal_separator: DecimalSeparator = DECIMAL_POINT
     column_map:        AmountColumnMap
 
 
@@ -243,7 +245,7 @@ async def preview_amounts(req: PreviewAmountsRequest):
 
     return {
         "amounts": [
-            parse_amount(row, req.amount_convention, req.column_map)
+            parse_amount(row, req.amount_convention, req.column_map, decimal_separator=req.decimal_separator)
             for row in req.rows
         ]
     }

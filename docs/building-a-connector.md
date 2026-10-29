@@ -167,6 +167,8 @@ naming because none of them announces itself — each fails as wrong data rather
 - **Downstream parsers expect strings.** The amount and date parsers exist to interpret *human* text, so
   a front end hands them strings (the statement reader keeps amounts as printed). A spreadsheet's floats
   and datetimes are normalized at the boundary rather than teaching each parser a second input type.
+  Amounts are read strictly in the config's `decimal_separator`, so a front end that writes the
+  numbers itself writes them point-decimal and sets `point`, as the PayPal statement does.
 - **The file viewer has no analog** for a binary container. `lines` holds the text the viewer shows
   around a bad row; a format with none leaves it empty, and the import then reports the row without
   opening a viewer with nothing in it.

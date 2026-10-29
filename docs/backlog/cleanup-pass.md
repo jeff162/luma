@@ -27,12 +27,6 @@ existed, where its rows come from the up-to-twenty sample in the snapshot instea
   on screen. Changing what the pill counts changes what the card reports, so it is a decision rather
   than a fix.
 
-## Schema leftovers to fold into the next migration
-
-*(Empty — `idx_recurring_override_pin` rode along with migration 46 on 2026-09-01. Kept as a heading
-because the pattern recurs: an inert schema leftover is worth queueing rather than version-bumping for,
-and the queue only works if something is checked when the next migration is written.)*
-
 ## Press-scoped transient labels (from the 2026-08-19 flicker sweep)
 
 **Unstarted, and deliberately not sweepable.** The 2026-08-19 sweep converted the busy indicators driven

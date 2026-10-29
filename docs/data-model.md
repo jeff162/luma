@@ -241,6 +241,15 @@ A third shape states the direction in its own column (`column_map.direction`, wi
 There the column is the only signal read: a `DR` / `CR` suffix in the amount cell does not override it,
 since a file carrying both has already said which way it means.
 
+The number is read in the source's **decimal separator** (`csv_import_profile.decimal_separator`, `point`
+for `1,234.56` or `comma` for `1.234,56`), by `services/amount_text.py`. The same characters are a
+different number in each, so the parse is strict: thousands groups of three, one decimal mark, and around
+them only a currency symbol, a sign or parentheses. A cell that is not well formed in the stated
+separator is refused, never guessed. The separator belongs to the source, not the ledger currency, since a
+ledger in one currency can receive files written either way. A config or snapshot without one means
+`point`. A data source does not adopt an earlier file imported with the other separator. The Amazon order
+export is always read `point`.
+
 ### Dates
 
 `date` is when the charge was made, the transaction date, wherever the source gives one, and the posted

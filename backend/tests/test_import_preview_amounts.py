@@ -35,24 +35,27 @@ class PreviewAmountsTestCase(unittest.TestCase):
     def tearDownClass(cls):
         cls._stack.close()
 
-    def post_amounts(self, rows, convention, column_map):
+    def post_amounts(self, rows, convention, column_map, **extra):
         return self.client.post("/api/import-export/preview/amounts", json={
             "rows": rows,
             "amount_convention": convention,
             "column_map": column_map,
+            **extra,
         })
 
 
 class PreviewAmountParityTests(PreviewAmountsTestCase):
     """Each case asserts the endpoint agrees with `parse_amount` — the import's answer — by value."""
 
-    def assert_matches_import(self, rows, convention, column_map, expected):
-        res = self.post_amounts(rows, convention, column_map)
+    def assert_matches_import(self, rows, convention, column_map, expected, decimal_separator="point"):
+        res = self.post_amounts(rows, convention, column_map, decimal_separator=decimal_separator)
         self.assertEqual(res.status_code, 200)
         amounts = res.json()["amounts"]
         self.assertEqual(amounts, expected)
         col_map = AmountColumnMap(**column_map)
-        self.assertEqual(amounts, [parse_amount(r, convention, col_map) for r in rows])
+        self.assertEqual(
+            amounts, [parse_amount(r, convention, col_map, decimal_separator=decimal_separator) for r in rows],
+        )
 
     def test_single_unsigned_honours_direction_column(self):
         # The reported bug: positive amounts with a separate debit/credit column all rendered green.
@@ -101,6 +104,13 @@ class PreviewAmountParityTests(PreviewAmountsTestCase):
             rows, "two_column", {"debit": "Debit", "credit": "Credit"}, [0.0, 0.0],
         )
 
+    def test_the_decimal_separator_is_the_one_posted(self):
+        rows = [{"Amount": "-1.234,56"}, {"Amount": "12,50"}]
+        self.assert_matches_import(
+            rows, "single_signed", {"amount": "Amount"}, [1234.56, -12.5], decimal_separator="comma",
+        )
+        self.assert_matches_import(rows, "single_signed", {"amount": "Amount"}, [None, None])
+
 
 class PreviewAmountContractTests(PreviewAmountsTestCase):
     def test_unparseable_cell_is_null(self):
@@ -117,7 +127,7 @@ class PreviewAmountContractTests(PreviewAmountsTestCase):
         res = self.post_amounts(rows, "two_column", {"debit": "Debit"})
         self.assertEqual(res.json()["amounts"], [None])
         self.assertEqual(
-            parse_amount(rows[0], "two_column", AmountColumnMap(debit="Debit")), 40.0,
+            parse_amount(rows[0], "two_column", AmountColumnMap(debit="Debit"), decimal_separator="point"), 40.0,
         )
 
     def test_single_unsigned_without_a_direction_column_still_parses(self):
@@ -140,6 +150,10 @@ class PreviewAmountContractTests(PreviewAmountsTestCase):
         res = self.post_amounts(rows, "single_signed", {"amount": "Amount"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(len(res.json()["amounts"]), MAX_PREVIEW_AMOUNT_ROWS)
+
+    def test_an_unknown_decimal_separator_is_refused(self):
+        res = self.post_amounts([{"Amount": "1.00"}], "single_signed", {"amount": "Amount"}, decimal_separator="dot")
+        self.assertEqual(res.status_code, 422)
 
     def test_no_rows_returns_no_amounts(self):
         res = self.post_amounts([], "single_signed", {"amount": "Amount"})

@@ -120,6 +120,7 @@ from backend.services.source_transaction_ids import (
     SourceTransactionIds,
     held_row_summary,
 )
+from backend.services.amount_text import DECIMAL_POINT, DECIMAL_SEPARATORS, parse_amount_text
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
 from backend.services.source_capabilities import (
@@ -279,23 +280,6 @@ class ColumnMap(AmountColumnMap):
     # Headers the user explicitly picked to capture into import evidence beyond the keyword auto-detect
     # (e.g. PayPal "Item Title"). Honored over MAX_IMPORT_EVIDENCE_TEXT_FIELDS; each is role-classified.
     evidence_columns: Optional[list[str]] = None
-
-class ImportRunRequest(BaseModel):
-    profile_id:           Optional[str] = None
-    filename:             str
-    account_id:           Optional[str] = None
-    account_map:          Optional[dict] = None
-    skip_accounts:        Optional[list] = None
-    new_accounts:         Optional[list] = None
-    date_format:          str = "%m/%d/%Y"
-    amount_convention:    str = "single_signed"
-    column_map:           ColumnMap
-    skip_rows:            int = 0
-    apply_categorization: bool = True
-    enrich_from_source:   bool = False
-    replace_batch_id:     Optional[str] = None
-    rows:                 list[dict]
-
 
 class BatchCategoryMappingApplyRequest(BaseModel):
     assignments: dict[str, str]
@@ -625,7 +609,7 @@ def _forced_evidence_headers(headers: list[str], is_paypal: bool) -> list[str]:
 
 
 def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: dict,
-                                  date_format: str, amount_convention: str) -> str:
+                                  date_format: str, amount_convention: str, decimal_separator: str) -> str:
     """The single system PayPal data source (`source_kind = 'source:paypal'`), created on first use so all
     PayPal imports attach to one header — a home for the shared money-movement review. It behaves like any
     data source (visible, renamable, auto-matches future PayPal files by fingerprint), except it can't be
@@ -643,8 +627,9 @@ def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: 
         if header_fingerprint and not existing["header_fingerprint"]:
             conn.execute(
                 """UPDATE csv_import_profile SET header_fingerprint = ?, column_map = ?, date_format = ?,
-                          amount_convention = ? WHERE id = ?""",
-                (header_fingerprint, json.dumps(column_map), date_format, amount_convention, existing["id"]),
+                          amount_convention = ?, decimal_separator = ? WHERE id = ?""",
+                (header_fingerprint, json.dumps(column_map), date_format, amount_convention, decimal_separator,
+                 existing["id"]),
             )
         return existing["id"]
     name, suffix = "PayPal", 1
@@ -657,11 +642,11 @@ def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: 
         # export day can be partial and it is one of the few sources that genuinely warrants the
         # narrowest trailing window. Stated outright rather than inherited from a column default.
         """INSERT INTO csv_import_profile
-             (id, name, header_fingerprint, column_map, date_format, amount_convention, source_kind,
-              terminal_window_days)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+             (id, name, header_fingerprint, column_map, date_format, amount_convention, decimal_separator,
+              source_kind, terminal_window_days)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (profile_id, name, header_fingerprint, json.dumps(column_map), date_format, amount_convention,
-         PAYPAL_SOURCE_KIND, MIN_TERMINAL_WINDOW_DAYS),
+         decimal_separator, PAYPAL_SOURCE_KIND, MIN_TERMINAL_WINDOW_DAYS),
     )
     return profile_id
 
@@ -2290,9 +2275,13 @@ def save_batch_snapshot(conn, batch_id: str, snapshot: dict) -> None:
     )
 
 
-def parse_amount(row: dict, convention: str, col_map: AmountColumnMap) -> Optional[float]:
+_DIRECTION_MARKER = re.compile(r"(?P<number>.*?)\s*(?P<marker>CR|DR)", re.IGNORECASE)
+
+
+def parse_amount(row: dict, convention: str, col_map: AmountColumnMap, *,
+                 decimal_separator: str) -> Optional[float]:
     """
-    Parse an amount cell and return a signed float.
+    Parse an amount cell and return a signed float, or None when the cell is not an amount.
     Positive = debit (money out), negative = credit (money in).
 
     Handles common bank CSV formats:
@@ -2300,7 +2289,10 @@ def parse_amount(row: dict, convention: str, col_map: AmountColumnMap) -> Option
       (50.00)       accounting/parenthetical negative (debit in some exports)
       50.00 CR      trailing CR = credit (income)
       50.00 DR      trailing DR = debit (expense)
-      $1,234.56     dollar sign and thousands separators
+      $1,234.56     currency symbol and thousands separators
+
+    The number itself is read by `amount_text.parse_amount_text` in the source's `decimal_separator`,
+    which refuses a cell that is not well formed in it rather than guessing.
 
     A cell carries at most one of two direction signals, and they are read in separate steps because
     they disagree about which way is positive: a `DR`/`CR` suffix names the direction outright, while a
@@ -2308,19 +2300,13 @@ def parse_amount(row: dict, convention: str, col_map: AmountColumnMap) -> Option
     function returns. Reading the suffix as if it were the latter is what made `50.00 CR` import as a
     debit — the suffix survived one flip too many.
     """
-    import re
-
     # The cell's numeric value in FILE convention, plus its explicit direction marker if it has one.
     # Callers apply the direction; nothing here is in stored convention yet.
     def clean(raw: str) -> tuple[float, Optional[str]]:
-        s = raw.strip().replace(",", "").replace("$", "").replace(" ", "")
-        m = re.fullmatch(r'\(([0-9.]+)\)', s)
-        if m:
-            return -float(m.group(1)), None
-        for marker in ("CR", "DR"):
-            if re.search(f'{marker}$', s, re.IGNORECASE):
-                return abs(float(re.sub(f'{marker}$', '', s, flags=re.IGNORECASE))), marker
-        return float(s), None
+        marked = _DIRECTION_MARKER.fullmatch(raw.strip())
+        if marked:
+            return abs(parse_amount_text(marked.group("number"), decimal_separator)), marked.group("marker").upper()
+        return parse_amount_text(raw, decimal_separator), None
 
     # Resolve one cell to stored convention (positive = debit). An explicit marker wins; otherwise the
     # cell's own sign decides, oriented by where it was read from — `column_sign` is -1 for a value in
@@ -3092,6 +3078,10 @@ def run_import_parsed(
 
     date_format       = cfg.get("date_format", "%m/%d/%Y")
     amount_convention = cfg.get("amount_convention", "single_signed")
+    # Absent from every config written before sources stated it, all of which were read point-decimal.
+    decimal_separator = cfg.get("decimal_separator") or DECIMAL_POINT
+    if decimal_separator not in DECIMAL_SEPARATORS:
+        raise HTTPException(status_code=400, detail=f"Unknown decimal separator: {decimal_separator!r}")
     apply_cat         = bool(cfg.get("apply_categorization", True))
     enrich_from_source = bool(cfg.get("enrich_from_source", False))
     use_imported_categories = bool(cfg.get("use_imported_categories", False))
@@ -3148,6 +3138,7 @@ def run_import_parsed(
                 profile_id = _get_or_create_paypal_profile(
                     conn, header_fingerprint=parsed.fingerprint, column_map=cm_dict,
                     date_format=date_format, amount_convention=amount_convention,
+                    decimal_separator=decimal_separator,
                 )
             else:
                 conn.execute(
@@ -3337,6 +3328,7 @@ def run_import_parsed(
             "header_fingerprint":  parsed.fingerprint,
             "date_format":         date_format,
             "amount_convention":   amount_convention,
+            "decimal_separator":   decimal_separator,
             "skip_rows":           skip_rows,
             "apply_categorization":apply_cat,
             "enrich_from_source":  enrich_from_source,
@@ -3473,7 +3465,7 @@ def run_import_parsed(
         incoming_amounts_by_group: dict = {}
         for pre_row in data_rows:
             pre_date = parse_date(str(pre_row.get(col.date, "")).strip(), date_format)
-            pre_amount = parse_amount(pre_row, amount_convention, col)
+            pre_amount = parse_amount(pre_row, amount_convention, col, decimal_separator=decimal_separator)
             if not pre_date or pre_amount is None:
                 continue
             incoming_amounts_by_group.setdefault((
@@ -3528,7 +3520,7 @@ def run_import_parsed(
                     break
                 continue
 
-            amount = parse_amount(row, amount_convention, col)
+            amount = parse_amount(row, amount_convention, col, decimal_separator=decimal_separator)
             if amount is None:
                 should_stop, remaining = record_footer_like_error(row_num, "Invalid amount", i)
                 if should_stop:

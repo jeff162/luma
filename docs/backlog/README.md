@@ -142,8 +142,7 @@ scale — rather than by feature.
   2026-08-08 and its model is in [`../data-model.md`](../data-model.md) → *One ledger currency*. What stays: **Bucket A** (the `en-US`
   formatter, a date-format preference, and the ~9 raw ISO renders the central helpers never reach —
   cosmetic) and **Bucket B**, the only correctness risk: the ledger search parses dates MDY-first and
-  amounts with fixed separator roles, and CSV amount parsing carries the same hazard, where `1.234,56`
-  silently imports as `1.234`.
+  amounts with fixed separator roles.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.

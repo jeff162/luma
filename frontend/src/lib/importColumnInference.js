@@ -7,6 +7,7 @@
  */
 
 export const DEFAULT_IMPORT_DATE_FORMAT = '%m/%d/%Y'
+export const DEFAULT_DECIMAL_SEPARATOR = 'point'
 
 export function inferFilenamePattern(filename) {
   let base = String(filename || '')
@@ -113,11 +114,47 @@ function analyzeDateSamples(values) {
   }
 }
 
+// The same grammar the backend reads a number by (`services/amount_text.py`): a currency symbol,
+// whitespace, a sign, accounting parentheses and a DR/CR suffix around a number written in one of the two
+// decimal conventions. The backend's parse is the authority; this only recognizes amount columns and
+// suggests which convention a file uses.
+const NUMBER_BY_DECIMAL_SEPARATOR = {
+  point: /^(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d*)?$/,
+  comma: /^(?:\d{1,3}(?:\.\d{3})+|\d+)?(?:,\d*)?$/,
+}
+
+function amountSampleNumber(value) {
+  const compact = String(value || '').replace(/[\s\p{Sc}]/gu, '').replace(/(?:CR|DR)$/i, '')
+  const match = compact.match(/^[+\-\u2212]?([\d.,]+)$/) || compact.match(/^\(([\d.,]+)\)$/)
+  return match && /\d/.test(match[1]) ? match[1] : null
+}
+
+function amountSampleSeparators(value) {
+  const number = amountSampleNumber(value)
+  if (!number) return []
+  return Object.keys(NUMBER_BY_DECIMAL_SEPARATOR).filter(separator => NUMBER_BY_DECIMAL_SEPARATOR[separator].test(number))
+}
+
 function looksLikeAmountSample(value) {
-  const sample = String(value || '').trim()
-  if (!sample) return false
-  const compact = sample.replace(/\s+/g, '')
-  return /^(\(\$?\d[\d,]*(\.\d+)?\)|[+-]?\$?\d[\d,]*(\.\d+)?(?:CR|DR)?)$/i.test(compact)
+  return amountSampleSeparators(value).length > 0
+}
+
+// A sample decides only when it reads in exactly one convention: `12,50` and `1,234.56` do, while
+// `1,234` and `1.234` read in both and say nothing. The majority of deciding samples wins, and with
+// none the file is no evidence either way.
+function guessDecimalSeparator(values) {
+  const votes = { point: 0, comma: 0 }
+  values.forEach(value => {
+    const separators = amountSampleSeparators(value)
+    if (separators.length === 1) votes[separators[0]] += 1
+  })
+  if (!votes.point && !votes.comma) return null
+  return votes.comma > votes.point ? 'comma' : 'point'
+}
+
+export function guessDecimalSeparatorForColumns(preview, headers, skipRows = 0) {
+  const columnSamples = buildColumnSamples(preview, skipRows)
+  return guessDecimalSeparator(headers.filter(Boolean).flatMap(header => columnSamples[header] || []))
 }
 
 function analyzeAmountSamples(values) {
@@ -132,10 +169,10 @@ function analyzeAmountSamples(values) {
   values.forEach(value => {
     const sample = String(value || '').trim()
     if (!looksLikeAmountSample(sample)) return
-    if (/^\(\$?\d[\d,]*(\.\d+)?\)$/i.test(sample)) styles.accounting += 1
+    if (/^\(.*\)$/.test(sample)) styles.accounting += 1
     else if (/(CR|DR)$/i.test(sample)) styles.trailingCode += 1
-    else if (/^[+-]/.test(sample)) styles.signed += 1
-    else if (sample.includes('$')) styles.currency += 1
+    else if (/^[+\-\u2212]/.test(sample)) styles.signed += 1
+    else if (/\p{Sc}/u.test(sample)) styles.currency += 1
     else styles.plain += 1
   })
 
@@ -562,6 +599,7 @@ export function inferImportFileCharacteristicsFromPreview(preview, skipRows = 0)
     return {
       dateFormat: DEFAULT_IMPORT_DATE_FORMAT,
       amountConvention: 'single_signed',
+      decimalSeparator: DEFAULT_DECIMAL_SEPARATOR,
     }
   }
 
@@ -619,6 +657,8 @@ export function inferImportFileCharacteristicsFromPreview(preview, skipRows = 0)
   return {
     dateFormat: (topDateHeader && dateAnalysisByHeader[topDateHeader]?.guessedFormat) || DEFAULT_IMPORT_DATE_FORMAT,
     amountConvention,
+    decimalSeparator: guessDecimalSeparator(amountCandidates.flatMap(entry => columnSamples[entry.header] || []))
+      || DEFAULT_DECIMAL_SEPARATOR,
   }
 }
 

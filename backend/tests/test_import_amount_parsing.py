@@ -22,12 +22,14 @@ SINGLE_WITH_DIRECTION = AmountColumnMap(amount="Amount", direction="Type")
 TWO_COLUMN = AmountColumnMap(debit="Debit", credit="Credit")
 
 
-def single(cell, convention="single_signed", col_map=SINGLE, **extra):
-    return parse_amount({"Amount": cell, **extra}, convention, col_map)
+def single(cell, convention="single_signed", col_map=SINGLE, decimal_separator="point", **extra):
+    return parse_amount({"Amount": cell, **extra}, convention, col_map, decimal_separator=decimal_separator)
 
 
-def two_column(debit="", credit=""):
-    return parse_amount({"Debit": debit, "Credit": credit}, "two_column", TWO_COLUMN)
+def two_column(debit="", credit="", decimal_separator="point"):
+    return parse_amount(
+        {"Debit": debit, "Credit": credit}, "two_column", TWO_COLUMN, decimal_separator=decimal_separator,
+    )
 
 
 class SignedAmountColumnTests(unittest.TestCase):
@@ -49,7 +51,7 @@ class SignedAmountColumnTests(unittest.TestCase):
         self.assertIsNone(single(""))
 
     def test_a_missing_column_is_none(self):
-        self.assertIsNone(parse_amount({"Other": "50.00"}, "single_signed", SINGLE))
+        self.assertIsNone(parse_amount({"Other": "50.00"}, "single_signed", SINGLE, decimal_separator="point"))
 
 
 class DirectionMarkerTests(unittest.TestCase):
@@ -117,6 +119,42 @@ class TwoColumnTests(unittest.TestCase):
 
     def test_an_unparseable_cell_is_none(self):
         self.assertIsNone(two_column(debit="n/a"))
+
+
+class DecimalSeparatorTests(unittest.TestCase):
+    """The source states how its numbers are written, and a cell malformed in that convention is refused:
+    stripping separators and reading what is left stored `1.234,56` as `1.23456`, and `1,23` as `123`."""
+
+    def test_point_decimal(self):
+        self.assertEqual(single("-1,234.56"), 1234.56)
+        self.assertEqual(single("1,234,567.8"), -1234567.8)
+        self.assertEqual(single("1234.56"), -1234.56)
+
+    def test_comma_decimal(self):
+        self.assertEqual(single("-1.234,56", decimal_separator="comma"), 1234.56)
+        self.assertEqual(single("12,50", decimal_separator="comma"), -12.5)
+        self.assertEqual(single("1 234,56", decimal_separator="comma"), -1234.56)
+        self.assertEqual(single("1\u202f234,56", decimal_separator="comma"), -1234.56)
+        self.assertEqual(single("(1.234,56)", decimal_separator="comma"), 1234.56)
+        self.assertEqual(single("1.234,56 CR", decimal_separator="comma"), -1234.56)
+        self.assertEqual(two_column(debit="12,50", decimal_separator="comma"), 12.5)
+
+    def test_a_number_written_the_other_way_is_refused(self):
+        for cell in ("1.234,56", "12,50", "1,23", "1234,567"):
+            self.assertIsNone(single(cell), cell)
+        for cell in ("1,234.56", "12.50", "1.23"):
+            self.assertIsNone(single(cell, decimal_separator="comma"), cell)
+
+    def test_malformed_grouping_is_refused(self):
+        for cell in ("1,2345.00", "12,34,567.00", "1.2.3", "1,234.56.7"):
+            self.assertIsNone(single(cell), cell)
+
+    def test_any_currency_symbol_is_ignored(self):
+        self.assertEqual(single("-12,50 €", decimal_separator="comma"), 12.5)
+        self.assertEqual(single("£1,234.56"), -1234.56)
+
+    def test_an_unknown_separator_is_refused(self):
+        self.assertIsNone(single("12.50", decimal_separator="dot"))
 
 
 if __name__ == "__main__":

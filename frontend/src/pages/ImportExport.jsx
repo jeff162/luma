@@ -83,9 +83,11 @@ import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/impor
 import {
   analyzeImportColumns,
   computeEvidenceColumnOptions,
+  DEFAULT_DECIMAL_SEPARATOR,
   defaultEvidenceColumns,
   forcedEvidenceColumns,
   formatLikelyMatchLabel,
+  guessDecimalSeparatorForColumns,
   inferFilenamePattern,
   inferImportFileCharacteristicsFromPreview,
   inferUnambiguousImportMappingFromPreview,
@@ -101,6 +103,7 @@ import {
 import {
   AMOUNT_CONVENTIONS,
   DATE_FORMATS,
+  DECIMAL_SEPARATORS,
   IMPORT_CONFIG_MAX_WIDTH,
   MANUAL_DATA_SOURCE_VALUE,
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
@@ -237,6 +240,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [accountId, setAccountId] = useState('')
   const [dateFormat, setDateFormat] = useState('%m/%d/%Y')
   const [amtConv, setAmtConv] = useState('single_signed')
+  const [decimalSeparator, setDecimalSeparator] = useState(DEFAULT_DECIMAL_SEPARATOR)
   const [skipRows, setSkipRows] = useState(0)
   const [applyCat, setApplyCat] = useState(true)
   // Per-source auto-enrich opt-in (default off): fold a trusted source's detail into existing rows it
@@ -336,6 +340,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [assignNewSourceName, setAssignNewSourceName] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [dateFormatLocked, setDateFormatLocked] = useState(false)
+  const [decimalSeparatorLocked, setDecimalSeparatorLocked] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -889,7 +894,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending || colCurrency || colTransactionId ||
     colAccount || accountId || singleAccountNew.enabled || Object.keys(accountMap).length > 0 ||
     Object.keys(categoryAssignments).length > 0 || skipRows > 0 || dateFormat !== '%m/%d/%Y' ||
-    amtConv !== 'single_signed' || !applyCat || useImportedCategories ||
+    amtConv !== 'single_signed' || decimalSeparator !== DEFAULT_DECIMAL_SEPARATOR || !applyCat || useImportedCategories ||
     stableSerialize(importedCategorySettings) !== stableSerialize(getBlankImportedCategorySettings())
   )
 
@@ -904,7 +909,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     dbInstanceId, preferenceSubjectId,
-    preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, skipRows, applyCat, useImportedCategories, importedCategorySettings,
+    preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, decimalSeparator, skipRows, applyCat, useImportedCategories, importedCategorySettings,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount,
     singleAccountNew, accountMap, categoryAssignments,
   ])
@@ -917,6 +922,14 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     }
   }, [colDate, columnAnalysis.dateAnalysisByHeader, dateFormat, dateFormatLocked])
 
+  // Like the date format: suggested from the mapped amount columns until someone picks it, or a saved
+  // source or snapshot states it.
+  useEffect(() => {
+    if (decimalSeparatorLocked) return
+    const guessed = guessDecimalSeparatorForColumns(preview, [colAmount, colDebit, colCredit], skipRows)
+    if (guessed && guessed !== decimalSeparator) setDecimalSeparator(guessed)
+  }, [preview, colAmount, colDebit, colCredit, skipRows, decimalSeparator, decimalSeparatorLocked])
+
   const previewSourceRows = useMemo(
     () => (preview?.rows ? preview.rows.slice(skipRows) : []),
     [preview?.rows, skipRows],
@@ -924,8 +937,11 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
 
   // Amounts are parsed by the backend, not here — see lib/importExport/previewAmounts.js for why the
   // client owns no amount parsing.
-  const previewAmounts = usePreviewAmounts(previewSourceRows, amtConv, {
-    amount: colAmount, debit: colDebit, credit: colCredit, direction: colDir,
+  const previewAmounts = usePreviewAmounts({
+    rows: previewSourceRows,
+    amountConvention: amtConv,
+    decimalSeparator,
+    columnMap: { amount: colAmount, debit: colDebit, credit: colCredit, direction: colDir },
   })
 
   function computePreviewRows() {
@@ -1028,6 +1044,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         single_account_new: { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' },
         date_format: dateFormat,
         amount_convention: amtConv,
+        decimal_separator: decimalSeparator,
         skip_rows: skipRows,
         apply_categorization: applyCat,
         enrich_from_source: enrichFromSource,
@@ -1045,6 +1062,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       account_id: (!colAccount && accountId) ? accountId : null,
       date_format: dateFormat,
       amount_convention: amtConv,
+      decimal_separator: decimalSeparator,
       skip_rows: skipRows,
       apply_categorization: applyCat,
       enrich_from_source: enrichFromSource,
@@ -1061,7 +1079,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     // above this point (or useCallback'ing it, which would TDZ here).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    accountMap, accountId, dateFormat, amtConv, skipRows,
+    accountMap, accountId, dateFormat, amtConv, decimalSeparator, skipRows,
     applyCat, enrichFromSource, useImportedCategories, importedCategorySettings, singleAccountNew,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount,
     resolvedEvidenceColumns,
@@ -1255,6 +1273,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     applySnapshot(getBlankImportSnapshot())
     setMappingSuggestions(getBlankMappingSuggestions())
     setDateFormatLocked(false)
+    setDecimalSeparatorLocked(false)
   }
 
   function resetToSuggestedImportMapping(profileId = '', previewLike = preview) {
@@ -1266,6 +1285,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setDateFormat(inferredCharacteristics.dateFormat || '%m/%d/%Y')
     setDateFormatLocked(false)
     setAmtConv(inferredCharacteristics.amountConvention || 'single_signed')
+    setDecimalSeparator(inferredCharacteristics.decimalSeparator || DEFAULT_DECIMAL_SEPARATOR)
+    setDecimalSeparatorLocked(false)
     setSkipRows(0)
     setApplyCat(true)
     setEnrichFromSource(false)
@@ -1299,6 +1320,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setDateFormat('%m/%d/%Y')
     setDateFormatLocked(false)
     setAmtConv('single_signed')
+    setDecimalSeparator(DEFAULT_DECIMAL_SEPARATOR)
+    setDecimalSeparatorLocked(false)
     setSkipRows(0)
     setApplyCat(true)
     setEnrichFromSource(false)
@@ -1355,6 +1378,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || '')); setDateFormat(p.date_format || '%m/%d/%Y')
     setDateFormatLocked(true)
     setAmtConv(p.amount_convention || 'single_signed'); setSkipRows(p.skip_rows || 0)
+    setDecimalSeparator(p.decimal_separator || DEFAULT_DECIMAL_SEPARATOR)
+    setDecimalSeparatorLocked(true)
     setApplyCat(!!p.apply_categorization)
     setEnrichFromSource(!!p.enrich_from_source)
     setUseImportedCategories(!!p.use_imported_categories)
@@ -1456,6 +1481,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       ? accounts.find(a => a.id === snap.account_id)
       : null
     setDateFormat(snap.date_format || '%m/%d/%Y'); setDateFormatLocked(true); setAmtConv(snap.amount_convention || 'single_signed')
+    setDecimalSeparator(snap.decimal_separator || DEFAULT_DECIMAL_SEPARATOR); setDecimalSeparatorLocked(true)
     setSkipRows(snap.skip_rows || 0); setApplyCat(snap.apply_categorization !== false)
     setEnrichFromSource(!!snap.enrich_from_source)
     setUseImportedCategories(!!snap.use_imported_categories)
@@ -1601,6 +1627,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         const inferredCharacteristics = inferImportFileCharacteristicsFromPreview(result, 0)
         setDateFormat(inferredCharacteristics.dateFormat || '%m/%d/%Y')
         setAmtConv(inferredCharacteristics.amountConvention || 'single_signed')
+        setDecimalSeparator(inferredCharacteristics.decimalSeparator || DEFAULT_DECIMAL_SEPARATOR)
+        setDecimalSeparatorLocked(false)
         setColDate(null)
         setColAmount(null)
         setColDebit(null)
@@ -2063,6 +2091,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           : null,
         date_format: dateFormat,
         amount_convention: amtConv,
+        decimal_separator: decimalSeparator,
         column_map: columnMap,
         skip_rows: skipRows,
         apply_categorization: applyCat,
@@ -2430,6 +2459,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       account_id: (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
       date_format: dateFormat,
       amount_convention: amtConv,
+      decimal_separator: decimalSeparator,
       skip_rows: skipRows,
       apply_categorization: applyCat,
       enrich_from_source: enrichFromSource,
@@ -3312,6 +3342,16 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     padding: '3px 6px', fontSize: 12, cursor: 'pointer',
                   }}>
                     {DATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  Decimal separator
+                  <select name="import-decimal-separator" value={decimalSeparator} onChange={e => { setDecimalSeparatorLocked(true); setDecimalSeparator(e.target.value) }} style={{
+                    background: 'var(--surface)', color: 'var(--text)',
+                    border: '1px solid var(--border)', borderRadius: 6,
+                    padding: '3px 6px', fontSize: 12, cursor: 'pointer',
+                  }}>
+                    {DECIMAL_SEPARATORS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
                   </select>
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>

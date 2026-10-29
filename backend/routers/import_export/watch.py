@@ -308,6 +308,7 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
         "column_map": column_map,
         "date_format": profile.get("date_format") or "%m/%d/%Y",
         "amount_convention": profile.get("amount_convention") or "single_signed",
+        "decimal_separator": profile.get("decimal_separator"),
         "skip_rows": int(profile.get("skip_rows") or 0),
         "apply_categorization": bool(profile.get("apply_categorization")),
         "enrich_from_source": bool(profile.get("enrich_from_source")),

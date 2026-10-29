@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from backend.db.database import get_db
 from backend.routers.accounts import resolve_default_owner_id
 from backend.json_utils import safe_json_dict
+from backend.services.amount_text import DECIMAL_POINT, DecimalSeparator
 from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS, MIN_TERMINAL_WINDOW_DAYS
 
 from .core import (
@@ -70,6 +71,7 @@ class ProfileCreate(BaseModel):
     new_mapped_accounts:  Optional[list[ProfileMappedNewAccount]] = None
     date_format:          str = "%m/%d/%Y"
     amount_convention:    str = "single_signed"
+    decimal_separator:    DecimalSeparator = DECIMAL_POINT
     skip_rows:            int = 0
     apply_categorization: bool = True
     enrich_from_source:   bool = False
@@ -92,6 +94,7 @@ class ProfileUpdate(BaseModel):
     new_mapped_accounts:  Optional[list[ProfileMappedNewAccount]] = None
     date_format:          Optional[str] = None
     amount_convention:    Optional[str] = None
+    decimal_separator:    Optional[DecimalSeparator] = None
     skip_rows:            Optional[int] = None
     apply_categorization: Optional[bool] = None
     enrich_from_source:   Optional[bool] = None
@@ -206,6 +209,7 @@ def _normalize_import_source_signature(source: dict) -> dict:
         "header_fingerprint": str(source.get("header_fingerprint") or "").strip(),
         "date_format": str(source.get("date_format") or "%m/%d/%Y").strip() or "%m/%d/%Y",
         "amount_convention": str(source.get("amount_convention") or "single_signed").strip() or "single_signed",
+        "decimal_separator": str(source.get("decimal_separator") or DECIMAL_POINT),
         "skip_rows": int(source.get("skip_rows") or 0),
         "apply_categorization": _flag_defaulting_true(source.get("apply_categorization")),
         "enrich_from_source": bool(source.get("enrich_from_source")),
@@ -232,6 +236,8 @@ def _signatures_are_compatible(profile_signature: dict, batch_signature: dict) -
     if profile_signature["date_format"] != batch_signature.get("date_format"):
         return False
     if profile_signature["amount_convention"] != batch_signature.get("amount_convention"):
+        return False
+    if profile_signature["decimal_separator"] != batch_signature.get("decimal_separator"):
         return False
     if profile_signature["skip_rows"] != batch_signature.get("skip_rows"):
         return False
@@ -393,14 +399,14 @@ def create_profile(body: ProfileCreate):
             INSERT INTO csv_import_profile
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
-               account_id, date_format, amount_convention, skip_rows,
+               account_id, date_format, amount_convention, decimal_separator, skip_rows,
                apply_categorization, enrich_from_source, use_imported_categories,
                terminal_window_days, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (pid, normalized_name, body.filename_pattern, body.header_fingerprint,
               body.template_filename, body.template_file_hash,
               json.dumps(column_map), account_id, body.date_format,
-              body.amount_convention, body.skip_rows,
+              body.amount_convention, body.decimal_separator, body.skip_rows,
               1 if body.apply_categorization else 0,
               1 if body.enrich_from_source else 0,
               1 if body.use_imported_categories else 0,
@@ -431,6 +437,7 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         elif body.account_id         is not None: fields.append("account_id = ?");           params.append(body.account_id)
         if body.date_format          is not None: fields.append("date_format = ?");          params.append(body.date_format)
         if body.amount_convention    is not None: fields.append("amount_convention = ?");    params.append(body.amount_convention)
+        if body.decimal_separator    is not None: fields.append("decimal_separator = ?");    params.append(body.decimal_separator)
         if body.skip_rows            is not None: fields.append("skip_rows = ?");            params.append(body.skip_rows)
         if body.apply_categorization is not None: fields.append("apply_categorization = ?"); params.append(1 if body.apply_categorization else 0)
         if body.enrich_from_source   is not None: fields.append("enrich_from_source = ?");   params.append(1 if body.enrich_from_source else 0)
@@ -494,7 +501,7 @@ def get_profile_compatible_batches(profile_id: str):
         profile = conn.execute(
             """
             SELECT id, name, header_fingerprint, column_map, account_id, date_format,
-                   amount_convention, skip_rows, apply_categorization, enrich_from_source
+                   amount_convention, decimal_separator, skip_rows, apply_categorization, enrich_from_source
             FROM   csv_import_profile
             WHERE  id = ?
             """,
@@ -524,6 +531,7 @@ def get_profile_compatible_batches(profile_id: str):
             "account_id": snapshot.get("account_id"),
             "date_format": snapshot.get("date_format"),
             "amount_convention": snapshot.get("amount_convention"),
+            "decimal_separator": snapshot.get("decimal_separator"),
             "skip_rows": snapshot.get("skip_rows"),
             "apply_categorization": snapshot.get("apply_categorization"),
             "enrich_from_source": snapshot.get("enrich_from_source"),
@@ -612,16 +620,17 @@ def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
             INSERT INTO csv_import_profile
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
-               account_id, date_format, amount_convention, skip_rows,
+               account_id, date_format, amount_convention, decimal_separator, skip_rows,
                apply_categorization, enrich_from_source, use_imported_categories,
                terminal_window_days, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             pid, normalized_name, (body.filename_pattern or None), snapshot.get("header_fingerprint"),
             batch["filename"], batch["file_content_hash"],
             json.dumps(column_map), snapshot.get("account_id"),
             snapshot.get("date_format") or "%m/%d/%Y",
             snapshot.get("amount_convention") or "single_signed",
+            snapshot.get("decimal_separator") or DECIMAL_POINT,
             int(snapshot.get("skip_rows") or 0),
             1 if snapshot.get("apply_categorization", True) else 0,
             1 if snapshot.get("enrich_from_source") else 0,

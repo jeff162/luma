@@ -11,6 +11,12 @@ export const AMOUNT_CONVENTIONS = [
   { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
   { value: 'two_column', label: 'Two columns — separate debit and credit' },
 ]
+// How a file writes a number. The import reads strictly in the chosen one and refuses a cell malformed in
+// it, so picking wrong shows as unparseable amounts rather than wrong ones.
+export const DECIMAL_SEPARATORS = [
+  { value: 'point', label: 'Point  (e.g. 1,234.56)' },
+  { value: 'comma', label: 'Comma  (e.g. 1.234,56)' },
+]
 export const DATE_FORMATS = [
   { value: '%m/%d/%Y', label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
   { value: '%Y-%m-%d', label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },

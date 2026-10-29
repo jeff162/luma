@@ -3119,9 +3119,10 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Specifying how amounts are represented',
     surfaces: ['Import mapping', 'Data source editor'],
-    summary: 'Specify how the file represents money in vs out: a single signed column, an amount column plus a separate debit/credit "type" column, or separate debit and credit columns.',
+    summary: 'Specify how the file represents money in vs out: a single signed column, an amount column plus a separate debit/credit "type" column, or separate debit and credit columns. Also whether it writes decimals with a point or a comma.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           Files express the direction of money in three common ways. Pick the <strong>amount
             convention</strong> that matches yours so debits and credits land with the right sign:
@@ -3136,6 +3137,12 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           {APP_NAME} tries to infer the convention.
+        </p>
+        <p>
+          The <strong>decimal separator</strong> is how the file writes a number: a point
+          (<em>1,234.56</em>) or a comma (<em>1.234,56</em>). It is suggested from the file. A value that
+          is not a well-formed number in the chosen style is not imported, and the mapping preview shows
+          it as written rather than as an amount.
         </p>
         <p>
           Amounts are all in one currency, chosen on the Settings page &mdash;

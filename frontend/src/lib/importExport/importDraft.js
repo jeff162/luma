@@ -21,7 +21,7 @@ import {
   normalizeImportedCategorySettings,
   extractImportedCategorySettings,
 } from './importedCategorySettings.js'
-import { inferFilenamePattern } from '../importColumnInference.js'
+import { DEFAULT_DECIMAL_SEPARATOR, inferFilenamePattern } from '../importColumnInference.js'
 import { localStore } from '../browserStorage.js'
 
 export function getBlankImportSnapshot() {
@@ -35,6 +35,7 @@ export function getBlankImportSnapshot() {
     single_account_new: null,
     date_format: '%m/%d/%Y',
     amount_convention: 'single_signed',
+    decimal_separator: DEFAULT_DECIMAL_SEPARATOR,
     skip_rows: 0,
     apply_categorization: true,
     use_imported_categories: false,
@@ -103,6 +104,7 @@ export function buildEmptyDataSourceBody(name) {
     account_id: null,
     date_format: '%m/%d/%Y',
     amount_convention: 'single_signed',
+    decimal_separator: DEFAULT_DECIMAL_SEPARATOR,
     skip_rows: 0,
     apply_categorization: true,
     // Spelled out like its siblings even though it matches the API default, so the shape stays complete
@@ -186,6 +188,7 @@ export function buildProfileBodyFromSnapshot(name, draftRecord) {
     account_id: snapshot.account_id || null,
     date_format: snapshot.date_format || '%m/%d/%Y',
     amount_convention: snapshot.amount_convention || 'single_signed',
+    decimal_separator: snapshot.decimal_separator || DEFAULT_DECIMAL_SEPARATOR,
     skip_rows: snapshot.skip_rows || 0,
     apply_categorization: snapshot.apply_categorization !== false,
     // Every per-source toggle the import screen offers has to be carried here, or saving the source

@@ -28,6 +28,7 @@ from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
 from backend.services.account_groups import effective_account_id
+from backend.services.amount_text import DECIMAL_POINT
 from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.money_movement import PAYPAL_ACCOUNT_TYPE, is_money_movement_type
@@ -269,6 +270,8 @@ def _config(profile: dict, account_id: str, statement: Statement) -> dict:
         "column_map": COLUMN_MAP,
         "date_format": "%m/%d/%Y",
         "amount_convention": "single_signed",
+        # The statement parser recognizes only point-decimal amounts, whatever the source's CSVs use.
+        "decimal_separator": DECIMAL_POINT,
         "apply_categorization": bool(profile["apply_categorization"]),
         # A statement row that is already in the ledger — from a sync or an earlier CSV — gives it the
         # statement's detail, as a PayPal CSV import does.
@@ -310,7 +313,7 @@ async def import_paypal_statements(files: list[UploadFile] = File(...), assignme
         accounts = _check_assignments(conn, [f.statement for f in pending], chosen)
         profile_id = _get_or_create_paypal_profile(
             conn, header_fingerprint="", column_map=COLUMN_MAP, date_format="%m/%d/%Y",
-            amount_convention="single_signed",
+            amount_convention="single_signed", decimal_separator=DECIMAL_POINT,
         )
         profile = dict(conn.execute(
             "SELECT id, apply_categorization FROM csv_import_profile WHERE id = ?", (profile_id,)

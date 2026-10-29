@@ -41,6 +41,10 @@ class ParseMoneyTests(unittest.TestCase):
         self.assertIsNone(parse_money(None))
         self.assertIsNone(parse_money("=SUBTOTAL(109,F2:F37)"))
 
+    def test_a_comma_decimal_value_is_none_rather_than_misread(self):
+        self.assertIsNone(parse_money("1.234,56"))
+        self.assertIsNone(parse_money("9,55"))
+
 
 class ParsePaymentsTests(unittest.TestCase):
     def test_single_card_leg(self):

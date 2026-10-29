@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from backend.services.amount_text import DECIMAL_POINT, parse_amount_text
+
 # Known non-cash payment instruments: value is redeemed at spend time but no cash leaves an account,
 # and the export never carries the dollar figure for them (see doc — same class as the points question).
 _NON_CASH_MARKERS = ("rewards point", "gift card")
@@ -107,14 +109,13 @@ class AmazonOrder:
 
 def parse_money(value) -> Optional[float]:
     """Parse ``"$8.99"`` / ``"9.55"`` / ``"1,234.00"`` → float. Blank, ``None``, or an unparseable
-    value (e.g. a spreadsheet ``=SUBTOTAL(...)`` formula) → ``None``."""
+    value (e.g. a spreadsheet ``=SUBTOTAL(...)`` formula) → ``None``. The export is read point-decimal,
+    like the ``$`` its payment strings are matched by, so a comma-decimal value is unparseable rather than
+    misread."""
     if value is None:
         return None
-    text = str(value).strip().replace("$", "").replace(",", "")
-    if not text:
-        return None
     try:
-        return float(text)
+        return parse_amount_text(value, DECIMAL_POINT)
     except ValueError:
         return None
 
