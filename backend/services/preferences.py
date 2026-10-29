@@ -85,6 +85,14 @@ def forget_startup_routes() -> None:
 SHARED_SCOPE_ID = "__ledger__"
 
 
+def keep_preferences_of(conn, user_ids) -> None:
+    """Delete the preferences of everyone not in `user_ids`. Preferences are keyed by user id and nothing
+    else, so a row for someone who no longer exists can never be read again. The ledger-wide scope is
+    not a person and always stays."""
+    keep = [SHARED_SCOPE_ID, *user_ids]
+    conn.execute(f"DELETE FROM ui_preference WHERE scope_id NOT IN ({', '.join('?' * len(keep))})", keep)
+
+
 # Both halves take the caller's connection. A service reading one of these is normally already inside a
 # `get_db()` block, and opening a second connection to the same file from within an open write
 # transaction is what SQLite reports as "database is locked" — so the store is read and written on the

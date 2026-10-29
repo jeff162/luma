@@ -273,7 +273,7 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
         _begin_restore(meta, staged)
         with get_db() as conn:
             _restore_sections(conn, meta, lambda section: read_archive_section(zf, section),
-                              meta.get("version"))
+                              meta.get("version"), preference_owners=set())
 
     @staticmethod
     def _rewrite_member(archive_bytes: bytes, member: str, content: bytes) -> bytes:

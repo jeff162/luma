@@ -2334,6 +2334,12 @@ the screen size, shorter side first, plus the orientation on a touch screen (`@m
 Each save also writes the plain `<key>`, the latest layout from any device, which a screen with no layout
 of its own starts from (`useDeviceLayoutPreference`). Every other preference is shared across devices.
 
+**A restore keeps preferences only for the users who exist once it is done**: the backup's users when its
+accounts part is restored, this install's users when only the data is. Preferences are keyed by user id
+alone, so a row for anyone else could never be read. Each remaining user takes their settings from the
+backup where it has some and keeps their own where it has none, and the ledger-wide scope always comes from
+the backup (`_restore_preferences`).
+
 A restore clears everyone's remembered page (`ui.startupRoute`), so each person's next sign-in lands on
 the dashboard (`preferences.forget_startup_routes`). Otherwise the person restoring would return to the
 restore page, and everyone else to the page they had open when the backup was taken.

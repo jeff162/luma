@@ -170,6 +170,13 @@ class BackupFixtureTestCase(unittest.TestCase):
         self._orig_control_path = control_database.CONTROL_DB_PATH
         control_database.CONTROL_DB_PATH = str(Path(self.tempdir.name) / "control.db")
         control_database.init_control_db()
+        # One user, since a restore keeps preferences only for people who exist once it is done.
+        self.user_id = str(uuid.uuid4())
+        with control_database.get_control_db() as cconn:
+            cconn.execute("INSERT INTO tenant (id, slug, name, db_path) VALUES ('fixture', 'fixture', 'Fixture', ?)",
+                          (str(self.db_path),))
+            cconn.execute("INSERT INTO user_account (id, username, password_hash, tenant_id) "
+                          "VALUES (?, 'fixture-user', '', 'fixture')", (self.user_id,))
 
     def tearDown(self):
         control_database.CONTROL_DB_PATH = self._orig_control_path
@@ -277,7 +284,7 @@ class BackupFixtureTestCase(unittest.TestCase):
                 # A reconciliation reverse-scan "Mark reviewed" acknowledgment, so the round trip covers
                 # amazon_charge_reviewed (references txn).
                 conn.execute("INSERT INTO amazon_charge_reviewed (txn_id, reviewed_at) VALUES (?, '2026-04-16')", (txn2,))
-                conn.execute("INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at) VALUES ('profile-1', 'ui.dashboard.tagReports', '[{\"id\":\"r1\"}]', '2026-04-15')")
+                conn.execute("INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at) VALUES (?, 'ui.dashboard.tagReports', '[{\"id\":\"r1\"}]', '2026-04-15')", (self.user_id,))
 
                 # Import history + an imported category that forward-references its batch.
                 profile = str(uuid.uuid4())
@@ -1720,6 +1727,49 @@ class RestoreReferentialRepairTests(BackupFixtureTestCase):
 # Encrypted backups need a keypair the user owns, and producing one otherwise means knowing an openssl
 # incantation. The generator removes that barrier; these pin the two properties that make it safe to
 # offer — it keeps nothing, and what it hands back genuinely opens a backup.
+
+
+class RestoredPreferencesTests(BackupFixtureTestCase):
+    """A data-only restore keeps preferences only for the users this install has, since preferences are
+    keyed by user id alone and a row for anyone else belongs to no one. A user here takes their settings
+    from the backup where it has some and keeps their own where it has none, and the ledger-wide scope
+    always comes from the backup."""
+
+    def _set(self, scope, key, value):
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO ui_preference (scope_id, pref_key, pref_value) VALUES (?, ?, ?) "
+                    "ON CONFLICT(scope_id, pref_key) DO UPDATE SET pref_value = excluded.pref_value",
+                    (scope, key, value))
+
+    def _rows(self) -> set:
+        with self._use_db_path():
+            with get_db() as conn:
+                return {tuple(r) for r in conn.execute("SELECT scope_id, pref_key, pref_value FROM ui_preference")}
+
+    def test_a_data_only_restore_keeps_preferences_for_the_users_here(self):
+        self._set(self.user_id, "ui.view", '"from-backup"')
+        self._set("someone-elsewhere", "ui.view", '"theirs"')
+        self._set("__ledger__", "ui.format.currency", '"EUR"')
+        payload = self._export_payload()
+
+        # After the backup: this user changes a setting, and a second user arrives with settings of their own.
+        self._set(self.user_id, "ui.view", '"changed-since"')
+        newcomer = str(uuid.uuid4())
+        with control_database.get_control_db() as cconn:
+            cconn.execute("INSERT INTO user_account (id, username, password_hash, tenant_id) "
+                          "VALUES (?, 'newcomer', '', 'fixture')", (newcomer,))
+        self._set(newcomer, "ui.view", '"newcomer-own"')
+
+        with self._use_db_path():
+            restore_backup(RestoreRequest(data=payload))
+
+        self.assertEqual(self._rows(), {
+            (self.user_id, "ui.view", '"from-backup"'),
+            (newcomer, "ui.view", '"newcomer-own"'),
+            ("__ledger__", "ui.format.currency", '"EUR"'),
+        })
 
 
 class BackupKeypairTests(BackupFixtureTestCase):

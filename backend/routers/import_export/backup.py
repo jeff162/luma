@@ -88,7 +88,7 @@ from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
 from backend.services import accounts_backup, backup_history, crypto_service, database_health
-from backend.services.preferences import forget_startup_routes
+from backend.services.preferences import SHARED_SCOPE_ID, forget_startup_routes, keep_preferences_of
 from backend.services.documents import (
     copy_document_file_from,
     document_file_path,
@@ -1823,11 +1823,13 @@ def _restore_preflight(header: dict, force: bool, *, restores_data: bool = True,
         })
 
 
-def _restore_sections(conn, header: dict, section_rows, backup_version, source: Optional[dict] = None) -> dict:
+def _restore_sections(conn, header: dict, section_rows, backup_version, source: Optional[dict] = None, *,
+                      preference_owners: set[str]) -> dict:
     """Wipe and rebuild every data table from `section_rows`, inside one transaction.
 
     `source` describes the uploaded file, for the history row a restore from another system writes for
-    it (`_restore_backup_history`).
+    it (`_restore_backup_history`). `preference_owners` are the users who exist once the restore is done
+    (`_restore_preferences`).
 
     All-or-nothing on purpose. The restore has many cross-table and self-referential foreign keys, and a
     single correct insert order would be brittle, so the whole wipe+reload runs with foreign-key checks
@@ -1851,6 +1853,8 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
 
     conn.execute("BEGIN")
     conn.execute("PRAGMA defer_foreign_keys = ON")
+    previous_preferences = [dict(row) for row in conn.execute(
+        "SELECT * FROM ui_preference WHERE scope_id != ?", (SHARED_SCOPE_ID,))]
     _wipe_user_data_tables(conn)
 
     _insert_section(conn, "owner", section_rows("owners"))
@@ -1880,7 +1884,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     _insert_section(conn, "connection_account", connection_accounts)
     del accounts, connection_accounts
 
-    reconciled = {"owners", "connections", "accounts", "connection_accounts", "backup_history"}
+    reconciled = {"owners", "connections", "accounts", "connection_accounts", "backup_history", "ui_preferences"}
     transforms = {
         "transactions": _transaction_transform(backup_version),
         "import_batches": _local_connection,
@@ -1890,6 +1894,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
         if section in reconciled:
             continue
         _insert_section(conn, table, section_rows(section), transforms.get(section))
+    _restore_preferences(conn, section_rows("ui_preferences"), preference_owners, previous_preferences)
 
     _apply_referential_rules(conn)
     # After the preferences, which hold the history's retention.
@@ -2082,6 +2087,23 @@ def restore_backup(body: RestoreRequest):
     return restore_payload(body.data, body.force)
 
 
+def _restore_preferences(conn, rows, owners: set[str], previous: list[dict]) -> None:
+    """Put back preferences only for the users who exist once the restore is done: the backup's users when
+    its accounts part is restored too, this install's users when only the data is. Each of them takes their
+    settings from the backup where it has some and keeps their own where it has none. A row for anyone else
+    would belong to no one, since preferences are keyed by user id alone. The ledger-wide scope belongs to
+    the ledger and always comes from the backup."""
+    keep = {SHARED_SCOPE_ID, *owners}
+    _insert_section(conn, "ui_preference", (row for row in rows if row.get("scope_id") in keep))
+    restored = {row["scope_id"] for row in conn.execute("SELECT DISTINCT scope_id FROM ui_preference")}
+    _insert_section(conn, "ui_preference",
+                    (row for row in previous if row["scope_id"] in owners and row["scope_id"] not in restored))
+
+
+def _current_user_ids() -> set[str]:
+    return {user["id"] for user in control_database.list_users()}
+
+
 def restore_payload(payload: dict, force: bool = False, source: Optional[dict] = None) -> dict:
     """`restore_backup` for a payload already in hand, with the uploaded file's `source` description when
     there was one."""
@@ -2101,7 +2123,8 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
     _begin_restore(payload, None)
     try:
         with get_db() as conn:
-            counts = _restore_sections(conn, payload, section_rows, backup_version, source)
+            counts = _restore_sections(conn, payload, section_rows, backup_version, source,
+                                       preference_owners=_current_user_ids())
     finally:
         _abandon_restore_if_staging()
     documents = _restore_documents(None)
@@ -2158,13 +2181,18 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
             if withheld:
                 accounts_part["credentials"] = None
 
+    # Who exists once this is done: the backup's users when its accounts part goes back, this install's
+    # otherwise. Only their preferences are kept.
+    owners = ({user["id"] for user in accounts_part.get("users") or []} if accounts_part is not None
+              else _current_user_ids())
     result = {"ok": True}
     if restores_data:
         _begin_restore(meta, artifact_path)
         try:
             with get_db() as conn:
                 counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section),
-                                           backup_version, {**(source or {}), **archive_sizes(zf)})
+                                           backup_version, {**(source or {}), **archive_sizes(zf)},
+                                           preference_owners=owners)
         finally:
             # Clears the slot only if the ledger never committed. A successful restore has already moved
             # the marker to `documents_pending` inside its own transaction, and that one has to survive.
@@ -2174,6 +2202,10 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         compact_if_worthwhile(reason="restored a backup")
     if accounts_part is not None:
         result["accounts"] = accounts_backup.apply(accounts_part)
+        # With the data left as it was, the preferences of users the accounts part removed would belong to
+        # no one. After a data restore too this changes nothing, since that kept only these users already.
+        with get_db() as conn:
+            keep_preferences_of(conn, owners)
         # The identities every session was authenticated against have just been replaced.
         result["signed_out"] = True
         if withheld:
