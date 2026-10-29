@@ -4365,6 +4365,46 @@ def get_batch_removed_duplicates(batch_id: str):
         return {"batch_id": batch_id, "count": removed_duplicate_count(conn, batch_id)}
 
 
+def _snapshot_rejected_row(entry: dict, snapshot: dict) -> dict:
+    """One rejected row from a batch snapshot's sample, for a batch imported before
+    `import_batch_rejected_row` existed.
+
+    Those samples kept only the file's raw cells, so the date, description and amount are read back out
+    of them through the batch's own mapping: parsed where the cell parses, the file's text for a date or
+    description that does not, and no amount for an amount that does not."""
+    values = entry.get("values") if isinstance(entry.get("values"), dict) else {}
+    column_map = snapshot.get("column_map") if isinstance(snapshot.get("column_map"), dict) else {}
+
+    def cell(field: str) -> str:
+        header = column_map.get(field)
+        return str(values.get(header, "") or "").strip() if header else ""
+
+    date = entry.get("date")
+    if not date and cell("date"):
+        date = parse_date(cell("date"), snapshot.get("date_format") or "%m/%d/%Y") or cell("date")
+    amount = entry.get("amount")
+    if amount is None and any(column_map.get(field) for field in ("amount", "debit", "credit")):
+        amount = parse_amount(
+            values,
+            snapshot.get("amount_convention") or "single_signed",
+            AmountColumnMap(**{
+                field: column_map.get(field)
+                for field in ("amount", "debit", "credit", "direction")
+                if column_map.get(field)
+            }),
+            decimal_separator=snapshot.get("decimal_separator") or DECIMAL_POINT,
+        )
+    return {
+        "row": entry.get("row"),
+        "kind": entry.get("kind") or VALIDATION_ERROR_KIND,
+        "reason": entry.get("reason") or "",
+        "values": values,
+        "date": date or None,
+        "description": entry.get("description") or cell("description") or None,
+        "amount": amount,
+    }
+
+
 @router.get("/batches/{batch_id}/not-imported")
 def get_batch_not_imported(batch_id: str):
     """The rows this file offered and the import did not take, for the file report's *Not imported* view.
@@ -4417,15 +4457,7 @@ def get_batch_not_imported(batch_id: str):
         ]
         if not rows:
             rows = [
-                {
-                    "row": entry.get("row"),
-                    "kind": entry.get("kind") or VALIDATION_ERROR_KIND,
-                    "reason": entry.get("reason") or "",
-                    "values": entry.get("values") or {},
-                    "date": entry.get("date"),
-                    "description": entry.get("description"),
-                    "amount": entry.get("amount"),
-                }
+                _snapshot_rejected_row(entry, snapshot)
                 for entry in (summary.get("rejected_rows") or [])
                 if isinstance(entry, dict)
             ]

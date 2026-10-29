@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { Button, SearchInput, Spinner, LinkButton } from '../ui.jsx'
+import { Button, SearchInput, Spinner, LinkButton, Tooltip } from '../ui.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
@@ -101,11 +101,16 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
   )
   const listedRows = rows.filter(row => row.kind !== COLLAPSED_KIND).length
   const omittedCount = Math.max(0, listedTotal - listedRows)
+  // A kind can be counted with none of its rows kept (a batch older than the stored rows, or one past the
+  // cap), and filtering to it could only show an empty list. Its pill stays, since the count is true, but
+  // cannot be chosen, and a seeded filter for it is ignored rather than left stuck on.
+  const keptKinds = useMemo(() => new Set(rows.map(row => row.kind)), [rows])
+  const activeKind = kindFilter && keptKinds.has(kindFilter) ? kindFilter : null
 
   const visibleRows = useMemo(() => {
     const needle = search.trim().toLowerCase()
     const filtered = rows.filter(row => (
-      (!kindFilter || row.kind === kindFilter) && matchesSearch(row, needle)
+      (!activeKind || row.kind === activeKind) && matchesSearch(row, needle)
     ))
     const direction = sortState.dir === 'desc' ? -1 : 1
     return filtered.sort((left, right) => {
@@ -119,7 +124,7 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
       if (comparison === 0) return (Number(left.row) || 0) - (Number(right.row) || 0)
       return comparison * direction
     })
-  }, [rows, kindFilter, search, sortState])
+  }, [rows, activeKind, search, sortState])
 
   const defaultColumns = useMemo(() => ([
     { key: '__row__', label: 'Row', width: 68, minWidth: 52, align: 'start' },
@@ -203,15 +208,20 @@ export default function ImportBatchNotImported({ batchId, seedKind = null, onOpe
           style={{ fontSize: 13 }}
         />
         <FeatureExplainer topic="not-imported-rows" placement="bottom-left" />
-        {NOT_IMPORTED_KINDS.filter(kind => (Number(totals[kind.key]) || 0) > 0).map(kind => (
-          <Button
-            key={kind.key}
-            variant={kindFilter === kind.key ? 'primary' : 'secondary'}
-            onClick={() => setKindFilter(current => (current === kind.key ? null : kind.key))}
-          >
-            {kind.label} ({totals[kind.key]})
-          </Button>
-        ))}
+        {NOT_IMPORTED_KINDS.filter(kind => (Number(totals[kind.key]) || 0) > 0).map(kind => {
+          const notKept = !keptKinds.has(kind.key)
+          return (
+            <Tooltip key={kind.key} describeTrigger content={notKept ? 'None of these rows were kept.' : ''}>
+              <Button
+                variant={activeKind === kind.key ? 'primary' : 'secondary'}
+                disabled={notKept}
+                onClick={() => setKindFilter(current => (current === kind.key ? null : kind.key))}
+              >
+                {kind.label} ({totals[kind.key]})
+              </Button>
+            </Tooltip>
+          )
+        })}
       </div>
       {omittedCount > 0 ? (
         <div style={{ flex: '0 0 auto', padding: '7px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 40%, var(--surface))', fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.5 }}>

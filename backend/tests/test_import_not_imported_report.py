@@ -129,6 +129,9 @@ class ImportNotImportedReportTests(unittest.TestCase):
         # those is worth more than reporting that the file dropped nothing.
         batch_id = str(uuid.uuid4())
         snapshot = {
+            "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+            "date_format": "%m/%d/%Y",
+            "amount_convention": "single_signed",
             "import_summary": {
                 "validation_error_count": 2,
                 "rejected_headers": ["Date", "Description", "Amount"],
@@ -145,6 +148,12 @@ class ImportNotImportedReportTests(unittest.TestCase):
             )
         report = self._report(batch_id)
         self.assertEqual([row["reason"] for row in report["rows"]], ["Invalid date: 'n/a'"])
+        # The snapshot kept only raw cells; the report's own columns are read back out of them through
+        # the batch's mapping rather than left blank beside the cells that hold them.
+        row = report["rows"][0]
+        self.assertEqual(row["date"], "n/a")
+        self.assertEqual(row["description"], "Refund")
+        self.assertEqual(row["amount"], 9.99)
         self.assertEqual(report["headers"], ["Date", "Description", "Amount"])
         self.assertEqual(report["totals"]["validation_error"], 2)
 

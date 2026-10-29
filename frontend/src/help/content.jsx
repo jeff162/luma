@@ -3994,7 +3994,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           A few hundred rows are kept per file. A file mapped to the wrong columns can have every row
-          refused, so the view states the full count whenever it is showing part of one.
+          refused, so the view states the full count whenever it is showing part of one. A reason with
+          none of its rows kept still shows its count, but its pill cannot be chosen.
         </p>
       </>
     ),
