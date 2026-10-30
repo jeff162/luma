@@ -497,12 +497,19 @@ def rename_identity(user_id: str, body: IdentityCreateRequest):
     return {"identity": _identity_view(user, crypto_service.sole_vault_member_id())}
 
 
+def _delete_person(user_id: str) -> None:
+    """Delete the user and their preferences, which are keyed by their id alone and could never be read
+    again. The preferences go second because the deletion can refuse (the last administrator)."""
+    delete_user(user_id)
+    clear_preferences(user_id)
+
+
 @router.delete("/identities/{user_id}")
 def delete_identity(user_id: str):
     _require_local_mode()
     try:
         # Deleting the last vault member resets the vault (`crypto_service.remove_vault_member`).
-        crypto_service.remove_vault_member(user_id, lambda: delete_user(user_id))
+        crypto_service.remove_vault_member(user_id, lambda: _delete_person(user_id))
     except ValueError as exc:
         detail = str(exc)
         raise HTTPException(status_code=404 if detail == "user not found" else 400, detail=detail)
@@ -1744,7 +1751,7 @@ def remove_user(user_id: str, request: Request):
         raise HTTPException(status_code=400, detail="You cannot delete the account you are currently signed into")
     try:
         # Deleting the last vault member resets the vault (`crypto_service.remove_vault_member`).
-        crypto_service.remove_vault_member(user_id, lambda: delete_user(user_id))
+        crypto_service.remove_vault_member(user_id, lambda: _delete_person(user_id))
     except ValueError as exc:
         detail = str(exc)
         if detail == "user not found":

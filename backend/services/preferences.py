@@ -14,6 +14,7 @@ Values are stored verbatim (the `/preferences` API JSON-encodes them); this laye
 
 from __future__ import annotations
 
+from backend.db import control_database
 from backend.db.database import get_db
 
 
@@ -91,6 +92,14 @@ def keep_preferences_of(conn, user_ids) -> None:
     not a person and always stays."""
     keep = [SHARED_SCOPE_ID, *user_ids]
     conn.execute(f"DELETE FROM ui_preference WHERE scope_id NOT IN ({', '.join('?' * len(keep))})", keep)
+
+
+def forget_departed_users() -> None:
+    """Delete the preferences of anyone no longer a user. Run at startup: deleting a user takes their
+    preferences with it, and this clears what an older version left behind or an interrupted deletion
+    missed."""
+    with get_db() as conn:
+        keep_preferences_of(conn, [user["id"] for user in control_database.list_users()])
 
 
 # Both halves take the caller's connection. A service reading one of these is normally already inside a

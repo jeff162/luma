@@ -314,6 +314,35 @@ class PerimeterOffSessionTests(unittest.TestCase):
             client.post("/api/auth/preferences", json={"key": "ui.theme", "value": "dark"})
             self.assertEqual(client.get("/api/auth/preferences").json()["preferences"]["ui.theme"], "dark")
 
+    def test_deleting_an_identity_deletes_its_preferences(self):
+        with _client_stack() as client:
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
+            sam = client.post("/api/auth/identities", json={"name": "Sam"}).json()["identity"]
+            for person in (mark, sam):
+                client.post("/api/auth/select-identity", json={"user_id": person["id"]})
+                client.post("/api/auth/preferences", json={"key": "ui.theme", "value": "dark"})
+
+            self.assertEqual(client.delete(f"/api/auth/identities/{sam['id']}").status_code, 200)
+            with database.get_db() as conn:
+                scopes = {row[0] for row in conn.execute("SELECT DISTINCT scope_id FROM ui_preference")}
+            self.assertIn(mark["id"], scopes)
+            self.assertNotIn(sam["id"], scopes)
+
+    def test_startup_forgets_preferences_of_users_who_are_gone(self):
+        from backend.services.preferences import SHARED_SCOPE_ID, forget_departed_users
+
+        with _client_stack() as client:
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
+            with database.get_db() as conn:
+                conn.executemany(
+                    "INSERT INTO ui_preference (scope_id, pref_key, pref_value) VALUES (?, 'ui.theme', '\"dark\"')",
+                    [(mark["id"],), ("someone-deleted-long-ago",), (SHARED_SCOPE_ID,)],
+                )
+            forget_departed_users()
+            with database.get_db() as conn:
+                scopes = {row[0] for row in conn.execute("SELECT DISTINCT scope_id FROM ui_preference")}
+            self.assertEqual(scopes, {mark["id"], SHARED_SCOPE_ID})
+
     def test_pwless_session_rejected_once_perimeter_comes_up(self):
         with _client_stack() as client:
             mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]

@@ -2340,6 +2340,9 @@ alone, so a row for anyone else could never be read. Each remaining user takes t
 backup where it has some and keeps their own where it has none, and the ledger-wide scope always comes from
 the backup (`_restore_preferences`).
 
+**Deleting a user deletes their preferences.** Startup also deletes any left for someone who is no longer
+a user (`forget_departed_users`), which catches those an older version kept and an interrupted deletion.
+
 A restore clears everyone's remembered page (`ui.startupRoute`), so each person's next sign-in lands on
 the dashboard (`preferences.forget_startup_routes`). Otherwise the person restoring would return to the
 restore page, and everyone else to the page they had open when the backup was taken.
