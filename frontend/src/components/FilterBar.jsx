@@ -375,6 +375,33 @@ function FilterPopover({ onClose }) {
         ))}
       </div>
 
+      {/* Search boxes sit above the scroll area so the list scrolls under them instead of taking them along. */}
+      {tab === 'categories' && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <input
+            name="filter-category-search"
+            value={catSearch}
+            onChange={e => setCatSearch(e.target.value)}
+            placeholder="Filter categories…"
+            aria-label="Filter categories"
+            style={{ ...inputStyle, width: '100%' }}
+          />
+        </div>
+      )}
+      {tab === 'payee' && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <input
+            autoFocus
+            name="filter-payee-search"
+            value={payeeSearch}
+            onChange={e => setPayeeSearch(e.target.value)}
+            placeholder="Search payee name…"
+            aria-label="Search payee name"
+            style={{ ...inputStyle, width: '100%' }}
+          />
+        </div>
+      )}
+
       <div style={{ maxHeight: 300, overflowY: 'auto', padding: '6px 0' }}>
 
         {/* Accounts under their type. A type heading selects every account of that type, including
@@ -445,17 +472,6 @@ function FilterPopover({ onClose }) {
 
           return (
             <div>
-              <div style={{ padding: '6px 12px 8px' }}>
-                <input
-                  name="filter-category-search"
-                  value={catSearch}
-                  onChange={e => setCatSearch(e.target.value)}
-                  placeholder="Filter categories…"
-                  aria-label="Filter categories"
-                  style={{ ...inputStyle, width: '100%' }}
-                />
-              </div>
-
               {/* Two super-categories (income / expense); each group nests under the one its type says.
                   The super-category header itself selects every group of that type (the old super-group
                   select-all), and the ✓/· shows how much of it is selected. */}
@@ -552,16 +568,7 @@ function FilterPopover({ onClose }) {
         })()}
 
         {tab === 'payee' && (
-          <div style={{ padding: '8px 12px' }}>
-            <input
-              autoFocus
-              name="filter-payee-search"
-              value={payeeSearch}
-              onChange={e => setPayeeSearch(e.target.value)}
-              placeholder="Search payee name…"
-              aria-label="Search payee name"
-              style={{ ...inputStyle, width: '100%', marginBottom: 8 }}
-            />
+          <div style={{ padding: '0 12px' }}>
             {/* What was typed is itself a filter, offered ahead of the names it matches: one merchant
               appears under several names, and a fragment covers them all, including the next one. */}
             {payeeRows.map(s => (
