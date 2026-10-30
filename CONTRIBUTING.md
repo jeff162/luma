@@ -319,7 +319,7 @@ suite run can't catch anything such an edit could break.
 
 There is no checklist of tests still wanted. A test lands with the change that earns it
 (`docs/collaboration-notes.md` → *Testing*), and a test for code nobody is changing is written when
-that code is next touched. The conformance audit in `docs/backlog/refactor-audits.md` writes the failing
+that code is next touched. The conformance audit in `docs/backlog/code-health-audits.md` writes the failing
 test as part of each finding.
 
 ## Hooks and lint

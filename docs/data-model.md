@@ -2754,22 +2754,22 @@ and owed decisions*.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
 - **`cash_date`, a second date for cash-basis timing.** What decides it is the drill-through question:
   an attributed node lists purchases dated outside the displayed period.
-  → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)
+  → [`backlog/cash-basis-reporting.md`](backlog/cash-basis-reporting.md)
 - **Document text beyond a PDF's text layer**: OCR, and itemized lines from a document. OCR is also the
   precondition for suggesting multi-payment purchases.
-  → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
+  → [`backlog/document-extraction.md`](backlog/document-extraction.md)
 - **A data source's account map cannot be viewed or edited.** It is stored in the source's `column_map`
   as a side effect of importing, and a watched folder depends on it. Removing an account rewrites it.
   No backlog item; this section owns it.
 - **Marketplace enrichment remainder**: AZAD ingestion ergonomics, re-deriving enrichment from stored
   raw values, and the column-centric mapping rework.
-  → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)
+  → [`backlog/amazon-paypal-improvements.md`](backlog/amazon-paypal-improvements.md)
 - **Recurring detection**: the pool-load cost of a scoped scan, the long-cadence bias on stale series,
   and showing a transfer pair that is not a series.
   → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
 - **Dedupe follow-ups**, including the prefix-stripping item and a duplicate-resolution history.
-  → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
+  → [`backlog/duplicate-detection-improvements.md`](backlog/duplicate-detection-improvements.md)
 - **An online merchant categorizer**, ending in the existing rule store.
   → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
 - **The invariants a semantic database checker would assert.**
-  → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)
+  → [`backlog/data-consistency-checker.md`](backlog/data-consistency-checker.md)

@@ -101,4 +101,4 @@ splitting stays a manual act.
 ## Open
 
 - **Attachment tier 2 (extraction)** is the named precondition for automatic purchase suggestion above.
-  → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
+  → [`backlog/document-extraction.md`](backlog/document-extraction.md)

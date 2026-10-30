@@ -1,9 +1,23 @@
-# Recurring detection: remaining items
+# Recurring page: a cadence bug, unscheduled transfers, and speed
 
-Three independent items. The subsystem as built is in [`../data-model.md`](../data-model.md) →
-*Recurring series* and `architecture.md` → *Recurring series*; the first two items are recorded there as
-obstacles. The detector's tuning constants are at the top of `services/recurring_detection.py`, with their
-reasons beside them.
+## What it is
+
+Three independent items for the Recurring page:
+
+- **A bug: a subscription that stopped can be shown with the wrong schedule.** A monthly charge that
+  went quiet can be detected as semiannual instead, and once confirmed the wrong schedule is permanent.
+- **Transfers between the user's own accounts that happen on no schedule are shown nowhere.** Luma
+  recognizes them (paying a card whenever it has a balance, an occasional savings sweep) but only
+  scheduled ones appear, on the Recurring page.
+- **Speed.** Every transaction edit re-checks recurring series, and that check reads the whole window,
+  so edits get slower as the ledger grows. Not noticeable yet.
+
+**Where it stands:** none started. The bug has a narrow fix ready; the other two need decisions.
+
+The subsystem as built is in [`../data-model.md`](../data-model.md) → *Recurring series* and
+`architecture.md` → *Recurring series*; the first two items are recorded there as obstacles. The
+detector's tuning constants are at the top of `services/recurring_detection.py`, with their reasons
+beside them.
 
 ## A stale series' cadence is biased long (a bug)
 

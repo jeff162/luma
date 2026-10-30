@@ -1,10 +1,17 @@
-# Incremental backups for attached documents
+# Smaller backups when there are many attached documents
 
-Design only, and not needed yet. Every backup holds everything: the ledger, the accounts part and every
-attached document. That is right while documents are a small share of a backup (the sizing assumption in
-[`transaction-attachments.md`](transaction-attachments.md) → *The sizing assumption*). The backup history
-on Backup / Restore splits each backup's size into ledger, accounts and documents, so the signal to start
-is visible there: documents becoming the bulk of every backup.
+## What it is
+
+Every backup holds everything: the ledger, the accounts and every attached document. If someone attaches
+a lot of documents, every backup carries all of them again and gets large. This project lets documents be
+backed up separately, so each regular backup carries only the documents added since the last document
+backup.
+
+**Where it stands:** designed, not started, and not needed yet. Documents are expected to be a small share
+of a backup (the sizing assumption in [`document-extraction.md`](document-extraction.md) → *The
+sizing assumption*). The backup history on Backup / Restore splits each backup's size into ledger,
+accounts and documents, so the signal to start is visible there: documents becoming the bulk of every
+backup.
 
 ## Shape
 

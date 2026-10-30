@@ -1,11 +1,20 @@
-# New file-import formats: QIF, XLSX and the OFX family
+# Importing Quicken files, spreadsheets and bank OFX downloads
 
-Not started. Three file formats, each a new front end on the existing parse seam: a front end produces a
-`ParsedFile` and `run_import_parsed` does the rest. The CSV and PayPal statement imports are the two
-existing front ends; [`../building-a-connector.md`](../building-a-connector.md) → *Adding a file
-importer* covers the seam and the four CSV assumptions a new format has to answer.
+## What it is
 
-Connections (Plaid, SimpleFIN) are a different track, also in `building-a-connector.md`.
+Imports accept CSV files (and PayPal statements). This project adds three more file types:
+
+- **QIF**, the file Quicken exports, so someone moving from Quicken can bring their whole history,
+  including splits and transfers.
+- **XLSX**, for statements a bank or a person provides as a spreadsheet.
+- **OFX / QFX / QBO**, the download format most banks offer, which needs no column mapping.
+
+**Where it stands:** not started. Each format is independent.
+
+Each is a new front end on the existing parse seam: a front end produces a `ParsedFile` and
+`run_import_parsed` does the rest. [`../building-a-connector.md`](../building-a-connector.md) → *Adding a
+file importer* covers the seam and the four CSV assumptions a new format has to answer. Connections
+(Plaid, SimpleFIN) are a different track, also in that doc.
 
 ## Which first
 

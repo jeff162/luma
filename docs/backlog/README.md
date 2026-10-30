@@ -2,6 +2,11 @@
 
 Work that has not been built yet. Each file is one project, written so it can be picked up cold.
 
+**Each file opens the same way:** a title naming the outcome, a short *What it is* in user terms (what
+someone would see or be able to do, and why it is wanted), and a *Where it stands* line (not started,
+parked on what, or ready to build). Code names and mechanism come after that. A file holding several
+small items gives each one a line in *What it is*.
+
 **A file describes the work remaining, not its history.** When part of a project ships, its durable facts
 move into the topic docs (or a comment beside the code) and the file is cut down to what is left. What
 was tried, what shipped and when belong in git history. A rejected approach stays only where it would
@@ -15,71 +20,64 @@ citations in the same change.
 **Why many small files rather than one long one:** someone picking up one project should be able to read
 one file, not scan a monolith for the paragraph that applies.
 
-## Proposals ready to build
+## Ready to build
 
-- [per-account-currency.md](per-account-currency.md) — one currency per account, with accounts and rules
-  interacting only within their currency and a per-user selector choosing which currency the app shows.
-  Nothing is converted. Five decisions are owed, each with a recommendation.
-- [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — import eBay's purchase history and
-  add each item's detail to the card charge that paid for it. Covers the purchase-record table, matching
-  by tax band and unique assignment, the eBay vendor on the shared reconciliation review, and the
-  `eBay: <item>` name. No product decisions owed.
+- [Accounts in more than one currency](per-account-currency.md) — each account has its own currency and
+  the app shows one currency at a time; nothing is converted. Five decisions are owed, each with a
+  recommendation.
+- [Showing what was bought on eBay](ebay-purchase-detail.md) — import eBay's purchase history and
+  add the item to the card charge that paid for it, so the row reads `eBay: <item>`. No decisions owed.
 
-## Import and data sources
+## Import and bank connections
 
-- [import-input-formats.md](import-input-formats.md) — three file formats: QIF (the way out of Quicken,
-  highest value), XLSX (cheapest) and the OFX family. Each is a new front end on the existing parse seam.
-- [provider-candidates.md](provider-candidates.md) — which data provider to add next. Several services
-  expose a SimpleFIN server, so a server-profile refactor of the SimpleFIN adapter makes each one a
-  configuration entry. Two others (Akahu, Enable Banking) sell direct access to individuals.
-- [ofx-direct-connect.md](ofx-direct-connect.md) — OFX Direct Connect as a provider, the only pull with
-  no aggregator in the middle. Parked on institution coverage. The credential is the bank login, which
-  the connect and disconnect flows have to say.
-- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — leftovers from the enrichment and Amazon
-  work: AZAD paste/drag ingestion, AZAD preview-feature gating, undoing one wallet funding-leg pairing,
-  re-deriving enrichment from stored raw values, and a column-per-row mapping screen.
-- [import-dedupe-followups.md](import-dedupe-followups.md) — a duplicate-resolution history view with
-  batch undo, letting a coverage reject rest on the real twin rather than a coincidence, and the
-  bank-side type prefixes that stay unstripped.
-- [import-history-windowing.md](import-history-windowing.md) — page the import-history fetch, once the
-  four callers that read it as all of history have their own endpoints.
+- [Importing Quicken files, spreadsheets and bank OFX downloads](import-input-formats.md) — QIF (the way
+  out of Quicken, highest value), XLSX (cheapest) and the OFX family.
+- [More bank-connection services, mostly outside the US](provider-candidates.md) — research on which
+  service to add next. One change to the SimpleFIN connector would open several of them at once.
+- [Connecting straight to the bank](ofx-direct-connect.md) — OFX Direct Connect, with no service in the
+  middle. Parked: few banks still support it, and it needs the user's bank login.
+- [Amazon, PayPal and import-mapping improvements](amazon-paypal-improvements.md) — five small, independent
+  items, such as pasting Amazon orders instead of saving a file.
+- [Duplicate detection improvements](duplicate-detection-improvements.md) — a history of duplicate decisions with
+  batch undo, and a rejection that rests on the right reason.
+- [Import history that stays fast as it grows](import-history-paging.md) — load the import history a
+  page at a time. Blocked on four screens that read all of it.
 
 ## Ledger, rules and reporting
 
-- [recurring-detection.md](recurring-detection.md) — the stale-series cadence bug, showing transfer
-  pairs that are not a series, and storing `payee_key` so a scoped scan stops reading the whole window.
-- [dashboard-reporting.md](dashboard-reporting.md) — `cash_date`, a second date for cash-basis timing.
-- [saved-tag-reports.md](saved-tag-reports.md) — a manager for saved tag reports outside the dashboard,
-  and a richer report builder.
-- [online-categorizer.md](online-categorizer.md) — an opt-in LLM categorizer for merchants with no
-  history, and deterministic merchant-name cleaning for the suggested rule keyword. Both end in the
-  existing rule store.
-- [misc-followups.md](misc-followups.md) — one-offs too small for their own file: showing every source
-  of a transaction's tag, and a per-rule *stop matching* option.
+- [Recurring page: a cadence bug, unscheduled transfers, and speed](recurring-detection.md) — a stopped
+  subscription can get the wrong schedule; transfers on no schedule are shown nowhere; edits slow down as
+  the ledger grows.
+- [Reports by when the money actually left the bank](cash-basis-reporting.md) — a second date on card
+  purchases, the date the card payment covered them.
+- [Managing and building tag reports](saved-tag-reports.md) — one place to manage saved tag reports, and
+  a richer report builder.
+- [Categorizing merchants Luma has never seen](online-categorizer.md) — an opt-in AI categorizer for a new
+  ledger, and cleaned-up keywords when building a rule.
+- [Small rule and tag improvements](rule-and-tag-improvements.md) — show where a transaction's tag comes from, and a
+  rule option that stops lower rules from applying.
 
-## Documents and backups
+## Documents, backups and data checks
 
-- [transaction-attachments.md](transaction-attachments.md) — document extraction past the PDF text
-  layer: embedded e-invoices, local OCR, a BYOK itemizer shared with the online categorizer, and
-  itemizations pre-filling splits. Also the space-reclamation view.
-- [document-incremental-backups.md](document-incremental-backups.md) — document-only backups, with each
-  data backup carrying only new documents. Not needed until documents are the bulk of a backup.
-- [database-diagnostics.md](database-diagnostics.md) — an invariant checker for the inconsistencies the
-  structural database check reports as `ok`.
+- [Reading receipts](document-extraction.md) — searchable photographed receipts, line items read
+  from invoices, and a view of what documents take up space.
+- [Smaller backups when there are many attached documents](document-incremental-backups.md) — back up
+  documents separately. Not needed until documents are the bulk of a backup.
+- [Finding data that is quietly wrong](data-consistency-checker.md) — a checker for data that passes the
+  database damage check but no longer makes sense.
 
 ## Help
 
-- [help-topic-search.md](help-topic-search.md) — a search box on the `/help` index. Waits on a way to
-  match article bodies.
-- [in-page-help-explain-mode.md](in-page-help-explain-mode.md) — an "explain this" mode that outlines
-  the controls on a page that have help topics, and a guided tour built on the same declarations.
+- [Searching the help pages](help-topic-search.md) — a search box on the Help index. Waits on a way to
+  match article text.
+- [Help that points at the screen](in-page-help-explain-mode.md) — an "explain this" mode that outlines
+  the controls with help topics, and a guided tour on the same mechanism.
 
 ## Code health
 
-- [refactor-audits.md](refactor-audits.md) — two recurring passes: duplication and shotgun surgery
-  (next scope: the backend), and checking the code against what a topic doc claims (next scope:
-  `architecture.md`).
-- [cleanup-pass.md](cleanup-pass.md) — small cleanups to batch: the file card's *rejected* count, and the
-  press-driven transient labels.
-- [query-cache-invalidation.md](query-cache-invalidation.md) — dependency-based refresh instead of the
-  hand-wired `notifyTransactionsChanged` list. Only if derived views multiply enough to hurt.
+- [Periodic code-health audits](code-health-audits.md) — duplicated code (next: the backend) and docs
+  checked against code (next: `architecture.md`).
+- [Small UI cleanups to batch](cleanup-pass.md) — the import card's rejected count, and button labels that
+  flash for an instant.
+- [Screens that refresh themselves when the data they show changes](query-cache-invalidation.md) —
+  replaces a hand-written refresh list. Maybe never needed.

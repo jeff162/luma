@@ -1,13 +1,15 @@
-# OFX Direct Connect
+# Connecting straight to the bank (OFX Direct Connect)
 
-Researched and parked; not planned. Parked on **coverage**, not cost. If picked up, the technology is
-`ofxtools`, and the disclosure below is settled before any code.
+## What it is
 
-## Why it is interesting
+A connection that downloads transactions directly from the bank, with no service in the middle. Plaid and
+SimpleFIN are both middlemen: a third party that holds a credential and sees the ledger. OFX Direct Connect
+is the one protocol that talks to the institution itself, a natural fit for a local-first, self-hosted
+app. The catch is that the user hands Luma their actual bank login.
 
-Plaid and SimpleFIN are both middlemen: a third party that holds a credential and sees the ledger. **OFX
-Direct Connect is the only transaction pull that talks to the institution directly**, a natural fit for a
-local-first, self-hosted app. That is the only reason to revisit it.
+**Where it stands:** researched and parked; not planned. Few banks still support it, and none of the ones
+in use here did when checked. If picked up, the library is `ofxtools`, and what the user is told about
+their login is settled before any code.
 
 ## Start with the coverage check
 

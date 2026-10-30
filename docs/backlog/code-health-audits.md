@@ -1,7 +1,15 @@
-# Recurring audits: refactor smells, and doc conformance
+# Periodic code-health audits
 
-Two periodic passes over the repo, kept together because both are standing processes with a carried
-scope rather than a feature. Neither blocks anything.
+## What it is
+
+Two passes to repeat every so often. Neither changes what users see:
+
+- **Duplicated code.** Find places where one small change has to be made in many near-identical spots,
+  and merge them before they drift apart.
+- **Docs against code.** Check that the code actually does what a topic doc claims, claim by claim, and
+  fix whichever side is wrong.
+
+**Where it stands:** recurring, never finished. Each has a next scope:
 
 | Audit | Next scope |
 | --- | --- |

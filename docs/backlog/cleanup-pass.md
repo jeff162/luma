@@ -1,7 +1,16 @@
-# Cleanup pass
+# Small UI cleanups to batch
 
-Small, non-urgent cleanups to do together. None blocks other work. Verify with `cd frontend && npm run
-lint` and the browser console on each page touched.
+## What it is
+
+Two small, unrelated fixes to do together:
+
+- **The import card's "rejected" count disagrees with the list it opens.** A card can say "3 rejected"
+  and open a list of twelve.
+- **"Saving…"-style button labels that flash for an instant.** Some can go, where the screen already
+  shows the result.
+
+**Where it stands:** not started, not urgent, and neither blocks other work. Verify with `cd frontend &&
+npm run lint` and the browser console on each page touched.
 
 ## The file card's *rejected* pill and the *Not imported* view count different sets
 

@@ -1,9 +1,16 @@
-# Cash-basis timing: a second date (`cash_date`)
+# Reports by when the money actually left the bank
 
-Not started. Reporting recognizes spending on the **transaction date**. This adds a second date recording
-when money actually left an account that holds it, so the same views can be re-run on cash-basis timing
-by pointing at a different column. The current reporting semantics are in
-[`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*.
+## What it is
+
+Reports count a card purchase in the month it was made. The money only leaves the bank account later,
+when the card is paid. This project adds a second date to each card purchase, the date of the payment
+that covered it, so the dashboard can answer "when did money actually leave" as well as "when was it
+spent". Most rows are unaffected: the two dates differ only for card spending.
+
+**Where it stands:** not started. One question decides whether it is worth building (below).
+
+The current reporting rules are in [`../data-model.md`](../data-model.md) → *Reporting assumptions* →
+*Cash flow*. The working name for the column is `cash_date` (see *Name*).
 
 ## What decides whether to build it
 

@@ -1,13 +1,22 @@
-# Paging the import-history fetch
+# Import history that stays fast as it grows
 
-Not started. `GET /import-export/batches` returns the whole import history. The Import page already
-shows it as a per-source window with a by-year archive, so the remaining work is bounding the fetch
-itself. Why the display query is unbounded and why the reconcile pass on the same endpoint stays capped
+## What it is
+
+Every import and sync adds a card to the import history, and the Import page loads the whole history
+every time it opens. The page already shows only recent cards per source, with older ones in a by-year
+archive, but the server still sends all of them. This project makes the server send a page at a time, so
+opening the Import page costs the same after ten years of imports as after one.
+
+**Where it stands:** not started. Not urgent until the history is long enough to slow the page. Blocked
+on four other screens that use the same request to answer "across all history" questions (below).
+
+Why the display query is unbounded today, and why the reconcile pass on the same endpoint stays capped,
 is in [`../scale-and-limits.md`](../scale-and-limits.md) → *Import history: retention*.
 
 ## What blocks it
 
-Four callers read the endpoint as an aggregate over all history, not as a page of it. Paging under them
+`GET /import-export/batches` returns the whole history. Four callers read it as an aggregate over all
+history, not as a page of it. Paging under them
 turns a complete answer into a first-page one. They are listed in
 [`../scale-and-limits.md`](../scale-and-limits.md) → *Obstacles*. The data-source manager's set of known
 template hashes is the one that becomes wrong rather than merely stale, since it guards against

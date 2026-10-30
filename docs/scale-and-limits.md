@@ -291,7 +291,7 @@ build and the DevTools hook each inflate render cost enough to change which cost
 
 - **Re-bounding the import-history fetch**, which means moving the aggregate consumers above off the
   whole-list payload first.
-  → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
+  → [`backlog/import-history-paging.md`](backlog/import-history-paging.md)
 - **Incremental backups for attached documents**, once the backup history shows documents as the bulk
   of a backup. The ledger half needs nothing.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
@@ -300,4 +300,4 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **A structural database check does not answer whether the data is coherent**: a cursor ahead of a
   restored ledger, a coverage claim disagreeing with its rows and a mapping pointing at a merged account
   all read as `ok`. What a semantic checker should assert is unstarted design.
-  → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)
+  → [`backlog/data-consistency-checker.md`](backlog/data-consistency-checker.md)

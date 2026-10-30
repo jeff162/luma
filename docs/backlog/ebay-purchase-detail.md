@@ -1,13 +1,15 @@
-# Marketplace purchase detail — eBay, and a shared review surface
+# Showing what was bought on eBay
 
-**Design, not started.** Nothing eBay-specific is built. The shared review shell it plugs into exists,
-with Amazon and the PayPal reconciliation as its vendors (see *The review surface*). No product decisions
-are owed.
+## What it is
 
-The feature: import a marketplace's purchase history and **add the item detail to the card charge that
-already paid for it**, so a charge reading only "eBay" says what was bought and is found by searching for
-it. Purchases that cannot be paired with a charge automatically are put in front of the user to decide.
-eBay is the first vendor; the review surface is built to be shared by any marketplace, Amazon included.
+An eBay purchase shows up in the ledger as a card charge that says only "eBay". This project imports
+eBay's purchase history and adds the item to the charge that paid for it, so the row reads `eBay: <item
+title>`, can be found by searching for the item, and can be categorized by what was bought. Purchases
+that cannot be paired with a charge automatically go into a review for the user to decide.
+
+**Where it stands:** designed, not started, ready to build. No product decisions are owed. The review
+plugs into the reconciliation review Amazon and PayPal already use (see *The review surface*), so later
+marketplaces can reuse the same pieces.
 
 ## Why this is not the Amazon model
 

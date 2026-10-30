@@ -1,9 +1,24 @@
-# Enrichment and Amazon import: remaining items
+# Amazon, PayPal and import-mapping improvements
 
-Independent leftovers from the import-enrichment and Amazon work. The built system is in
-`data-model.md` (enrich-on-duplicate, `display_name_source`, evidence capture and roles, *Transaction
-links and Amazon order import*, wallet funding-leg suppression, *PayPal source recognition*) and
-`architecture.md` → *Amazon order import contract*.
+## What it is
+
+Five independent improvements around Amazon order import, PayPal, and adding detail from one import to
+transactions already in the ledger:
+
+- **Paste Amazon orders instead of saving a file**: copy the order table from the AZAD browser extension
+  and paste or drag it into Luma.
+- **Find out what a plain AZAD install exports**, so the import does not depend on AZAD's preview
+  features.
+- **Undo one PayPal funding pairing** the user disagrees with.
+- **Add newly chosen detail columns to old rows** without re-importing the file.
+- **A simpler column-mapping screen**: one row per column in the file, each with a dropdown for what it
+  means.
+
+**Where it stands:** none started; all are polish, and each can be done on its own.
+
+The built system is in `data-model.md` (enrich-on-duplicate, `display_name_source`, evidence capture and
+roles, *Transaction links and Amazon order import*, wallet funding-leg suppression, *PayPal source
+recognition*) and `architecture.md` → *Amazon order import contract*.
 
 ## AZAD ingestion without a file
 

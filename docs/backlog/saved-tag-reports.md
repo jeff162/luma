@@ -1,8 +1,15 @@
-# Saved tag reports
+# Managing and building tag reports
 
-Two independent enhancements to the dashboard tag reports. Freezing filters with a report is already
-covered by saved filters (`architecture.md` → *Saved filters*): apply the saved filter, then pick the
-report.
+## What it is
+
+Two independent improvements to the dashboard's tag reports:
+
+- **A place to manage all saved reports**, so stale ones can be cleaned out in one go instead of one at a
+  time from the dashboard picker.
+- **A richer report builder** than the flat list of tag checkboxes.
+
+**Where it stands:** not started; neither is pressing. Freezing filters with a report is already covered
+by saved filters (`architecture.md` → *Saved filters*): apply the saved filter, then pick the report.
 
 ## A manager outside the dashboard
 

@@ -1,9 +1,19 @@
-# Database invariant checker
+# Finding data that is quietly wrong
 
-Not started. Settings → Database runs `integrity_check` and `foreign_key_check` on both databases
+## What it is
+
+Settings → Database can check that the database files are not damaged. It cannot tell whether the data
+in them still makes sense: a connection that will skip transactions after a restore, an import record
+that disagrees with the rows it imported, a mapping to an account that no longer stands on its own. Each
+of these passes the damage check and still gives wrong results. This project is a checker that looks for
+them, and possibly repairs some.
+
+**Where it stands:** not started, and needs its own design (which checks, how serious each is, report
+or repair).
+
+The existing check runs `integrity_check` and `foreign_key_check` on both databases
 ([`../operations.md`](../operations.md) → *Checking the databases*). Those verify SQLite's structures,
-not the app's invariants, so a database can pass and still hold data that means the wrong thing. This
-project is a checker for that half.
+not the app's invariants.
 
 ## What it would catch
 

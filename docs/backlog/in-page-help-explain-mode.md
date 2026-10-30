@@ -1,13 +1,19 @@
-# In-page help: an "explain this" mode, and a guided tour
+# Help that points at the screen: "explain this" and a guided tour
 
-Not started. Two in-page guidance ideas that would share one mechanism: a way for a page to declare which
-help topic each of its controls belongs to, so the guidance points at the real screen.
+## What it is
+
+Two ways to learn a page by looking at it rather than reading about it:
+
+- **Explain this.** A button on any page outlines every control that has a help topic. Clicking an
+  outlined control opens its topic. Pressing the button again, or Escape, leaves the mode.
+- **A guided tour**, offered once data has arrived, stepping through the main controls one at a time.
+
+Both rest on the same piece: each control declaring which help topic explains it.
+
+**Where it stands:** not started. The explain mode has several design questions owed (below); the tour is
+not designed at all.
 
 ## Explain-this mode
-
-A button on any page turns on a mode that outlines every control on screen that has a help topic.
-Clicking an outlined control opens its topic in place. Pressing the button again, or Escape, leaves the
-mode.
 
 **Why the real screen and not a picture of it.** A mockup of the page inside its `page-*` hub topic was
 the first form of the idea. A screenshot with hot spots goes stale whenever the page changes, needs light

@@ -487,4 +487,4 @@ data means.
 - **No check of the app's own invariants.** The structural check cannot see the cases under *Obstacles*.
   An invariant checker over them needs its own design: which invariants to assert, warning or error, and
   whether anything can be repaired or only reported.
-  → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)
+  → [`backlog/data-consistency-checker.md`](backlog/data-consistency-checker.md)

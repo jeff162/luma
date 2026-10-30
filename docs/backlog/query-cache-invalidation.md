@@ -1,9 +1,21 @@
-# Dependency-based cache invalidation
+# Screens that refresh themselves when the data they show changes
 
-Parked, and maybe never needed. Writes that change a transaction go through `txnMutations`
-(`frontend/src/lib/txnMutations.js`), which calls `notifyTransactionsChanged()` after each write, and an
-eslint `no-restricted-properties` rule stops callers from skipping it. That one function decides which
-transaction-derived views refresh. A new view adds its refresh there and callers stay unaware.
+## What it is
+
+When a transaction is edited, other screens showing figures derived from it (the Tasks badge, totals,
+uncategorized counts) have to refresh. Today one function holds a hand-written list of what to refresh
+after a transaction changes. This project would replace that list with a system where each screen
+declares what data it depends on and refreshes itself when that data changes. Nobody would maintain the
+list. Users would see no difference; it is a code-health change.
+
+**Where it stands:** parked, and maybe never needed. The hand-written list works and is short.
+
+## How it works today
+
+Writes that change a transaction go through `txnMutations` (`frontend/src/lib/txnMutations.js`), which
+calls `notifyTransactionsChanged()` after each write, and an eslint `no-restricted-properties` rule stops
+callers from skipping it. That one function decides which transaction-derived views refresh. A new view
+adds its refresh there and callers stay unaware.
 
 ## The idea
 

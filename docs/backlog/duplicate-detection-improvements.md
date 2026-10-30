@@ -1,7 +1,20 @@
-# Import and duplicate-detection follow-ups
+# Duplicate detection improvements
 
-Convenience and precision items for the dedupe subsystem. None is a safety gap: every resolution
-soft-deletes, and per-row restore prevents data loss.
+## What it is
+
+Improvements to how imports catch duplicate transactions:
+
+- **A history of duplicate decisions, with batch undo**: one place to see every Keep / Discard / Replace
+  decision made over time, and undo a whole bulk action at once.
+- **A rejection that rests on the right reason.** An imported row can be rejected as a duplicate because
+  of an unrelated charge with the same amount, when its real twin sits on another account. The rejection
+  is right; the reasoning is not, and fixing it changes which rows get imported.
+- **Bank-side prefixes such as `WDRL-ACH`.** Stripping them was measured and does not help; recorded so it
+  is not tried again blind.
+- **An open question:** whether bank syncs capture less detail per row than the docs suggest.
+
+**Where it stands:** none started. None is a safety gap: every resolution soft-deletes, and per-row
+restore prevents data loss.
 
 ## Duplicate-resolution history and batch undo
 

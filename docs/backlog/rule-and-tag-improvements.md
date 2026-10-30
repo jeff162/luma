@@ -1,7 +1,17 @@
-# Miscellaneous follow-ups
+# Small rule and tag improvements
 
-One-offs too small for their own file. When an entry grows into a project, give it its own file; when it
-ships, delete the entry.
+## What it is
+
+One-offs too small for their own file:
+
+- **Show where a transaction's tag comes from.** A tag can be added by hand, by a rule and by the
+  category all at once, but the tag picker shows only one source, so unchecking it cannot offer "remove
+  my copy, keep the inherited one".
+- **A rule option that stops lower rules from applying**, as mail filters have, so one rule can fully
+  govern the transactions it matches.
+
+**Where it stands:** ideas, not started. When an entry grows into a project, give it its own file; when
+it ships, delete the entry.
 
 ## Showing every source of a transaction's tag
 

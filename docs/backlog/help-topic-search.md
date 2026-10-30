@@ -1,14 +1,17 @@
-# Help-page topic search
-
-Not started. A search box on the `/help` index, in the sticky "Topic index" header beside the section
-jump-pills, to find articles by typing. Parked because it is of limited use until a match can reach the
-article text, not just titles and summaries.
+# Searching the help pages
 
 ## What it is
 
-`pages/Help.jsx` renders the index as sectioned cards from `HELP_TOPICS` (`help/content.jsx`). A live
-search filters the cards as the user types into a flat list across sections, hides the jump-pills while a
-query is active, and shows a quiet "No topics match" when empty. Clearing the box restores the index.
+A search box on the Help page's topic index, so an article can be found by typing a word instead of
+scanning the list. Typing filters the topic cards into a flat list of matches; clearing the box restores
+the normal sectioned index.
+
+**Where it stands:** parked, not started. A search that only matches titles and summaries misses most of
+what people would search for, and article bodies are not plain text (below).
+
+The box sits in the sticky "Topic index" header beside the section jump-pills. `pages/Help.jsx` renders
+the index from `HELP_TOPICS` (`help/content.jsx`). While a query is active the jump-pills are hidden, and
+an empty result shows a quiet "No topics match".
 
 ## The depth-of-match problem
 

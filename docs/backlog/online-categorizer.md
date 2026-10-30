@@ -1,11 +1,24 @@
-# Online categorizer and merchant-name cleaning
+# Categorizing merchants Luma has never seen
 
-Not started. Two related but independent features for categorizing merchants with no history to learn
-from. Distinct from source-text rule matching (`match_source_text`, `docs/data-model.md` → *The matcher*)
-and from the history-driven **Generate Rules** suggester. Worth picking up next time rules are in focus.
+## What it is
+
+A new ledger has no categorized history, so there is nothing for Generate Rules to learn from and every
+merchant has to be categorized by hand. Two independent features help:
+
+1. **An online categorizer.** On request, send each unknown merchant name to an AI service, which picks
+   one of the user's own categories ("Spotify → Entertainment"). The user reviews each suggestion, and
+   accepting one can create a rule. Opt-in, since merchant names leave the machine.
+2. **Merchant-name cleaning.** When building a rule, suggest a cleaned keyword (`BLACKPEARL` from
+   `TST*BlackPearl #123 Portland`) so the rule matches every visit, not just one. Runs locally.
+
+**Where it stands:** designed, not started. Worth picking up next time rules are in focus. The second
+feature can ship on its own.
+
+Both are distinct from source-text rule matching (`match_source_text`, `docs/data-model.md` → *The
+matcher*) and from Generate Rules.
 
 The online categorizer shares most of its subsystem with document itemization
-([`transaction-attachments.md`](transaction-attachments.md) → *Tier 3 shares a subsystem with the online
+([`document-extraction.md`](document-extraction.md) → *Tier 3 shares a subsystem with the online
 categorizer*), so whichever is built first should build the shared part.
 
 ## The rule is the cache

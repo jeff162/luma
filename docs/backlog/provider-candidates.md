@@ -1,9 +1,18 @@
-# Provider candidates
+# More bank-connection services, mostly outside the US
 
-**Research, nothing started.** No commitment to any of the services below. One structural finding is
-worth acting on before any particular provider: **SimpleFIN is a protocol with several independent
-servers, and this repo currently treats it as one product.** The work it implies is a server-profile
-refactor of the SimpleFIN adapter (below); after that, each SimpleFIN-speaking service is a profile entry.
+## What it is
+
+Bank connections go through Plaid or SimpleFIN Bridge, and SimpleFIN Bridge covers only the US and
+Canada. This file is the research on which connection service to add next, mostly for regions the Bridge
+does not reach (Europe, the UK, Australia, New Zealand, Brazil), and what each would cost.
+
+The main finding: several of these services speak the same protocol as SimpleFIN Bridge, so one change to
+the SimpleFIN connector (a "server profile", below) would let Luma connect to all of them, each added as a
+settings entry rather than new code. Two others (Akahu, Enable Banking) would each need their own
+connector but sell access directly to individuals.
+
+**Where it stands:** research, nothing started, no commitment to any service. Which track comes first is
+open (see *Open*).
 
 [`../building-a-connector.md`](../building-a-connector.md) is the *how* — the seam, the declarations, and
 the traits that turned out to be one provider's. This file is the *which*: the candidate services, what

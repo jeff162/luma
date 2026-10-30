@@ -1,7 +1,14 @@
-# Per-account currency
+# Accounts in more than one currency
 
-**Proposal, not started.** The design below is agreed in outline. The decisions under *Decisions owed*
-are settled before building starts.
+## What it is
+
+Luma holds one currency for the whole ledger, so someone with a euro account and a dollar account cannot
+track both. This project gives each account its own currency. The app shows one currency at a time,
+picked from a selector, and nothing is ever converted: euro accounts are totalled with euro accounts,
+dollar with dollar. A ledger with one currency looks exactly as it does today.
+
+**Where it stands:** proposal, not started. The design is agreed in outline; five decisions under
+*Decisions owed* are settled before building starts.
 
 ## Goal
 

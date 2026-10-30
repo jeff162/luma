@@ -1,8 +1,21 @@
-# Attached documents: extraction past the PDF text layer
+# Reading receipts: searchable photos and itemized documents
 
-Not started. Documents can be attached, viewed, backed up and searched, with text pulled from a PDF's
-text layer ([`../data-model.md`](../data-model.md) → *Attached documents*, `architecture.md` → *Attached
-documents*). What remains is the extraction above that, and a storage view.
+## What it is
+
+Receipts and invoices can be attached to a transaction, and the text of a digital PDF is searchable. A
+photographed receipt is not, and nothing reads the line items out of a document. This project adds, in
+stages:
+
+- **Searchable photos and scans**, using OCR on the user's own machine.
+- **Itemized documents**: line items read from an invoice (by an AI service the user configures, or
+  exactly from the e-invoice data some PDFs carry), proposed for approval and able to pre-fill a split.
+- **A storage view** showing what documents take up space, so the user can choose what to drop.
+
+**Where it stands:** not started. The AI itemizer should be designed together with the online
+categorizer, which needs the same plumbing.
+
+What is built is in [`../data-model.md`](../data-model.md) → *Attached documents* and `architecture.md`
+→ *Attached documents*.
 
 ## The tiers
 
