@@ -522,21 +522,26 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
   // the other.
   const owners = ownerLabels ? entry.owners || [] : []
   return (
+    /* The whole card opens its reimbursement (a draft one, if untracked), not just the headline: the
+       summary and member lines are most of its area. The click is taken here so the headline button
+       reaches it by bubbling, which keeps Enter on the focused headline doing the same thing. */
     <div
       ref={dropRef}
+      onClick={onOpen}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
         borderRadius: 6,
+        cursor: 'pointer',
         border: `1px solid ${dropTarget ? 'var(--accent)' : 'var(--border)'}`,
         background: dropTarget
           ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-          : 'var(--surface2)',
+          : hovered
+            ? 'color-mix(in srgb, var(--accent) 5%, var(--surface2))'
+            : 'var(--surface2)',
       }}
     >
-      {/* The row opens its reimbursement (a draft one, if untracked), which nothing about a list row
-          says on its own — the ledger's ↗ on hover is how the rest of the app makes that readable. */}
-      <button type="button" onClick={onOpen} title="Open" style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
+      <button type="button" title="Open" style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none', cursor: 'inherit' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
           {/* The due marker and the owners go ahead of the name rather than after it: the marker is the
               reason the row is being looked at, and anything at the end of a truncating label is the
@@ -545,7 +550,6 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
           {owners.map(owner => <OwnerChip key={owner.id} owner={owner} label={ownerLabels.get(owner.id)} />)}
           <span style={{ fontWeight: tracked ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {tracked ? reimbursementListLabel(entry.reimbursement) : entry.row.payee}
-            <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: hovered ? 1 : 0 }}> ↗</span>
           </span>
         </span>
         <span style={{ textAlign: 'right', color: getTransactionAmountColor(amount) }}>
@@ -559,7 +563,11 @@ function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, 
               {residualSummary(entry.reimbursement)}
             </span>
             {readyToComplete ? (
-              <Button variant="secondary" disabled={busy} onClick={onComplete}>Mark complete</Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={event => { event.stopPropagation(); onComplete() }}
+              >Mark complete</Button>
             ) : null}
           </div>
           {entry.members.map(member => (
