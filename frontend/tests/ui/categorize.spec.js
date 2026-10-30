@@ -69,6 +69,7 @@ test('a category created from the inline picker is listed once afterwards', asyn
     // Restore the row's category and remove the created one, so the shared demo baseline is unchanged.
     await page.goto('/transactions')
     await page.getByPlaceholder('Search…', { exact: true }).fill('Interest Payment')
+    await expect(categoryCell).toHaveCount(1)
     await categoryCell.click()
     await page.getByPlaceholder(name).fill('Interest Income')
     await pickCategory(page, 'Interest Income')

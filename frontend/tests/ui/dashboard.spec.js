@@ -419,6 +419,11 @@ async function trendClickReport(page) {
 // keeping that choice, and a FilterBar pick keeping it too. Month to date rather than year to date, because
 // the demo ledger's spending sits in one year but several months.
 test('single-period trend keeps its grain chooser through bar clicks and compares exact spans', async ({ page }) => {
+  // Late in a month, Month to date's same span is a whole month for the clicked bar (the 1st–30th of
+  // September), which is a calendar month, so the chooser rightly shows Monthly there. Mid-month, no bar is.
+  const real = new Date()
+  const now = new Date(real.getFullYear(), real.getMonth(), Math.min(real.getDate(), 15), 12)
+  await page.clock.setSystemTime(now)
   await instrumentTrendClick(page)
   await page.goto('/')
   await page.getByRole('link', { name: 'Dashboard' }).click()
@@ -447,7 +452,6 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   await pickPreset('Month to date')
   await expect(grain).toHaveValue('month')
   // Same span asks for day-precise totals: the 1st through today's date in each month, ending with this one.
-  const now = new Date()
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const today = `${thisMonth}-${String(now.getDate()).padStart(2, '0')}`
   const spanRequest = page.waitForRequest(request => request.url().includes('/summary/range-trend'))
