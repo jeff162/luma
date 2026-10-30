@@ -1,9 +1,8 @@
 # Marketplace purchase detail — eBay, and a shared review surface
 
-**Design, not started (2026-09-16).** Nothing eBay-specific is built; the shared review shell this design
-called for exists, with Amazon and the PayPal reconciliation as its vendors (see *The review surface*).
-The four product decisions the first draft left open were settled the same day and are written into the
-sections they affect; what is still open is under [Open](#open) at the end.
+**Design, not started.** Nothing eBay-specific is built. The shared review shell it plugs into exists,
+with Amazon and the PayPal reconciliation as its vendors (see *The review surface*). No product decisions
+are owed.
 
 The feature: import a marketplace's purchase history and **add the item detail to the card charge that
 already paid for it**, so a charge reading only "eBay" says what was bought and is found by searching for
@@ -172,7 +171,7 @@ those exact fields.
 
 ## The review surface
 
-### What already exists and is already shared
+### What it builds on
 
 - **`MatchReport`** — the "record ↔ matched record" table, windowed, with controlled sort and selection.
   Both the duplicate report and the reconciliation reports render through it.
@@ -183,13 +182,12 @@ those exact fields.
   blocking). A vendor supplies its buckets, columns and the call behind each action; Amazon and the PayPal
   pairing review are its vendors (`components/importExport/reconciliation/`).
 - **The attention cache** — `services/reconciliation_attention.py`: a per-batch count cached on the batch
-  and a whole-ledger count cached in `db_meta`, both invalidated by the `recon_epoch` triggers.
+  (`reconciliation_attention_count`, behind the file card's tint and the Tasks nag) and a whole-ledger
+  count cached in `db_meta`, both invalidated by the `recon_epoch` triggers.
 - **`MarketplaceImportHistory`** — the per-vendor import card, with a registry for a vendor's own per-file
   action pill.
-- **`reconciliation_attention_count`** — the cached per-batch attention count behind the file card's
-  tint and the Tasks nag, invalidated by the `recon_epoch` triggers.
 
-### What eBay still adds to the shared pieces
+### What eBay adds to the shared pieces
 
 - **Backend.** A report endpoint returning its buckets, an attention compute function handed to the shared
   cache, and its own Tasks entry and file-card annotation, as Amazon and PayPal each have.

@@ -1,145 +1,85 @@
 # Backlog
 
-Deferred and parked work that is **not** blocking current features. Each file is one initiative,
-written so it can be picked up cold.
+Work that has not been built yet. Each file is one project, written so it can be picked up cold.
 
-**When an item ships, its file and its line here are deleted.**
+**A file describes the work remaining, not its history.** When part of a project ships, its durable facts
+move into the topic docs (or a comment beside the code) and the file is cut down to what is left. What
+was tried, what shipped and when belong in git history. A rejected approach stays only where it would
+stop the next attempt from repeating it.
 
-**A link to a project filename decays,** because project filenames are transient by construction; topic
-docs are stable, so a code comment cites `docs/<doc>.md` → *Section name* and never a path under here.
-Before deleting a file, grep for what still points at it — code, the sibling project files and this
-index — and repoint those citations in the same change.
+**When a project ships, its file and its line here are deleted.** Project filenames are transient, so a
+code comment cites `docs/<doc>.md` → *Section name* and never a path under here. Before deleting a file,
+grep for what still points at it (code, the sibling project files and this index) and repoint those
+citations in the same change.
 
-A status line per item is welcome: *done*, *in progress*, *what remains* is exactly what someone picking
-a file up cold needs first.
+**Why many small files rather than one long one:** someone picking up one project should be able to read
+one file, not scan a monolith for the paragraph that applies.
 
-**Why many small files rather than one long one:** an agent (or a person) picking up one initiative
-should be able to read one file, not scan a monolith for the paragraph that applies. The same reasoning
-splits the topic docs by question — structure, field semantics, UI behavior, security, operations,
-scale — rather than by feature.
+## Proposals ready to build
 
-## Items
+- [per-account-currency.md](per-account-currency.md) — one currency per account, with accounts and rules
+  interacting only within their currency and a per-user selector choosing which currency the app shows.
+  Nothing is converted. Five decisions are owed, each with a recommendation.
+- [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — import eBay's purchase history and
+  add each item's detail to the card charge that paid for it. Covers the purchase-record table, matching
+  by tax band and unique assignment, the eBay vendor on the shared reconciliation review, and the
+  `eBay: <item>` name. No product decisions owed.
 
-- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The
-  import-enrichment + Amazon initiative landed in full — PayPal as an ordinary import, the general
-  enrich-an-existing-transaction capability, `display_name_source`, evidence capture + role tagging, the
-  Amazon orders-only account+link model with the funding-source map and reconciliation, and wallet
-  funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
-  ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
-  from stored raw values, and the deferred column-centric mapping-screen rework.
-- [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
-  (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
-  it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers
-  the purchase-record store, the matching (tax band + unique assignment, measured on one real download),
-  a marketplace review shell that Amazon moves onto in the same change, the enriched `eBay: <item>` name
-  with a rule pass for uncategorized charges, and eBay joining Amazon as a row in the data-source list. No product
-  decisions owed.
-- [online-categorizer.md](online-categorizer.md) — **parked design.** An opt-in online (LLM) merchant
-  categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
-  terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
-  resuming next time rules are in focus.
-- [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: the file
-  report's *Not imported* view on older batches, and the press-scoped transient labels.
-- [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
-  optimization, the only item left.** The subsystem is live end to end — detection and curation, the
-  rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount
-  identity with the user-pinned expectation band (2026-09-01, schema v46) — and all of it is in [`../data-model.md`](../data-model.md) → *Recurring series*. What stays:
-  the payee filter is applied *after* a full pool load, so a scoped scan costs what a full one does
-  (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
-  on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
-  `txn`; the revisit threshold is roughly 50,000 rows.
-- [transaction-attachments.md](transaction-attachments.md) — **reduced 2026-09-03 to the unbuilt
-  extraction tiers.** Phase 1 shipped 2026-08-24 — the `document` table and on-disk store, the
-  format-agnostic ingestion seam (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text
-  and the FTS5 index, the backup and resumable-restore halves, the shared UI — and all of it is in
-  [`../data-model.md`](../data-model.md) → *Attached documents*. What stays: tier 1b (embedded
-  e-invoices, a file probe), tier 2 (local OCR, whose obstacle is packaging a system binary, not code),
-  tier 3 (a BYOK extractor that is **the same subsystem** as
-  [online-categorizer.md](online-categorizer.md) and should be designed with it), phase 4 (an approved
-  itemization pre-filling a split), the **sizing assumption** and the signal that would falsify it, and
-  the space-reclamation view — plus why originals are never sunset on a timer.
-- [refactor-audits.md](refactor-audits.md) — **two recurring audit processes.** (1) Duplication /
-  shotgun-surgery smells — the method is in the file, and its deciding caveats in `collaboration-notes.md` →
-  *Code Structure Preferences*; the file records the first run's shipped items (`getFormControlStyle` in Dashboard,
-  `TransactionListToolbar`, `useTags()`), the deferred candidates (row-patch util, the four drill
-  panels) and the next scope (**backend audit**). (2) **Doc conformance** — does the code do what
-  `data-model.md` says it does, claim by claim, with a five-way verdict per claim. The first run
-  (2026-10-15) covered twelve of the doc's seventeen sections; what is carried is the four it did not
-  reach — **import batches and profiles, watched import folders, transaction links and Amazon order
-  import, backups** — plus the method and the two obstacles, of which the load-bearing one is that a
-  green suite says nothing about conformance.
-- [help-topic-search.md](help-topic-search.md) — **parked, not started (2026-07-25).** A search box on the
-  `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
-  use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
-  that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
-- [in-page-help-explain-mode.md](in-page-help-explain-mode.md) — **not started (2026-09-13).** An
-  "explain this" mode that outlines the controls on a page that have help topics and opens the topic on a
-  click, declared per control so it points at the real screen rather than a mockup; recorded with the
-  post-data guided tour from the onboarding rework, which would sequence over the same declarations.
-- [import-history-windowing.md](import-history-windowing.md) — **reduced again 2026-10-09; the
-  per-source window, the by-year archive, the move onto transaction coverage and the stored-detail
-  maintenance screen are all built.** The retention story — the silent global
-  `LIMIT 50` that hid older imports and let one active source crowd out another, why the display query
-  is unbounded, and why the writing reconcile pass on the same endpoint stays capped — is in
-  [`../scale-and-limits.md`](../scale-and-limits.md); the window and archive as built are in
-  [`../data-model.md`](../data-model.md). What stays: the
-  fetch re-bound, now blocked on the five
-  consumers that read the batch list as an aggregate rather than as a page.
-- [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
-  Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
-  the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
-  have abandoned the path), records that the protocol is being *retired* rather than held stable by
-  Quicken (its successor, EWC+, is closed to third parties), and flags the disclosure it owes: an OFX
-  credential **is the bank login** and cannot be revoked from inside the app, so both the connect and
-  disconnect flows have to say so. Parked on
-  **coverage**: the bundled FI list matched none of the institutions actually in use here.
-- [provider-candidates.md](provider-candidates.md) — **research, nothing started (2026-10-09).** Which
-  provider to add next, and what each would cost. The structural half is the finding worth acting on:
-  SimpleFIN is a protocol with several independent servers — four of the seven services checked expose one
-  — and the adapter isolates the protocol *mapping* cleanly while keeping every Bridge-specific policy in
-  module constants no subclass can reach, so a second server costs a parameterizing refactor before it
-  costs anything else. Records what each service actually is, the two that sell direct access to
-  individuals (Akahu, Enable Banking's restricted production), the **server profile** that makes "named
-  server" and "paste any token" one mechanism rather than two, and why accepting an unlisted host leaks
-  nothing — so the fixed host allowlist is not re-imposed out of caution.
-- [per-account-currency.md](per-account-currency.md) — **proposal, not started (2026-10-27).** One
-  currency per account. Accounts and rules interact only within their currency, and a per-user selector
-  scopes the app to one currency at a time. Categories, tags and Tasks stay app-wide. Nothing is
-  converted. Five decisions are owed, each with a recommendation.
+## Import and data sources
 
-### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
+- [import-input-formats.md](import-input-formats.md) — three file formats: QIF (the way out of Quicken,
+  highest value), XLSX (cheapest) and the OFX family. Each is a new front end on the existing parse seam.
+- [provider-candidates.md](provider-candidates.md) — which data provider to add next. Several services
+  expose a SimpleFIN server, so a server-profile refactor of the SimpleFIN adapter makes each one a
+  configuration entry. Two others (Akahu, Enable Banking) sell direct access to individuals.
+- [ofx-direct-connect.md](ofx-direct-connect.md) — OFX Direct Connect as a provider, the only pull with
+  no aggregator in the middle. Parked on institution coverage. The credential is the bank login, which
+  the connect and disconnect flows have to say.
+- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — leftovers from the enrichment and Amazon
+  work: AZAD paste/drag ingestion, AZAD preview-feature gating, undoing one wallet funding-leg pairing,
+  re-deriving enrichment from stored raw values, and a column-per-row mapping screen.
+- [import-dedupe-followups.md](import-dedupe-followups.md) — a duplicate-resolution history view with
+  batch undo, letting a coverage reject rest on the real twin rather than a coincidence, and the
+  bank-side type prefixes that stay unstripped.
+- [import-history-windowing.md](import-history-windowing.md) — page the import-history fetch, once the
+  four callers that read it as all of history have their own endpoints.
 
-- [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Two dashboard tag-report
-  follow-ups: a Settings-page manager mirror and a richer (drag/NL) report builder.
-- [dashboard-reporting.md](dashboard-reporting.md) — **reduced 2026-09-02 to what has not started.**
-  The cash-flow work shipped 2026-08-25 and its durable half is now in the topic docs: chart behaviour in
-  the comments beside the chart code, reporting semantics (including
-  `exclude_from_totals` as the *only* exclusion axis)
-  in [`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*, and the endpoints in
-  `architecture.md`. What stays: the **`cash_date`** phase for cash-basis timing. The trend-bucketing
-  question was settled and built 2026-10-07.
-- [import-input-formats.md](import-input-formats.md) — **reduced 2026-09-03 to the file formats,
-  unstarted.** The **parse-seam extraction** they shared is done (2026-09-18, with the PayPal statement
-  import as the second front end). QIF, for moving from Quicken, has the most value: mapping-free, with
-  splits and transfers. XLSX is the cheapest, reusing the entire downstream unchanged. OFX/QFX/QBO is
-  mapping-free too, with `FITID` going through the existing source-transaction-id rung. SimpleFIN, the
-  Plaid-parallel connection track that shared this file, shipped 2026-08-07 and everything it taught is in
-  [`../building-a-connector.md`](../building-a-connector.md).
-- [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** A
-  duplicate-resolution history view + batch undo, convenience only — per-row restore already prevents
-  loss. Also holds two measured/scoped
-  deferrals: bank-side type prefixes, and letting a coverage reject rest on the actual twin rather than
-  on whichever same-amount row filled the candidate slot (the report half of that one shipped).
-- [document-incremental-backups.md](document-incremental-backups.md) — **design, not started, not
-  needed yet.** Document-only backups, with each data backup carrying only the documents added since the
-  last one. Started when the backup history shows documents as the bulk of a backup.
-- [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
-  hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
-  only if transaction-derived views proliferate enough to hurt.
-- [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-10-29).** An
-  invariant checker for the semantic inconsistencies the structural check in Settings → Database calls
-  "ok" (a cursor ahead of a restored ledger, a coverage claim disagreeing with its rows, a mapping to a
-  merged account). Needs its own design: which invariants, warning or error, report or repair.
-- [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file:
-  showing every source a transaction's tag comes from (hand, rule, category) rather than only the
-  winner, and a per-rule *stop matching* option that keeps lower-ranked rules from contributing.
+## Ledger, rules and reporting
+
+- [recurring-detection.md](recurring-detection.md) — the stale-series cadence bug, showing transfer
+  pairs that are not a series, and storing `payee_key` so a scoped scan stops reading the whole window.
+- [dashboard-reporting.md](dashboard-reporting.md) — `cash_date`, a second date for cash-basis timing.
+- [saved-tag-reports.md](saved-tag-reports.md) — a manager for saved tag reports outside the dashboard,
+  and a richer report builder.
+- [online-categorizer.md](online-categorizer.md) — an opt-in LLM categorizer for merchants with no
+  history, and deterministic merchant-name cleaning for the suggested rule keyword. Both end in the
+  existing rule store.
+- [misc-followups.md](misc-followups.md) — one-offs too small for their own file: showing every source
+  of a transaction's tag, and a per-rule *stop matching* option.
+
+## Documents and backups
+
+- [transaction-attachments.md](transaction-attachments.md) — document extraction past the PDF text
+  layer: embedded e-invoices, local OCR, a BYOK itemizer shared with the online categorizer, and
+  itemizations pre-filling splits. Also the space-reclamation view.
+- [document-incremental-backups.md](document-incremental-backups.md) — document-only backups, with each
+  data backup carrying only new documents. Not needed until documents are the bulk of a backup.
+- [database-diagnostics.md](database-diagnostics.md) — an invariant checker for the inconsistencies the
+  structural database check reports as `ok`.
+
+## Help
+
+- [help-topic-search.md](help-topic-search.md) — a search box on the `/help` index. Waits on a way to
+  match article bodies.
+- [in-page-help-explain-mode.md](in-page-help-explain-mode.md) — an "explain this" mode that outlines
+  the controls on a page that have help topics, and a guided tour built on the same declarations.
+
+## Code health
+
+- [refactor-audits.md](refactor-audits.md) — two recurring passes: duplication and shotgun surgery
+  (next scope: the backend), and checking the code against what a topic doc claims (next scope:
+  `architecture.md`).
+- [cleanup-pass.md](cleanup-pass.md) — small cleanups to batch: the file card's *rejected* count, and the
+  press-driven transient labels.
+- [query-cache-invalidation.md](query-cache-invalidation.md) — dependency-based refresh instead of the
+  hand-wired `notifyTransactionsChanged` list. Only if derived views multiply enough to hurt.

@@ -1,9 +1,9 @@
 # Provider candidates
 
-**Status: research, nothing started (2026-10-09).** No code, no commitment to any of the services below.
-Recorded so the question is not re-derived, and because the research produced one structural finding that
-is worth acting on before any particular provider is: **SimpleFIN is a protocol with several independent
-servers, and this repo currently treats it as one product.**
+**Research, nothing started.** No commitment to any of the services below. One structural finding is
+worth acting on before any particular provider: **SimpleFIN is a protocol with several independent
+servers, and this repo currently treats it as one product.** The work it implies is a server-profile
+refactor of the SimpleFIN adapter (below); after that, each SimpleFIN-speaking service is a profile entry.
 
 [`../building-a-connector.md`](../building-a-connector.md) is the *how* — the seam, the declarations, and
 the traits that turned out to be one provider's. This file is the *which*: the candidate services, what

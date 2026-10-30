@@ -1,7 +1,7 @@
 # Per-account currency
 
-**Status: proposal, not started (2026-10-27).** The design below is agreed in outline. The decisions
-under *Decisions owed* are settled before building starts.
+**Proposal, not started.** The design below is agreed in outline. The decisions under *Decisions owed*
+are settled before building starts.
 
 ## Goal
 

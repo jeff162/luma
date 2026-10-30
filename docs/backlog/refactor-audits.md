@@ -1,171 +1,122 @@
 # Recurring audits: refactor smells, and doc conformance
 
-> **Status: backlog / recurring.** Two periodic passes over the whole repo, kept in one file because
-> both are standing processes with a carried scope rather than a feature. Not blocking anything.
-> Verify each change with `cd frontend && npm run lint` + `npm run build` (and
-> `backend/venv/bin/python -m pytest backend/tests` for backend changes).
->
-> 1. **[Refactor smells](#why-this-exists)** — duplication and shotgun surgery. First run: frontend,
->    high-signal, 2026-07-03. Next scope: **backend**.
-> 2. **[Doc conformance](#doc-conformance-audit-data-modelmd)** — does the code do what
->    `data-model.md` says it does. First run: 2026-10-15, twelve of the doc's seventeen sections.
->    Second run: 2026-10-15, the remaining five. Third run: 2026-10-29, the subsections whose text
->    changed since the second (rules, backups, import and dedupe, the facet registry). **Nothing is
->    carried.** Next scope: the same lens over `architecture.md`, whose cross-subsystem contracts have
->    never had one.
+Two periodic passes over the repo, kept together because both are standing processes with a carried
+scope rather than a feature. Neither blocks anything.
 
-## Why this exists
+| Audit | Next scope |
+| --- | --- |
+| [Refactor smells](#refactor-smells) (duplication, shotgun surgery) | the **backend**; the frontend has had one pass |
+| [Doc conformance](#doc-conformance) (does the code do what a doc says) | **`architecture.md`**, whose cross-subsystem contracts have never had one; `data-model.md` is fully covered |
 
-Several times, a small feature change (e.g. adding `blocked_tags` to tag reconciliation) had to be
-made in ~10 near-identical places. That's **shotgun surgery** (one change, many edits) and its cousin
-**divergent duplication** (the same shape copy-pasted). This item institutionalizes finding and
-retiring those patterns before they spread.
+Verify each change with `cd frontend && npm run lint` and `npm run build`, plus
+`backend/venv/bin/python -m pytest backend/tests` for backend changes.
 
-## How to run an audit
+## Refactor smells
 
-Detection is structural: `jscpd` over `frontend/src` / `backend` for copy-paste blocks, and `semgrep`
-(or `ripgrep` on a structural signature) to find every copy and confirm how far a refactor reaches.
-Historical co-change is not useful here, because commits are batched, so "changed together" is noise.
+A small feature change that has to be made in many near-identical places is **shotgun surgery**; its
+cousin is **divergent duplication**, the same shape copy-pasted. This audit finds and retires those
+patterns before they spread.
+
+### How to run it
+
+Detection is structural: `jscpd` over `frontend/src` or `backend` for copy-paste blocks, and `semgrep`
+(or `ripgrep` on a structural signature) to find every copy and see how far a refactor reaches.
+Historical co-change is not useful, because commits are batched.
 
 Then a reading pass ranks the candidates by how often they occur and how safe they are to change. The
 rule of three and divergence risk decide most cases (`docs/collaboration-notes.md` → *Code Structure
-Preferences*). An agent reading pass works well for this half. The output is "do it" or "leave it" for
-each candidate, not raw hits, and a deliberate "leave it" is worth recording.
+Preferences*). The output is "do it" or "leave it" for each candidate, not raw hits, and a deliberate
+"leave it" is worth recording here.
 
-## Carried candidates from the first run (frontend)
+### Backend: likely candidates
 
-The high-value three shipped (see below). These were deliberately **deferred**, not missed:
+Repeated SQL filter and `WHERE` assembly, per-endpoint serialization shapes, and the tag and category
+chokepoints.
 
-- **Row-patch idiom** — `setX(prev => prev.map(t => t.id === id ? { ...t, … } : t))` appears ~10×
-  across ~7 files. Could become a tiny `updateById(list, id, patch)` util, but each callsite is
-  already one line and some are heterogeneous → **low priority; extract opportunistically.**
+### Frontend: candidates left open, each with its trigger
+
+- **Row-patch idiom.** `setX(prev => prev.map(t => t.id === id ? { ...t, … } : t))` appears about ten
+  times across seven files. A tiny `updateById(list, id, patch)` would do, but each site is already one
+  line and some differ. Extract opportunistically.
 - **The four drill detail panels** (`CategoryDetail` / `AccountDetail` / `PeriodDetail` / `TagDetail`)
-  share a trend-chart + drill-list + child-`TransactionDetail` + bulk skeleton. `detailShared.jsx`
-  already factors the chrome/paging/range. A full unify has **high divergence risk** (AccountDetail's
-  source-account column/filter is genuinely different) → **leave; keep extracting into
-  `detailShared.jsx` incrementally instead of a mega-component.**
-- **Reference-data fetch** — `useState(null)` plus a cancelled-flag `getX()` effect for a whole-list
+  share a trend chart, drill list, child `TransactionDetail` and bulk skeleton, and `detailShared.jsx`
+  already factors the chrome, paging and range. A full merge has high divergence risk (AccountDetail's
+  source-account column and filter are different). Keep extracting into `detailShared.jsx` instead of a
+  mega-component.
+- **Reference-data fetch.** `useState(null)` plus a cancelled-flag `getX()` effect for a whole-list
   lookup (categories, accounts, owners) in `FilterBar`, `Accounts`, `AmazonImportDialog` and several
-  pages. Only tags have a cache (`useTags`) → **add a `useTags`-style hook for an entity when another
-  surface starts refetching it.**
-- **Dismiss + undo toast + a durable "N dismissed" list** — recurring signal dismissal (Recurring) and
-  task dismissal (Tasks). The storage differs by design, so only the presentation would unify →
-  **extract the row/footer/toast trio if a third surface grows one.**
-- **Source-account → local-account mapping grid** — the CSV import's account step (`ImportExport.jsx`)
-  and `ConnectionAccountMapDialog`. They already share the logic (`importAccountMatching.js`,
-  `PossibleAccountMatchChooserDialog`, `AccountMatchSelect`) and the same row-state shape; what is
-  duplicated is the surrounding markup → **extract the row when a third source of accounts needs
-  mapping, or the two grids drift in what a row offers.**
-- **`ContextMenu` vs. `ActionMenu`** — the transaction row's right-click menu (`TransactionRow.jsx`) is
-  a second anchored-menu implementation. It anchors at the cursor and takes named per-action handlers
-  rather than an item list. `ActionMenu` already anchors at the cursor (`anchorPoint`) → **retire
-  `ContextMenu` onto `ActionMenu` when it needs a feature `ActionMenu` already has.**
+  pages. Only tags have a cache (`useTags`). Add a `useTags`-style hook for an entity when another surface
+  starts refetching it.
+- **Dismiss, undo toast and a "N dismissed" list**, on Recurring signals and Tasks. The storage differs by
+  design, so only the presentation would unify. Extract the row / footer / toast trio if a third surface
+  grows one.
+- **Source-account → local-account mapping grid**, in the CSV import's account step (`ImportExport.jsx`)
+  and `ConnectionAccountMapDialog`. The logic is shared (`importAccountMatching.js`,
+  `PossibleAccountMatchChooserDialog`, `AccountMatchSelect`) and so is the row-state shape; the markup
+  around it is duplicated. Extract the row when a third source of accounts needs mapping, or when the two
+  grids start to drift in what a row offers.
 
-### `useTags()` consumers not yet migrated (see below)
+### `useTags()` consumers not migrated
 
-The shared `useTags()` hook (`frontend/src/lib/useTags.js`) centralizes the tag-list fetch. Migrated:
-`BulkEditPanel`, `useBulkTransactionEditing`, `useTransactionRowActions`, `RuleForm`, the Dashboard
-tag-report builder — plus the inline-create chokepoint (`TagPickerWithCreate` → `addTagToCache`) and
-Settings CRUD (`invalidateTags`). **Intentionally left**, each for a reason:
+The shared `useTags()` hook (`frontend/src/lib/useTags.js`) caches the tag list. These still fetch their
+own:
 
-- `TransactionRow.jsx` `TransactionAmountCell` — **per-row**; a module-subscribing hook there would be
-  thousands of listeners. Its lazy per-open fetch is the right pattern; leave it.
-- `pages/Accounts.jsx`, `pages/ImportRuleSuggestions.jsx` — fetch tags inside a page-init `Promise.all`
-  (and ImportRuleSuggestions refetches after rule ops). Different shape; migrate only if it simplifies.
-- `pages/Categories.jsx` — the category-tag management context (own list + optimistic add). Migratable
-  but lower value; do in a later pass.
-- `components/TagsDialog.jsx` — the tag management surface: fetches its own list and calls
-  `invalidateTags()` after each edit, the same shape as `Categories.jsx`. Migratable; lower value.
-- `components/TransactionDetail.jsx` — has a `providedAvailableTags` host-override path; a clean
-  migration must serve both the fed and self-fetched cases. Worth doing, just branchier — next pass.
+- `TransactionRow.jsx` `TransactionAmountCell`: **leave it.** It is per row, and a subscribing hook there
+  would mean thousands of listeners; its lazy fetch on open is right.
+- `FilterBar.jsx`: fetches tags with the rest of its reference data (see *Reference-data fetch* above).
+- `pages/Accounts.jsx`, `pages/ImportRuleSuggestions.jsx`: fetch tags inside a page-init `Promise.all`
+  (ImportRuleSuggestions also refetches after rule actions). Migrate only if it simplifies.
+- `pages/Categories.jsx`, `components/TagsDialog.jsx`: each manages its own list and calls
+  `invalidateTags()` after an edit. Migratable, lower value.
+- `components/TransactionDetail.jsx`: has a `providedAvailableTags` override from the host, so a
+  migration has to serve both the fed and self-fetched cases. Worth doing; just more branches.
 
-## Shipped in the first run (fold into docs when this file is deleted)
+## Doc conformance
 
-1. **`getFormControlStyle` adopted in Dashboard** — 8 hand-rolled `<select>` styles → two helper-derived
-   constants (`DASH_SELECT_MD/SM`).
-2. **`TransactionListToolbar`** (`frontend/src/components/`) — the Copy + Bulk-Edit toggle row, now shared
-   across the 6 activity/drill surfaces.
-3. **`useTags()`** — shared, cached tag list with explicit invalidation (see above).
+Read a topic doc's claims against the code that is supposed to keep them, and classify each one, rather
+than hunting for bugs directly. It matters most for a doc whose statements are invariants: a claim the
+code has quietly stopped keeping means wrong numbers or a wrong relationship between transactions, with
+nothing to notice it.
 
-## Next scope (refactor smells)
+Findings are fixed, or folded back into the doc as corrections, in the same pass. The point is that the
+doc and the code agree afterwards, so there is no standing finding list to carry.
 
-**Backend audit.** Run the same lenses over `backend/` — likely candidates: repeated SQL filter/where
-assembly, per-endpoint serialization shapes, and the tag/category chokepoints. Same rule-of-three /
-divergence caveats apply.
-
----
-
-## Doc conformance audit (`data-model.md`)
-
-A different lens from the one above, and the same shape of process: read a topic doc's claims against
-the code that is supposed to keep them, and classify each one rather than hunting for bugs directly.
-`data-model.md` is the doc that earns it, because it is the one whose statements are *invariants* — a
-claim there that the code has quietly stopped keeping means wrong numbers or a wrong relationship
-between transactions, with nothing to notice it.
-
-### The method, which is the part worth reusing
+### The method
 
 Per claim, one of five verdicts: **ENFORCED** (name the schema constraint, the validation, or the one
-code path that writes the field), **CONVENTION ONLY** (true today, but name the write paths that could
-break it), **VIOLATED** (name the path, the inputs, and what ends up in the database), **DOC STALE**
-(the code moved on), **UNVERIFIABLE** (say what would settle it). Three rules made the difference:
+code path that writes the field), **CONVENTION ONLY** (true today; name the write paths that could break
+it), **VIOLATED** (name the path, the inputs and what ends up in the database), **DOC STALE** (the code
+moved on), **UNVERIFIABLE** (say what would settle it).
 
-- **Rank by what corrupts silently.** VIOLATED before DOC STALE before CONVENTION ONLY, and within
-  those, fields where a wrong value changes a total or a cross-transaction relationship without
-  surfacing an error. Enumerating the ENFORCED claims is nearly free and nearly worthless — a one-line
-  tally per section is enough.
-- **Cite file:line for both halves**, the doc claim and the code. A finding that cites only the code is
-  an opinion about the code.
-- **Never infer from a name.** Most of the first run's wrong turns were a function whose name said it
-  did the thing. Build the fixture and run it: that is what separated the three real defects from the
-  several that looked identical on a reading.
+- **Rank by what corrupts silently.** VIOLATED before DOC STALE before CONVENTION ONLY, and within those,
+  fields where a wrong value changes a total or a cross-transaction relationship without an error.
+  ENFORCED claims get a one-line tally per section.
+- **Cite file:line for both halves**, the doc claim and the code. A finding that cites only the code is an
+  opinion about the code.
+- **Never infer from a name.** Build the fixture and run it; that is what separates a real defect from
+  several that look identical on a reading.
 
-Nothing from either run is owed. Findings were fixed or folded back into `data-model.md` as
-corrections in the same pass, which is where a conformance audit's output belongs — the point of the
-exercise is that the doc and the code agree afterwards, so there is no standing finding list to carry.
+### Where defects turn up
 
-### What the second run changed, as a shape to expect
-
-Five sections, three code defects and five stale claims. The distribution is worth knowing before a
-third run, because it is not what the first run's was:
-
-- **The stale claims clustered where a figure is derived in more than one place.** `row_count` was
-  defined as three populations where every write path sums five; the Amazon reconciliation's bucket
-  list had drifted two buckets behind the function. Both had a correct second description in a
-  docstring beside the code, which is the tell: when the same fact is written twice, the copy in
-  `data-model.md` is the one that goes stale, because the one by the code gets edited with it.
-- **The code defects were each a second implementation of a rule stated once.** A duplicate
-  `watch_enabled` assignment in one `UPDATE`; a `terminal_window_days` normalizer open-coded beside the
-  shared one it contradicts; a refund matcher reading the payment's id from only one of the two places
-  the id is stored. None was reachable by reading the doc — each needed a fixture.
-- **A veto is where a widened mechanism rots.** Refund pairing required a PayPal-shaped `Type`, so the
-  CSV path the doc advertised paired nothing, silently. When a mechanism is documented as general and
-  implemented against one source, the gate is usually a predicate borrowed from that source.
-
-### What the third run changed
-
-Two code defects and three stale claims, in the same two shapes as before. The starter rules were a
-second implementation of rule creation, with their own existence check, so they forked a second live
-rule beside the user's on one matcher. The matcher cap cut a fourth text silently, and a test asserted
-the cut. A test that encodes the defect is what a conformance audit is for: it read as coverage.
+- **Stale claims cluster where a fact is written in more than one place.** When a docstring beside the
+  code also describes it, the copy in the topic doc is the one that goes stale.
+- **Code defects are usually a second implementation of a rule stated once**: an open-coded normalizer
+  beside the shared one, a second create path with its own existence check, a matcher reading an id from
+  only one of the two places it is stored.
+- **A mechanism documented as general but gated by a predicate borrowed from one source** silently does
+  nothing for the others.
+- **A test can encode the defect.** One that asserts the wrong behaviour reads as coverage.
 
 ### Obstacles
 
-- **A green test suite says nothing about conformance.** Every defect the first run found was in a path
-  the tests covered; what was missing was a test that asserted the *doc's* claim. Expect to write the
-  failing test as part of the finding, and expect it to be easy once the claim is stated precisely.
-- **The split seam is where claims go to die.** `txn_effective_sql` substitutes a split part's
-  `category_id` and `amount` over the parent row, so any claim phrased in terms of "the transaction's
-  category" has two readings, and a query written for one of them is wrong for split rows without
-  erroring. Check every per-transaction count for `COUNT(DISTINCT t.id)` against the seam. The first
-  run's sharpest findings were all this one shape. It cost the second run nothing: the batch counts
-  count rows a card imported, which a split does not multiply, and the three places it could have bitten
-  already guard on `is_split`. Check it, but do not budget for it in a section about import counts.
-- **A fixture's own premises are the likeliest thing wrong.** Two of the second run's fixtures went red
-  on the fixture, not the code: a CSV amount cell is written in the *file's* convention and inverted on
-  import, so a purchase is a negative cell and a positive row. Confirm how a value is stored with a
-  throwaway import before asserting against it.
-- **The tree moves under a long audit.** The second run's citations were taken against a working tree
-  four commits behind where it ended, and `database.py` had shifted ~80 lines and a schema version by
-  then. Re-grep every doc and code line number against the current tree before acting on a finding
-  list, and re-read `git log` rather than the session's opening snapshot.
+- **A green suite says nothing about conformance.** Defects sit in paths the tests cover; what is missing
+  is a test asserting the *doc's* claim. Expect to write the failing test as part of the finding.
+- **The split seam.** `txn_effective_sql` substitutes a split part's `category_id` and `amount` over the
+  parent row, so a claim about "the transaction's category" has two readings, and a query written for one
+  is wrong for split rows without erroring. Check every per-transaction count for `COUNT(DISTINCT t.id)`
+  against the seam. It rarely matters for import counts, which a split does not multiply.
+- **A fixture's own premises are the likeliest thing wrong.** A CSV amount cell is in the *file's*
+  convention and inverted on import, so a purchase is a negative cell and a positive row. Confirm how a
+  value is stored with a throwaway import before asserting against it.
+- **The tree moves under a long audit.** Re-grep every doc and code line number against the current tree
+  before acting on a finding list, and re-read `git log`.
