@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { AppDialog, Button } from '../../ui.jsx'
 import { formatTransactionAmount } from '../../../lib/moneyDisplay.js'
 import { formatDate } from '../../../lib/utils.js'
+import { vh } from '../../../lib/displaySize.js'
 
 // The reconciliation report's manual pairing window: pick the ledger row(s) that belong to one record the
 // matcher could not pair on its own. Candidates are sorted by date proximity to the record, and a running
@@ -66,7 +67,7 @@ export function ChargePickerDialog({
       {!matches && selected.size > 0 ? (
         <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>{mismatchNote}</div>
       ) : null}
-      <div style={{ marginTop: 12, maxHeight: '46vh', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+      <div style={{ marginTop: 12, maxHeight: vh(46), overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
         {sorted.length === 0 ? (
           <div style={{ padding: 16, color: 'var(--muted)', fontSize: 13 }}>{emptyMessage}</div>
         ) : sorted.map(c => (

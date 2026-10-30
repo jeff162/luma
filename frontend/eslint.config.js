@@ -66,6 +66,16 @@ const filterDateRestrictions = [
   { object: 'filters', property: 'date', message: 'Read the period via getDate() (default-aware) or getRawDate() (explicit-only) from useFilters — reading filters.date directly bypasses the page-default logic.' },
 ]
 
+// Viewport units shrink with the display size, which zooms the whole page (src/lib/displaySize.js), so
+// `100vh` there is short of the window and leaves a band at the bottom. A length relative to the window is
+// written with the `vh()` / `dvh()` / `vw()` helpers, which divide the zoom back out.
+const VIEWPORT_UNIT = '/(^|[^\\w.-])\\d+(\\.\\d+)?[dls]?v(h|w|min|max)\\b/'
+const VIEWPORT_UNIT_MESSAGE = 'Viewport units shrink with the display size; use vh() / dvh() / vw() from lib/displaySize.js.'
+const viewportUnitRestrictions = [
+  { selector: `Literal[value=${VIEWPORT_UNIT}]`, message: VIEWPORT_UNIT_MESSAGE },
+  { selector: `TemplateElement[value.raw=${VIEWPORT_UNIT}]`, message: VIEWPORT_UNIT_MESSAGE },
+]
+
 export default [
   {
     ignores: ['dist/**', 'node_modules/**', 'playwright-report/**', 'test-results/**'],
@@ -150,6 +160,7 @@ export default [
 
       // See the txnMutation / preference / filter-date restriction lists defined above this config.
       'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions, ...filterDateRestrictions],
+      'no-restricted-syntax': ['error', ...viewportUnitRestrictions],
     },
   },
   {

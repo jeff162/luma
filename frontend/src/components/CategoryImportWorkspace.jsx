@@ -23,6 +23,7 @@ import {
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { ActionMenu } from './ActionMenu.jsx'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
+import { cssRect, toCssPx } from '../lib/displaySize.js'
 
 export { createCategoryImportDraftState }
 
@@ -89,7 +90,7 @@ function clampOverlayPosition(x, y, width, height, padding = 12) {
 // Where the pointer holds the copy of a dragged pill: toward its right end, clear of the count badge that
 // marks a multi-item drag at its left.
 function pillPreview(source) {
-  const rect = source.getBoundingClientRect()
+  const rect = cssRect(source)
   return {
     offsetX: Math.min(Math.max(rect.width * 0.82, 44), Math.max(44, rect.width - 12)),
     offsetY: Math.min(Math.max(rect.height * 0.3, 10), Math.max(10, rect.height - 10)),
@@ -947,7 +948,7 @@ export default function CategoryImportWorkspace({
   }
 
   function clampLeftPanelWidth(value) {
-    const layoutWidth = contentLayoutRef.current?.getBoundingClientRect?.().width || 0
+    const layoutWidth = contentLayoutRef.current?.offsetWidth || 0
     const maxWidth = layoutWidth
       ? Math.max(MIN_LEFT_PANEL_WIDTH, layoutWidth - MIN_RIGHT_PANEL_WIDTH - 8)
       : 560
@@ -962,7 +963,7 @@ export default function CategoryImportWorkspace({
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     trackPointer(event, {
-      onMove: moveEvent => setLeftPanelWidth(clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)),
+      onMove: moveEvent => setLeftPanelWidth(clampLeftPanelWidth(toCssPx(moveEvent.clientX - layoutRect.left))),
       onEnd: () => {
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
@@ -1339,7 +1340,7 @@ export default function CategoryImportWorkspace({
       for (const node of element.querySelectorAll('[data-group-card="true"][data-group-id]')) {
         const groupId = node.getAttribute('data-group-id')
         if (!groupId) continue
-        nextHeights[groupId] = Math.round(node.getBoundingClientRect().height)
+        nextHeights[groupId] = node.offsetHeight
       }
       setMeasuredGroupHeights(prev => {
         const prevKeys = Object.keys(prev)
@@ -1361,7 +1362,7 @@ export default function CategoryImportWorkspace({
 
   useEffect(() => {
     if (hasPersistedLeftPanelWidth || leftPanelWidth != null) return
-    const layoutWidth = contentLayoutRef.current?.getBoundingClientRect?.().width || 0
+    const layoutWidth = contentLayoutRef.current?.offsetWidth || 0
     if (!layoutWidth) return
     const rightColumnCount = Math.max(1, groupColumns.length || 1)
     const desiredRightWidth = Math.max(

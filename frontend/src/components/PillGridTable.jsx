@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import PillTableHeader from './PillTableHeader.jsx'
 import { dividerIsDraggable, moveDivider } from '../lib/columnDividers.js'
 import { preventPressDefaults, startPointerDrag } from '../lib/pointerDrag.js'
+import { cssRect, toCssPx } from '../lib/displaySize.js'
 
 // The committed grid template is published as this CSS variable on the table root; the header and
 // body consume it via var(), so a live resize can update widths by mutating the variable on the DOM
@@ -116,7 +117,7 @@ export default function PillGridTable({
     function onMove(event) {
       if (!resizeState.current) return
       const { key, startX, startColumns } = resizeState.current
-      const nextColumns = moveDivider(startColumns, key, event.clientX - startX)
+      const nextColumns = moveDivider(startColumns, key, toCssPx(event.clientX - startX))
 
       // Live preview via the DOM only — no React state, so nothing re-renders during the drag.
       liveResizeRef.current = nextColumns
@@ -262,7 +263,7 @@ export default function PillGridTable({
 
   // The translucent copy of the pill that follows the pointer.
   function reorderPreview(pill) {
-    const rect = pill.getBoundingClientRect()
+    const rect = cssRect(pill)
     const ghost = pill.cloneNode(true)
     ghost.removeAttribute('title')
     Object.assign(ghost.style, {
@@ -313,7 +314,7 @@ export default function PillGridTable({
     state.nextColumns = target ? reorderColumns(columnsRef.current, state.key, target.key, target.dropAfter) : null
     if (state.nextColumns) {
       marker.style.display = 'block'
-      marker.style.left = `${target.x - headerRect.left - 1.5}px`
+      marker.style.left = `${toCssPx(target.x - headerRect.left) - 1.5}px`
     } else {
       marker.style.display = 'none'
     }

@@ -31,6 +31,7 @@ import { formatRuleMatcher, ruleMatcherLists, ruleMatcherTerms } from '../lib/ru
 import { RULE_PRIORITY_NORMAL } from '../lib/rulePriority.js'
 import RulePrioritySelect from './RulePrioritySelect.jsx'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
+import { vh } from '../lib/displaySize.js'
 
 const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
 
@@ -355,7 +356,7 @@ export function RulePreviewDetail({
 
   return (
     <OverlayBackdrop zIndex={1400} tint="rgba(15, 23, 42, 0.42)">
-      <FloatingPanel style={{ width: 'min(960px, 100%)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+      <FloatingPanel style={{ width: 'min(960px, 100%)', maxHeight: vh(80), display: 'flex', flexDirection: 'column' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>

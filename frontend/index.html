@@ -19,9 +19,10 @@
       below.
     -->
     <script>
-      // Anti-FOUC: set the theme on <html> before first paint, ahead of the bundle. Preferences
-      // round-trip from the backend, so we cannot wait for them here; src/lib/theme.js mirrors the
-      // resolved choice into this localStorage cache on every change to keep the next load correct.
+      // Anti-FOUC: set the theme and display size on <html> before first paint, ahead of the bundle.
+      // Preferences round-trip from the backend, so we cannot wait for them here; src/lib/theme.js and
+      // src/lib/displaySize.js mirror each choice into a localStorage cache on every change to keep the
+      // next load correct.
       (function () {
         try {
           var t = localStorage.getItem('luma.theme') || 'system'
@@ -31,6 +32,13 @@
           var eff = explicit ? t : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
           document.documentElement.setAttribute('data-theme', eff)
         } catch (e) { /* private mode / no matchMedia: fall through to the dark default */ }
+        try {
+          // Display size, mirrored by src/lib/displaySize.js; keep this list in sync with its choices.
+          var size = Number(localStorage.getItem('luma.displaySize'))
+          if (size === 80 || size === 90 || size === 110 || size === 125) {
+            document.documentElement.style.setProperty('--ui-scale', String(size / 100))
+          }
+        } catch (e) { /* private mode: full size */ }
       })()
     </script>
     <style>
@@ -149,8 +157,10 @@
         --review-marker-color: #e3c168;
         color-scheme: dark;
       }
-      body { background: var(--bg); color: var(--text); min-height: 100vh; }
-      #root { display: flex; flex-direction: column; min-height: 100vh; }
+      /* Display size (src/lib/displaySize.js). Viewport units shrink with the zoom, hence the division. */
+      html { zoom: var(--ui-scale, 1); }
+      body { background: var(--bg); color: var(--text); min-height: calc(100vh / var(--ui-scale, 1)); }
+      #root { display: flex; flex-direction: column; min-height: calc(100vh / var(--ui-scale, 1)); }
     </style>
   </head>
   <body>

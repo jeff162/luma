@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { preventPressDefaults } from '../../lib/pointerDrag.js'
 
 import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
+import { cssViewport, toCssPx } from '../../lib/displaySize.js'
 import { Button, IconButton } from '../ui.jsx'
 
 export function RawFilePreview({
@@ -28,7 +29,7 @@ export function RawFilePreview({
   loadingMore = false,
 }) {
   const busyMore = useBusyIndicator(loadingMore)
-  const [pos, setPos] = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
+  const [pos, setPos] = useState(() => ({ x: Math.max(0, cssViewport().width - 560), y: 80 }))
   const [size, setSize] = useState({ w: 520, h: 320 })
   const [dragState, setDragState] = useState(null)
   const startRef = useRef({})
@@ -37,12 +38,13 @@ export function RawFilePreview({
     if (embedded) return
     if (!dragState) return
     function onMove(e) {
-      const dx = e.clientX - startRef.current.mx
-      const dy = e.clientY - startRef.current.my
+      const dx = toCssPx(e.clientX - startRef.current.mx)
+      const dy = toCssPx(e.clientY - startRef.current.my)
       if (dragState === 'move') {
+        const view = cssViewport()
         setPos({
-          x: Math.max(0, Math.min(window.innerWidth - 200, startRef.current.x + dx)),
-          y: Math.max(0, Math.min(window.innerHeight - 60, startRef.current.y + dy)),
+          x: Math.max(0, Math.min(view.width - 200, startRef.current.x + dx)),
+          y: Math.max(0, Math.min(view.height - 60, startRef.current.y + dy)),
         })
         return
       }

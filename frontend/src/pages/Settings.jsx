@@ -32,6 +32,7 @@ import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
 import DatabaseSection from '../components/administration/DatabaseSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
+import DisplaySizeSection from '../components/settings/DisplaySizeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import DisplayFormatSection from '../components/settings/DisplayFormatSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
@@ -85,10 +86,11 @@ export default function Settings() {
         {
           key: 'appearance',
           title: 'Appearance',
-          description: 'The color theme, and how dates and numbers are written.',
+          description: 'The color theme, the display size, and how dates and numbers are written.',
           content: (
             <div style={{ display: 'grid', gap: 18 }}>
               <Subsection title="Theme"><ThemeSection /></Subsection>
+              <Subsection title="Display size"><DisplaySizeSection /></Subsection>
               <Subsection title="Dates and numbers"><DisplayFormatSection /></Subsection>
             </div>
           ),

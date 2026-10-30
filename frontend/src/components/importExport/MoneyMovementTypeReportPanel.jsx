@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { Spinner, FloatingPanel, FloatingPanelHeader, IconButton, OverlayBackdrop } from '../ui.jsx'
 import TransactionListTable from '../TransactionListTable.jsx'
+import { vh } from '../../lib/displaySize.js'
 
 /*
  * Drill-down for one PayPal money-movement `Type`, opened from the review's per-type arrow. It fetches
@@ -46,7 +47,7 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
 
   return (
     <OverlayBackdrop zIndex={1300} tint="rgba(15, 23, 42, 0.30)" onClick={onClose}>
-      <FloatingPanel style={{ width: 'min(860px, 100%)', maxHeight: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+      <FloatingPanel style={{ width: 'min(860px, 100%)', maxHeight: `calc(${vh(100)} - 120px)`, display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
         <FloatingPanelHeader style={{ padding: '16px 20px' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{type}</div>

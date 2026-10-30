@@ -9,6 +9,7 @@ import { HelpNavContext } from './helpNav.jsx'
 import { HELP_BODY_CSS } from './helpBody.js'
 import { scrollToHelpAnchor } from './helpAnchors.js'
 import { IconButton, LinkButton } from '../components/ui.jsx'
+import { vh } from '../lib/displaySize.js'
 
 /*
  * In-place help viewer. Renders a topic's full body in a portal'd overlay above everything
@@ -100,7 +101,7 @@ export default function HelpTopicDialog({ topicId, onClose }) {
         position: 'fixed', inset: 0, zIndex: 2000,
         background: 'rgba(15, 23, 42, 0.5)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-        overflowY: 'auto', padding: '6vh 16px 24px',
+        overflowY: 'auto', padding: `${vh(6)} 16px 24px`,
       }}
     >
       <style>{HELP_BODY_CSS}</style>

@@ -14,6 +14,7 @@ import { api } from '../lib/api.js'
 import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner, IconButton } from './ui.jsx'
 import RuleSummary from './RuleSummary.jsx'
 import { formatDate } from '../lib/utils.js'
+import { vh } from '../lib/displaySize.js'
 
 export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone }) {
   const [candidates, setCandidates] = useState(null)
@@ -55,7 +56,7 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
 
   return (
     <OverlayBackdrop zIndex={1400} tint="rgba(15, 23, 42, 0.42)">
-      <FloatingPanel style={{ width: 'min(720px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}>
+      <FloatingPanel style={{ width: 'min(720px, 100%)', maxHeight: vh(82), display: 'flex', flexDirection: 'column' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 600 }}>Clean up unused rules</div>

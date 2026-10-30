@@ -29,6 +29,7 @@
  */
 
 import { useCallback, useLayoutEffect, useRef } from 'react'
+import { cssPoint, cssRect } from './displaySize.js'
 
 const MOUSE_DRAG_THRESHOLD = 4
 const TOUCH_HOLD_MS = 300
@@ -126,7 +127,7 @@ export function useDropZone(options) {
  *   onEnd?: (result: { dropped: boolean, cancelled: boolean }) => void,
  *   preview?: false | ((source: HTMLElement) => { element?: HTMLElement, offsetX?: number, offsetY?: number }),
  * }} options `onStart` returns the dragged item, or null to refuse the drag. `preview` replaces the copy
- *   that follows the pointer, or turns it off.
+ *   that follows the pointer, or turns it off; its offsets are CSS pixels (see displaySize.js).
  */
 export function startPointerDrag(event, options) {
   if (activeDrag || event.button !== 0) return
@@ -249,7 +250,7 @@ function activate(drag) {
 
 function createPreview(drag) {
   const custom = typeof drag.options.preview === 'function' ? drag.options.preview(drag.source) || {} : {}
-  const rect = drag.source.getBoundingClientRect()
+  const rect = cssRect(drag.source)
   let element = custom.element
   if (!element) {
     // A copy hung off <body> loses what it inherited in place, so the text styles come with it.
@@ -277,8 +278,8 @@ function createPreview(drag) {
   })
   element.setAttribute('aria-hidden', 'true')
   drag.previewOffset = {
-    x: custom.offsetX ?? drag.start.clientX - rect.left,
-    y: custom.offsetY ?? drag.start.clientY - rect.top,
+    x: custom.offsetX ?? cssPoint(drag.start).x - rect.left,
+    y: custom.offsetY ?? cssPoint(drag.start).y - rect.top,
   }
   document.body.appendChild(element)
   drag.preview = element
@@ -287,7 +288,8 @@ function createPreview(drag) {
 function update(drag) {
   const { clientX, clientY } = drag.point
   if (drag.preview) {
-    drag.preview.style.transform = `translate(${clientX - drag.previewOffset.x}px, ${clientY - drag.previewOffset.y}px)`
+    const at = cssPoint(drag.point)
+    drag.preview.style.transform = `translate(${at.x - drag.previewOffset.x}px, ${at.y - drag.previewOffset.y}px)`
   }
   drag.options.onMove?.(drag.point)
 

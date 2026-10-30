@@ -26,6 +26,7 @@ import {
   formatSuggestionAmountLabel,
   IMPORT_RULE_MATCHES_COLUMNS_PREF_KEY,
 } from '../../lib/importRuleSuggestions.js'
+import { vw } from '../../lib/displaySize.js'
 
 function estimateColumnWidth(values, { min = 80, max = 260, perChar = 8, extra = 24 } = {}) {
   const longest = values.reduce((maxLen, value) => Math.max(maxLen, String(value || '').length), 0)
@@ -543,7 +544,7 @@ export function MatchingTransactionsModal(props) {
           background: 'var(--surface)',
           border: '1px solid var(--border)',
           borderRadius: 14,
-          width: 'min(1200px, 96vw)',
+          width: `min(1200px, ${vw(96)})`,
           maxHeight: `calc(${visibleHeightCss(area)} * 0.88)`,
           overflow: 'hidden',
           boxShadow: '0 20px 60px rgba(0,0,0,0.42)',

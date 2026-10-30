@@ -31,7 +31,9 @@ import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
 import DataLocationLine from './components/DataLocationLine.jsx'
 import { useShownDataLocation } from './lib/dataLocation.js'
-import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
+import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileAppearanceCacheForDb } from './lib/theme.js'
+import { DISPLAY_SIZE_CHOICES, applyDisplaySize, toCssPx, vh, dvh } from './lib/displaySize.js'
+import { useDisplaySize } from './lib/useDisplaySize.js'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
 import {
   UnifiedDuplicatesViewerProvider,
@@ -230,7 +232,7 @@ const s = {
   // The visible height (`dvh`), not `100vh`: iPad Safari's `vh` is the height with its toolbar hidden, so
   // with the toolbar showing the page would be taller than the screen, and Safari can leave it scrolled
   // by the difference after the on-screen keyboard closes.
-  shell: { display: 'flex', height: '100dvh', overflow: 'hidden' },
+  shell: { display: 'flex', height: dvh(100), overflow: 'hidden' },
   nav: {
     background: 'var(--surface)', borderRight: '1px solid var(--border)',
     display: 'flex', flexDirection: 'column', padding: '24px 0', flexShrink: 0,
@@ -639,7 +641,7 @@ function LocalPreferenceProfileScreen({
 
   return (
     <div style={{
-      minHeight: '100vh',
+      minHeight: vh(100),
       display: 'grid',
       placeItems: 'center',
       padding: 24,
@@ -1044,6 +1046,39 @@ function ThemeController() {
   return null
 }
 
+// Applies the user's display size for this kind of screen to <html>, reconciling the pre-paint cache to the real preference as
+// ThemeController does for the theme.
+function DisplaySizeController() {
+  const [displaySize] = useDisplaySize()
+  useEffect(() => { applyDisplaySize(displaySize) }, [displaySize])
+  return null
+}
+
+// The right-click menu on the user in the nav pane: rename (a local profile only) and the display size,
+// which is here as well as in Settings so it can be stepped through while looking at any page.
+function NavProfileMenu({ anchorPoint, onClose, onRename }) {
+  const [current, setDisplaySize] = useDisplaySize()
+  return (
+    <ActionMenu
+      anchorPoint={anchorPoint}
+      align="start"
+      minWidth={150}
+      label="User actions"
+      onClose={onClose}
+      items={[
+        onRename ? { label: 'Rename', onClick: onRename } : null,
+        ...DISPLAY_SIZE_CHOICES.map((size, index) => ({
+          key: `size-${size}`,
+          label: `Display size ${size}%`,
+          checked: size === current,
+          separatorBefore: index === 0,
+          onClick: () => setDisplaySize(size),
+        })),
+      ]}
+    />
+  )
+}
+
 // Applies the viewer's date and number format to the shared formatters before anything below renders.
 // During render rather than in an effect, because an effect runs only after the children have already
 // formatted with the defaults; the assignment is idempotent, so a repeated render changes nothing.
@@ -1225,10 +1260,10 @@ export default function App() {
         setBundledLicenseAvailable(!!status.bundled_license_available)
         setBuildStamp(status.build_stamp || '')
         setThirdPartyNoticesScope(status.third_party_notices_scope || null)
-        // Drop a theme cache left over from a different/previous database (e.g. a recreated DB) so the
-        // welcome screen — which paints before any per-profile theme loads — falls back to System
-        // rather than inheriting the old palette. Same-DB profile clears keep their configured theme.
-        reconcileThemeCacheForDb(status.db_instance_id || '')
+        // Drop an appearance cache left over from a different/previous database (e.g. a recreated DB) so
+        // the welcome screen — which paints before any per-profile preference loads — falls back to
+        // System and full size rather than inheriting the old ones. Same-DB profile clears keep theirs.
+        reconcileAppearanceCacheForDb(status.db_instance_id || '')
         setBootPreferences(null)
         setBootPreferenceSubjectId('')
 
@@ -1472,7 +1507,7 @@ export default function App() {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     trackPointer(event, {
-      onMove: moveEvent => setNavPaneWidth(clampNavPaneWidth(startWidth + (moveEvent.clientX - startX))),
+      onMove: moveEvent => setNavPaneWidth(clampNavPaneWidth(startWidth + toCssPx(moveEvent.clientX - startX))),
       onEnd: () => {
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
@@ -1487,7 +1522,6 @@ export default function App() {
 
   function openNavProfileMenu(event) {
     event.preventDefault()
-    if (!activeLocalProfile) return
     setNavProfileMenu({ x: event.clientX, y: event.clientY })
   }
 
@@ -1749,7 +1783,7 @@ export default function App() {
 
   if (!authChecked) {
     return (
-      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+      <div style={{ minHeight: vh(100), display: 'grid', placeItems: 'center' }}>
         <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading {APP_NAME}...</div>
       </div>
     )
@@ -1845,6 +1879,7 @@ export default function App() {
                           <VaultGateProvider>
                             <SyncStatusProvider>
                               <ThemeController />
+                              <DisplaySizeController />
                               <UnifiedDuplicatesViewerRenderer />
                               <ReconciliationViewerRenderer />
                               <AmazonImportDetailViewerRenderer />
@@ -1968,6 +2003,7 @@ export default function App() {
                                           role="img"
                                           aria-label={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
                                           title={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
+                                          onContextMenu={openNavProfileMenu}
                                           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, color: 'var(--muted)' }}
                                         >
                                           <ProfileInitials name={currentUser?.display_name || currentUser?.username} />
@@ -2006,7 +2042,7 @@ export default function App() {
                                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                                       {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
                                       {authEnabled ? (
-                                        <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                                        <span onContextMenu={openNavProfileMenu} style={{ fontWeight: 600, color: 'var(--text)' }}>
                                           {currentUser?.display_name || currentUser?.username}
                                         </span>
                                       ) : (
@@ -2135,23 +2171,17 @@ export default function App() {
                                   </div>
                                 </div>
                               </div>
-                              {navProfileMenu && activeLocalProfile ? (
-                                <ActionMenu
+                              {navProfileMenu ? (
+                                <NavProfileMenu
                                   anchorPoint={navProfileMenu}
-                                  align="start"
-                                  minWidth={150}
-                                  label="User actions"
                                   onClose={() => setNavProfileMenu(null)}
-                                  items={[{
-                                    label: 'Rename',
-                                    onClick: () => {
-                                      // The inline editor has no room in the icon column, so a rename from a
-                                      // collapsed pane opens it.
-                                      setNavCollapsed(false)
-                                      setNavProfileDraft(activeLocalProfile.name)
-                                      setNavProfileEditing(true)
-                                    },
-                                  }]}
+                                  onRename={activeLocalProfile ? () => {
+                                    // The inline editor has no room in the icon column, so a rename from a
+                                    // collapsed pane opens it.
+                                    setNavCollapsed(false)
+                                    setNavProfileDraft(activeLocalProfile.name)
+                                    setNavProfileEditing(true)
+                                  } : null}
                                 />
                               ) : null}
                             </SyncStatusProvider>

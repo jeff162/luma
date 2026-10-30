@@ -30,6 +30,7 @@ import {
   buildSectionedRuleItems, presentSectionLetters, ruleSectionLetter, sectionHeaderIndexByLetter,
 } from '../lib/rulesFilter.js'
 import { sessionStore } from '../lib/browserStorage.js'
+import { vh } from '../lib/displaySize.js'
 
 // Search text + facet selections are session-scoped (persist while the app is open, reset on next launch)
 // — deliberately independent of the app-wide, cross-page FilterContext. Mirrors the Transactions
@@ -932,7 +933,7 @@ export default function Rules() {
           list below owns a clean scroll container — a virtualizer doesn't want unrelated content sharing
           its scrollport. */}
       {showCreateForm ? (
-        <div style={{ flexShrink: 0, padding: '12px 32px 0', maxHeight: '58vh', overflowY: 'auto' }}>
+        <div style={{ flexShrink: 0, padding: '12px 32px 0', maxHeight: vh(58), overflowY: 'auto' }}>
           <Card style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 14, fontWeight: 600 }}>
               New rule

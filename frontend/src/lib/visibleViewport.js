@@ -10,12 +10,13 @@
  * a layer, often pushing the whole layer off the top. A fixed layer that pins itself to the visible area
  * reported here stays in place, and one that caps its height to it ends above the keyboard.
  *
- * Coordinates are the page viewport's, the same ones `getBoundingClientRect` and `position: fixed` use.
- * While no keyboard is open the area is the whole window, and `keyboard` is false so layers keep their
+ * The area's `top` and `height` are CSS pixels, ready for a fixed layer's style: the visual viewport
+ * reports screen pixels, which differ under a display size (displaySize.js). While no keyboard is open the area is the whole window, and `keyboard` is false so layers keep their
  * ordinary styles. A pinch-zoom also shrinks the visible area; it is not a keyboard, and is ignored.
  */
 
 import { useEffect, useSyncExternalStore } from 'react'
+import { toCssPx, uiScale, vh } from './displaySize.js'
 
 const CLOSED = Object.freeze({ keyboard: false, top: 0, height: 0 })
 let snapshot = CLOSED
@@ -27,8 +28,10 @@ function readSnapshot() {
   const height = vv.height
   // The page viewport's height without scrollbars, which the visible area also leaves out.
   if (top < 1 && height > document.documentElement.clientHeight - 1) return CLOSED
-  if (snapshot.keyboard && snapshot.top === top && snapshot.height === height) return snapshot
-  return { keyboard: true, top, height }
+  const cssTop = toCssPx(top)
+  const cssHeight = toCssPx(height)
+  if (snapshot.keyboard && snapshot.top === cssTop && snapshot.height === cssHeight) return snapshot
+  return { keyboard: true, top: cssTop, height: cssHeight }
 }
 
 function getSnapshot() {
@@ -66,8 +69,9 @@ function readVisibleBounds() {
     originMarker.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none'
     document.body.appendChild(originMarker)
   }
-  const top = area.top + originMarker.getBoundingClientRect().top
-  return { top, bottom: top + area.height }
+  const scale = uiScale()
+  const top = area.top * scale + originMarker.getBoundingClientRect().top
+  return { top, bottom: top + area.height * scale }
 }
 
 // Position for a layer that covers the window: the visible area while a keyboard is open.
@@ -79,7 +83,7 @@ export function visibleLayerBox(area) {
 
 // The window's height as a CSS length, for a layer's height cap.
 export function visibleHeightCss(area) {
-  return area.keyboard ? `${area.height}px` : '100vh'
+  return area.keyboard ? `${area.height}px` : vh(100)
 }
 
 // Where a floating panel placed at `top` sits while a keyboard is open: inside the visible area, moved

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import RuleForm from '../RuleForm.jsx'
 import { Button, DialogActions, IconButton } from '../ui.jsx'
 import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../../lib/visibleViewport.js'
+import { vw } from '../../lib/displaySize.js'
 
 export function RuleEditorModal({
   suggestion,
@@ -210,8 +211,8 @@ export function RuleEditorModal({
           border: '1px solid var(--border)',
           borderRadius: 14,
           boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
-          width: matchingRowsPanel ? 'min(1280px, 96vw)' : 640,
-          maxWidth: '96vw',
+          width: matchingRowsPanel ? `min(1280px, ${vw(96)})` : 640,
+          maxWidth: vw(96),
           maxHeight: `calc(${visibleHeightCss(area)} * 0.9)`,
           overflow: 'hidden',
           display: 'flex',

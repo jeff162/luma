@@ -5,6 +5,7 @@ import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
+import { toCssPx, vw } from '../lib/displaySize.js'
 import { IconButton, Tooltip } from './ui.jsx'
 
 /*
@@ -39,7 +40,7 @@ import { IconButton, Tooltip } from './ui.jsx'
  * handling of its own; Escape is not, since dismissal listens for it on the window.
  *
  * It is anchored to the element that opened it (`anchorElement`), or to the pointer for a right-click
- * menu (`anchorPoint`, `{ x, y }`), and the browser keeps it there (useAnchoredPopup): right-aligned to
+ * menu (`anchorPoint`, `{ x, y }`: the event's `clientX`/`clientY`, which are screen pixels), and the browser keeps it there (useAnchoredPopup): right-aligned to
  * the anchor by default, since the trigger sits at a card's trailing edge, and above the anchor when
  * there is not enough room below. A pointer is given a zero-size marker to anchor to, so both kinds
  * place and flip the same way. The anchor element counts as inside the menu for dismissal, so a trigger
@@ -124,7 +125,7 @@ export function ActionMenu({ anchorElement = null, anchorPoint = null, items = [
       <div
         ref={pointRef}
         aria-hidden="true"
-        style={{ position: 'fixed', left: anchorPoint.x, top: anchorPoint.y, width: 0, height: 0, pointerEvents: 'none' }}
+        style={{ position: 'fixed', left: toCssPx(anchorPoint.x), top: toCssPx(anchorPoint.y), width: 0, height: 0, pointerEvents: 'none' }}
       />
     ) : null}
     <div
@@ -138,7 +139,7 @@ export function ActionMenu({ anchorElement = null, anchorPoint = null, items = [
       onMouseLeave={() => setActive(-1)}
       style={{
         ...popupStyle,
-        maxWidth: 'min(480px, calc(100vw - 16px))',
+        maxWidth: `min(480px, calc(${vw(100)} - 16px))`,
         zIndex: 1400,
         outline: 'none',
         background: 'var(--surface)',

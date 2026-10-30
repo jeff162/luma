@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
 import { AppDialog, Button } from './ui.jsx'
+import { vh } from '../lib/displaySize.js'
 
 /*
  * Viewing an attached receipt or invoice, and editing one that is plain text.
@@ -135,7 +136,7 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
             setEditing(prev => (prev ? { ...prev, draft } : prev))
           }}
           style={{
-            width: '100%', height: '70vh', boxSizing: 'border-box', resize: 'vertical',
+            width: '100%', height: vh(70), boxSizing: 'border-box', resize: 'vertical',
             background: 'var(--surface2)', color: 'var(--text)',
             border: '1px solid var(--border)', borderRadius: 8,
             padding: '8px 10px', fontSize: 13, fontFamily: 'monospace', outline: 'none',
@@ -150,13 +151,13 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
             <img
               src={fileUrl}
               alt={doc.filename}
-              style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: 8 }}
+              style={{ maxWidth: '100%', maxHeight: vh(70), objectFit: 'contain', borderRadius: 8 }}
             />
           ) : (
             <iframe
               src={fileUrl}
               title={doc.filename}
-              style={{ width: '100%', height: '70vh', border: 'none', borderRadius: 8, background: 'var(--surface)' }}
+              style={{ width: '100%', height: vh(70), border: 'none', borderRadius: 8, background: 'var(--surface)' }}
             />
           )}
         </div>

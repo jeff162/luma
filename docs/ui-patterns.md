@@ -361,6 +361,13 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   slide. Placing a fixed popup from `getBoundingClientRect` goes wrong there, because WebKit measures
   elements from the visible area while `position: fixed` places from the full-size page. A tooltip that
   closes on scroll is the exception.
+- **A measurement is converted before it becomes a style.** The display size zooms the whole page, so
+  `getBoundingClientRect`, a pointer's `clientX`/`clientY` and `innerWidth`/`innerHeight` are screen
+  pixels while a style length is CSS pixels. Measurements compared with each other need nothing; one
+  that is written into a style, or mixed with an `offset*`/`scroll*` value, goes through `cssPoint`,
+  `cssRect`, `cssViewport` or `toCssPx` first. A length relative to the window is written `vh(n)` /
+  `vw(n)`, since raw viewport units shrink with the zoom (`lib/displaySize.js`); lint rejects a raw one. `ActionMenu` takes a
+  right-click's raw `clientX`/`clientY` and converts them itself.
 
 ## Theming
 

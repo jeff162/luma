@@ -17,10 +17,11 @@
  */
 
 import { localStore } from './browserStorage.js'
+import { applyDisplaySize, DEFAULT_DISPLAY_SIZE } from './displaySize.js'
 
 export const THEME_PREF_KEY = 'ui.appearance.theme'
 export const THEME_CACHE_KEY = 'luma.theme'
-// Records which backend database the cached choice belongs to (see reconcileThemeCacheForDb).
+// Records which backend database the cached appearance belongs to (see reconcileAppearanceCacheForDb).
 export const THEME_CACHE_DB_KEY = 'luma.theme.db'
 
 export const THEME_SYSTEM = 'system'
@@ -74,18 +75,21 @@ export function applyTheme(choice) {
   return effective
 }
 
-// The pre-paint cache (THEME_CACHE_KEY) survives a backend database reset, so a recreated/empty
-// database would otherwise inherit the palette configured for the *previous* one — most visibly the
-// welcome screen, which renders before any per-profile theme loads and so shows only the cached value.
-// Tag the cache with the db_instance_id it was written under: when that id changes (a different or
-// freshly recreated database, which defines no theme yet), the cached choice is stale, so fall back to
-// System (the OS scheme). Clearing local profiles on the *same* database leaves the id unchanged, so a
-// theme configured there is still honored. A first run with no tag adopts the current id without
-// resetting, so existing setups keep their theme.
-export function reconcileThemeCacheForDb(dbInstanceId) {
+// The pre-paint caches (theme and display size) survive a backend database reset, so a recreated/empty
+// database would otherwise inherit the appearance configured for the *previous* one — most visibly the
+// welcome screen, which renders before any per-profile preference loads and so shows only the cached
+// values. Tag the caches with the db_instance_id they were written under: when that id changes (a
+// different or freshly recreated database, which defines no appearance yet), the cached choices are
+// stale, so fall back to System and full size. Clearing local profiles on the *same* database leaves the
+// id unchanged, so an appearance configured there is still honored. A first run with no tag adopts the
+// current id without resetting, so existing setups keep their appearance.
+export function reconcileAppearanceCacheForDb(dbInstanceId) {
   const dbId = dbInstanceId || ''
   const cachedDbId = localStore.get(THEME_CACHE_DB_KEY)
   if (cachedDbId === dbId) return
-  if (cachedDbId) applyTheme(THEME_SYSTEM)
+  if (cachedDbId) {
+    applyTheme(THEME_SYSTEM)
+    applyDisplaySize(DEFAULT_DISPLAY_SIZE)
+  }
   localStore.set(THEME_CACHE_DB_KEY, dbId)
 }

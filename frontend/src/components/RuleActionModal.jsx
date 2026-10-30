@@ -15,6 +15,7 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
+import { vh, vw } from '../lib/displaySize.js'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
   const [categories, setCategories] = useState([])
@@ -142,7 +143,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
 
   return (
     <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">
-      <FloatingPanel style={{ width: 640, maxWidth: '94vw', maxHeight: '90vh' }}>
+      <FloatingPanel style={{ width: 640, maxWidth: vw(94), maxHeight: vh(90) }}>
         <FloatingPanelHeader style={{ padding: '14px 20px' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>
             {state.mode === 'edit'
@@ -151,7 +152,7 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
           </div>
           <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
         </FloatingPanelHeader>
-        <div style={{ maxHeight: 'calc(90vh - 56px)', overflowY: 'auto' }}>
+        <div style={{ maxHeight: `calc(${vh(90)} - 56px)`, overflowY: 'auto' }}>
           {loading || !initialValues ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
               {state.mode === 'edit' ? 'Loading rule…' : 'Loading…'}

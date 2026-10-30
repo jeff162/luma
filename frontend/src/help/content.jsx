@@ -4118,8 +4118,13 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="personal">Personal</HelpHeading>
         <ul>
           <li>
-            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc., and how dates and numbers
-            are written. Dates and amounts typed into {APP_NAME} are read in the same format.
+            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc., the display size, and how
+            dates and numbers are written. Dates and amounts typed into {APP_NAME} are read in the same
+            format. Display size draws the whole app smaller or larger, from 80% to 125%. It is kept for
+            each kind of screen: a laptop, a desktop monitor, and a tablet held upright or sideways each
+            have their own, wherever the user signs in. A screen not yet set starts from the size chosen
+            most recently. It is also on the right-click menu of the user's name at the bottom of
+            the navigation pane, so each size can be tried on the page being looked at.
           </li>
           <li>
             <strong>Security</strong> holds the password, passkeys and two-factor sign-in of the user

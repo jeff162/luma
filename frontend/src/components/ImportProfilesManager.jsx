@@ -54,6 +54,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
 import { formatCount } from '../lib/displayFormat.js'
+import { cssPoint, cssRect, cssViewport, vh, vw } from '../lib/displaySize.js'
 
 // How many trailing days of an export are treated as still filling in. Most sources lag the thing they
 // describe, so the default assumes a lag; 1 — only the export day itself — is the opt-in for a
@@ -1021,8 +1022,9 @@ export default function ImportProfilesManager({
 
   function clampFormPanelPosition(pos, size = { width: ADD_PANEL_WIDTH, height: 740 }) {
     if (!pos || typeof window === 'undefined') return pos
-    const maxX = Math.max(24, window.innerWidth - (size.width || ADD_PANEL_WIDTH) - 24)
-    const maxY = Math.max(24, window.innerHeight - Math.min(size.height || 740, window.innerHeight - 48) - 24)
+    const view = cssViewport()
+    const maxX = Math.max(24, view.width - (size.width || ADD_PANEL_WIDTH) - 24)
+    const maxY = Math.max(24, view.height - Math.min(size.height || 740, view.height - 48) - 24)
     return {
       x: Math.max(24, Math.min(maxX, Math.round(pos.x))),
       y: Math.max(24, Math.min(maxY, Math.round(pos.y))),
@@ -1031,13 +1033,14 @@ export default function ImportProfilesManager({
 
   const getDefaultFormPanelPosition = useCallback((size = { width: ADD_PANEL_WIDTH, height: 740 }) => {
     if (typeof window === 'undefined') return { x: 96, y: 96 }
-    const rect = rootRef.current?.getBoundingClientRect()
+    const rect = rootRef.current ? cssRect(rootRef.current) : null
+    const view = cssViewport()
     const desiredX = rect
       ? rect.left + Math.max(36, Math.round((rect.width - (size.width || ADD_PANEL_WIDTH)) / 2))
-      : Math.round((window.innerWidth - (size.width || ADD_PANEL_WIDTH)) / 2)
+      : Math.round((view.width - (size.width || ADD_PANEL_WIDTH)) / 2)
     // Open near the top so there's room to grow downward when a template file is loaded (the mapping +
     // capture sections appear); the panel caps its height to the viewport and scrolls internally.
-    const desiredY = Math.max(48, Math.round(window.innerHeight * 0.07))
+    const desiredY = Math.max(48, Math.round(view.height * 0.07))
     return clampFormPanelPosition({ x: desiredX, y: desiredY }, size)
   }, [])
 
@@ -1119,9 +1122,10 @@ export default function ImportProfilesManager({
     function handleMove(event) {
       const start = formPanelDragStartRef.current
       if (!start) return
+      const point = cssPoint(event)
       setFormPanelPos(clampFormPanelPosition({
-        x: start.x + (event.clientX - start.mouseX),
-        y: start.y + (event.clientY - start.mouseY),
+        x: start.x + (point.x - start.mouseX),
+        y: start.y + (point.y - start.mouseY),
       }, { width: start.width, height: start.height }))
     }
     function handleUp() {
@@ -1140,7 +1144,7 @@ export default function ImportProfilesManager({
   useEffect(() => {
     if (!activeFormKey) return undefined
     function handleResize() {
-      const rect = formPanelRef.current?.getBoundingClientRect()
+      const rect = formPanelRef.current ? cssRect(formPanelRef.current) : null
       setFormPanelPos(prev => clampFormPanelPosition(prev || getDefaultFormPanelPosition(), {
         width: rect?.width || ADD_PANEL_WIDTH,
         height: rect?.height || 740,
@@ -1151,11 +1155,12 @@ export default function ImportProfilesManager({
   }, [activeFormKey, getDefaultFormPanelPosition])
 
   function startFormPanelDrag(event) {
-    const rect = formPanelRef.current?.getBoundingClientRect()
-    if (!rect) return
+    if (!formPanelRef.current) return
+    const rect = cssRect(formPanelRef.current)
+    const point = cssPoint(event)
     formPanelDragStartRef.current = {
-      mouseX: event.clientX,
-      mouseY: event.clientY,
+      mouseX: point.x,
+      mouseY: point.y,
       x: formPanelPos?.x ?? rect.left,
       y: formPanelPos?.y ?? rect.top,
       width: rect.width,
@@ -1285,12 +1290,12 @@ export default function ImportProfilesManager({
             ref={formPanelRef}
             onClick={event => event.stopPropagation()}
             style={{
-              width: `min(${ADD_PANEL_WIDTH}px, calc(100vw - 96px))`,
+              width: `min(${ADD_PANEL_WIDTH}px, calc(${vw(100)} - 96px))`,
               // Cap the height relative to where the panel actually sits, so growing after a template is
               // loaded scrolls inside the panel instead of pushing the footer off the bottom of the screen.
               maxHeight: formPanelKeyboard
                 ? formPanelKeyboard.maxHeight
-                : `calc(100vh - ${formPanelPlacement.y}px - 24px)`,
+                : `calc(${vh(100)} - ${formPanelPlacement.y}px - 24px)`,
               overflow: 'auto',
               position: 'fixed',
               left: formPanelPlacement.x,

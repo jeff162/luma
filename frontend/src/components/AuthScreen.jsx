@@ -12,10 +12,11 @@ import {
 import TransientTextInput from './TransientTextInput.jsx'
 import { ServerCertificateLink } from './ServerCertificate.jsx'
 import { FieldIssue, PasswordInput, PasswordManagerUsername, Tooltip, Button } from './ui.jsx'
+import { vh } from '../lib/displaySize.js'
 
 const s = {
   page: {
-    minHeight: '100vh',
+    minHeight: vh(100),
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

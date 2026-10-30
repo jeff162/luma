@@ -23,6 +23,7 @@ vi.mock('../../components/ServerCertificate.jsx', () => ({ ServerCertificateSect
 vi.mock('../../components/settings/ThemeSection.jsx', () => section('appearance'))
 vi.mock('../../components/settings/CurrencySection.jsx', () => section('currency'))
 vi.mock('../../components/settings/DisplayFormatSection.jsx', () => section('display format'))
+vi.mock('../../components/settings/DisplaySizeSection.jsx', () => section('display size'))
 vi.mock('../../components/settings/SignInFactorsSection.jsx', () => section('security'))
 vi.mock('../../components/administration/DatabaseSection.jsx', () => section('database'))
 vi.mock('../../components/settings/AboutSection.jsx', () => section('about'))

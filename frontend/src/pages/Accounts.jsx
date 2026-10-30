@@ -22,6 +22,7 @@ import { useColumnPreference } from '../lib/useColumnPreference.js'
 import { dividerIsDraggable, moveDivider } from '../lib/columnDividers.js'
 import { localStore, sessionStore } from '../lib/browserStorage.js'
 import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
+import { cssPoint, cssRect, cssViewport, toCssPx, uiScale } from '../lib/displaySize.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
@@ -1567,7 +1568,7 @@ export default function Accounts() {
     function onMove(event) {
       const state = columnResizeRef.current
       if (!state) return
-      const next = moveDivider(state.startColumns, state.key, event.clientX - state.startX)
+      const next = moveDivider(state.startColumns, state.key, toCssPx(event.clientX - state.startX))
       liveAccountColumnsRef.current = next
       setLiveAccountColumns(next)
     }
@@ -1598,12 +1599,13 @@ export default function Accounts() {
 
   function getAccountDetailInitialPosition() {
     if (!accountsPanelRef.current || typeof window === 'undefined') return null
-    const rect = accountsPanelRef.current.getBoundingClientRect()
-    const panelWidth = Math.min(820, window.innerWidth - 32)
+    const rect = cssRect(accountsPanelRef.current)
+    const viewWidth = cssViewport().width
+    const panelWidth = Math.min(820, viewWidth - 32)
     const gutter = 20
-    const fitsToRight = rect.right + gutter + panelWidth <= window.innerWidth - 16
+    const fitsToRight = rect.right + gutter + panelWidth <= viewWidth - 16
     const fallbackOffset = Math.min(Math.max(rect.width * 0.42, 260), 420)
-    const maxVisibleX = Math.max(16, window.innerWidth - panelWidth - 16)
+    const maxVisibleX = Math.max(16, viewWidth - panelWidth - 16)
     return {
       x: fitsToRight ? rect.right + gutter : Math.min(rect.left + fallbackOffset, maxVisibleX),
       y: Math.max(96, Math.round(rect.top)),
@@ -2043,7 +2045,7 @@ export default function Accounts() {
     if (!listRef.current) return
 
     const listRect = listRef.current.getBoundingClientRect()
-    const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH
+    const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH * uiScale()
     if (dragged.parent_account_id && point.clientX <= detachZoneRight) {
       setDropIntent({ kind: 'detach', accountId: dragged.id })
       clearDragHint()
@@ -2102,7 +2104,7 @@ export default function Accounts() {
       clearDragHint()
       return
     }
-    const at = { x: point.clientX, y: point.clientY }
+    const at = cssPoint(point)
     if (dragHintTargetRef.current !== mergeTarget.id) {
       // A new row starts the delay over, so the hint always names the row under the pointer.
       clearDragHint()
@@ -2122,7 +2124,7 @@ export default function Accounts() {
   function handleListDrop(dragged, point) {
     const listRect = listRef.current?.getBoundingClientRect()
     if (!listRect) return
-    const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH
+    const detachZoneRight = listRect.left + ACCOUNT_DETACH_DROP_ZONE_WIDTH * uiScale()
     if (dragged.parent_account_id && point.clientX <= detachZoneRight) {
       detachAccount(dragged)
       return
@@ -2481,7 +2483,7 @@ export default function Accounts() {
                             onContextMenu={e => {
                               if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
                               e.preventDefault()
-                              setListContextMenu({ x: e.clientX, y: e.clientY })
+                              setListContextMenu(cssPoint(e))
                             }}
                             style={{ background: 'var(--surface2)' }}>
                             <PillTableHeader
@@ -2561,7 +2563,7 @@ export default function Accounts() {
                             onContextMenu={e => {
                               if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
                               e.preventDefault()
-                              setListContextMenu({ x: e.clientX, y: e.clientY })
+                              setListContextMenu(cssPoint(e))
                             }}
                             style={{ maxHeight: 640, overflowY: 'auto', position: 'relative' }}
                           >
@@ -2600,8 +2602,8 @@ export default function Accounts() {
                               <div
                                 style={{
                                   position: 'fixed',
-                                  left: Math.min(listContextMenu.x, window.innerWidth - 200),
-                                  top: Math.min(listContextMenu.y, window.innerHeight - 100),
+                                  left: Math.min(listContextMenu.x, cssViewport().width - 200),
+                                  top: Math.min(listContextMenu.y, cssViewport().height - 100),
                                   zIndex: 300,
                                   background: 'var(--surface)',
                                   border: '1px solid var(--border)',

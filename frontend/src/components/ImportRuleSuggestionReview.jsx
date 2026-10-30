@@ -54,6 +54,7 @@ import { SuggestionCard } from './importRuleSuggestions/SuggestionCard.jsx'
 import { useStableOrder } from '../lib/useStableOrder.js'
 import TransactionDetail from './TransactionDetail.jsx'
 import { localStore } from '../lib/browserStorage.js'
+import { toCssPx, vw } from '../lib/displaySize.js'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
 const SORT_OPTIONS = [{ value: 'row_count', label: '# rows' }, { value: 'alpha', label: 'A–Z' }]
@@ -485,7 +486,7 @@ export default function ImportRuleSuggestionReview({
     const rowGap = Number.parseFloat(rootStyle.rowGap || rootStyle.gap || '0') || 0
     const desiredTop = stickyPanel.getBoundingClientRect().bottom + rowGap
     const delta = anchor.getBoundingClientRect().top - desiredTop
-    if (Math.abs(delta) > 0.5) scrollParent.scrollTop += delta
+    if (Math.abs(delta) > 0.5) scrollParent.scrollTop += toCssPx(delta)
   }, [bulkMode])
 
   useEffect(() => {
@@ -1126,7 +1127,7 @@ export default function ImportRuleSuggestionReview({
           display: 'inline-flex',
           alignItems: 'center',
           height: 30,
-          maxWidth: 'min(520px, 56vw)',
+          maxWidth: `min(520px, ${vw(56)})`,
           margin: '0 14px 0 0',
           padding: '3px 14px 3px 6px',
           boxSizing: 'border-box',

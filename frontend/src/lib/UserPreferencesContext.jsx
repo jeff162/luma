@@ -29,6 +29,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import { deviceLayoutPreferenceKey, useDeviceLayoutKey } from './deviceLayout.js'
+import { vh } from './displaySize.js'
 
 const UserPreferencesContext = createContext(null)
 
@@ -168,7 +169,7 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
 
   if (!preferencesReady) {
     return (
-      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+      <div style={{ minHeight: vh(100), display: 'grid', placeItems: 'center' }}>
         {/* Avoid flashing fallback defaults before the saved preference state arrives. */}
         <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading preferences...</div>
       </div>
@@ -219,8 +220,8 @@ export function useUserPreference(key, defaultValue) {
   return [value, setValue]
 }
 
-// Per-device variant for table column geometry (order and widths), so a layout tuned on a desktop does
-// not reach a tablet. The value is saved under `baseKey@<device>` (see `lib/deviceLayout.js`) and also
+// Per-device variant for what is tuned to a screen: table column geometry (order and widths) and the
+// display size, so a layout tuned on a desktop does not reach a tablet. The value is saved under `baseKey@<device>` (see `lib/deviceLayout.js`) and also
 // under `baseKey`, which keeps the most recent layout saved on any device. A device with no saved layout
 // of its own starts from that one, so a new screen never starts from the defaults when a layout exists.
 export function useDeviceLayoutPreference(baseKey, defaultValue) {

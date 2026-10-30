@@ -14,6 +14,7 @@ import { AMAZON_IMPORT_ACCOUNT_PREF_KEY, DEMO_IMPORT_DISABLED_MESSAGE } from '..
 import { skippedFileNoticeTitle, skippedFileReason } from '../../lib/importExport/importOutcome.js'
 import FileInput from '../FileInput.jsx'
 import { PICKER_IDS } from '../../lib/filePicker.js'
+import { vh } from '../../lib/displaySize.js'
 
 // Sentinel Select value for the explicit "untracked" state (a card that isn't one of the user's
 // accounts). Distinct from '' (not yet decided) and from any real account id.
@@ -508,7 +509,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
           }}
           width="min(560px, 100%)"
         >
-          <div style={{ maxHeight: '40vh', overflow: 'auto', fontSize: 13, color: 'var(--text)' }}>
+          <div style={{ maxHeight: vh(40), overflow: 'auto', fontSize: 13, color: 'var(--text)' }}>
             {skippedFilesAlert.map(skip => (
               <div key={skip.filename} style={{ padding: '3px 0' }}>
                 <div>{skip.filename}</div>

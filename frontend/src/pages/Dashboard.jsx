@@ -71,6 +71,7 @@ import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
 import AxisAvgPill from '../components/AxisAvgPill.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { formatDecimal } from '../lib/displayFormat.js'
+import { vh } from '../lib/displaySize.js'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -652,7 +653,7 @@ function TagReportBuilder({ availableTags, report = null, onClose, onDisplay, on
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
             gap: 6,
-            maxHeight: '50vh',
+            maxHeight: vh(50),
             overflowY: 'auto',
           }}>
             {sortedTags.map(tag => {

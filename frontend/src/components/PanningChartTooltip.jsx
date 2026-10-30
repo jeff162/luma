@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DefaultTooltipContent } from 'recharts'
 import { besideOnAxis } from '../lib/floatingPlacement.js'
+import { cssRect, toCssPx } from '../lib/displaySize.js'
 
 /*
  * Tooltip content for a Recharts chart that pans inside a horizontally scrolling element — the Dashboard's
@@ -25,14 +26,14 @@ import { besideOnAxis } from '../lib/floatingPlacement.js'
 
 const POINTER_GAP = 12
 
-// The horizontal span of `el` that is not clipped by any ancestor or by the window.
+// The horizontal span of `el` that is not clipped by any ancestor or by the window, in CSS pixels.
 function visibleHorizontalSpan(el) {
   let lo = 0
-  let hi = document.documentElement.clientWidth
+  let hi = toCssPx(document.documentElement.clientWidth)
   for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
     const overflowX = getComputedStyle(node).overflowX
     if (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden' || overflowX === 'clip') {
-      const rect = node.getBoundingClientRect()
+      const rect = cssRect(node)
       lo = Math.max(lo, rect.left)
       hi = Math.min(hi, rect.right)
     }
@@ -59,15 +60,16 @@ export default function PanningChartTooltip(props) {
     const chart = anchorRef.current?.closest('.recharts-wrapper')
     const card = cardRef.current
     if (!chart || !card || typeof pointerX !== 'number' || typeof pointerY !== 'number') return
-    const chartRect = chart.getBoundingClientRect()
-    const cardRect = card.getBoundingClientRect()
+    // Recharts reports the pointer in the chart's own CSS pixels, so the placement is worked in those.
+    const chartRect = cssRect(chart)
+    const cardRect = cssRect(card)
     const x = chartRect.left + pointerX
     const y = chartRect.top + pointerY
     const { lo, hi } = visibleHorizontalSpan(chart)
     setPosition({
       left: besideOnAxis({ before: x, after: x, size: cardRect.width, lo, hi, gap: POINTER_GAP }),
       top: besideOnAxis({
-        before: y, after: y, size: cardRect.height, lo: 0, hi: document.documentElement.clientHeight, gap: POINTER_GAP,
+        before: y, after: y, size: cardRect.height, lo: 0, hi: toCssPx(document.documentElement.clientHeight), gap: POINTER_GAP,
       }),
     })
   }, [shown, hiddenByScroll, pointerX, pointerY, payload])

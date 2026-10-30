@@ -14,6 +14,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
 import { Button, LinkButton } from './ui.jsx'
 import { activeRulesFacetCount } from '../lib/rulesFilter.js'
+import { vh } from '../lib/displaySize.js'
 
 // A list longer than this grows a type-to-filter search box, so a big category/tag set stays findable.
 const SEARCH_THRESHOLD = 8
@@ -136,7 +137,7 @@ export default function RulesFilterPopover({ facets, onChange, options, onClose,
       ref={ref}
       style={{
         position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
-        width: 300, maxHeight: '70vh', overflowY: 'auto',
+        width: 300, maxHeight: vh(70), overflowY: 'auto',
         background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
         boxShadow: '0 16px 44px rgba(0,0,0,0.24)', padding: 14,
       }}

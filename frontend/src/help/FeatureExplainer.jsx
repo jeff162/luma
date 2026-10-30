@@ -8,6 +8,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
 import { HelpPopoverPanel } from './helpPanel.jsx'
 import { useHelpTopicViewer } from './useHelpTopicViewer.jsx'
+import { vw } from '../lib/displaySize.js'
 
 // Card chrome for the floating `?` popover (the tip callout supplies its own inline style), and the
 // text inside it.
@@ -16,7 +17,7 @@ const HELP_POPOVER_CARD_STYLE = {
   border: '1px solid var(--border)',
   borderRadius: 10,
   boxShadow: '0 12px 32px rgba(15,23,42,0.32)',
-  width: 'min(340px, calc(100vw - 32px))',
+  width: `min(340px, calc(${vw(100)} - 32px))`,
 }
 const HELP_POPOVER_TEXT_STYLE = {
   padding: '12px 14px',

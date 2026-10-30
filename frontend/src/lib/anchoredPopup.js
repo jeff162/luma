@@ -18,6 +18,7 @@
  */
 
 import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { vw } from './displaySize.js'
 
 const VIEWPORT_MARGIN = 8
 
@@ -94,7 +95,7 @@ export function useAnchoredPopup({
     ...(anchorWidth === 'exact' ? { width: `max(anchor-size(width), ${minWidth}px)` } : null),
     ...(anchorWidth === 'atLeast' ? { minWidth: `max(anchor-size(width), ${minWidth}px)` } : null),
     ...(anchorWidth ? null : { minWidth }),
-    maxWidth: `calc(100vw - ${VIEWPORT_MARGIN * 2}px)`,
+    maxWidth: `calc(${vw(100)} - ${VIEWPORT_MARGIN * 2}px)`,
     maxHeight: `calc(100% - ${gap + VIEWPORT_MARGIN}px)`,
     minHeight: Math.min(minRoom, contentHeight),
     overflowY: 'auto',

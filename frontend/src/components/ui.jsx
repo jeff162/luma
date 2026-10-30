@@ -12,6 +12,7 @@ import { SUGGESTED_PASSPHRASE_WORDS, SUGGESTED_PASSWORD_WORDS, suggestPassphrase
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../lib/visibleViewport.js'
+import { cssPoint, cssRect, cssViewport, toCssPx } from '../lib/displaySize.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -70,10 +71,10 @@ function fittedTooltipWidth(el) {
   const style = getComputedStyle(el)
   const inset = ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
     .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0)
-  const used = Math.max(...lines.map(rect => rect.right)) - Math.min(...lines.map(rect => rect.left))
+  const used = toCssPx(Math.max(...lines.map(rect => rect.right)) - Math.min(...lines.map(rect => rect.left)))
   // Rounded up with a pixel spare, so sub-pixel text never finds itself a hair too wide and re-wraps.
   const fitted = Math.ceil(used + inset) + 1
-  return fitted < el.getBoundingClientRect().width - 1 ? fitted : null
+  return fitted < cssRect(el).width - 1 ? fitted : null
 }
 
 // The tooltip's own box, apart from where it is placed and how wide it is: for a hint that cannot use
@@ -183,7 +184,8 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
       start: align === 'right' ? trigger.right - tip.width : trigger.left, size: tip.width, lo: 0, hi: vw,
     })
     const top = besideOnAxis({ before: trigger.top, after: trigger.bottom, size: tip.height, lo: 0, hi: vh })
-    setPos({ top, left })
+    // Measured in screen pixels, placed in CSS pixels (displaySize.js).
+    setPos({ top: toCssPx(top), left: toCssPx(left) })
   }, [open, content, align, bare, fit])
   if (!content) return children
   const triggerChild = describeTrigger && isValidElement(children)
@@ -579,24 +581,27 @@ export function AppDialog({
     if (!draggable || event.button !== 0) return
     preventPressDefaults(event)
     const panel = panelRef.current
-    const rect = panel?.getBoundingClientRect()
-    const startX = event.clientX
-    const startY = event.clientY
+    const rect = panel ? cssRect(panel) : null
+    const start = cssPoint(event)
+    const view = cssViewport()
     const origin = drag
     // Clamp against the panel's untranslated base position so a margin always stays grabbable on-screen.
     const margin = 56
     const baseLeft = rect ? rect.left - origin.x : 0
     const baseTop = rect ? rect.top - origin.y : 0
     const minX = rect ? margin - rect.width - baseLeft : -Infinity
-    const maxX = rect ? window.innerWidth - margin - baseLeft : Infinity
+    const maxX = rect ? view.width - margin - baseLeft : Infinity
     const minY = rect ? -baseTop : -Infinity
-    const maxY = rect ? window.innerHeight - margin - baseTop : Infinity
+    const maxY = rect ? view.height - margin - baseTop : Infinity
     const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi)
     trackPointer(event, {
-      onMove: moveEvent => setDrag({
-        x: clamp(origin.x + moveEvent.clientX - startX, minX, maxX),
-        y: clamp(origin.y + moveEvent.clientY - startY, minY, maxY),
-      }),
+      onMove: moveEvent => {
+        const point = cssPoint(moveEvent)
+        setDrag({
+          x: clamp(origin.x + point.x - start.x, minX, maxX),
+          y: clamp(origin.y + point.y - start.y, minY, maxY),
+        })
+      },
     })
   }
 

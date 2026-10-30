@@ -8,6 +8,7 @@
 import { IconButton } from '../ui.jsx'
 import { ProgressPill } from './suggestionPresentational.jsx'
 import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../../lib/visibleViewport.js'
+import { vw } from '../../lib/displaySize.js'
 
 export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
   // Kept on the visible area while an on-screen keyboard is open (see visibleViewport.js).
@@ -35,7 +36,7 @@ export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
           border: '1px solid var(--border)',
           borderRadius: 14,
           width: 980,
-          maxWidth: '96vw',
+          maxWidth: vw(96),
           maxHeight: `calc(${visibleHeightCss(area)} * 0.88)`,
           overflowY: 'auto',
           boxShadow: '0 20px 60px rgba(0,0,0,0.42)',

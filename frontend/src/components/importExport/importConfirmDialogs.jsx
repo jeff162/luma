@@ -26,6 +26,7 @@ import {
 import { DataSourcePill } from './importPresentational.jsx'
 import { formatTimestamp } from '../../lib/utils.js'
 import { formatCount } from '../../lib/displayFormat.js'
+import { vh } from '../../lib/displaySize.js'
 
 export function DataSourceMismatchDialog({
   profileName,
@@ -192,7 +193,7 @@ export function MultiFileSourceChooserDialog({ groups = [], unreadable = [], onP
             </div>
           </div>
         </FloatingPanelHeader>
-        <div style={{ padding: 20, display: 'grid', gap: 12, maxHeight: '55vh', overflowY: 'auto' }}>
+        <div style={{ padding: 20, display: 'grid', gap: 12, maxHeight: vh(55), overflowY: 'auto' }}>
           {groups.map(group => (
             <button
               key={group.key}

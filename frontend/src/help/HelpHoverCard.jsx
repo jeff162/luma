@@ -5,6 +5,7 @@ import { Tooltip } from '../components/ui.jsx'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
 import { HelpPopoverPanel } from './helpPanel.jsx'
 import { useHelpTopicViewer } from './useHelpTopicViewer.jsx'
+import { vw } from '../lib/displaySize.js'
 
 /*
  * Wrap a trigger (e.g. a report pill) so hovering it shows that topic's help summary in a hover
@@ -19,7 +20,7 @@ const HOVER_CARD_STYLE = {
   borderRadius: 10,
   boxShadow: '0 12px 32px rgba(15,23,42,0.32)',
   padding: '11px 13px',
-  width: 'min(320px, calc(100vw - 24px))',
+  width: `min(320px, calc(${vw(100)} - 24px))`,
   fontSize: 13,
   lineHeight: 1.5,
   color: 'var(--text)',

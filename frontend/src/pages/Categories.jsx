@@ -34,6 +34,7 @@ import { localStore } from '../lib/browserStorage.js'
 import { preventPressDefaults, trackPointer, useDropZone } from '../lib/pointerDrag.js'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
+import { toCssPx } from '../lib/displaySize.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import {
   UNASSIGNED_CATEGORY_SYSTEM_KEY,
@@ -676,7 +677,7 @@ export default function Categories() {
   // Left/right split resize. Mirrors the divider in CategoryImportWorkspace: the pointer drag
   // sets the left track width directly, clamped so neither panel collapses below its minimum.
   function clampLeftPanelWidth(value) {
-    const layoutWidth = contentLayoutRef.current?.getBoundingClientRect?.().width || 0
+    const layoutWidth = contentLayoutRef.current?.offsetWidth || 0
     const maxWidth = layoutWidth
       ? Math.max(MIN_LEFT_PANEL_WIDTH, layoutWidth - MIN_RIGHT_PANEL_WIDTH - 8)
       : 560
@@ -699,7 +700,7 @@ export default function Categories() {
     document.body.style.userSelect = 'none'
     trackPointer(event, {
       onMove: moveEvent => {
-        nextWidth = clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)
+        nextWidth = clampLeftPanelWidth(toCssPx(moveEvent.clientX - layoutRect.left))
         setLeftPanelWidth(nextWidth)
       },
       onEnd: () => {

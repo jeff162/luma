@@ -4,6 +4,7 @@
 import { useState } from 'react'
 import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackdrop } from '../ui.jsx'
 import { StatusPill } from '../connections/ConnectionStatus.jsx'
+import { vh } from '../../lib/displaySize.js'
 
 /*
  * Review (and later edit) which PayPal transaction `Type` values are money movement, routing the checked
@@ -55,7 +56,7 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
             </div>
           </div>
         </FloatingPanelHeader>
-        <div style={{ padding: 12, display: 'grid', gap: 2, maxHeight: '55vh', overflowY: 'auto' }}>
+        <div style={{ padding: 12, display: 'grid', gap: 2, maxHeight: vh(55), overflowY: 'auto' }}>
           {proposals.map(proposal => (
             <div
               key={proposal.type}

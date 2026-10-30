@@ -7,6 +7,7 @@ import { api } from '../lib/api.js'
 import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle, SegmentedToggle } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
+import { toCssPx } from '../lib/displaySize.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
 // How many entries show between the selected category and the field's end of the list when it opens.
@@ -383,7 +384,7 @@ export default function CategoryPicker({
       const row = panel?.querySelector('[data-picker-row-selected="true"]')
       if (!row || !ref.current) return
       const panelRect = panel.getBoundingClientRect()
-      const rowTop = row.getBoundingClientRect().top - panelRect.top - panel.clientTop + panel.scrollTop
+      const rowTop = toCssPx(row.getBoundingClientRect().top - panelRect.top) - panel.clientTop + panel.scrollTop
       const margin = ENTRIES_TOWARD_FIELD * row.offsetHeight
       const opensAbove = panelRect.bottom <= ref.current.getBoundingClientRect().top + 1
       panel.scrollTop = Math.max(0, opensAbove

@@ -7,6 +7,7 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Badge, Button, DialogActions, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
+import { vh, vw } from '../lib/displaySize.js'
 
 const TIMEOUT_MS = 8000
 
@@ -145,7 +146,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
 
   return (
     <OverlayBackdrop zIndex={900} tint="rgba(0,0,0,0.5)" blur={0}>
-      <FloatingPanel style={{ width: 540, maxWidth: '94vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+      <FloatingPanel style={{ width: 540, maxWidth: vw(94), maxHeight: vh(90), display: 'flex', flexDirection: 'column' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px', flexShrink: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>⚙️ Create categorization rule</div>
           <IconButton size="large" aria-label="Close" onClick={onCancel}>×</IconButton>

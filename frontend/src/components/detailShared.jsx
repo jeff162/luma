@@ -40,12 +40,13 @@ import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
 import { useScrollContainment } from '../lib/scrollContainment.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
+import { cssPoint, cssRect, cssViewport, vh, vw } from '../lib/displaySize.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
 // category, account, amount) plus chrome and a vertical scrollbar gutter without
 // clipping the rightmost column on a typical desktop window.
-export const DETAIL_PANEL_WIDTH = 'min(960px, calc(100vw - 32px))'
+export const DETAIL_PANEL_WIDTH = `min(960px, calc(${vw(100)} - 32px))`
 export const DETAIL_PANEL_MIN_WIDTH = 480
 export const DETAIL_PANEL_MIN_HEIGHT = 320
 export const DETAIL_LIST_MAX_HEIGHT = 312
@@ -68,8 +69,9 @@ export function getDetailMonthSectionHeight(trend = []) {
   )
 }
 
+// Panel geometry is all CSS pixels (displaySize.js): the viewport, every rect and every pointer position.
 function readViewport() {
-  return { width: window.innerWidth, height: window.innerHeight }
+  return cssViewport()
 }
 
 // The size a panel may actually occupy in a given viewport. Takes the viewport rather than reading the
@@ -88,8 +90,9 @@ function clampPanelPosition(pos, rect = null) {
   if (!pos) return null
   const gutter = DETAIL_FLOATING_EDGE_GUTTER
   const topGutter = DETAIL_FLOATING_TOP_GUTTER
-  const maxX = Math.max(gutter, window.innerWidth - (rect?.width || 200) - gutter)
-  const maxY = Math.max(topGutter, window.innerHeight - (rect?.height || 60) - gutter)
+  const view = readViewport()
+  const maxX = Math.max(gutter, view.width - (rect?.width || 200) - gutter)
+  const maxY = Math.max(topGutter, view.height - (rect?.height || 60) - gutter)
   return {
     x: Math.max(gutter, Math.min(maxX, pos.x)),
     y: Math.max(topGutter, Math.min(maxY, pos.y)),
@@ -99,8 +102,9 @@ function clampPanelPosition(pos, rect = null) {
 function getDefaultPanelPosition(rect, stackIndex = 0) {
   const gutter = DETAIL_FLOATING_EDGE_GUTTER
   const topGutter = DETAIL_FLOATING_TOP_GUTTER
-  const centeredX = Math.max(gutter, Math.round((window.innerWidth - rect.width) / 2))
-  const centeredY = Math.max(topGutter, Math.round((window.innerHeight - rect.height) / 2))
+  const view = readViewport()
+  const centeredX = Math.max(gutter, Math.round((view.width - rect.width) / 2))
+  const centeredY = Math.max(topGutter, Math.round((view.height - rect.height) / 2))
   return {
     x: centeredX + (stackIndex * DETAIL_STACK_OFFSET),
     y: centeredY + (stackIndex * DETAIL_STACK_OFFSET),
@@ -179,10 +183,11 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // used to re-render every row twice per click on the header.
   function onDragStart(e) {
     if (!panelRef.current) return
-    const rect = panelRef.current.getBoundingClientRect()
+    const rect = cssRect(panelRef.current)
+    const start = cssPoint(e)
     dragOffset.current = {
-      x: e.clientX - (pos ? pos.x : rect.left),
-      y: e.clientY - (pos ? pos.y : rect.top),
+      x: start.x - (pos ? pos.x : rect.left),
+      y: start.y - (pos ? pos.y : rect.top),
     }
     hasDragged.current = false
     preventPressDefaults(e)
@@ -193,25 +198,26 @@ export function useDetailPanelChrome(onClose, options = {}) {
     function applyFrame() {
       pendingFrame = null
       if (!lastEvent || !panelRef.current) return
-      const r = panelRef.current.getBoundingClientRect()
+      const r = cssRect(panelRef.current)
       const next = clampPanelPosition({
-        x: lastEvent.clientX - dragOffset.current.x,
-        y: lastEvent.clientY - dragOffset.current.y,
+        x: lastEvent.x - dragOffset.current.x,
+        y: lastEvent.y - dragOffset.current.y,
       }, r)
       panelRef.current.style.left = `${next.x}px`
       panelRef.current.style.top  = `${next.y}px`
       lastWritten = next
     }
     function onMove(ev) {
+      const point = cssPoint(ev)
       if (!hasDragged.current) {
         if (!pos && panelRef.current) {
-          const r = panelRef.current.getBoundingClientRect()
+          const r = cssRect(panelRef.current)
           setPos({ x: r.left, y: r.top })
-          dragOffset.current = { x: ev.clientX - r.left, y: ev.clientY - r.top }
+          dragOffset.current = { x: point.x - r.left, y: point.y - r.top }
         }
         hasDragged.current = true
       }
-      lastEvent = { clientX: ev.clientX, clientY: ev.clientY }
+      lastEvent = point
       if (!pendingFrame) pendingFrame = requestAnimationFrame(applyFrame)
     }
     let stopTracking = null
@@ -240,9 +246,9 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // west/north edge also moves the panel's origin so the opposite edge stays anchored.
   function onResizeStart(e, dir = 'se') {
     if (!panelRef.current) return
-    const rect = panelRef.current.getBoundingClientRect()
+    const rect = cssRect(panelRef.current)
     resizeStart.current = {
-      x: e.clientX, y: e.clientY,
+      ...cssPoint(e),
       left: rect.left, top: rect.top,
       width: rect.width, height: rect.height,
       dir,
@@ -259,8 +265,9 @@ export function useDetailPanelChrome(onClose, options = {}) {
     let lastGeom = { pos: seededPos, size: size || { width: rect.width, height: rect.height } }
     function onMove(ev) {
       const { x, y, left, top, width, height, dir: d } = resizeStart.current
-      const dx = ev.clientX - x
-      const dy = ev.clientY - y
+      const point = cssPoint(ev)
+      const dx = point.x - x
+      const dy = point.y - y
       let nextWidth = width
       let nextHeight = height
       if (d.includes('e')) nextWidth = width + dx
@@ -299,7 +306,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
 
   useEffect(() => {
     if (!panelRef.current || pos) return
-    const rect = panelRef.current.getBoundingClientRect()
+    const rect = cssRect(panelRef.current)
     if (forceFloating && initialPosition) {
       setPos(clampPanelPosition(applyPanelStackOffset(initialPosition, stackIndex), rect))
       return
@@ -314,7 +321,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
 
   useEffect(() => {
     function handleResize() {
-      setPos(prev => clampPanelPosition(prev, panelRef.current?.getBoundingClientRect()))
+      setPos(prev => clampPanelPosition(prev, (panelRef.current && cssRect(panelRef.current))))
       // Only the viewport is recorded; the rendered size falls out of it. The requested size is left
       // untouched so the panel can grow back into a window that is enlarged again.
       setViewport(prev => {
@@ -332,7 +339,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     if (!element) return undefined
 
     const observer = new ResizeObserver(() => {
-      setPos(prev => clampPanelPosition(prev, element.getBoundingClientRect()))
+      setPos(prev => clampPanelPosition(prev, cssRect(element)))
     })
     observer.observe(element)
     return () => observer.disconnect()
@@ -352,9 +359,10 @@ export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fall
   const [savedPanel, setSavedPanel] = useUserPreference(prefKey, null)
   const { initialPosition, initialSize } = useMemo(() => {
     const hasWindow = typeof window !== 'undefined'
+    const view = hasWindow ? readViewport() : { width: fallbackWidth, height: fallbackHeight }
     const fallbackSize = {
-      width:  Math.min(fallbackWidth,  (hasWindow ? window.innerWidth  : fallbackWidth)  - edgeGutter),
-      height: Math.min(fallbackHeight, (hasWindow ? window.innerHeight : fallbackHeight) - topGutter),
+      width:  Math.min(fallbackWidth,  view.width  - edgeGutter),
+      height: Math.min(fallbackHeight, view.height - topGutter),
     }
     if (!savedPanel || !hasWindow) return { initialPosition: null, initialSize: fallbackSize }
     const savedViewport = savedPanel.viewport
@@ -362,8 +370,8 @@ export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fall
       // Legacy save (pre-viewport-scaling): use as-is. Hook clamping handles overflow.
       return { initialPosition: savedPanel.pos || null, initialSize: savedPanel.size || fallbackSize }
     }
-    const scaleX = window.innerWidth / savedViewport.width
-    const scaleY = window.innerHeight / savedViewport.height
+    const scaleX = view.width / savedViewport.width
+    const scaleY = view.height / savedViewport.height
     const scaledSize = savedPanel.size ? {
       width:  Math.max(DETAIL_PANEL_MIN_WIDTH,  Math.round(savedPanel.size.width  * scaleX)),
       height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.round(savedPanel.size.height * scaleY)),
@@ -376,7 +384,7 @@ export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fall
   }, [savedPanel, fallbackWidth, fallbackHeight, edgeGutter, topGutter])
   const onGestureEnd = ({ pos: gPos, size: gSize }) => {
     if (!gPos && !gSize) return
-    setSavedPanel({ pos: gPos || null, size: gSize || null, viewport: { width: window.innerWidth, height: window.innerHeight } })
+    setSavedPanel({ pos: gPos || null, size: gSize || null, viewport: readViewport() })
   }
   return { initialPosition, initialSize, onGestureEnd }
 }
@@ -882,8 +890,8 @@ export function DetailPanelShell({
   // sits under the overlay's own top padding.
   const availableHeight = keyboardCap
     ?? (pos
-      ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
-      : (area.keyboard ? `${Math.round(area.height * 0.85)}px` : '85vh'))
+      ? `calc(${vh(100)} - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
+      : (area.keyboard ? `${Math.round(area.height * 0.85)}px` : vh(85)))
   // A press anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
   // Using the press rather than click means the panel rises immediately, before any nested
   // event listener runs — so the focused panel is on top while the user's actual gesture
