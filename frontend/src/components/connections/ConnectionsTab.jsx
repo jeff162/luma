@@ -82,21 +82,20 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
   // checking the saved value against the provider's dashboard. Throwing keeps the field hidden rather than
   // showing an empty box that would read as "the secret is blank".
   //
-  // The fetch needs the vault, so the gate is *awaited* here rather than reported as a failure:
-  // PasswordInput holds the field hidden until this resolves, which is what lets an unlock reveal the
-  // secret on the same press of Show. A declined prompt throws, leaving the field hidden and silent.
+  // The dialog opens only with the vault unlocked, so the fetch normally just works. PasswordInput holds
+  // the field hidden until this resolves, which is what lets a re-prompt reveal the secret on the same
+  // press of Show. A declined prompt throws, leaving the field hidden and silent.
   async function revealStoredSecret() {
     if (secret) return               // already showing something typed (or previously revealed)
     if (!hasSecret) return
     setError('')
-    if (!(await ensureVault())) throw new Error('The vault is still locked.')
     try {
       await loadStoredSecret()
     } catch (e) {
       let failure = e
-      // The gate passes on cached flags, so a 423 here means the server dropped the key under us
-      // (restart or idle timeout) — the same gate arriving late. Re-prompt and retry once, so this
-      // still costs a single press of Show.
+      // A 423 here means the server dropped the key while the dialog was open (restart or idle
+      // timeout) — the gate arriving late. Re-prompt and retry once, so this still costs a single press
+      // of Show.
       if (failure.status === 423 && await ensureVault({ force: true })) {
         try {
           await loadStoredSecret()
@@ -118,9 +117,6 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
     // the same case: it is the stored value, so re-sending it would only churn the ciphertext.
     const payload = { client_id: clientId, env }
     if (secret && secret !== revealedSecret) payload.secret = secret
-    // Only storing a secret encrypts anything, so the prompt is raised for that save alone; a declined
-    // prompt leaves the form exactly as it was.
-    if (payload.secret && !(await ensureVault())) { setSaving(false); return }
     try {
       await onSave(payload)
     } catch (e) {
@@ -139,7 +135,7 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
   return (
     <AppDialog
       title={`Configure ${providerLabel(provider)}`}
-      description="These app credentials identify this app to the provider. The secret is stored in the encrypted vault; only the secret needs the vault unlocked to save."
+      description="These app credentials identify this app to the provider. The secret is stored in the encrypted vault."
       onClose={onClose}
       width="min(520px, 100%)"
       actions={
@@ -748,6 +744,13 @@ export default function ConnectionsTab({ onShowHistory }) {
     [accounts],
   )
 
+  // Every save needs the vault, and the three values only work as a set, so the dialog opens behind the
+  // gate rather than prompting part-way through an edit.
+  async function openConfig(p) {
+    if (!(await ensureVault())) return
+    setConfigTarget(p)
+  }
+
   async function saveConfig(provider, payload) {
     await api.saveProviderConfig(provider, payload)
     await refresh()
@@ -1295,7 +1298,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                 {/* Configure only where there is something to configure — a provider with no app-level
                     credential would open a dialog with no fields in it. */}
                 {isAdmin && p.requires_app_config !== false
-                  ? <Button variant="secondary" onClick={() => setConfigTarget(p)}>Configure</Button> : null}
+                  ? <Button variant="secondary" onClick={() => openConfig(p)}>Configure</Button> : null}
                 {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
                     because it differs in kind: Plaid's widget authorizes one institution, while a
                     SimpleFIN setup token claims a bridge that may span several banks and so has no noun
@@ -1603,7 +1606,7 @@ export default function ConnectionsTab({ onShowHistory }) {
             .filter(p => isAdmin || p.requires_app_config === false)
             .map(p => (
               <Button key={p.provider} variant="secondary"
-                onClick={() => (p.requires_app_config === false ? connect(p) : setConfigTarget(p))}>
+                onClick={() => (p.requires_app_config === false ? connect(p) : openConfig(p))}>
                 + {providerLabel(p.provider)}
               </Button>
             ))}

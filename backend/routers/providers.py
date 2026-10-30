@@ -364,18 +364,17 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
     # No environment gate here any more. Switching to Production used to demand a strong passphrase,
     # because Sandbox accepted a weak one; with the weak tier gone the check could only ever pass, and
     # keeping it would tell the user that the environment is what governs their passphrase — which is
-    # exactly the model this change removes. Storing a secret at all still requires an unlocked vault
-    # (the VaultLocked arm below), and that vault is strong by construction.
+    # exactly the model this change removes. Every save requires an unlocked vault (the VaultLocked arm
+    # below), and that vault is strong by construction.
     try:
         set_provider_config(
             request.state.user, provider,
             client_id=body.client_id, secret=body.secret, env=body.env,
         )
     except crypto_service.VaultLocked:
-        # The secret is vault-encrypted, so storing one needs the vault configured and unlocked.
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Set and unlock a vault passphrase before saving this data provider's secret.",
+            "message": "Set and unlock a vault passphrase before configuring this data provider.",
         })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

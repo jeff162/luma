@@ -3,9 +3,9 @@ App-level provider credentials in the vault: the Plaid client_id/secret/env move
 `.env` into the vaulted `provider_config` table.
 
 Pins the edges: only the secret is vaulted (client_id/env plaintext, secret never returned by status);
-the saved row is the only source, so environment credentials are ignored; saving a secret needs an
-unlocked vault while client_id/env alone do not; the Configure endpoints round-trip; the Production gate
-holds; and app credentials ride the credentials backup.
+the saved row is the only source, so environment credentials are ignored; every save needs an unlocked
+vault, including one changing only client_id/env or clearing the secret; the Configure endpoints
+round-trip; the Production gate holds; and app credentials ride the credentials backup.
 """
 
 from __future__ import annotations
@@ -106,12 +106,18 @@ class ProviderConfigServiceTests(unittest.TestCase):
             {"client_id": "cid", "secret": "sek", "env": "sandbox"},
         )
 
-    def test_client_id_only_saves_while_locked(self):
+    def test_client_id_only_save_requires_unlock(self):
         cs.lock(self.alice)
-        provider_config.set_provider_config(self.user, "plaid", client_id="cid", env="sandbox")
-        status = provider_config.get_provider_config_status("plaid")
-        self.assertEqual(status["client_id"], "cid")
-        self.assertFalse(status["has_secret"])
+        with self.assertRaises(cs.VaultLocked):
+            provider_config.set_provider_config(self.user, "plaid", client_id="cid", env="sandbox")
+        self.assertEqual(provider_config.get_provider_config_status("plaid")["client_id"], "")
+
+    def test_clearing_the_secret_requires_unlock(self):
+        provider_config.set_provider_config(self.user, "plaid", client_id="cid", secret="sek")
+        cs.lock(self.alice)
+        with self.assertRaises(cs.VaultLocked):
+            provider_config.set_provider_config(self.user, "plaid", secret="")
+        self.assertTrue(provider_config.get_provider_config_status("plaid")["has_secret"])
 
     def test_saving_a_secret_requires_unlock(self):
         cs.lock(self.alice)
@@ -149,6 +155,12 @@ class ProviderConfigEndpointTests(unittest.TestCase):
     def test_unknown_provider_is_404(self):
         with api_client() as (client, _):
             self.assertEqual(client.get("/api/providers/nope/config").status_code, 404)
+
+    def test_saving_client_id_alone_needs_a_vault(self):
+        with api_client() as (client, _):
+            r = client.post("/api/providers/plaid/config", json={"client_id": "cid", "env": "sandbox"})
+            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
 
     def test_saving_a_secret_needs_a_vault(self):
         with api_client() as (client, _):

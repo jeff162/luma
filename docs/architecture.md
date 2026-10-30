@@ -1063,8 +1063,8 @@ import card. The full rule is in `data-model.md`.
   config, the saved row being the only source, and every adapter method takes it rather than reading the
   environment. A provider with `requires_app_config = False` receives `{}`, reports itself configured
   once it has a connection, and is gated on a Production-strength vault at connect time. CRUD is
-  admin-gated at `GET/POST /api/providers/{provider}/config`; saving the secret needs the vault
-  unlocked. App credentials ride the accounts part of a backup (`provider_configs`).
+  admin-gated at `GET/POST /api/providers/{provider}/config`; every save needs the vault unlocked,
+  since the three values work only as a set, so the Configure dialog opens behind the vault gate. App credentials ride the accounts part of a backup (`provider_configs`).
 
 - **The vault gate is hosted at App level** (`contexts/VaultGateContext.jsx`, `lib/useVaultGate.js`),
   because the navigation pane's sync control (`components/SyncNavItem.jsx`) starts gated work from any

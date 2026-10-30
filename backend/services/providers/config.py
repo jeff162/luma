@@ -366,9 +366,15 @@ def resolve_app_config(user: dict, provider: str) -> dict | None:
 
 
 def set_provider_config(user: dict, provider: str, *, client_id=None, secret=None, env=None) -> None:
-    """Upsert the app credential. client_id/env store plaintext; a provided secret is vault-encrypted
-    (requires the vault unlocked). `secret=None` leaves the stored secret unchanged; `secret=''` clears it.
-    A field left None keeps its current value (or the default on a fresh row)."""
+    """Upsert the app credential. client_id/env store plaintext; a provided secret is vault-encrypted.
+    `secret=None` leaves the stored secret unchanged; `secret=''` clears it. A field left None keeps its
+    current value (or the default on a fresh row).
+
+    Every save needs the vault unlocked (raises VaultLocked), not only one carrying a secret. The three
+    values work only as a set, so a client_id or env changed without the matching secret can only break
+    syncing, and clearing the secret is a change to a vaulted value."""
+    if not crypto_service.is_unlocked(user["id"]):
+        raise crypto_service.VaultLocked()
     normalized_env = None
     if env is not None:
         normalized_env = (env or "sandbox").strip() or "sandbox"
