@@ -10,7 +10,7 @@
 
 import { OutcomeChip, SourceAccountChip } from '../importExport/SourceAccountChip.jsx'
 import { allowanceSummary } from '../../lib/requestAllowance.js'
-import { HOVER_OPEN_DELAY_MS, Tooltip, IconButton } from '../ui.jsx'
+import { HOVER_OPEN_DELAY_MS, Tooltip, IconButton, PillMark } from '../ui.jsx'
 import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
 import { formatCount } from '../../lib/displayFormat.js'
 
@@ -60,10 +60,10 @@ export function HoverLines({ lines, children }) {
 // line of 11px metadata, the full-size pill is the largest thing in the row and reads as the point of
 // it. It stays legible because it keeps its weight; only the type and the padding come down.
 //
-// With `onClick` the pill is a button; `report` adds the `↗` that says the click opens a report
-// (`ui-patterns.md` → Status, badges and timestamps), as on the import cards' rejected, duplicate and
-// to-review counts.
-export function StatusPill({ tone = 'accent2', small = false, report = false, children, title, onClick }) {
+// With `onClick` the pill is a button and ends in a `PillMark`: `mark="report"` for the `↗` of a count
+// that opens its report, as on the import cards' rejected, duplicate and to-review counts, and otherwise
+// the `›` of a pill that goes somewhere (`ui-patterns.md` → Pickers and filters).
+export function StatusPill({ tone = 'accent2', small = false, mark, children, title, onClick }) {
   const color = tone === 'danger' ? 'var(--danger, #dc2626)'
     : tone === 'warning' ? 'var(--warning)'
       : tone === 'muted' ? 'var(--muted)'
@@ -72,7 +72,7 @@ export function StatusPill({ tone = 'accent2', small = false, report = false, ch
   const Tag = onClick ? 'button' : 'span'
   return (
     <Tag
-      {...(onClick ? { type: 'button', onClick } : {})}
+      {...(onClick ? { type: 'button', onClick, className: 'ui-pill' } : {})}
       title={title}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -86,7 +86,7 @@ export function StatusPill({ tone = 'accent2', small = false, report = false, ch
       }}
     >
       {children}
-      {report ? <span aria-hidden="true" style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }}>↗</span> : null}
+      {onClick ? <PillMark kind={mark || 'go'} /> : null}
     </Tag>
   )
 }

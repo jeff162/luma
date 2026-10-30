@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+// A pill that only labels: page-coloured fill, grey outline, grey text. Kept apart from the raised fill
+// that every clickable grey pill has (`FilterChip`, a chooser), so a label is not mistaken for one.
+export const LABEL_PILL_COLORS = {
+  border: '1px solid var(--border)',
+  background: 'var(--surface)',
+  color: 'var(--muted)',
+}
+
 export function getSharedPillStyle({ tone = 'default' } = {}) {
   const palettes = {
     default: {

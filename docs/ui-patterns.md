@@ -219,6 +219,13 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - **Short categorical values use pills** that expand into their selector, rather than full-width
   selects. Opening one does not change row height or shift its neighbors.
+- **A clickable stand-alone pill says so before it is clicked.** A pill that reports something (a status,
+  a count, a notice) sits among others that only label, so one that does something ends in a `PillMark`:
+  `↗` opens a report, `›` goes to another page or opens a dialog. A value in a table or list column takes
+  no mark, since a field there is already known to be editable, and neither does a filter chip or a pill
+  that names its action in its label. Every clickable pill carries `ui-pill`, which darkens its outline
+  on hover. The mark is the cue that reaches an iPad, which has no hover. A pill that only labels uses
+  `LABEL_PILL_COLORS`, so it does not look like an unpressed filter chip.
 - **Category and tag assignment use the shared pickers** (`CategoryPicker`, `TagPickerWithCreate`), and
   pickers show groups in the same order as the Categories page.
 - **Search and filter are separate tools.** A search box narrows by one obvious field. A filter narrows
@@ -270,7 +277,7 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A count shown at more than one level comes from one function**, so a roll-up cannot disagree with
   the rows under it.
 - **`↗` means "opens a report".** Reuse the glyph rather than restyling the control: an `IconButton` with
-  `tone="accent"` on its own, or a `StatusPill` with `report` where a count opens the rows it counts.
+  `tone="accent"` on its own, or a `StatusPill` with `mark="report"` where a count opens the rows it counts.
 
 ## Empty states
 

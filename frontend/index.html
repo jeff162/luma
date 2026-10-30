@@ -61,6 +61,14 @@
       .ui-icon-button { background: transparent; }
       .ui-icon-button:not(:disabled):hover { background: color-mix(in srgb, currentColor 14%, transparent); }
       .ui-link-button:not(:disabled):hover { text-decoration: underline; }
+      /* A clickable pill's outline darkens toward its text colour under the pointer, so a pill that does
+         something stands apart from one that only labels. Every pill sets its border inline, which only
+         !important can override. Where a child draws the pill, the button is `ui-pill-host` and the child
+         `ui-pill-face`. */
+      .ui-pill:not(:disabled):hover,
+      .ui-pill-host:not(:disabled):hover > .ui-pill-face {
+        border-color: color-mix(in srgb, currentColor 60%, transparent) !important;
+      }
       /* A browser draws button labels in its own control font rather than the page's. */
       button { font-family: inherit; }
       /* A Button's progress fill. Tinted from the label colour so it reads on every variant; the width eases

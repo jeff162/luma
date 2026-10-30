@@ -7,6 +7,7 @@ import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { Card, Spinner, InsetPanel, SectionEyebrow, AppConfirmDialog, Toggle, Tooltip } from '../ui.jsx'
 import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { NAV_DATA_LOCATION_PREF_KEY } from '../../lib/dataLocation.js'
+import { LABEL_PILL_COLORS } from '../pillStyles.js'
 
 // The configuration report: every resolved setting and which layer supplied it. Read-only on purpose.
 // Settings that can be changed in the app have their own sections (sign-in, security profile, currency,
@@ -49,6 +50,7 @@ function ConfigRowAction({ label, hint, disabled, onClick }) {
     <Tooltip describeTrigger content={hint}>
       <button
         type="button"
+        className="ui-pill"
         disabled={disabled}
         onClick={onClick}
         style={{
@@ -72,7 +74,7 @@ function ConfigSourceChip({ row }) {
   return (
     <span style={{
       ...CONFIG_PILL_STYLE,
-      background: overridden ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'var(--surface2)',
+      background: overridden ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : LABEL_PILL_COLORS.background,
       color: overridden ? 'var(--accent)' : 'var(--muted)',
     }}>
       {configSourceLabel(row)}

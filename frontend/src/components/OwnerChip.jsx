@@ -3,6 +3,8 @@
 
 /* eslint-disable react-refresh/only-export-components -- the chip and the short labels it is shown with live together so callers get one import */
 
+import { LABEL_PILL_COLORS } from './pillStyles.js'
+
 /*
  * An owner as a pill: their colour as a dot, then a name. Read-only it says whose something is; given an
  * `onClick` it is a filter pill, `selected` marking the one in force.
@@ -49,8 +51,7 @@ export default function OwnerChip({ owner, label = owner.name, selected = false,
       <span
         title={owner.name}
         style={{
-          ...style, padding: '0 6px', fontSize: 11, fontWeight: 500,
-          border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)',
+          ...style, padding: '0 6px', fontSize: 11, fontWeight: 500, ...LABEL_PILL_COLORS,
         }}
       >
         {content}
@@ -61,6 +62,7 @@ export default function OwnerChip({ owner, label = owner.name, selected = false,
   return (
     <button
       type="button"
+      className="ui-pill"
       aria-pressed={selected}
       onClick={onClick}
       disabled={disabled}

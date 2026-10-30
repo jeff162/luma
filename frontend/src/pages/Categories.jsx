@@ -36,6 +36,7 @@ import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorksp
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { toCssPx } from '../lib/displaySize.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
+import { LABEL_PILL_COLORS } from '../components/pillStyles.js'
 import {
   UNASSIGNED_CATEGORY_SYSTEM_KEY,
   categoryCapabilities,
@@ -1943,8 +1944,7 @@ export default function Categories() {
                             gap: 5,
                             padding: '2px 8px',
                             borderRadius: 999,
-                            border: '1px solid var(--border)',
-                            background: 'var(--surface2)',
+                            ...LABEL_PILL_COLORS,
                             fontSize: 12,
                           }}
                         >
@@ -2079,9 +2079,7 @@ export default function Categories() {
                                   display: 'inline-flex', alignItems: 'center', gap: 6,
                                   padding: '3px 8px',
                                   borderRadius: 999,
-                                  border: '1px dashed color-mix(in srgb, var(--border) 92%, transparent)',
-                                  background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
-                                  color: 'var(--muted)',
+                                  ...LABEL_PILL_COLORS,
                                   fontSize: 12, fontStyle: 'italic', lineHeight: 1.2,
                                 }}
                               >

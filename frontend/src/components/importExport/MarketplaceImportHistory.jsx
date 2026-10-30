@@ -29,7 +29,7 @@ function AmazonReconciliationAction({ batch, count, attention = 0 }) {
   const warn = attention > 0
   return (
     <StatusPill
-      report
+      mark="report"
       tone={warn ? 'warning' : 'muted'}
       onClick={() => open({ vendor: 'amazon', batchId: batch.id, title: batch.filename })}
       title={warn
@@ -50,7 +50,7 @@ const VENDOR_ROW_ACTION = {
 // tints it (used for discarded items — a missing orders file).
 function DetailPill({ count, label, title, warn, onClick }) {
   return (
-    <StatusPill report tone={warn ? 'warning' : 'muted'} onClick={onClick} title={title}>
+    <StatusPill mark="report" tone={warn ? 'warning' : 'muted'} onClick={onClick} title={title}>
       {count} {label}
     </StatusPill>
   )
@@ -199,7 +199,7 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
               {needsReview > 0 ? (
                 <>
                   <StatusPill
-                    report
+                    mark="report"
                     tone="review"
                     // Opens on the rows the pill counts; the report's own quick filter turns it off.
                     onClick={() => onOpenLedger({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}

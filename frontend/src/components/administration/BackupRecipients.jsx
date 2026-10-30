@@ -591,6 +591,7 @@ function EditableRecipientLabel({ recipient, onCommit }) {
     <button
       type="button"
       onClick={() => beginEdit(recipient.label || '')}
+      className="ui-pill"
       style={{
         background: 'var(--surface2)',
         color: 'var(--text)',

@@ -80,7 +80,7 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
                   matching the launch affordance used on import cards. */}
               {onOpenReport ? (
                 <StatusPill
-                  report
+                  mark="report"
                   tone="muted"
                   onClick={() => onOpenReport(proposal.type, proposal.already_ruled)}
                   title="Show these transactions"

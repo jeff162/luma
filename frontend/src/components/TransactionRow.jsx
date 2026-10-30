@@ -44,10 +44,10 @@ function RowTooltip({ openDelay = ROW_HOVER_OPEN_DELAY_MS, ...props }) {
   return <Tooltip openDelay={openDelay} {...props} />
 }
 
-// The category cell on one expanded allocation of a split: the badge and the ◧ beside it are a single
-// control, since both lead to the same editor. Reset to nothing visible so the badge reads exactly as it
-// does on an ordinary row — the button contributes the hit area and the cursor, not chrome of its own.
-const splitPartControlStyle = {
+// A category cell that opens something: the badge, and on a split's allocation the ◧ beside it, are a
+// single control. Reset to nothing visible so the badge reads as it does anywhere
+// else — the button contributes the hit area and the cursor, not chrome of its own.
+const categoryControlStyle = {
   background: 'none',
   border: 'none',
   padding: 0,
@@ -1166,15 +1166,17 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       const wholeAmount = total ?? txn.amount
       const content = (
         <>
-          <CategoryDisplay id={txn.category_id} name={txn.category_name} />
+          <CategoryDisplay id={txn.category_id} name={txn.category_name} faceClassName={onOpenSplit ? 'ui-pill-face' : undefined} />
           <span aria-hidden="true" style={{ color: 'var(--muted)' }}>◧</span>
         </>
       )
       const control = onOpenSplit ? (
         <button
+          type="button"
+          className="ui-pill-host"
           onClick={e => { e.stopPropagation(); onOpenSplit(txn) }}
           aria-label={`${txn.category_name || 'Uncategorized'} — one part of a split; edit the split`}
-          style={splitPartControlStyle}
+          style={categoryControlStyle}
         >{content}</button>
       ) : (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{content}</span>
@@ -1250,16 +1252,19 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
 
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <div
-        onClick={editable ? () => { hasOpenedRef.current = false; createdRef.current = null; setEditing(true) } : undefined}
-        style={{ cursor: editable ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-        title={editable ? 'Click to change category' : undefined}
-      >
-        <CategoryDisplay
-          id={txn.category_id}
-          name={txn.category_name}
-        />
-      </div>
+      {editable ? (
+        <button
+          type="button"
+          className="ui-pill-host"
+          onClick={() => { hasOpenedRef.current = false; createdRef.current = null; setEditing(true) }}
+          style={categoryControlStyle}
+          title="Click to change category"
+        >
+          <CategoryDisplay id={txn.category_id} name={txn.category_name} faceClassName="ui-pill-face" />
+        </button>
+      ) : (
+        <CategoryDisplay id={txn.category_id} name={txn.category_name} />
+      )}
       {onOpenDetail && txn.category_name && (
         <RowTooltip content="View category spending history">
           <IconButton

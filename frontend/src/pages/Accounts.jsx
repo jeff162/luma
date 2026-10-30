@@ -291,6 +291,7 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
           setOpen(prev => !prev)
         }}
         onContextMenu={disabled ? undefined : onContextMenu}
+        className={disabled ? undefined : 'ui-pill'}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -542,6 +543,7 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
         type="button"
         onClick={onStartEdit}
         onContextMenu={shared ? (e => e.preventDefault()) : onContextMenu}
+        className="ui-pill"
         style={{
           display: 'inline-flex',
           alignItems: 'center',

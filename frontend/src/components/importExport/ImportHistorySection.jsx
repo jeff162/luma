@@ -444,7 +444,7 @@ export function ImportHistorySection({
                               }}>
                             {hasPaypalRecon ? (
                               <StatusPill
-                                report
+                                mark="report"
                                 tone={paypalAttention > 0 ? 'warning' : 'muted'}
                                 onClick={() => openReconciliationViewer({ vendor: 'paypal', batchId: b.id, title: b.filename })}
                                 title={paypalAttention > 0
@@ -456,7 +456,7 @@ export function ImportHistorySection({
                             ) : null}
                             {summary.rejectedCount > 0 ? (
                               <StatusPill
-                                report
+                                mark="report"
                                 tone="muted"
                                 // The rows themselves live in the file's own report, beside the
                                 // ones that did arrive — the pill is the count and the way in,
@@ -484,7 +484,7 @@ export function ImportHistorySection({
                               const hasSoft = toReview > 0
                               return (
                                 <StatusPill
-                                  report
+                                  mark="report"
                                   tone={hasSoft ? 'warning' : 'muted'}
                                   onClick={() => openUnifiedDuplicatesViewer({
                                     source: b,
@@ -502,7 +502,7 @@ export function ImportHistorySection({
                             {Number(b.needs_review_count || 0) > 0 ? (
                               <>
                                 <StatusPill
-                                  report
+                                  mark="report"
                                   tone="review"
                                   // Opens on the rows the pill counts; the report's own quick filter turns it off.
                                   onClick={() => openBatchDetail({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}

@@ -14,6 +14,7 @@
 // state is what makes an account silently importing nothing visible instead of merely absent.
 
 import { formatCount } from '../../lib/displayFormat.js'
+import { PillMark } from '../ui.jsx'
 
 const TRUNCATE_AT = 22
 
@@ -84,13 +85,14 @@ export function SourceAccountChip({ label, mappedLabel = '', count = null, skipp
 }
 
 // A neutral outcome chip for a count that is not an account — duplicates dropped, rows needing review.
-// Same shape as the account chips so a card's outcome row reads as one set rather than two styles.
+// Same shape as the account chips so a card's outcome row reads as one set rather than two styles; with
+// `onClick` it ends in the `›` that sets it apart from them.
 export function OutcomeChip({ label, count, tone = 'muted', onClick, title }) {
   const color = tone === 'warning' ? 'var(--warning)' : 'var(--muted)'
   const Tag = onClick ? 'button' : 'span'
   return (
     <Tag
-      {...(onClick ? { type: 'button', onClick } : {})}
+      {...(onClick ? { type: 'button', onClick, className: 'ui-pill' } : {})}
       title={title}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -103,6 +105,7 @@ export function OutcomeChip({ label, count, tone = 'muted', onClick, title }) {
     >
       {label}
       <span style={{ fontWeight: 600 }}>{formatCount(count)}</span>
+      {onClick ? <PillMark kind="go" /> : null}
     </Tag>
   )
 }

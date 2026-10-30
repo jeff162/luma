@@ -65,7 +65,7 @@ import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
 import { ActionMenu } from './components/ActionMenu.jsx'
-import { AppConfirmDialog, AppDialog, Button, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, PillMark, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -735,6 +735,7 @@ function LocalPreferenceProfileScreen({
                   ) : (
                     <button
                       onClick={() => onSelect(profile)}
+                      className="ui-pill"
                       onContextMenu={e => {
                         e.preventDefault()
                         setMenu({
@@ -2075,6 +2076,7 @@ export default function App() {
                                           <button
                                             onClick={handleSwitchLocalProfile}
                                             onContextMenu={openNavProfileMenu}
+                                            className="ui-pill"
                                             style={{
                                               display: 'inline-flex',
                                               alignItems: 'center',
@@ -2092,6 +2094,7 @@ export default function App() {
                                             title="Switch user profile"
                                           >
                                             {activeLocalProfile?.name || 'Choose profile'}
+                                            <PillMark kind="go" />
                                           </button>
                                         )
                                       )}

@@ -30,6 +30,7 @@ import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { useConnectionOperations } from '../../lib/useConnectionOperations.js'
 import { IMPORT_CONFIG_MAX_WIDTH } from '../../lib/importExport/constants.js'
+import { LABEL_PILL_COLORS } from '../pillStyles.js'
 
 // --- Data-source connections --------------------------------------------------------------------
 //
@@ -52,8 +53,7 @@ function EnvBadge({ env }) {
   if (!env || env === 'production') return null
   return (
     <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)',
+      display: 'inline-flex', alignItems: 'center', ...LABEL_PILL_COLORS,
       borderRadius: 99, padding: '2px 9px', fontSize: 11, fontWeight: 600, textTransform: 'capitalize',
       whiteSpace: 'nowrap',
     }}>

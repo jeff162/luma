@@ -22,7 +22,7 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
   const palette = getStatusPalette(tone)
   const symbol = getStatusSymbol(tone)
   const content = (
-    <span style={{
+    <span className="ui-pill-face" style={{
       position: 'relative',
       display: 'inline-flex',
       alignItems: 'center',
@@ -72,6 +72,7 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
   return (
     <button
       type="button"
+      className="ui-pill-host"
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -286,6 +287,9 @@ export function CriteriaGroup({
   )
 }
 
+// The label is a button when the pill does something: `onClick`, or `onMouseDown` for a pill that opens a
+// picker as the press lands. A keyboard press only clicks, so a mousedown-only pill also answers a click
+// that no pointer made (`detail` 0).
 export function SuggestionPill({
   label,
   tone = 'default',
@@ -301,7 +305,8 @@ export function SuggestionPill({
   title,
 }) {
   const pillTone = tone === 'muted' ? 'default' : 'accent'
-  const LabelTag = onClick && !editing ? 'button' : 'span'
+  const actionable = Boolean(onClick || onMouseDown) && !editing
+  const LabelTag = actionable ? 'button' : 'span'
   const labelRef = useRef(null)
   const restoreFocusRef = useRef(false)
 
@@ -315,6 +320,7 @@ export function SuggestionPill({
   return (
     <span
       title={title}
+      className={actionable ? 'ui-pill' : undefined}
       style={{ ...getSharedPillStyle({ tone: pillTone }), position: 'relative', maxWidth, minWidth: 0 }}
     >
       {editing ? (
@@ -340,7 +346,7 @@ export function SuggestionPill({
       ) : (
         <LabelTag
           ref={labelRef}
-          type={onClick ? 'button' : undefined}
+          type={actionable ? 'button' : undefined}
           onMouseDown={event => {
             if (!onMouseDown) return
             event.stopPropagation()
@@ -349,21 +355,25 @@ export function SuggestionPill({
           }}
           onClick={event => {
             event.stopPropagation()
-            onClick?.()
+            if (onClick) onClick()
+            else if (onMouseDown && event.detail === 0) onMouseDown()
           }}
           style={{
             ...getSharedPillLabelStyle({ muted: tone === 'muted' }),
-            ...(onClick ? {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            minWidth: 0,
+            ...(actionable ? {
               background: 'none',
               border: 'none',
               padding: 0,
               cursor: 'pointer',
               textAlign: 'left',
             } : {}),
-            ...(maxWidth ? { overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 } : {}),
           }}
         >
-          {label}
+          <span style={maxWidth ? { overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 } : undefined}>{label}</span>
         </LabelTag>
       )}
       {onRemove ? (

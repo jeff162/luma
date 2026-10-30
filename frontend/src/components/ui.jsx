@@ -1120,6 +1120,20 @@ export function IconButton({ children, onClick, onMouseDown, onPointerDown, 'ari
   )
 }
 
+// The glyph that ends a clickable stand-alone pill (a status, a count, a notice) and says what the click
+// does: `report` opens a report, `go` moves to another page or opens a dialog (`ui-patterns.md` →
+// *Pickers and filters*). A clickable pill also carries the `ui-pill` class, whose hover is in `index.html`.
+const PILL_MARKS = {
+  report: { glyph: '↗', style: { color: 'var(--accent2)', fontSize: 10 } },
+  go: { glyph: '›', style: { opacity: 0.7, fontSize: 13 } },
+}
+
+export function PillMark({ kind }) {
+  const mark = PILL_MARKS[kind]
+  if (!mark) return null
+  return <span aria-hidden="true" style={{ lineHeight: 1, flexShrink: 0, ...mark.style }}>{mark.glyph}</span>
+}
+
 // A rounded chip that narrows a list: a facet value, a status filter, a quick scope. `selected` makes it a
 // toggle (`aria-pressed`); `count` is the number of rows it would show, drawn inside the chip so it is
 // visible before the chip is pressed. `variant="add"` is the dashed chip that opens a picker to add
@@ -1132,7 +1146,7 @@ export function FilterChip({ children, onClick, selected, count, countTone, vari
   return (
     <button
       {...rest}
-      className="ui-button"
+      className="ui-button ui-pill"
       type="button"
       aria-label={ariaLabel}
       aria-pressed={add || selected === undefined ? undefined : !!selected}
@@ -1466,10 +1480,11 @@ export function FieldIssue({ children, style }) {
   )
 }
 
-export function Badge({ label, toneKey, markerKind = 'category' }) {
+// `className` lets a button that wraps the badge mark it `ui-pill-face`, so the badge takes the button's hover.
+export function Badge({ label, toneKey, markerKind = 'category', className }) {
   const theme = getCategoryBadgeTheme(toneKey || label || 'badge')
   return (
-    <span style={{
+    <span className={className} style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
       background: theme.bg,
       color: theme.text,

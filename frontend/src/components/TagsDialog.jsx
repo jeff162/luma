@@ -91,6 +91,7 @@ function EditableTagName({ tag, onCommit }) {
     <button
       type="button"
       onClick={() => beginEdit(tag.name || '')}
+      className="ui-pill"
       style={{
         display: 'inline-flex',
         alignItems: 'center',

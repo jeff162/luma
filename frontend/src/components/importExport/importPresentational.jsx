@@ -70,6 +70,7 @@ export function DataSourcePill({
   return (
     <button
       type="button"
+      className="ui-pill"
       onClick={onClick}
       title={title}
       style={{
@@ -128,6 +129,7 @@ export function InlineFilterPill({ onClick, disabled = false, title = '' }) {
     <Tooltip describeTrigger content={title}>
       <button
         type="button"
+        className="ui-pill"
         onClick={event => {
           event.preventDefault()
           event.stopPropagation()
