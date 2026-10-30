@@ -32,6 +32,7 @@ from backend.services.amount_text import DECIMAL_POINT
 from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.money_movement import PAYPAL_ACCOUNT_TYPE, is_money_movement_type
+from backend.services.paypal_conversions import fold_statement_conversions
 from backend.services.paypal_statement import STATEMENT_HEADERS, Statement, StatementError, is_pdf, read_statement
 from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.restore_state import require_no_pending_restore
@@ -160,21 +161,24 @@ def statement_account_pairs(conn) -> list[dict]:
             for pid, aid in sorted(by_paypal_id.items())]
 
 
-def _currency_refusals(statement: Statement, ledger_currency: str) -> dict[int, str]:
-    """The rows in the ledger's currency that only moved money for a row in another currency — a card
-    deposit that paid for a payment in pounds, say. The payment is refused for its currency, and its card
-    or bank charge then stays the record of it; the deposit, imported, would pair that charge away."""
-    foreign = {row["Transaction ID"]: row["Currency"] for row in statement.rows
+def _currency_refusals(rows: list[dict], ledger_currency: str) -> dict[int, str]:
+    """The rows in the ledger's currency that only moved money for a row still in another currency — a
+    card deposit that paid for a payment in pounds with no conversion printed, say. The payment is refused
+    for its currency, and its card or bank charge then stays the record of it; the deposit, imported,
+    would pair that charge away. A payment restated from its conversion is in the ledger's currency, so
+    its deposit is its leg like any other."""
+    foreign = {row["Transaction ID"]: row["Currency"] for row in rows
                if row["Currency"] and not currency_matches(ledger_currency, row["Currency"])}
     return {
         index: f"Moved money for a payment in {foreign[row['Ref ID']]}, which is not imported"
-        for index, row in enumerate(statement.rows)
+        for index, row in enumerate(rows)
         if row["Ref ID"] in foreign and row["Transaction ID"] not in foreign and is_money_movement_type(row["Type"])
     }
 
 
 def _describe(found: _Found, imported: set[str], ledger_currency: str) -> dict:
     statement = found.statement
+    rows = fold_statement_conversions(statement.rows, ledger_currency=ledger_currency).rows
     return {
         "key": statement.content_hash,
         "filename": found.filename,
@@ -183,7 +187,7 @@ def _describe(found: _Found, imported: set[str], ledger_currency: str) -> dict:
         "period_start": statement.period_start,
         "period_end": statement.period_end,
         "transaction_count": len(statement.rows),
-        "foreign_count": sum(1 for row in statement.rows if not currency_matches(ledger_currency, row["Currency"])),
+        "foreign_count": sum(1 for row in rows if not currency_matches(ledger_currency, row["Currency"])),
         "already_imported": statement.content_hash in imported,
     }
 
@@ -254,14 +258,16 @@ def _check_assignments(conn, statements: list[Statement], assignments: dict) -> 
 
 
 def _parsed(statement: Statement, ledger_currency: str) -> ParsedFile:
+    folded = fold_statement_conversions(statement.rows, ledger_currency=ledger_currency)
     return ParsedFile(
         headers=list(STATEMENT_HEADERS),
-        rows=[dict(row) for row in statement.rows],
+        rows=folded.rows,
         content_hash=statement.content_hash,
         source=SOURCE_PAYPAL_STATEMENT,
         source_kind=PAYPAL_SOURCE_KIND,
         evidence_roles=EVIDENCE_ROLES,
-        currency_refusals=_currency_refusals(statement, ledger_currency),
+        currency_refusals=_currency_refusals(folded.rows, ledger_currency),
+        currency_conversions=folded.conversions,
     )
 
 

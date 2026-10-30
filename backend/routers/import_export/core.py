@@ -38,7 +38,7 @@ import sqlite3
 import uuid
 import re
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -134,6 +134,7 @@ from backend.services.source_capabilities import (
 )
 from backend.services.connection_dedupe import build_connection_dedupe
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
+from backend.services.paypal_conversions import CONVERSION_EVIDENCE_HEADER, fold_activity_conversions
 from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
 from backend.services.review_flagging import owners_not_flagging
@@ -2416,7 +2417,10 @@ class ParsedFile:
     `evidence_roles` states a captured column's role for a format that cannot measure it from the file;
     anything not named is classified by cardinality, as a CSV's columns are. `currency_refusals` are
     rows the front end knows belong to another currency though they carry none of their own (a PayPal
-    card deposit that paid for a foreign-currency payment), by index into `rows`, with the reason shown."""
+    card deposit that paid for a foreign-currency payment), by index into `rows`, with the reason shown.
+    `currency_conversions` are rows restated in the ledger's currency from a conversion the source
+    recorded, each with the conversion to capture on it, and `absorbed_rows` the rows that conversion was
+    recorded in, now carried by the row they paid for (`services/paypal_conversions.py`)."""
     headers: list[str]
     rows: list[dict]
     content_hash: str
@@ -2427,6 +2431,8 @@ class ParsedFile:
     source_kind: Optional[str] = None
     evidence_roles: dict[str, str] = field(default_factory=dict)
     currency_refusals: dict[int, str] = field(default_factory=dict)
+    currency_conversions: dict[int, str] = field(default_factory=dict)
+    absorbed_rows: frozenset[int] = frozenset()
 
     @property
     def fingerprint(self) -> str:
@@ -3130,6 +3136,14 @@ def run_import_parsed(
         default_owner_id = resolve_default_owner_id(conn, None)
         # Read once, like the zero-amount policy: one import is judged against one ledger currency.
         ledger_currency = get_ledger_currency(conn)
+        # A PayPal activity CSV records the conversion that paid a foreign payment as rows of its own; the
+        # statement front end restates its payments itself, from the conversion it prints on them.
+        if is_paypal and parsed.source == SOURCE_CSV:
+            folded = fold_activity_conversions(
+                parsed.rows, ledger_currency=ledger_currency, decimal_separator=decimal_separator)
+            parsed = replace(
+                parsed, rows=folded.rows, currency_conversions=folded.conversions, absorbed_rows=folded.absorbed)
+            data_rows = parsed.rows[skip_rows:]
         # A recognized PayPal import groups under the single system PayPal data source, so all PayPal
         # imports share one header + one money-movement review. With no source picked, get-or-create it;
         # with a source picked (a hand-created PayPal source), *adopt* it — tag it `source:paypal` so it
@@ -3479,6 +3493,11 @@ def run_import_parsed(
                 on_progress(i, len(data_rows))
             row_num = parsed.first_row_number + skip_rows + i
             skip_account_row = False
+            if skip_rows + i in parsed.absorbed_rows:
+                skipped += 1
+                row_results.append({"row": row_num, "status": "absorbed"})
+                reset_footer_detection()
+                continue
 
             if use_account_col:
                 csv_val = str(row.get(col.account, "")).strip()
@@ -3586,6 +3605,11 @@ def run_import_parsed(
             is_pending = parse_pending_flag(row, col)
             content_hash = make_hash(parsed_date, amount, raw_desc)
             import_evidence = _build_import_evidence(row, col, csv_val, raw_desc, evidence_plan)
+            conversion = parsed.currency_conversions.get(skip_rows + i)
+            if conversion:
+                import_evidence = import_evidence or {}
+                import_evidence.setdefault("extra_text_fields", []).append({
+                    "header": CONVERSION_EVIDENCE_HEADER, "value": conversion, "role": EVIDENCE_ROLE_CATEGORICAL})
             batch_account_stat = batch_account_stats.setdefault(
                 csv_val,
                 {"account_id": acc["id"], "count": 0, "coverage_dates": set()},

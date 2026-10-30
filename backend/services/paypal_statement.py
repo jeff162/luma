@@ -19,6 +19,8 @@ balance; reading both would import those twice.
 so each transaction starts on a line carrying a date, a description, a currency and three amounts, and
 the lines under it continue it: the rest of a date or description that wrapped, the funding detail
 (indented further than the description, or carrying an amount), and last its `ID:` and `Ref ID:` lines.
+A payment PayPal converted currency to pay prints the conversion among that detail, and it is kept on the
+row (`services/paypal_conversions.py` restates the payment from it).
 A transaction that does not end in an `ID:` line means the layout was not what this reader expects, and
 the statement is refused whole rather than imported in part.
 
@@ -41,6 +43,8 @@ from typing import Optional
 
 from pypdf import PdfReader
 
+from backend.services.paypal_conversions import STATEMENT_EXCHANGE_KEY
+
 STATEMENT_HEADERS = [
     "Date", "Type", "Name", "Currency", "Amount", "Fees", "Total", "Transaction ID", "Ref ID", "Bank account",
 ]
@@ -54,6 +58,7 @@ _FULL_DATE = re.compile(r"\d{2}/\d{2}/\d{4}")
 _HAS_AMOUNT = re.compile(rf"(?<![\w.]){_AMOUNT}(?![\w.])")
 _TRAILING_AMOUNT = re.compile(rf"\s+{_AMOUNT}(\s+[A-Z]{{3}})?\s*$")
 _CURRENCY_ONLY = re.compile(r"[A-Z]{3}")
+_ENDS_IN_CURRENCY = re.compile(r"\s[A-Z]{3}$")
 _PERIOD = re.compile(r"([A-Z][a-z]+ \d{1,2}, \d{4})\s*-\s*([A-Z][a-z]+ \d{1,2}, \d{4})")
 _EMAIL = re.compile(r"\S+@\S+")
 _PAGE_NUMBER = re.compile(r"Page\s+\d+")
@@ -69,13 +74,16 @@ class Statement:
     holder: str
     period_start: str   # ISO dates
     period_end: str
-    rows: list[dict]    # keyed by STATEMENT_HEADERS
+    rows: list[dict]    # keyed by STATEMENT_HEADERS, plus a payment's printed conversion (STATEMENT_EXCHANGE_KEY)
 
     @property
     def content_hash(self) -> str:
         """What recognizes a statement imported before. Over what was read rather than the file's bytes,
-        so the same month downloaded again — a new file, with the same content — is still recognized."""
-        payload = json.dumps([self.paypal_account_id, self.period_start, self.period_end, self.rows], sort_keys=True)
+        so the same month downloaded again — a new file, with the same content — is still recognized. Only
+        the statement's columns count, so reading more of a row later does not make a month imported
+        before look new."""
+        rows = [{header: row[header] for header in STATEMENT_HEADERS} for row in self.rows]
+        payload = json.dumps([self.paypal_account_id, self.period_start, self.period_end, rows], sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -162,7 +170,7 @@ def _read_activity(lines: list[str]) -> list[dict]:
                 "description": [start.group("description").strip()], "bank": [], "detail": False,
                 "currency": start.group("currency"), "amount": start.group("amount"),
                 "fees": start.group("fees"), "total": start.group("total"),
-                "id": None, "ref": None, "closed": False,
+                "id": None, "ref": None, "closed": False, "exchange": [],
             }
             continue
         if current is None or current["closed"] or not line.strip():
@@ -192,6 +200,12 @@ def _read_activity(lines: list[str]) -> list[dict]:
             continue
         indented = len(rest) - len(rest.lstrip()) > 0
         if indented and "(Exchange Rate)" in text:
+            # The conversion PayPal made to pay it, its last currency often wrapped to the next line.
+            current["exchange"] = [text]
+            current["detail"] = True
+        elif (len(current["exchange"]) == 1 and _CURRENCY_ONLY.fullmatch(text)
+              and not _ENDS_IN_CURRENCY.search(current["exchange"][0])):
+            current["exchange"].append(text)
             current["detail"] = True
         elif indented:
             current["bank"].append(_TRAILING_AMOUNT.sub("", text).strip())
@@ -210,7 +224,7 @@ def _finish(current: dict, rows: list[dict]) -> None:
         raise StatementError("A transaction in the statement could not be read.")
     description = " ".join(current["description"])
     kind, _, name = description.partition(":")
-    rows.append({
+    row = {
         "Date": current["date"],
         "Type": kind.strip(),
         "Name": name.strip(),
@@ -221,4 +235,7 @@ def _finish(current: dict, rows: list[dict]) -> None:
         "Transaction ID": current["id"],
         "Ref ID": current["ref"] or "",
         "Bank account": " ".join(part for part in current["bank"] if part),
-    })
+    }
+    if current["exchange"]:
+        row[STATEMENT_EXCHANGE_KEY] = " ".join(" ".join(current["exchange"]).split())
+    rows.append(row)

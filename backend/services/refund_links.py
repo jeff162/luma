@@ -16,7 +16,7 @@ column to corroborate it with. A ``Type`` is read only to *rule a row out*, and 
 different mechanism — a deposit, withdrawal, currency conversion or hold references its counterpart in
 the same field, and belongs to wallet funding-leg suppression (``services/money_movement.py``) rather
 than here. What the reference cannot settle, :func:`_returns` still checks: the same account group, the
-other direction, and no more than was paid.
+other direction, and no more than was paid, except where a currency conversion explains the difference.
 
 **The refund takes the payment's category, and keeps following it.** Money back is not income; it offsets
 what was spent (see ``docs/data-model.md`` → *Reporting assumptions*), which is only true in the totals
@@ -53,13 +53,14 @@ from backend.services.money_movement import (
     captured_type,
     states_money_movement,
 )
+from backend.services.paypal_conversions import CONVERSION_EVIDENCE_HEADER
 
 LINK_KIND = "refund"
 PAYMENT_ROLE = "payment"
 REFUND_ROLE = "refund"
 REFUND_CATEGORY_SOURCE = "refund"
 
-# Half a cent: a refund may return part of a payment but never more than it.
+# Half a cent: a refund may return part of a payment but, in one currency, never more than it.
 _CENT = 0.005
 
 
@@ -128,11 +129,16 @@ def _payments_by_transaction_id(conn: sqlite3.Connection, root_ids: set[str]) ->
 
 def _returns(refund: dict, payment: dict) -> bool:
     """Whether `refund` can be money back on `payment`: the same account group, the other direction, and no
-    more than was paid."""
+    more than was paid — unless either was converted from another currency. Each converts at its own day's
+    rate, so a full refund can come back as more than was paid; paired, the difference stays in the
+    payment's category as a small credit."""
     if refund["id"] == payment["id"] or refund["root_id"] != payment["root_id"]:
         return False
     refund_amount, payment_amount = float(refund["amount"] or 0), float(payment["amount"] or 0)
-    return refund_amount * payment_amount < 0 and abs(refund_amount) <= abs(payment_amount) + _CENT
+    if refund_amount * payment_amount >= 0:
+        return False
+    return abs(refund_amount) <= abs(payment_amount) + _CENT or any(
+        captured_field(row["import_evidence_json"], CONVERSION_EVIDENCE_HEADER) for row in (refund, payment))
 
 
 def _follow(conn: sqlite3.Connection, refund: dict, payment: dict) -> Optional[dict]:

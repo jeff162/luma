@@ -170,18 +170,13 @@ export default function Help() {
             </LinkButton>
           </div>
         ) : null}
-        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
-          Explanations for how features in {APP_NAME} are designed to be used. Each topic also
-          appears as a <strong>?</strong> popover next to the feature it describes.
-        </div>
-
         <Card style={{ padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 280px', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>First-use hints</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
               Tips that appear the first time a situation is encountered (for example a cross-account duplicate).
               Turning them off leaves the <strong>?</strong> so they can be revisited later. Resetting clears the
-              tracking of previously encountered situations.
+              tracking of previously encountered situations so the hint appears again.
             </div>
           </div>
           <Toggle

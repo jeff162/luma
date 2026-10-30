@@ -3619,14 +3619,19 @@ export const HELP_TOPICS = [
           Each statement becomes its own card under the PayPal data source. A transaction already in the
           ledger &mdash; from a data connection or an earlier CSV &mdash; is recognized as a duplicate and enriched
           with the statement&apos;s detail. A statement imported before is skipped, as is a month with no activity.
-          A payment in another currency is not imported, nor the card deposit that paid for it, so the card
-          charge stays the record of that purchase. The activity CSV carries each purchase&apos;s item title,
-          which the statement lacks.
+          A payment in another currency that PayPal paid by converting from the ledger&apos;s currency is
+          imported at the converted amount, with the conversion (<em>20.00 GBP = 25.40 USD</em>) in its
+          imported detail; the statement and the activity CSV both record it. A payment in another currency
+          with no conversion is not imported, nor the card deposit that paid for it, so the card charge stays
+          the record of that purchase. The activity CSV carries each purchase&apos;s item title, which the
+          statement lacks.
         </p>
         <p>
           A statement also names the payment each refund returns, so the refund is paired with that payment
           and takes its category: categorizing the purchase moves the refund with it, and the two cancel out
-          in that category. This holds across statements, imported in any order, and for a payment imported
+          in that category. A refund in another currency converts at its own day&apos;s rate, so it may
+          return a little more or less than was paid, and the difference stays in that category. This holds
+          across statements, imported in any order, and for a payment imported
           from the activity CSV. A category set by hand on the refund itself ends the pairing&apos;s hold on
           it. Both transactions carry the 🔗 link marker, which names the other one and opens it. A refund sent straight back to the card or
           bank it came from leaves a withdrawal, which moves to <em>Money movement</em>. A deposit or
@@ -4540,9 +4545,12 @@ export const HELP_TOPICS = [
           data provider reports as held in another currency is <strong>skipped</strong> &mdash; its
           transactions are not imported, and the account-mapping screen says so rather than letting the
           account sync cleanly and sit permanently empty. Where one source carries several currencies, the
-          transactions in a foreign one are dropped the same way. A CSV file is taken at face value: its
-          amounts are read as plain numbers, so a file holding another currency imports figures that do not
-          mean what the rest of the ledger means.
+          transactions in a foreign one are dropped the same way. The exception is a PayPal payment that
+          PayPal converted the ledger&apos;s currency to pay: it is imported at the converted amount (see{' '}
+          <HelpLink to="/help/paypal-statements">PayPal statements</HelpLink>). A CSV file with a mapped
+          currency column has its rows in another currency refused; without one it is taken at face value,
+          so a file holding another currency imports figures that do not mean what the rest of the ledger
+          means.
         </p>
       </>
     ),

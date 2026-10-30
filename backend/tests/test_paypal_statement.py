@@ -37,9 +37,10 @@ from backend.tests._pdf_fixture import make_positioned_pdf, make_text_pdf
 COLUMNS = {"date": 20, "description": 110, "currency": 330, "amount": 400, "fees": 470, "total": 540}
 
 
-def txn(date, description, amount, txn_id, *, currency="USD", ref=None, wrap=None, bank=None, date_wraps=False):
+def txn(date, description, amount, txn_id, *, currency="USD", ref=None, wrap=None, bank=None, date_wraps=False,
+        exchange=None):
     return {"date": date, "description": description, "amount": amount, "id": txn_id, "currency": currency,
-            "ref": ref, "wrap": wrap, "bank": bank or [], "date_wraps": date_wraps}
+            "ref": ref, "wrap": wrap, "bank": bank or [], "date_wraps": date_wraps, "exchange": exchange}
 
 
 def statement_pdf(transactions, *, account="robin@example.com", holder="Vale, Robin",
@@ -69,6 +70,14 @@ def statement_pdf(transactions, *, account="robin@example.com", holder="Vale, Ro
                 y -= 10
             if t["bank"]:
                 placed.append((COLUMNS["description"], y, t["currency"]))
+                y -= 10
+            if t["exchange"]:
+                # As PayPal prints it: the rate indented, the amount converted into to its right, and
+                # that amount's currency wrapped onto the next line.
+                rate, converted, converted_currency = t["exchange"]
+                placed += [(COLUMNS["description"] + 10, y, rate), (COLUMNS["currency"] - 40, y, converted)]
+                y -= 10
+                placed.append((COLUMNS["description"], y, converted_currency))
                 y -= 10
             if t["id"]:
                 placed.append((COLUMNS["description"], y, f"ID: {t['id']}"))
@@ -384,10 +393,10 @@ class StatementImportTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_payment_in_another_currency_is_refused_with_its_card_deposit(self):
         # Imported alone, the deposit would pair the card charge away and leave nothing counting the
         # purchase; refused together, the card charge stays its record.
-        charge = self._card_charge("2026-04-09", 14.21, "PAYPAL *CHARTWORKS")
-        payment = txn("04/09/2026", "Subscription Payment: Chartworks Ltd", "-10.00", "7GG00000GG0000007",
+        charge = self._card_charge("2026-04-09", 31.75, "PAYPAL *CHARTWORKS")
+        payment = txn("04/09/2026", "Subscription Payment: Chartworks Ltd", "-25.00", "7GG00000GG0000007",
                       currency="GBP")
-        deposit = txn("04/09/2026", "General Credit Card Deposit", "14.21", "8HH00000HH0000008", ref="7GG00000GG0000007")
+        deposit = txn("04/09/2026", "General Credit Card Deposit", "31.75", "8HH00000HH0000008", ref="7GG00000GG0000007")
         result = await self._import([FakeUpload("s.pdf", statement_pdf([payment, deposit, PAYMENT]))],
                                     {"robin@example.com": self.paypal})
         self.assertEqual(result["batches"][0]["rejected"], 2)
@@ -395,6 +404,84 @@ class StatementImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self._category(charge))
         with self._db() as conn:
             self.assertEqual(paypal_funding.paypal_funding_report(conn)["matched"], [])
+
+    async def test_a_payment_paypal_converted_currency_to_pay_is_imported_at_what_it_cost(self):
+        # Restated in dollars from the conversion printed under it, the payment is an ordinary one: the
+        # deposit is its leg and the card charge pairs away, so the purchase counts once, here.
+        charge = self._card_charge("2026-04-15", 25.40, "PAYPAL *CHARTWORKS")
+        payment = txn("04/15/2026", "Subscription Payment: Chartworks Ltd", "-20.00", "7GG00000GG0000007",
+                      currency="GBP", exchange=("25.40 USD X 0.7874 (Exchange Rate)", "20.00", "GBP"))
+        deposit = txn("04/15/2026", "General Credit Card Deposit", "25.40", "8HH00000HH0000008", ref="7GG00000GG0000007")
+        pdf = statement_pdf([payment, deposit])
+        scan = await self._call(scan_paypal_statements, [FakeUpload("s.pdf", pdf)])
+        self.assertEqual(scan["statements"][0]["foreign_count"], 0)
+
+        result = await self._import([FakeUpload("s.pdf", pdf)], {"robin@example.com": self.paypal})
+        self.assertEqual((result["batches"][0]["imported"], result["batches"][0]["rejected"]), (2, 0))
+        rows = {r["amount"]: r for r in self._rows(self.paypal)}
+        self.assertEqual(rows[25.40]["merchant_name"], "Chartworks Ltd")
+        fields = {f["header"]: f["value"] for f in json.loads(rows[25.40]["import_evidence_json"])["extra_text_fields"]}
+        self.assertEqual(fields["Currency conversion"], "20.00 GBP = 25.40 USD")
+        with self._db() as conn:
+            money_movement = money_movement_category_id_if_exists(conn)
+        self.assertEqual((self._category(rows[-25.40]["id"]), self._category(charge)), (money_movement, money_movement))
+        self.assertNotEqual(self._category(rows[25.40]["id"]), money_movement)
+
+    async def test_a_converted_refund_pairs_with_its_payment_though_it_returns_more_than_was_paid(self):
+        # Each side converts at its own day's rate. Paired, the refund sits in the payment's category and
+        # the difference shows there as a small credit; unpaired, the whole refund would be income.
+        subscriptions = self._new_category("Subscriptions")
+        with self._db() as conn:
+            conn.execute("INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, 'chartworks')",
+                         (str(uuid.uuid4()), subscriptions))
+        payment = txn("04/15/2026", "Subscription Payment: Chartworks Ltd", "-20.00", "7GG00000GG0000007",
+                      currency="GBP", exchange=("25.40 USD X 0.7874 (Exchange Rate)", "20.00", "GBP"))
+        refund = txn("04/28/2026", "Payment Refund: Chartworks Ltd", "20.00", "6RR00000RR0000006", currency="GBP",
+                     ref="7GG00000GG0000007", exchange=("20.00 GBP X 1.2950 (Exchange Rate)", "25.90", "USD"))
+        await self._import([FakeUpload("s.pdf", statement_pdf([payment, refund]))], {"robin@example.com": self.paypal})
+        rows = {r["amount"]: r["id"] for r in self._rows(self.paypal)}
+        self.assertEqual(self._links("refund"), {(rows[25.40], "payment"), (rows[-25.90], "refund")})
+        self.assertEqual((self._category(rows[-25.90]), self._source(rows[-25.90])), (subscriptions, "refund"))
+
+    async def test_an_activity_csv_payment_takes_the_amount_of_the_conversion_that_paid_it(self):
+        # The CSV records the conversion as two rows of its own at the payment's timestamp; they are carried
+        # by the payment, not imported. One payment is card-funded, one paid from the balance; a payout
+        # received in another currency and never converted stays refused.
+        charge = self._card_charge("2026-04-15", 25.40, "PAYPAL *CHARTWORKS")
+        header = ('"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total",'
+                  '"Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"')
+
+        def line(time, name, kind, currency, amount, txn_id):
+            return (f'"04/15/2026","{time}","EDT","{name}","{kind}","Completed","{currency}","{amount}","0.00",'
+                    f'"{amount}","","","0.00","{txn_id}",""')
+
+        lines = [
+            line("09:15:00", "Chartworks Ltd", "Subscription Payment", "GBP", "-20.00", "7GG00000GG0000007"),
+            line("09:15:00", "", "General Card Deposit", "USD", "25.40", "8HH00000HH0000008"),
+            line("09:15:00", "", "General Currency Conversion", "USD", "-25.40", "9CC00000CC0000009"),
+            line("09:15:00", "", "General Currency Conversion", "GBP", "20.00", "1CC00000CC0000010"),
+            line("14:30:00", "Trail Club", "Donation Payment", "EUR", "-8.50", "2DD00000DD0000011"),
+            line("14:30:00", "", "General Currency Conversion", "USD", "-9.35", "3CC00000CC0000012"),
+            line("14:30:00", "", "General Currency Conversion", "EUR", "8.50", "4CC00000CC0000013"),
+            line("20:00:00", "Robin Vale", "Mass Pay Payment", "HUF", "500.00", "5MM00000MM0000014"),
+        ]
+        token = set_current_db_path(str(self.db_path))
+        try:
+            result = run_import_core("\n".join([header, *lines]) + "\n", {
+                "account_id": self.paypal, "date_format": "%m/%d/%Y", "amount_convention": "single_signed",
+                "column_map": {"date": "Date", "description": "Name", "amount": "Total", "currency": "Currency"},
+            }, filename="activity.csv")
+        finally:
+            reset_current_db_path(token)
+        self.assertEqual((result["imported"], result["currency_rejected_count"]), (3, 1))
+        rows = {r["amount"]: r for r in self._rows(self.paypal)}
+        self.assertEqual(sorted(rows), [-25.40, 9.35, 25.40])
+        for amount, conversion in ((25.40, "20.00 GBP = 25.40 USD"), (9.35, "8.50 EUR = 9.35 USD")):
+            fields = {f["header"]: f["value"] for f in json.loads(rows[amount]["import_evidence_json"])["extra_text_fields"]}
+            self.assertEqual(fields["Currency conversion"], conversion)
+        with self._db() as conn:
+            money_movement = money_movement_category_id_if_exists(conn)
+        self.assertEqual((self._category(rows[-25.40]["id"]), self._category(charge)), (money_movement, money_movement))
 
     async def test_a_statement_imported_before_is_skipped_however_it_arrives(self):
         pdf = statement_pdf([PAYMENT, DEPOSIT])

@@ -6,7 +6,9 @@ import { expect, test } from '@playwright/test'
 // filter changes. The unit tests already pin the button's own state machine.
 //
 // Locators are scoped by role rather than by text throughout, because several attribute names
-// ("Recurring", "Split") also name a nav destination or a row affordance elsewhere on the page.
+// ("Recurring", "Split") also name a nav destination or a row affordance elsewhere on the page. The
+// switched-off button is found by its title, since a row's category pill is a button named
+// "Uncategorized" too.
 
 test('the ledger quick filter narrows to one kind of transaction and back', async ({ page }) => {
   await page.goto('/transactions')
@@ -35,7 +37,7 @@ test('the ledger quick filter narrows to one kind of transaction and back', asyn
   // button a replacement for the two it succeeded rather than a narrowing of them.
   await page.getByRole('button', { name: '✕ Recurring' }).click()
   await expect(countLabel).toHaveText(unfilteredText)
-  await expect(page.getByRole('button', { name: 'Recurring', exact: true })).toBeVisible()
+  await expect(page.getByTitle('Show only Recurring', { exact: true })).toBeVisible()
 })
 
 test('a ?only= link arrives already filtered', async ({ page }) => {
@@ -49,7 +51,7 @@ test('the ledger opens on a seeded choice that is switched off', async ({ page }
   // No "clear" and no empty state: the button always has something to name itself after, and starts
   // showing everything.
   await page.goto('/transactions')
-  await expect(page.getByRole('button', { name: 'Uncategorized', exact: true })).toBeVisible()
+  await expect(page.getByTitle('Show only Uncategorized', { exact: true })).toBeVisible()
 })
 
 test('the same attributes are combinable from the FilterBar', async ({ page }) => {

@@ -1957,8 +1957,20 @@ equal, opposite, nameless deposit into the balance. `suppress_batch_funding_legs
   `Transaction ID` is declared categorical (`_PAYPAL_FORCED_CATEGORICAL`): a unique value would measure
   as descriptive and feed duplicate matching. A statement declares its `Ref ID`, `Transaction ID`,
   `Type` and funding bank categorical too.
-- A statement row in another currency is refused, and so is a same-currency deposit or withdrawal whose
-  `Ref ID` names one.
+- **A payment PayPal converted the ledger's currency to pay is restated at the converted amount**
+  (`services/paypal_conversions.py`). It keeps its name and Transaction ID, and the conversion is captured
+  as a categorical `Currency conversion` field ("20.00 GBP = 25.40 USD"). From then on it is an ordinary
+  payment: its deposit is its leg and the card charge pairs away. The activity CSV records the conversion
+  as two rows at the payment's timestamp, which are absorbed (counted as skipped, not imported); a
+  statement prints it on the payment.
+- **Only an unambiguous conversion restates.** The foreign side equals the payment's total, the other
+  side is in the ledger's currency, and neither carries a fee; in the CSV, the payment is the only one in
+  its currency at that timestamp, with one conversion each way. Any other row in another currency is
+  refused as before (in a CSV, once its currency column is mapped), and in a statement so is a
+  same-currency deposit or withdrawal whose `Ref ID` names one.
+- **A refund in another currency converts at its own day's rate**, so it can come back as more or less
+  than was paid. It pairs either way ([Refunds](#refunds)), and the difference stays in the payment's
+  category.
 - **Money-movement `Type`s become rules the user approves.** Each approved type is a
   `match_source_text` rule to the *Money movement* leaf, scoped `account_type = 'paypal'` and
   `is_managed`. `is_money_movement_type` matches by fragment (deposit, withdrawal, currency conversion,
@@ -2018,8 +2030,10 @@ the purchase's category. Where a source states which payment a refund returns,
 
 - **Only a stated reference pairs.** A PayPal statement's `Ref ID` is the payment's `Transaction ID`; a
   CSV refund says the same through the optional `Reference Txn ID` column. The refund must be on the
-  same account group, in the other direction, for no more than was paid. A refund with no reference is
-  an ordinary transaction. A reversal of a payment received pairs the same way.
+  same account group, in the other direction, for no more than was paid, unless either row carries a
+  `Currency conversion` field: each side then converted at its own rate, and the excess stays in the
+  category as a small credit. A refund with no reference is an ordinary transaction. A reversal of a
+  payment received pairs the same way.
 - **The reference is the qualifying signal; a captured `Type` is only a veto.** Naming the transaction
   returned is the source saying what the row is, and most file sources carry no `Type` column to
   corroborate it with — so a word the PayPal vocabulary does not know ("Return" on a card export), or

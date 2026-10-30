@@ -179,6 +179,9 @@ file can be seen. A column's evidence role (below) is measured from a CSV, but a
 measure it — a month's statement is a handful of rows — declares it (`evidence_roles`). And a row can
 belong to another currency without saying so: a PayPal card deposit that paid for a payment in pounds is
 itself in dollars, so the front end names it (`currency_refusals`) and it is refused with the payment.
+Where the source also recorded the conversion that paid it, the front end restates the payment in the
+ledger's currency instead (`currency_conversions`, with the rows that recorded the conversion as
+`absorbed_rows`), and the deposit is then an ordinary leg.
 
 **Source recognition is a header-only sniff.** `sniff_paypal_activity(headers)` tests whether a marker
 set is a subset of the file's cleaned header keys — no row inspection, because the header is the stable

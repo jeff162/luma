@@ -277,8 +277,8 @@ describe('column mapping', () => {
     // A wallet export that mixes currencies names the column; the import refuses rows in any currency but
     // the ledger's only once it is mapped, so the suggestion is what makes that cost nothing to set up.
     const wallet = preview(['Date', 'Name', 'Currency', 'Gross'], [
-      { Date: '05/09/2026', Name: 'Subscription', Currency: 'GBP', Gross: '-10.00' },
-      { Date: '05/09/2026', Name: 'Card top-up', Currency: 'USD', Gross: '14.21' },
+      { Date: '04/15/2026', Name: 'Subscription', Currency: 'GBP', Gross: '-20.00' },
+      { Date: '04/15/2026', Name: 'Card top-up', Currency: 'USD', Gross: '25.40' },
     ])
     expect(inferUnambiguousImportMappingFromPreview(wallet).columnMap.currency).toBe('Currency')
     const bank = preview(['Date', 'Description', 'Amount'], [
@@ -295,7 +295,7 @@ describe('column mapping', () => {
     ])
     expect(inferUnambiguousImportMappingFromPreview(aggregator).columnMap.transaction_id).toBe('Id')
     const wallet = preview(['Date', 'Name', 'Receipt ID', 'Reference Txn ID', 'Transaction ID', 'Total'], [
-      { Date: '05/09/2026', Name: 'Subscription', 'Receipt ID': '', 'Reference Txn ID': '', 'Transaction ID': '4AB12', Total: '-10.00' },
+      { Date: '04/15/2026', Name: 'Subscription', 'Receipt ID': '', 'Reference Txn ID': '', 'Transaction ID': '4AB12', Total: '-20.00' },
     ])
     expect(inferUnambiguousImportMappingFromPreview(wallet).columnMap.transaction_id).toBe('Transaction ID')
     const orders = preview(['Date', 'Description', 'Order ID', 'Amount'], [

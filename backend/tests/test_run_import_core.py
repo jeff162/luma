@@ -187,8 +187,8 @@ class RunImportCoreTests(unittest.TestCase):
             conn.execute(*_account_sql("acc-wallet", "Wallet", "depository"))
         csv = (
             "Date,Description,Amount,Currency,Account\n"
-            "2026-05-09,Subscription,-10.00,GBP,Wallet\n"
-            "2026-05-09,Card top-up,14.21,USD,Wallet\n"
+            "2026-04-15,Subscription,-20.00,GBP,Wallet\n"
+            "2026-04-15,Card top-up,25.40,USD,Wallet\n"
             "2026-05-10,Coffee,-4.50,,Wallet\n"
         )
         cfg = self._cfg({"Wallet": "acc-wallet"}, use_imported_categories=False)
@@ -219,7 +219,7 @@ class RunImportCoreTests(unittest.TestCase):
         # the whole file is in the ledger's currency. Nothing is refused on a column nobody chose.
         with get_db(str(self.db_path)) as conn:
             conn.execute(*_account_sql("acc-wallet", "Wallet", "depository"))
-        csv = "Date,Description,Amount,Currency,Account\n2026-05-09,Subscription,-10.00,GBP,Wallet\n"
+        csv = "Date,Description,Amount,Currency,Account\n2026-04-15,Subscription,-20.00,GBP,Wallet\n"
         with self._use_db_path():
             result = run_import_core(
                 csv, self._cfg({"Wallet": "acc-wallet"}, use_imported_categories=False), filename="wallet.csv",
