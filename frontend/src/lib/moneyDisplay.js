@@ -54,7 +54,7 @@ const moneyFormatters = new Map()
 const MONEY_SHAPES = {
   exact: {},
   whole: { minimumFractionDigits: 0, maximumFractionDigits: 0 },
-  compact: { notation: 'compact', maximumFractionDigits: 1 },
+  compact: { notation: 'compact', minimumFractionDigits: 0, maximumFractionDigits: 1 },
 }
 
 function formatMoney(value, shape, currency = MONEY_DISPLAY_CONFIG.currencyCode) {
