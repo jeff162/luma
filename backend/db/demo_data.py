@@ -20,10 +20,12 @@ later re-import of equivalent rows dedupes naturally.
 can never overwrite or pollute real data.
 """
 
+import calendar
 import csv
 import hashlib
 import io
 import json
+import random
 import uuid
 from datetime import date, timedelta
 
@@ -217,6 +219,28 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     def d(days_ago: int) -> str:
         return (today - timedelta(days=days_ago)).isoformat()
 
+    # A bill falls on the same day every month. Stepping back a fixed thirty days instead drifts across
+    # month ends, so depending on the load date one calendar month gets two rents and the next none, and
+    # every monthly chart turns lumpy. `days_ago` places the newest occurrence; a shorter month takes its
+    # last day.
+    def monthly(days_ago: int, months_back: int) -> str:
+        newest = today - timedelta(days=days_ago)
+        year, month0 = divmod(newest.year * 12 + newest.month - 1 - months_back, 12)
+        last_day = calendar.monthrange(year, month0 + 1)[1]
+        return date(year, month0 + 1, min(newest.day, last_day)).isoformat()
+
+    # Everyday spending comes at irregular gaps, bunched some weeks and sparse others, so it covers every
+    # day of the month rather than repeating one weekday or one day-of-month. A fixed seed keeps the
+    # ledger identical on every load.
+    rng = random.Random(2026)
+
+    def scattered(mean_gap: float, first: int, *, until: int = 388, count: int | None = None) -> list[int]:
+        days_ago, day = [], first
+        while (day <= until) if count is None else (len(days_ago) < count):
+            days_ago.append(day)
+            day += max(1, round(rng.gammavariate(3, mean_gap / 3)))
+        return days_ago
+
     # --- Owners + accounts up front (typed + owned). The CSVs reference accounts by name, so the import
     # maps onto these rather than creating untyped, unowned accounts. ---
     owners = {
@@ -249,34 +273,33 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
 
     # `amount` is the intended STORED value (spending +, income −). The CSV carries the natural bank
     # convention (income +, spending −); single_signed import negates it back (parse_amount → -val).
-    def bank(days_ago, desc, category, amount, acct):
-        bank_rows.append((d(days_ago), desc, category, f"{-amount:.2f}", name_of[acct]))
+    def bank(when, desc, category, amount, acct):
+        bank_rows.append((when, desc, category, f"{-amount:.2f}", name_of[acct]))
 
     # The steady activity runs thirteen months, so "Last 12 months" — the dashboard's default period — is
     # full from end to end and every trend chart has a year of shape rather than a few recent bars. The
     # figures are sized to one household: income clears spending by a believable margin, not by double.
-    def seasonal(by_month, m):
-        # `m` counts back from this month, so the seasonal position follows the real calendar.
-        return by_month[(today.month - 1 - m) % 12]
+    def seasonal(by_month, when):
+        return by_month[int(when[5:7]) - 1]
 
     for i in range(28):
-        bank(7 + i * 14, "Acme Corp Payroll", "Salary", -2400.00, "checking")
+        bank(d(7 + i * 14), "Acme Corp Payroll", "Salary", -2400.00, "checking")
     # Occasional freelance work: irregular in both timing and size, the income that is not a paycheck.
     for days_ago, amount in [(24, 1150.00), (118, 860.00), (205, 1400.00), (290, 725.00), (370, 980.00)]:
-        bank(days_ago, "Brightline Design — invoice", "Freelance", -amount, "checking")
+        bank(d(days_ago), "Brightline Design — invoice", "Freelance", -amount, "checking")
     # Electricity peaks in summer (air conditioning), the opposite of the gas bill below.
     power_by_month = [88.40, 81.15, 76.30, 72.85, 84.10, 118.60,
                       146.25, 152.90, 121.40, 86.75, 78.20, 90.65]
     for m in range(13):
-        base = m * 30
-        bank(base + 1, "Parkside Apartments", "Rent & Mortgage", 2200.00, "checking")
-        bank(base + 3, "City Power & Light", "Electricity", seasonal(power_by_month, m), "checking")
-        bank(base + 4, "Fiberlink", "Internet", 69.99, "checking")
-        bank(base + 5, "CellOne Mobile", "Phone", 55.00, "checking")
-        bank(base + 10, "Keystone Auto Insurance", "Auto Insurance", 132.00, "checking")
+        bank(monthly(1, m), "Parkside Apartments", "Rent & Mortgage", 2200.00, "checking")
+        power_day = monthly(3, m)
+        bank(power_day, "City Power & Light", "Electricity", seasonal(power_by_month, power_day), "checking")
+        bank(monthly(4, m), "Fiberlink", "Internet", 69.99, "checking")
+        bank(monthly(5, m), "CellOne Mobile", "Phone", 55.00, "checking")
+        bank(monthly(10, m), "Keystone Auto Insurance", "Auto Insurance", 132.00, "checking")
     # Month 0's water bill is the one that outgrew its rule, further down.
     for m in range(1, 13):
-        bank(m * 30 + 6, "Metro Water", "Water", 34.10 + (m * 7) % 12, "checking")
+        bank(monthly(6, m), "Metro Water", "Water", 34.10 + (m * 7) % 12, "checking")
     # A gas bill with a real winter peak, carried back far enough to be seasonal rather than noisy. Two
     # features need this shape and nothing else in the set provides it: the price-change signal's
     # tightness test (which reads the whole prior history, so four flat summer bills must not make the
@@ -285,7 +308,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     gas_by_month = [148.20, 132.75, 88.40, 61.30, 44.85, 39.10,
                     41.60, 43.25, 58.90, 79.40, 104.60, 139.80]
     for m in range(14):
-        bank(m * 30 + 8, "Northgate Gas", "Natural Gas", seasonal(gas_by_month, m), "checking")
+        gas_day = monthly(8, m)
+        bank(gas_day, "Northgate Gas", "Natural Gas", seasonal(gas_by_month, gas_day), "checking")
 
     # A subscription that stops two periods before the data ends. Two constraints decide those numbers
     # and they pull against each other: the missed signal is judged against how fresh the *data* is
@@ -293,19 +317,19 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # recency to zero at three periods without a charge, and an undetected series cannot be missed. A
     # long run ending about two and a half months back sits in the gap, and reads as what it is: a
     # subscription that was cancelled, or a payment method that quietly expired.
-    for m in range(2, 9):
-        bank(m * 30 + 12, "CloudVault Backup", "Software & Subscriptions", 9.99, "checking")
+    for m in range(7):
+        bank(monthly(72, m), "CloudVault Backup", "Software & Subscriptions", 9.99, "checking")
 
     # The other bill from the same biller, and the reason its rule carries a floor rather than the water
     # rule simply matching everything: told apart by size, nothing else about them differs.
-    bank(75, "Metro Water", "Home Repairs", 185.00, "checking")
+    bank(d(75), "Metro Water", "Home Repairs", 185.00, "checking")
 
     # The newest water bill, arriving just past the ceiling on the rule that files these. It carries no
     # category *because* of that: the range on a rule is a matching gate, so a bill that grows past it
     # stops matching and quietly stops being categorized. Nothing else in the app notices, which is the
     # whole reason the drift signal exists — and why this row must not be filed under Water here, since
     # a row already carrying the rule's own category is by definition fine.
-    bank(4, "Metro Water", "", 63.40, "checking")
+    bank(monthly(6, 0), "Metro Water", "", 63.40, "checking")
 
     # A standing transfer, recorded twice — leaving checking and arriving in savings — which is what
     # every movement between two tracked accounts looks like to a ledger organized by account. Detection
@@ -314,10 +338,10 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # two sides are worded differently on purpose: pairing is structural — rows that offset exactly — and
     # a demo whose legs shared a name would let a name-based shortcut look like it worked.
     for m in range(13):
-        bank(m * 30 + 5, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
-        bank(m * 30 + 5, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
+        bank(monthly(5, m), "Transfer to Savings", "Bank Transfer", 500.00, "checking")
+        bank(monthly(5, m), "Transfer from Checking", "Bank Transfer", -500.00, "savings")
     # One row only: categorize.spec.js finds it by name as the single categorized row it edits.
-    bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
+    bank(d(31), "Interest Payment", "Interest Income", -12.18, "savings")
 
     # Paying off the card: the other movement every household with a credit card makes, and the one a
     # ledger most often counts twice — once as the purchases on the card, again as the payment leaving
@@ -328,75 +352,77 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # card-side rows are in the card source below; a rule files them.
     card_payments = [812.48, 945.10, 833.92, 898.15, 1010.37, 887.60, 924.33,
                      861.75, 1102.40, 979.05, 846.62, 1218.90, 905.14]
-    for m, amount in enumerate(card_payments):
-        bank(m * 30 + 15, "Rewards Card Autopay", "Credit Card Payment", amount, "checking")
+    autopay_days = [monthly(15, m) for m in range(len(card_payments))]
+    for when, amount in zip(autopay_days, card_payments):
+        bank(when, "Rewards Card Autopay", "Credit Card Payment", amount, "checking")
 
     # A sofa paid for in two instalments: a deposit when ordered, the balance on delivery. Each payment is
     # real money on its own date and is already counted correctly, so what the multi-payment purchase
     # built afterwards adds is only the relationship — and the expected total that shows nothing is still
     # owed. "Furniture" is not a starter leaf; it is grouped after the import, as a user part-way through
     # the imported-categories workspace would have done.
-    bank(70, "Oakline Furniture", "Furniture", 450.00, "checking")
-    bank(16, "Oakline Furniture", "Furniture", 1149.00, "checking")
+    bank(d(70), "Oakline Furniture", "Furniture", 450.00, "checking")
+    bank(d(16), "Oakline Furniture", "Furniture", 1149.00, "checking")
 
     # The irregular spending of a year: a summer trip, the dentist twice, prescriptions, and the holidays
     # (placed by calendar month, like the bills above, so December lands in December).
-    bank(250, "SkyWest Air", "Air Travel", 586.40, "checking")
-    bank(236, "Coastline Car Rental", "Rental Car", 214.75, "checking")
-    bank(160, "Bright Smile Dental", "Dental", 95.00, "checking")
-    bank(340, "Bright Smile Dental", "Dental", 95.00, "checking")
+    bank(d(250), "SkyWest Air", "Air Travel", 586.40, "checking")
+    bank(d(236), "Coastline Car Rental", "Rental Car", 214.75, "checking")
+    bank(d(160), "Bright Smile Dental", "Dental", 95.00, "checking")
+    bank(d(340), "Bright Smile Dental", "Dental", 95.00, "checking")
     for days_ago, amount in [(38, 24.60), (132, 18.25), (221, 24.60), (309, 31.40)]:
-        bank(days_ago, "Lakeview Pharmacy", "Pharmacy", amount, "checking")
+        bank(d(days_ago), "Lakeview Pharmacy", "Pharmacy", amount, "checking")
     for m in range(1, 13):
-        if (today.month - 1 - m) % 12 in (10, 11):   # November, December
-            bank(m * 30 + 13, "Maple & Co. Gifts", "Gifts Given", 145.00 + m * 6, "checking")
+        when = monthly(13, m)
+        if when[5:7] in ("11", "12"):
+            bank(when, "Maple & Co. Gifts", "Gifts Given", 145.00 + m * 6, "checking")
 
     # The hardware store the bank's export filed two ways: some visits were a project, some a repair, and
     # nothing on the row says which. The amounts overlap and every row is on one account, so no rule can
     # tell them apart, and the Generate Rules review shows them as a conflict set to resolve.
     for days_ago, amount in [(64, 89.40), (151, 212.75), (158, 46.10), (318, 134.60)]:
-        bank(days_ago, "Hearthside Hardware", "Home Improvement", amount, "checking")
+        bank(d(days_ago), "Hearthside Hardware", "Home Improvement", amount, "checking")
     for days_ago, amount in [(29, 58.25), (233, 141.30)]:
-        bank(days_ago, "Hearthside Hardware", "Home Repairs", amount, "checking")
+        bank(d(days_ago), "Hearthside Hardware", "Home Repairs", amount, "checking")
 
     # A class pass given up a little over a year ago. Its rule suggestion is still pending, and it is the
     # one a one-year look-back moves into the review's Older view.
     for days_ago, amount in [(396, 85.00), (431, 85.00), (473, 120.00), (509, 85.00)]:
-        bank(days_ago, "Harbor Yoga Studio", "Fitness Classes", amount, "checking")
+        bank(d(days_ago), "Harbor Yoga Studio", "Fitness Classes", amount, "checking")
 
     # The money coming back. Each is claimed by one of the reimbursements built after the import; until
     # then they are ordinary inflows, which is exactly what they look like to someone who has not
     # recorded the debt.
-    bank(27, "Expense reimbursement — Northwind Ltd", "Reimbursed Expenses", -388.00, "checking")
-    bank(26, "Sam Okafor — lunch", "Reimbursed Expenses", -24.00, "checking")
-    bank(26, "Priya Raman — lunch", "Reimbursed Expenses", -24.00, "checking")
-    bank(26, "Dana Whitfield — lunch", "Reimbursed Expenses", -24.00, "checking")
-    bank(22, "Sam Okafor — concert ticket", "Reimbursed Expenses", -35.00, "checking")
+    bank(d(27), "Expense reimbursement — Northwind Ltd", "Reimbursed Expenses", -388.00, "checking")
+    bank(d(26), "Sam Okafor — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(d(26), "Priya Raman — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(d(26), "Dana Whitfield — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(d(22), "Sam Okafor — concert ticket", "Reimbursed Expenses", -35.00, "checking")
     # Receivables still being worked on; demo_examples files and tracks them.
-    bank(52, "Brightwater Physical Therapy", "Medical Services", 180.00, "checking")
-    bank(19, "Summit Health Plan claim", "Reimbursed Expenses", -144.00, "checking")
-    bank(95, "Pinecrest Cabins", "Hotel", 480.00, "checking")
-    bank(9, "Print & Copy Depot", "Home Office", 42.80, "checking")
-    bank(3, "Acme Corp Expense Reimb", "Reimbursed Expenses", -42.80, "checking")
+    bank(d(52), "Brightwater Physical Therapy", "Medical Services", 180.00, "checking")
+    bank(d(19), "Summit Health Plan claim", "Reimbursed Expenses", -144.00, "checking")
+    bank(d(95), "Pinecrest Cabins", "Hotel", 480.00, "checking")
+    bank(d(9), "Print & Copy Depot", "Home Office", 42.80, "checking")
+    bank(d(3), "Acme Corp Expense Reimb", "Reimbursed Expenses", -42.80, "checking")
     # "Pet Care" isn't a starter leaf, so importing it here creates the leaf (under Unassigned).
-    bank(20, "Petco", "Pet Care", 46.20, "checking")
-    bank(48, "Chewy", "Pet Care", 61.85, "checking")
+    bank(d(20), "Petco", "Pet Care", 46.20, "checking")
+    bank(d(48), "Chewy", "Pet Care", 61.85, "checking")
     # A handful of categories that AREN'T in the starter set, so they land in Unassigned and give the
     # "Group imported categories" workspace something to demonstrate. (Labels matching a starter leaf
     # reuse it, and income labels auto-file under the Income group, so only novel expense labels surface.)
-    bank(12, "WeWork Desk", "Home Office", 180.00, "checking")
-    bank(22, "Bright Kids Daycare", "Childcare", 850.00, "checking")
-    bank(40, "City Vet Clinic", "Veterinary", 120.00, "checking")
-    bank(52, "Red Cross Donation", "Charitable Giving", 75.00, "checking")
-    bank(26, "Annual Membership", "Fees & Charges", 96.00, "checking")   # cross-account duplicate, leg A
+    bank(d(12), "WeWork Desk", "Home Office", 180.00, "checking")
+    bank(d(22), "Bright Kids Daycare", "Childcare", 850.00, "checking")
+    bank(d(40), "City Vet Clinic", "Veterinary", 120.00, "checking")
+    bank(d(52), "Red Cross Donation", "Charitable Giving", 75.00, "checking")
+    bank(d(26), "Annual Membership", "Fees & Charges", 96.00, "checking")   # cross-account duplicate, leg A
 
     # ===== Source 2: "Rewards Card" — a raw export WITHOUT categories (card + brokerage, plus one savings
     # row). Format B uses different header names (so it's a distinct data source); rows here are categorized
     # only by the rules created below, or land uncategorized — demonstrating the other import path. =====
     card_rows = []  # (transaction date, payee, amount, account_name)
 
-    def card(days_ago, payee, amount, acct="card"):
-        card_rows.append((d(days_ago), payee, f"{-amount:.2f}", name_of[acct]))
+    def card(when, payee, amount, acct="card"):
+        card_rows.append((when, payee, f"{-amount:.2f}", name_of[acct]))
 
     # Six months rather than three so the price step below is judged against an established price. The
     # newest charge is the one that moved: price change is measured against the occurrences *preceding*
@@ -408,50 +434,50 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # nothing for as long as the comment here claimed it did. The threshold lives in
     # `recurring_signals._FIXED_STEP_FRACTION`; keep this rise comfortably the far side of it.
     for m in range(13):
-        base = m * 30
-        card(base + 8, "Netflix", 15.99 if m else 18.99)   # rule → Streaming Services
-        card(base + 9, "FitClub", 40.00)                   # recurring rule → Gym Membership
-        card(base + 17, "Spotify", 11.99)                  # rule → Streaming Services
-    # The everyday spending repeats on a cadence but never at one price; the small deterministic wobble
-    # (`(i * k) % n`) keeps every month's total close to the last without any row repeating exactly.
+        card(monthly(8, m), "Netflix", 15.99 if m else 18.99)   # rule → Streaming Services
+        card(monthly(9, m), "FitClub", 40.00)                   # recurring rule → Gym Membership
+        card(monthly(17, m), "Spotify", 11.99)                  # rule → Streaming Services
+    # The everyday spending never repeats one price either; the small deterministic wobble (`(i * k) % n`)
+    # keeps every month's total near the last without any row repeating exactly.
     grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
     grocery_amts = [168.40, 58.10, 104.75, 76.30]
-    for i in range(56):
-        card(2 + i * 7, grocers[i % 4], grocery_amts[i % 4] + (i * 7) % 23)   # rules → Groceries
+    for i, days_ago in enumerate(scattered(7, 2)):
+        card(d(days_ago), grocers[i % 4], grocery_amts[i % 4] + (i * 7) % 23)   # rules → Groceries
     # Blue Bottle is the one merchant no rule claims, so a few rows stay uncategorized to work on.
     coffee_amts = [4.75, 5.40, 6.25, 4.10, 5.95]
-    for i in range(32):
-        card(1 + i * 12, "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])  # Starbucks → rule
+    for i, days_ago in enumerate(scattered(12, 1)):
+        card(d(days_ago), "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])  # Starbucks → rule
     diners = ["The Corner Bistro", "Sushi House", "Taco Stand", "Pasta Bar"]
-    for i in range(36):
-        card(3 + i * 11, diners[i % 4], 26.50 + (i * 5) % 19)     # rules → Dining Out
-    for i in range(30):
-        card(4 + i * 13, "Shell" if i % 2 else "Chevron", 38.00 + (i * 3) % 17)   # rules → Gas
+    for i, days_ago in enumerate(scattered(11, 3)):
+        card(d(days_ago), diners[i % 4], 26.50 + (i * 5) % 19)     # rules → Dining Out
+    for i, days_ago in enumerate(scattered(13, 4)):
+        card(d(days_ago), "Shell" if i % 2 else "Chevron", 38.00 + (i * 3) % 17)   # rules → Gas
     for days_ago, amount in [(19, 31.50), (87, 28.00), (163, 34.50), (241, 28.00), (318, 31.50)]:
-        card(days_ago, "Cinemark Theatres", amount)               # rule → Movies & Events
+        card(d(days_ago), "Cinemark Theatres", amount)               # rule → Movies & Events
     for days_ago, amount in [(11, 18.40), (57, 23.75), (128, 16.90), (199, 27.30), (274, 21.15)]:
-        card(days_ago, "Uber Trip", amount)                       # rule → Rideshare
+        card(d(days_ago), "Uber Trip", amount)                       # rule → Rideshare
     online_amts = [23.99, 119.40, 14.25, 56.80, 31.10, 78.65, 19.99, 44.50]
     amazon_charges = []   # (days_ago, amount), for the order history imported against them below
-    for i in range(8):
-        card(5 + i * 8, "Amazon", online_amts[i])                # Amazon → rule
-        amazon_charges.append((5 + i * 8, online_amts[i]))
-    card(15, "Amazon Refund", -45.00)                            # refund (income); "amazon" → rule
+    for days_ago, amount in zip(scattered(8, 5, count=len(online_amts)), online_amts):
+        card(d(days_ago), "Amazon", amount)                      # Amazon → rule
+        amazon_charges.append((days_ago, amount))
+    card(d(15), "Amazon Refund", -45.00)                            # refund (income); "amazon" → rule
 
     # Rows the worked examples further down build on. They import as ordinary transactions; what makes
     # them examples is what is done to them afterwards.
-    card(33, "Warehouse Club", 214.60)          # split across two categories
-    card(41, "Northgate Hotel", 388.00)         # work expense, repaid in full a fortnight later
-    card(41, "Sky Harbor Parking", 64.00)       # part of the same trip, attached receipt
-    card(26, "Lakeside Taverna", 96.00)         # lunch for four, repaid the same day
-    card(30, "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
+    card(d(33), "Warehouse Club", 214.60)          # split across two categories
+    card(d(41), "Northgate Hotel", 388.00)         # work expense, repaid in full a fortnight later
+    card(d(41), "Sky Harbor Parking", 64.00)       # part of the same trip, attached receipt
+    card(d(26), "Lakeside Taverna", 96.00)         # lunch for four, repaid the same day
+    card(d(30), "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
     for q, amount in enumerate([52.40, 49.85, 47.10, 45.60]):
-        card(45 + q * 91, "Quarterly Dividend", -amount, "brokerage")   # uncategorized income
+        card(monthly(45, q * 3), "Quarterly Dividend", -amount, "brokerage")   # uncategorized income
     # Leg B lands on savings, not the card: a duplicate is one account recorded twice, and a checking row
     # and a card row can never be that (duplicate_detection.account_types_can_match).
-    card(26, "Annual Membership", 96.00, "savings")              # cross-account duplicate, leg B
-    for m, amount in enumerate(card_payments):
-        card(m * 30 + 14, "Payment Received - Thank You", -amount)   # the card side of each autopay
+    card(d(26), "Annual Membership", 96.00, "savings")              # cross-account duplicate, leg B
+    for when, amount in zip(autopay_days, card_payments):
+        posted = (date.fromisoformat(when) + timedelta(days=1)).isoformat()
+        card(posted, "Payment Received - Thank You", -amount)   # the card side of each autopay
 
     bank_cols = {"date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "account": "Account"}
     card_cols = {"date": "Transaction Date", "description": "Payee", "amount": "Amount", "account": "Account"}

@@ -121,6 +121,8 @@ test('amazon reconciliation', async ({ page }) => {
   await expect(dialog).toBeVisible()
   // The panel is translucent so the page shows through it, which reads as smudging once cropped.
   await dialog.evaluate(el => { el.style.background = 'var(--surface)' })
+  // The click that opened the panel leaves the pointer over its last row, which opens that row's tooltip.
+  await page.mouse.move(0, 0)
   await hideDemoBanner(page)
   await settle(page)
   await dialog.screenshot({ path: path.join(OUT_DIR, 'amazon-reconciliation.png') })

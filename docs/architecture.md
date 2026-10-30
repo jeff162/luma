@@ -122,7 +122,9 @@ requirements, because popovers, inline editors and dismissal rules rebuilt per p
   through the feature (each recurring signal kind fires, a document's text was extracted) rather than by
   row count, because the dataset exists to demonstrate features. It is also what the README screenshots
   are captured from (`npm run screenshots`), so it carries thirteen months of steady, household-sized
-  activity and only the last week arrives unreviewed.
+  activity and only the last week arrives unreviewed. Monthly rows fall on the same calendar day each
+  month, never a fixed count of days apart, so every month's total is steady whatever day the ledger
+  loads.
 
 - **Demo mode blocks every path that brings data in.** Loading writes a marker (`demo_data` in the data
   DB's `import_workflow_state`). While it is present the backend answers 409 to CSV import, the Amazon
