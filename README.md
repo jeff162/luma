@@ -268,7 +268,7 @@ The data lives in a `data` folder beside `docker-compose.yml`, so backing up tha
 docker compose exec app python -m backend.desktop --certificate-fingerprint
 ```
 
-A watched import folder has to be mounted into the container and named in `.env` by its path inside the container: add a line such as `- /home/sam/imports:/imports` under the `app` service's `volumes:` and put `WATCH_FOLDER_ROOTS=/imports` in `.env`. The container runs as root, so it can read whatever is mounted.
+A data source can watch `data/imports`, which the server creates when it starts, without further setup. The container runs as root, so that folder belongs to root on the host, and saving files into it there needs `sudo` or a change to its permissions. Any other watched folder has to be mounted into the container and named in `.env` by its path inside the container: add a line such as `- /home/sam/statements:/statements` under the `app` service's `volumes:` and put `WATCH_FOLDER_ROOTS=/statements` in `.env`.
 
 Updating to a newer release is `docker compose pull` followed by `docker compose up -d`.
 
@@ -305,7 +305,7 @@ A firewall on the server has to allow TCP port 443 and UDP port 5353. Changing `
 
 **Which user the server runs as.** The service file from step 4 has a `User=` line naming whoever ran `./luma --systemd-unit`. Luma runs as that user and can read and write only what that user can, starting with the data folder beside the program. To change it, edit `User=` in `/etc/systemd/system/luma.service` (or run step 4 again as the other user), make the new user the owner of the folder Luma was unpacked into, and run `sudo systemctl daemon-reload` and `sudo systemctl restart luma`.
 
-**Watched import folders.** A server watches only the folders named in `WATCH_FOLDER_ROOTS` in `.env`, and none until it is set, for example `WATCH_FOLDER_ROOTS=/home/sam/imports`. Several are separated by `:`. The server's user (the `User=` above) has to be able to read those folders and the files saved into them, and to delete files there if a data source is set to delete them after import. A file saved there by another user is readable by the server's user only if the file's permissions allow it, for instance through a group both users belong to.
+**Watched import folders.** A server watches the `imports` folder it creates in the data folder, and also the folders named in `WATCH_FOLDER_ROOTS` in `.env`, for example `WATCH_FOLDER_ROOTS=/home/sam/statements`. Several are separated by `:`. The server's user (the `User=` above) has to be able to read those folders and the files saved into them, and to delete files there if a data source is set to delete them after import. A file saved there by another user is readable by the server's user only if the file's permissions allow it, for instance through a group both users belong to.
 
 ### On Windows
 
@@ -335,7 +335,7 @@ The server runs while that user is signed in. Replacing `luma.exe` with a newer 
 
 A server started this way has no icon in the notification area. Its address is on the start line of `luma.log`, beside the data.
 
-A Windows server watches only the folders named in `WATCH_FOLDER_ROOTS` in `.env`, separated by `;`, and none until it is set. Luma runs as the signed-in user, or as the account the scheduled task runs as, and that account has to be able to read those folders.
+A Windows server watches the `imports` folder it creates in the data folder, and also the folders named in `WATCH_FOLDER_ROOTS` in `.env`, separated by `;`. Luma runs as the signed-in user, or as the account the scheduled task runs as, and that account has to be able to read those folders.
 
 ### On each computer that connects
 

@@ -650,8 +650,8 @@ folder, although the upload expands one: an archive found on disk is one nobody 
 - **Settings are admin-gated** (`PATCH /import-export/profiles/{id}/watch`, `require_admin_or_local`),
   because naming a directory is a statement about the server's filesystem; see `security-model.md` →
   *Reading and deleting outside the data directory*. **Where is the operator's**: an installation other
-  devices can reach (`transport.reachable_from_network`) watches only inside `WATCH_FOLDER_ROOTS`, and
-  nothing until it is set. `watch_folder_refusal` is the one check, applied on save, in the picker, in the
+  devices can reach (`transport.reachable_from_network`) watches only inside its own `imports/` folder
+  (beside the data database, created at startup) and `WATCH_FOLDER_ROOTS`. `watch_folder_refusal` is the one check, applied on save, in the picker, in the
   scan (a refused folder is a source notice, and its purge is skipped) and when a parked file is handed
   back (`operations.md` → *Watched folders on a server*). A restore from another instance switches watching
   off; the verdict is taken before the wipe, since every restore gives the system a new `instance_id`.

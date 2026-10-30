@@ -3074,12 +3074,14 @@ export const HELP_TOPICS = [
         <p>
           The folder is read on the machine that runs the application. On a desktop installation that is
           the same machine the page is open on. On a server, or in a container, it is a folder there
-          &mdash; a container additionally needs it mounted, or the path names nothing.
+          &mdash; a container additionally needs any folder outside its data folder mounted, or the path
+          names nothing.
         </p>
         <p>
-          A server watches only inside the folders its operator names with <code>WATCH_FOLDER_ROOTS</code> in
-          its <code>.env</code> file, and no folder until one is named; the <strong>Folder</strong> dialog
-          says so when none is. The account the server runs as has to be able to read the folder and the
+          Every installation has an <code>imports</code> folder beside its data, which is always one that
+          can be watched and is where <strong>Browse</strong> starts. A server watches only there and
+          inside the folders its operator names with <code>WATCH_FOLDER_ROOTS</code> in its{' '}
+          <code>.env</code> file. The account the server runs as has to be able to read the folder and the
           files saved into it, and to delete them there when a data source deletes files after import.
         </p>
         <p>

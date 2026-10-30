@@ -68,13 +68,14 @@ unlock secret ⇒ no KEK ⇒ nothing opens.
 Everything else the app touches on disk is its own. **A watched import folder is the one exception** — a
 data source names a directory, and the server lists it, reads the files of the kinds that source takes
 (CSVs, and for the PayPal source statement PDFs) and, if the source says so, deletes the ones it
-imported. That is a new capability class, so what is defended is stated here.
+imported. That is a new capability class, so what is defended is stated here. The installation's own
+`imports/` folder sits beside the data database, so watching it reaches nothing outside the app's data.
 
 **What is defended.** Setting the path is admin-or-local (`require_admin_or_local`): a directory on the
 server is global app configuration, not ledger data a member edits. **On an installation other devices
-can reach, where it may be is the operator's**: watching is confined to the folders named in
-`WATCH_FOLDER_ROOTS` and is off until some are, because an administrator in the app need not have a shell
-on the machine, and with sign-in protection off the admin check passes everyone. The confinement is
+can reach, where it may be is the operator's**: watching is confined to `imports/` and the folders named
+in `WATCH_FOLDER_ROOTS`, because an administrator in the app need not have a shell on the machine, and
+with sign-in protection off the admin check passes everyone. The confinement is
 checked on every way in — saving a path, the picker, the scan, the delete, handing a parked file back —
 against the path resolved through symbolic links (`operations.md` → *Watched folders on a server*). The delete is constrained further —
 only a file this app recorded importing is eligible, and its recorded content hash is re-checked against

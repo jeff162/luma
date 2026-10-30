@@ -280,11 +280,17 @@ is read only to say so in Settings → About → **Copy details**.
 
 A data source may watch a folder on the machine running Luma, which is the one place the app reads or
 deletes outside its data directory (`security-model.md` → *Reading and deleting outside the data
-directory*). **An installation other devices can reach watches only inside the folders named in
-`WATCH_FOLDER_ROOTS`, and no folder until one is named.** An administrator in the app need not be
-anyone with a shell on the machine, and `.env` is reached only by someone who is, so that is where the
-filesystem reach is granted. An installation only this computer can open watches anywhere unless the
+directory*). **An installation other devices can reach watches only inside its own `imports` folder and
+the folders named in `WATCH_FOLDER_ROOTS`.** An administrator in the app need not be anyone with a shell
+on the machine, and `.env` is reached only by someone who is, so that is where filesystem reach beyond
+the app's own data is granted. An installation only this computer can open watches anywhere unless the
 setting is given, in which case it is confined the same way.
+
+- **`imports/` sits beside the data database**, as `documents/` does, and is created when the server
+  starts. It is always allowed, whatever `WATCH_FOLDER_ROOTS` says, and the picker starts there. It is
+  added to the named folders rather than being the setting's default value: as a default it would
+  confine an installation only this computer can open, which otherwise watches anywhere, and naming a
+  folder on a server would drop it. It is not part of a backup, and a restore leaves it alone.
 
 - **Several roots are separated by the system's path separator** (`:` on Linux, `;` on Windows). A folder
   is inside a root when its resolved path is, so a symbolic link inside a root that leads elsewhere is
@@ -294,11 +300,13 @@ setting is given, in which case it is confined the same way.
   the roots changed is no longer read or deleted from; its source reports why.
 - **The server's account has to be able to read the folder and the files in it**, and to delete files
   there when a source is set to delete them after import. That is the systemd unit's `User=` on Linux,
-  the signed-in user or the scheduled task's account on Windows, and root in the container. A folder it
+  the signed-in user or the scheduled task's account on Windows, and root in the container. `imports/`
+  belongs to that account, so another user saving into it needs permission to. A folder it
   cannot read is reported on the source rather than failing the scan.
-- **In a container the folder has to be mounted**, and the root is named by its path inside the
-  container: a `volumes:` line such as `/home/sam/imports:/imports` beside `./data:/data`, with
-  `WATCH_FOLDER_ROOTS=/imports`.
+- **In a container `imports/` is `./data/imports` on the host**, reached through the existing data
+  mount. Any other folder has to be mounted, and the root is named by its path inside the container: a
+  `volumes:` line such as `/home/sam/statements:/statements` beside `./data:/data`, with
+  `WATCH_FOLDER_ROOTS=/statements`.
 
 ## Where the data lives, and how the app decides
 

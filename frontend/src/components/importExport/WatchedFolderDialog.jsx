@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../../lib/api.js'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { AppDialog, Button, Input, Select, Toggle } from '../ui.jsx'
@@ -18,10 +18,6 @@ import ServerFolderPicker from './ServerFolderPicker.jsx'
 // The copy carries the one thing that is reliably misread — the folder is on the machine running the
 // app, which is the same machine only in the desktop case — and says plainly what the purge setting
 // deletes, since it is the only part of this that removes anything outside the app's own data.
-//
-// A server only watches folders its operator has named in WATCH_FOLDER_ROOTS. Where none are named the
-// dialog says so before anything is typed, since the refusal is otherwise met only on Save; the path
-// field stays editable so a folder saved earlier can still be cleared.
 
 const PURGE_OPTIONS = [
   { value: 'never', label: 'Keep every file' },
@@ -40,22 +36,6 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
   // What the field held when Browse was pressed. Navigating writes into the field as it goes, so
   // abandoning the browse has to put back what was there rather than leave it wherever the walk ended.
   const [folderBeforeBrowse, setFolderBeforeBrowse] = useState('')
-
-  // Asked of the server once, through the picker's own starting listing: `false` only where this server
-  // watches no folder at all.
-  const [watchingEnabled, setWatchingEnabled] = useState(true)
-  const [serverNotice, setServerNotice] = useState('')
-  useEffect(() => {
-    let live = true
-    api.browseServerDirectories('', profile?.id)
-      .then(result => {
-        if (!live || result?.watching_enabled !== false) return
-        setWatchingEnabled(false)
-        setServerNotice(result.notice || '')
-      })
-      .catch(() => { })
-    return () => { live = false }
-  }, [profile?.id])
 
   const trimmedFolder = folder.trim()
 
@@ -110,7 +90,7 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
             <Button
               variant="secondary"
               onClick={() => { setFolderBeforeBrowse(folder); setBrowsing(true) }}
-              disabled={!canEdit || browsing || !watchingEnabled}
+              disabled={!canEdit || browsing}
             >
               Browse&hellip;
             </Button>
@@ -123,9 +103,6 @@ export default function WatchedFolderDialog({ profile, canEdit, onClose, onSaved
               onDone={() => setBrowsing(false)}
               onCancel={() => { setFolder(folderBeforeBrowse); setBrowsing(false) }}
             />
-          ) : null}
-          {serverNotice ? (
-            <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.5 }}>{serverNotice}</div>
           ) : null}
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
             The folder is read on the machine running {APP_NAME}, which is not necessarily the machine

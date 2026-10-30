@@ -64,6 +64,7 @@ from backend.db.database import init_db, reset_current_db_path, set_current_db_p
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service, sign_in_sessions
 from backend.services.preferences import forget_departed_users
+from backend.routers.import_export import watch as import_watch
 from backend.routers import accounts, app_control, connections, auth, categories, currency, diagnostics, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
@@ -289,6 +290,8 @@ async def lifespan(app: FastAPI):
     # The control DB is already initialized (configuration was resolved from it below); this readies the
     # financial database so no request handling starts against partial state.
     init_db()
+    # Beside the database just readied, so the folder a source may always watch is there to find.
+    import_watch.ensure_imports_dir()
     forget_departed_users()
     try:
         yield

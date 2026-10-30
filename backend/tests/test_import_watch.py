@@ -440,8 +440,8 @@ class ImportWatchTests(_WatchFolderCase):
 
 class WatchRootsTests(_WatchFolderCase):
     """Where an installation other devices can reach may watch. An administrator in the app need not have
-    a shell on the machine, so the folders it may read are named by whoever does, in WATCH_FOLDER_ROOTS;
-    with none named it watches nothing. Every way in is checked, not only the save, so a folder saved
+    a shell on the machine, so beyond the app's own imports folder the folders it may read are named by
+    whoever does, in WATCH_FOLDER_ROOTS. Every way in is checked, not only the save, so a folder saved
     before the setting changed stops being read and is never deleted from."""
 
     def setUp(self):
@@ -460,23 +460,22 @@ class WatchRootsTests(_WatchFolderCase):
         with self._use_db_path():
             return watch.set_profile_watch("src-1", watch.WatchSettings(watch_dir=str(folder), watch_enabled=True))
 
-    def test_a_server_with_no_roots_named_watches_nothing(self):
+    def test_a_server_with_no_roots_named_watches_its_imports_folder_and_nothing_else(self):
+        self.watched = Path(self.tempdir.name) / watch.IMPORTS_DIR_NAME
+        with self._use_db_path():
+            watch.ensure_imports_dir()
         self._create_source()
         self._prove_source()
         self._drop("january.csv")
         with self._server():
             self._scan(); self._scan()
             with self.assertRaises(HTTPException) as refused:
-                self._save_folder(self.watched)
-            listing = watch.browse_directories(None)
+                self._save_folder(self.outside)
+            with self._use_db_path():
+                listing = watch.browse_directories(None)
         self.assertEqual(refused.exception.status_code, 400)
-        self.assertFalse(listing["watching_enabled"])
-        self.assertEqual(listing["roots"], [])
-        self.assertNotIn(self._files().get("january.csv", {}).get("state"), (watch.WATCH_STATE_IMPORTED,))
-        with get_db(str(self.db_path)) as conn:
-            self.assertEqual(conn.execute(
-                "SELECT watch_notice FROM csv_import_profile WHERE id = 'src-1'").fetchone()["watch_notice"],
-                watch.WATCHING_NOT_ENABLED)
+        self.assertEqual([r["path"] for r in listing["roots"]], [os.path.realpath(self.watched)])
+        self.assertEqual(self._files()["january.csv"]["state"], watch.WATCH_STATE_IMPORTED)
 
     def test_a_folder_inside_a_root_is_watched_and_one_outside_is_refused(self):
         self._create_source()
@@ -509,11 +508,13 @@ class WatchRootsTests(_WatchFolderCase):
         self.assertNotEqual(self._files().get("february.csv", {}).get("state"), watch.WATCH_STATE_IMPORTED)
 
     def test_the_picker_starts_at_the_roots_and_goes_no_higher(self):
-        with self._server(self.watched):
+        with self._server(self.watched), self._use_db_path():
             start = watch.browse_directories(None)
             inside = watch.browse_directories(str(self.watched))
             above = watch.browse_directories(str(self.watched.parent))
-        self.assertEqual([r["path"] for r in start["roots"]], [os.path.realpath(self.watched)])
+        self.assertEqual([r["path"] for r in start["roots"]],
+                         [os.path.realpath(Path(self.tempdir.name) / watch.IMPORTS_DIR_NAME),
+                          os.path.realpath(self.watched)])
         self.assertIsNone(inside["parent"])
         self.assertEqual(above["notice"], watch.OUTSIDE_WATCH_ROOTS)
         self.assertEqual(above["entries"], [])

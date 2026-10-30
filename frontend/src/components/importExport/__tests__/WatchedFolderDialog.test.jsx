@@ -141,17 +141,4 @@ describe('WatchedFolderDialog folder picker', () => {
     await user.click(screen.getByRole('button', { name: 'Show 1 hidden' }))
     expect(screen.getByRole('button', { name: /\.cache/ })).toBeTruthy()
   })
-
-  it('says up front when this server watches no folder, and offers no browse there', async () => {
-    mockBrowse()
-    api.browseServerDirectories.mockImplementation(async () => ({
-      path: null, roots: [], notice: 'Watching folders is not enabled on this server.', truncated: false,
-      entries: [], files: [], file_count: 0, parent: null, watching_enabled: false,
-    }))
-    render(<WatchedFolderDialog profile={profile()} canEdit onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(await screen.findByText('Watching folders is not enabled on this server.')).toBeTruthy()
-    const browse = screen.getByRole('button', { name: /Browse/ })
-    await userEvent.setup().click(browse)
-    expect(screen.queryByRole('button', { name: 'Done choosing a folder' })).toBeNull()
-  })
 })

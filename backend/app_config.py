@@ -263,7 +263,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="watch_folder_roots",
         env_var="WATCH_FOLDER_ROOTS",
         label="Watched folder roots",
-        help="The folders a data source may watch, with everything inside them; several are separated by the system's path separator (: on Linux and macOS, ; on Windows). An installation other devices can reach watches no folder until this is set. One only this computer can open may watch any folder unless this is set, in which case it is confined the same way.",
+        help="Folders a data source may watch, with everything inside them, in addition to the imports folder beside the data, which is always allowed; several are separated by the system's path separator (: on Linux and macOS, ; on Windows). An installation other devices can reach watches only the imports folder until this is set. One only this computer can open may watch any folder unless this is set, in which case it is confined the same way.",
         default="",
         advanced=True,
     ),
@@ -487,7 +487,7 @@ def server_mode_enabled() -> bool:
 
 
 def watch_folder_roots() -> list[str]:
-    """The folders watching is confined to, as configured; empty when none are. Env-only, because a
+    """The folders named for watching beyond the imports folder, as configured; empty when none are. Env-only, because a
     folder outside the data directory is the server's filesystem, which only someone with a shell on the
     machine should decide the app may read (`docs/security-model.md` → *Reading and deleting outside the
     data directory*)."""

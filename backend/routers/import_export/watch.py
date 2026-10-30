@@ -38,10 +38,11 @@ the recorded content hash is re-checked against what is on disk immediately befo
 file swapped in under the same name is never removed. A delete that fails is recorded and reported
 rather than swallowed.
 
-**Where a source may watch is the operator's call, not the app's.** On an installation other devices
-can reach, watching is confined to the folders named in `WATCH_FOLDER_ROOTS` and is off until some are,
-because an administrator in the app need not be anyone with a shell on the machine, and the folder is
-the machine's filesystem. Only an installation this computer alone can open watches anywhere by default.
+**Where a source may watch, beyond the app's own imports folder, is the operator's call.** On an
+installation other devices can reach, watching is confined to `imports/` beside the data database and the
+folders named in `WATCH_FOLDER_ROOTS`, because an administrator in the app need not be anyone with a shell
+on the machine, and any other folder is the machine's filesystem. Only an installation this computer
+alone can open watches anywhere by default.
 Every path that touches the disk is checked against it — saving a folder, the picker, the scan and its
 purge, handing a parked file back — so a folder saved before the setting changed stops being read rather
 than slipping through (`security-model.md` → *Reading and deleting outside the data directory*).
@@ -67,7 +68,7 @@ from backend import app_config
 from backend.app_logging import log_error
 from backend.authorization import require_admin_or_local
 from backend.runtime_config import app_name, data_dir
-from backend.db.database import get_db, single_runner
+from backend.db.database import current_db_path, get_db, single_runner
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
 from backend.services.ledger_currency import get_ledger_currency
@@ -144,21 +145,42 @@ AMAZON_SOURCE_KIND = "marketplace:amazon"
 MAX_WATCHED_FILE_BYTES = 64 * 1024 * 1024
 
 
-WATCHING_NOT_ENABLED = (
-    "Watching folders is not enabled on this server. It is turned on by naming the folders it may watch "
-    "in WATCH_FOLDER_ROOTS, in the server's .env file."
+OUTSIDE_WATCH_ROOTS = (
+    "This folder is outside the folders this server may watch: its imports folder and any named in "
+    "WATCH_FOLDER_ROOTS."
 )
-OUTSIDE_WATCH_ROOTS = "This folder is outside the folders this server may watch (WATCH_FOLDER_ROOTS)."
+
+IMPORTS_DIR_NAME = "imports"
+
+
+def imports_dir() -> Path:
+    """The installation's own folder for files to import: `imports/` beside the data database, found the
+    way `documents_dir()` finds `documents/`, so the two sit together whatever `DB_PATH` says. It is
+    always a folder a source may watch, because it is inside the app's own data rather than the machine's
+    filesystem at large (`security-model.md` → *Reading and deleting outside the data directory*)."""
+    return Path(current_db_path()).parent / IMPORTS_DIR_NAME
+
+
+def ensure_imports_dir() -> None:
+    """Create the imports folder if it is missing, so it is there to find before any source names it. A
+    data directory that cannot take it is logged rather than failing the start: watching is one feature,
+    and the folder is created again on the next start."""
+    try:
+        imports_dir().mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log_error(f"[watch] could not create the imports folder {imports_dir()}: {exc}")
 
 
 def allowed_watch_roots() -> Optional[list[str]]:
-    """The folders watching is confined to, resolved; `None` when any folder may be watched, and an empty
-    list when none may. Resolved through symlinks, as the folders checked against them are, so a link
-    inside a root that points outside it is outside."""
+    """The folders watching is confined to, resolved; `None` when any folder may be watched. Resolved
+    through symlinks, as the folders checked against them are, so a link inside a root that points
+    outside it is outside. The imports folder is always one of them, and leads the list because the
+    picker starts there."""
     roots = app_config.watch_folder_roots()
     if not roots and not reachable_from_network():
         return None
-    return [os.path.realpath(os.path.expanduser(root)) for root in roots]
+    resolved = [os.path.realpath(os.path.expanduser(root)) for root in [str(imports_dir()), *roots]]
+    return list(dict.fromkeys(resolved))
 
 
 def _within(path: str, root: str) -> bool:
@@ -174,8 +196,6 @@ def watch_folder_refusal(path: str) -> Optional[str]:
     roots = allowed_watch_roots()
     if roots is None:
         return None
-    if not roots:
-        return WATCHING_NOT_ENABLED
     resolved = os.path.realpath(os.path.expanduser(path))
     return None if any(_within(resolved, root) for root in roots) else OUTSIDE_WATCH_ROOTS
 
@@ -980,12 +1000,14 @@ MAX_BROWSE_ENTRIES = 500
 def _browse_roots() -> list[dict]:
     """Where the folder picker starts. Not a confinement — anywhere reachable can still be walked to or
     typed — but dropping someone at `/` makes them navigate down through directories that are nothing to
-    do with them. These are the three places a watched folder actually tends to be — or, where watching
-    is confined, the folders it is confined to, since nothing outside them can be chosen."""
+    do with them. These are the imports folder and the places a watched folder otherwise tends to be — or,
+    where watching is confined, the folders it is confined to, since nothing outside them can be chosen."""
+    imports = os.path.realpath(imports_dir())
+    imports_root = {"label": f"{app_name()} imports", "path": imports}
     allowed = allowed_watch_roots()
     if allowed is not None:
-        return [{"label": root, "path": root} for root in allowed]
-    roots = [{"label": "Home", "path": str(Path.home())}]
+        return [imports_root if root == imports else {"label": root, "path": root} for root in allowed]
+    roots = [imports_root, {"label": "Home", "path": str(Path.home())}]
     try:
         roots.append({"label": f"{app_name()} data", "path": str(data_dir().resolve())})
     except OSError:
@@ -1028,11 +1050,8 @@ def browse_directories(path: Optional[str] = None, profile_id: Optional[str] = N
     """
     target = (path or "").strip()
     if not target:
-        roots = _browse_roots()
-        not_enabled = allowed_watch_roots() == []
         return {"path": None, "parent": None, "entries": [], "files": [], "file_count": 0,
-                "truncated": False, "notice": WATCHING_NOT_ENABLED if not_enabled else None,
-                "roots": roots, "watching_enabled": not not_enabled}
+                "truncated": False, "notice": None, "roots": _browse_roots()}
     refusal = watch_folder_refusal(target)
     if refusal:
         return _browse_notice(os.path.abspath(os.path.expanduser(target)), refusal)
