@@ -224,7 +224,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Search and filter are separate tools.** A search box narrows by one obvious field. A filter narrows
   by structured facets shown as removable chips, and offers only values present in the data.
 - **A page-local filter stays out of `FilterContext`.** The app-wide filter persists across pages and
-  feeds the Dashboard. A filter that belongs to one page is session-scoped state on that page.
+  feeds the Dashboard. A filter that belongs to one page is held in memory on that page, so it survives
+  moving around the app and is gone after a reload, a relaunch or a restored tab.
 - **Include and exclude.** A facet row's main click includes; the quiet `≠` at its right edge excludes.
   Pages translate chips to API parameters with `selectionsToParams`, which splits by mode.
 - **Read the shared date with `getDate()`**, which applies a page's registered default.

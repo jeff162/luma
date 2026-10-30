@@ -37,7 +37,6 @@ import TagsDialog from '../components/TagsDialog.jsx'
 import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx'
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import { useReimbursementCount } from '../lib/useReimbursementCount.js'
-import { sessionStore } from '../lib/browserStorage.js'
 import WindowedRows from '../components/WindowedRows.jsx'
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
@@ -55,21 +54,11 @@ const COLUMN_DEFS = [
 
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'tags', 'amount']
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
-const TXN_SESSION_STATE_STORAGE_KEY = 'luma:txn-session-state'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
 const TRANSACTIONS_PAGE_SIZE = 500
 // Rows past the viewport, either way, that are fetched before they scroll into view.
 const TRANSACTIONS_PREFETCH_ROWS = 200
 const TRANSACTIONS_ROW_ESTIMATE = 38
-let transactionsSessionInitialized = false
-
-
-function normalizeTransactionSortState(value) {
-  if (!value || typeof value !== 'object') return DEFAULT_TRANSACTION_SORT
-  const key = COLUMN_DEFS.some(column => column.key === value.key) ? value.key : DEFAULT_TRANSACTION_SORT.key
-  const dir = value.dir === 'asc' ? 'asc' : 'desc'
-  return { key, dir }
-}
 
 // The ledger's attribute quick filter always carries a *choice*; what varies is whether it is applied.
 // Uncategorized is the seed because it is the most-reached-for of the set and the one the Tasks nudge
@@ -77,50 +66,11 @@ function normalizeTransactionSortState(value) {
 // whole reason it is one button rather than a row of toggles.
 const DEFAULT_ATTRIBUTE_FILTER = { attribute: 'uncategorized', active: false }
 
-function normalizeAttributeFilter(value) {
-  // The key is not validated against the vocabulary here: that list is fetched, so it is not available
-  // when session state is read, and an unknown key already narrows to nothing server-side rather than
-  // erroring. Shape is all this can honestly check.
-  if (!value || typeof value !== 'object' || typeof value.attribute !== 'string') {
-    return DEFAULT_ATTRIBUTE_FILTER
-  }
-  return { attribute: value.attribute, active: !!value.active }
-}
-
-function getTransactionsNavigationType() {
-  if (typeof window === 'undefined' || !window.performance?.getEntriesByType) return ''
-  const navigationEntry = window.performance.getEntriesByType('navigation')[0]
-  return navigationEntry?.type || ''
-}
-
 // The ledger's filters are session state rather than a saved preference: they survive moving around the
 // app and reset on reload or relaunch, because opening the app to a ledger narrowed by a filter nobody
-// remembers setting is worse than choosing it again.
-function loadTransactionsSessionState() {
-  if (typeof window === 'undefined') return null
-  if (!transactionsSessionInitialized) {
-    transactionsSessionInitialized = true
-    if (getTransactionsNavigationType() === 'reload') {
-      sessionStore.remove(TXN_SESSION_STATE_STORAGE_KEY)
-      return null
-    }
-  }
-  const parsed = sessionStore.getJson(TXN_SESSION_STATE_STORAGE_KEY)
-  if (!parsed) return null
-  return {
-    quickFilter: typeof parsed.quickFilter === 'string' ? parsed.quickFilter : '',
-    sortState: normalizeTransactionSortState(parsed.sortState),
-    attributeFilter: normalizeAttributeFilter(parsed.attributeFilter),
-  }
-}
-
-function saveTransactionsSessionState({ quickFilter, sortState, attributeFilter }) {
-  sessionStore.setJson(TXN_SESSION_STATE_STORAGE_KEY, {
-    quickFilter: quickFilter || '',
-    sortState: normalizeTransactionSortState(sortState),
-    attributeFilter: normalizeAttributeFilter(attributeFilter),
-  })
-}
+// remembers setting is worse than choosing it again. They are held in memory rather than sessionStorage
+// because a browser restores a tab's sessionStorage along with the tab.
+let transactionsSessionState = null
 
 function defaultColumnConfig() {
   return DEFAULT_ORDER.map(key => {
@@ -184,7 +134,7 @@ function escapeCsvClipboardCell(value) {
 }
 
 export default function Transactions() {
-  const initialSessionStateRef = useRef(loadTransactionsSessionState())
+  const initialSessionStateRef = useRef(transactionsSessionState)
   // The ledger reads the *explicit* date via getRawDate() — never getDate() — so a page default (the
   // Dashboard's) can never leak in: an unset filter here always means all-time. See getRawDate's contract.
   const { filters, clearDate, removeSelections, getRawDate } = useFilters()
@@ -288,7 +238,7 @@ export default function Transactions() {
     if (search.get('needs_review') === '1') return { attribute: 'needs-review', active: true }
     // A link is an explicit instruction and outranks what the session remembers; with no link, the
     // session's choice carries over, and failing that the seeded default.
-    return normalizeAttributeFilter(initialSessionStateRef.current?.attributeFilter)
+    return initialSessionStateRef.current?.attributeFilter || DEFAULT_ATTRIBUTE_FILTER
   })
   const [filterAttributes, setFilterAttributes] = useState([])
   useEffect(() => { api.getFilterAttributes().then(setFilterAttributes) }, [])
@@ -342,7 +292,7 @@ export default function Transactions() {
   }, [quickFilter])
 
   useEffect(() => {
-    saveTransactionsSessionState({ quickFilter, sortState, attributeFilter })
+    transactionsSessionState = { quickFilter, sortState, attributeFilter }
   }, [quickFilter, sortState, attributeFilter])
 
   // One page of the list by position, in the list's own filter and sort. The filter is the same object bulk
