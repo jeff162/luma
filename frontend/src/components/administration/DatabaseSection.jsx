@@ -29,7 +29,7 @@ import ImportStorageSection from '../settings/ImportStorageSection.jsx'
 
 const DATABASES = [
   ['data', 'Financial data'],
-  ['accounts', 'User sign-in'],
+  ['accounts', 'Users & security'],
 ]
 const SHOWN_PROBLEMS = 5
 const SHOWN_TABLES = 10

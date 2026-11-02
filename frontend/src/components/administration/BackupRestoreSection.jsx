@@ -6,10 +6,10 @@
 // backup is sealed to. All of it is admin-or-local on the server, which is why
 // it is here rather than beside the importer.
 //
-// A backup is always everything: the financial data and the user sign-in
-// (sign-in accounts and settings, backup keys, and the data provider credentials
+// A backup is always everything: the ledger, and the users & security (users,
+// sign-in settings and data, backup keys, and the data provider credentials
 // with the vault that opens them). What to put back is chosen at restore, from
-// what the file holds; the credentials are a choice within the user sign-in,
+// what the file holds; the credentials are a choice within the users & security,
 // since the vault they come with belongs to the people restored beside them.
 // An unencrypted backup leaves out any vault passphrase not validated against
 // the current strength rule, and the credentials too when that leaves no way
@@ -27,7 +27,7 @@
 // internally. Every restore routes through the confirm overlay, which names
 // what it replaces.
 //
-// Every restore of the financial data gives the system a new backup identifier, so a backup made before
+// Every restore of the ledger gives the system a new backup identifier, so a backup made before
 // it reads as another system's. The completion panel says so, and it is the only way out: a restore that
 // replaces the sign-in accounts has signed this tab out too, so the panel holds the shell's answer to the
 // lost session (`holdSessionLost`) until its reload.
@@ -79,7 +79,7 @@ function describeBackupStatus(status) {
 }
 
 const RESTORE_KIND_TITLES = {
-  data: 'financial data backup',
+  data: 'ledger backup',
   credentials: 'credentials backup',
 }
 
@@ -515,8 +515,8 @@ export default function BackupRestoreSection() {
 
   const restoreButtonLabel = restoreIsCredentials ? 'Restore credentials'
     : restoreReplacesEverything ? 'Restore everything'
-      : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore data & user sign-in' : 'Restore user sign-in')
-        : 'Restore data'
+      : restoreReplacesAccounts ? (restoreReplacesData ? 'Restore ledger, users & security' : 'Restore users & security')
+        : 'Restore ledger'
 
   function requestRestore() {
     if (restoreBlocked) return
@@ -541,12 +541,12 @@ export default function BackupRestoreSection() {
         && parseTimestamp(restoreInspection.exported_at) < resetAt
         ? ` The vault was reset after this backup was taken, so ${relinkedSinceReset.connections.join(', ')} lose${relinkedSinceReset.connections.length === 1 ? 's' : ''} the credentials reconnected since.`
         : ''
-      const replaced = `${restoreReplacesData ? 'all financial data, ' : ''}the sign-in accounts and settings${restoreReplacesCredentials ? ', backup keys and data provider credentials' : ' and backup keys'}`
+      const replaced = `${restoreReplacesData ? 'the ledger, ' : ''}the sign-in accounts and settings${restoreReplacesCredentials ? ', backup keys and data provider credentials' : ' and backup keys'}`
       setPendingConfirm({
         type: 'data',
         title: restoreReplacesEverything ? 'Replace everything with this backup?'
-          : restoreReplacesData ? 'Replace data & user sign-in with this backup?' : 'Replace user sign-in with this backup?',
-        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' Financial data is not touched.'}${taken}${relinkLost}`,
+          : restoreReplacesData ? 'Replace the ledger, users & security with this backup?' : 'Replace users & security with this backup?',
+        message: `This replaces ${replaced}${name}, and signs everyone out.${restoreReplacesData ? '' : ' The ledger is not touched.'}${taken}${relinkLost}`,
         confirmLabel: restoreButtonLabel,
         variant: 'danger',
       })
@@ -554,13 +554,13 @@ export default function BackupRestoreSection() {
     }
     setPendingConfirm(targetHasData ? {
       type: 'data',
-      title: 'Replace all data with this backup?',
+      title: 'Replace the ledger with this backup?',
       message: `This will replace accounts, categories, rules, import settings, and transactions${name}.${taken}`,
-      confirmLabel: 'Restore data backup',
+      confirmLabel: 'Restore ledger backup',
       variant: 'danger',
     } : {
       type: 'data',
-      title: 'Load this data backup?',
+      title: 'Load this ledger backup?',
       message: `This system has no data yet, so this just loads the backup${name} into it — nothing is replaced.${taken}`,
       confirmLabel: 'Load backup',
       variant: 'warn',
@@ -779,7 +779,7 @@ export default function BackupRestoreSection() {
                     {[
                       restoreIsCredentials
                         ? 'Data provider credentials, still encrypted. Restoring replaces the credentials stored here; accounts and transactions are not touched.'
-                        : restoreHoldsBoth ? null : 'Restoring replaces all financial data.',
+                        : restoreHoldsBoth ? null : 'Restoring replaces the ledger.',
                       restoreInspection.encrypted
                         ? `${restoreInspection.cipher || 'Encrypted'}, readable by ${restoreInspection.recipient_count || 0} backup key${restoreInspection.recipient_count === 1 ? '' : 's'}.`
                         : null,
@@ -797,15 +797,15 @@ export default function BackupRestoreSection() {
                 {restoreHoldsBoth && (
                   <div role="group" aria-label="What to restore" style={{ display: 'grid', gap: 8 }}>
                     {[
-                      ['restore-data', 'Financial data', restoreData, setRestoreData,
+                      ['restore-data', 'Ledger', restoreData, setRestoreData,
                         'Accounts, categories, rules, transactions, documents and preferences replaced.'],
-                      ['restore-accounts', 'User sign-in', restoreAccounts, value => { setRestoreAccounts(value); if (!value) setAdminPrompt(null) },
-                        'Sign-in accounts, settings and backup keys replaced. Everyone is signed out.'],
-                      // Nested under the sign-in because the vault it brings opens for the people restored with it.
+                      ['restore-accounts', 'Users & security', restoreAccounts, value => { setRestoreAccounts(value); if (!value) setAdminPrompt(null) },
+                        'Users, Sign-in settings and data, backup keys replaced.'],
+                      // Nested under users & security because the vault it brings opens for the people restored with it.
                       ...(restoreFileHasCredentials ? [['restore-credentials', 'Data provider credentials', restoreProviderCredentials, setRestoreProviderCredentials,
                         restoreProviderCredentials
-                          ? 'Vault replaced with the one in the backup. Users with a passphrase, recovery code or passkey in the backup have vault access afterwards, using the ones in force at the time. Other users request vault access again.'
-                          : 'Existing vault contents preserved. The vault is indexed by user information so only users in the backup retain current vault access. The vault will be reset if after restoring the backup none of the users have access.',
+                          ? 'The vault is replaced by the backup. Users with a passphrase, recovery code or passkey in the backup will have vault access. Other users request vault access again.'
+                          : 'Existing vault preserved. The vault is indexed by user id so only users in the backup can have access. The vault is reset if none of the users in the backup have vault access.',
                         true]] : []),
                     ].map(([name, label, checked, setChecked, detail, nested]) => {
                       const disabled = nested && !restoreAccounts

@@ -101,6 +101,8 @@ The `docs/` directory captures the **intent** of the system: what it does, **why
 
 **Overlap and precedence.** Some rules are intentionally stated in more than one place — most notably, `CLAUDE.md` and this file both carry the read-first rule and the quality bar so that each entry point is self-sufficient (an agent that reads only one of them still gets the rule). These copies are meant to agree. If two statements ever appear to conflict, follow the **stricter** one and surface the discrepancy to the user to reconcile — do not act on the looser reading, and do not silently rewrite one to match the other. This keeps intentional duplication safe and turns drift into a flagged question instead of a silent regression. The same rule applies to any apparent inconsistency between docs, code comments, and these instruction files.
 
+**Guidance carries its reason.** A rule in any of these files states the goal it serves ("do X, because Y") rather than standing as a bare command. The reason lets a reader recognise a case it doesn't cover, where departing from the rule may be right, and it keeps a rule from becoming stronger than it was meant to be. The few absolute rules, such as the hard rule in `CLAUDE.md`, say so explicitly.
+
 When working on the codebase:
 
 - A change is finished only when every description of what it touched is still true — code comments, the in-app help (`frontend/src/help/content.jsx`), the README and the docs below. Update them in the same change.

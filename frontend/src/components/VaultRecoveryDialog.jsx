@@ -451,7 +451,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {backups.length > 0 ? (
             <Rung title={backups.length === 1 ? 'A backup holding the vault is on file' : 'Backups holding the vault are on file'}>
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                Restoring the user sign-in and data provider credentials of a backup on Settings →
+                Restoring the users & security and data provider credentials of a backup on Settings →
                 Backup / Restore puts the vault back as it was when the backup was taken, and recovers
                 everything without reconnecting anything. It also puts back the sign-in accounts as they were
                 and signs everyone out.

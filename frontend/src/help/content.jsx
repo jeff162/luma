@@ -139,7 +139,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `How ${APP_NAME} works`,
     surfaces: ['Getting started', 'Dashboard'],
-    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else (accounts, owners, categories, tags, rules) exists to make these two better.`,
+    summary: `${APP_NAME} is for digging into spending patterns. Accounts, owners, categories, tags, rules are tools to help answer questions about the spending.`,
     body: () => (
       <>
         <p>**needs review** - just a read though, keeping up to date @ end removed</p>
@@ -148,11 +148,6 @@ export const HELP_TOPICS = [
           dashboard) and <strong>searching</strong> the transaction history. Accounts, owners, categories,
           tags, and rules all exist to make those two better, and they can be used or not depending on
           whether they are helpful.
-        </p>
-        <p>
-          A handful of deliberate design choices shape how {APP_NAME} behaves and how it is best
-          used -- see <HelpLink to="/help/design-principles">how {APP_NAME} is designed to be
-            used</HelpLink>.
         </p>
         <p>
           A few things hold for the whole ledger rather than for any one page:
@@ -247,7 +242,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each saying what it is for and handing off to its own topic.',
+    summary: 'A description of the major sections and how they fit together.',
     body: () => (
       <><p>The major sections roughly in the order data moves through them:</p>
         {/* A table rather than the prose tour this used to be: ten sections described at paragraph length
@@ -311,71 +306,6 @@ export const HELP_TOPICS = [
             </tbody>
           </table>
         </div>
-      </>
-    ),
-  },
-  {
-    id: 'design-principles',
-    section: 'getting-started',
-    title: `How ${APP_NAME} is designed to be used`,
-    surfaces: ['Getting started'],
-    summary: `A few deliberate choices shape how ${APP_NAME} behaves: categorization that compounds instead of repeating, editing in place, non-destructive toggles, and dedupe that makes overlapping imports safe. Knowing the reasoning makes the rest of the app easier to use.`,
-    body: () => (
-      <>
-        <p>
-          {APP_NAME} makes a handful of deliberate choices, all aimed at keeping routine work
-          low-friction. It is meant to act as a window into the data and to stay out of the way
-          rather than enforce one particular method -- so when something seems like it should be
-          possible but is not, that is usually a gap worth reporting rather than an intended limit.
-          The reasoning below explains why several things work the way they do, and how to take
-          advantage of them.
-        </p>
-        <ul>
-          <li>
-            <strong>Categorization compounds.</strong> Categorizing a
-            transaction can become a rule that reproduces the same
-            decision across every matching transaction and on future imports. Time spent
-            refining a few good rules pays off more than re-touching individual rows. See{' '}
-            <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink>.
-          </li>
-          <li>
-            <strong>Editing happens where the data is shown.</strong> Wherever a thing is viewed it
-            can usually be updated, and anything assignable -- a category, a tag, an
-            owner -- can be created right there. There is rarely a need to find a
-            separate settings screen to make a change.
-          </li>
-          <li>
-            <strong>Use the features which are useful, ignore those which are not.</strong> Reports and search
-            are the two things {APP_NAME} exists to do well; accounts, owners, categories, tags, and
-            rules all exist to make those better. None are mandatory, and each can be left aside
-            until a need for it arises -- there is no obligation to fill everything
-            in up front.
-          </li>
-          <li>
-            <strong>Most changes are reversible.</strong> Most actions can be
-            undone, redone, or adjusted later, and several that look like deletions are really
-            reporting switches: a group{' '}
-            <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> still keeps its
-            transactions, and a{' '}
-            <HelpLink to="/help/removed-as-duplicates">removed duplicate</HelpLink> stays on its
-            file's duplicate report, ready to restore. The few removals that are permanent say so
-            before they happen.
-          </li>
-          <li>
-            <strong>Overlapping sources are safe to import.</strong> Strong duplicate detection is
-            what makes it reasonable to bring in the same activity from more than one place -- a card
-            and the bank account that pays it off, or an aggregator that has seen both. So importing
-            liberally for richer detail is encouraged; the{' '}
-            <HelpLink to="/help/duplicate-report">duplicate-detection report</HelpLink> settles the
-            overlaps.
-          </li>
-          <li>
-            <strong>Ambiguous cases are surfaced, not guessed.</strong> Where more than one reading
-            is reasonable -- which account a transaction belongs to, whether a row is a duplicate,
-            how something should be categorized -- {APP_NAME} asks rather than deciding silently, and a
-            manual choice overrides what a rule would otherwise do.
-          </li>
-        </ul>
       </>
     ),
   },
@@ -846,7 +776,7 @@ export const HELP_TOPICS = [
           every amount from $77.00 to $77.99 (never $770), <code>77.4</code> those from $77.40 to $77.49,
           and <code>77.45</code> that amount alone. A dollar sign and thousands separators are fine
           (<code>$1,250.00</code>), written in the number format chosen in <strong>Settings &rarr;
-          Appearance</strong> (<code>1.250,00</code> with a decimal comma), and parentheses read as a minus, the way a statement writes a payment:
+            Appearance</strong> (<code>1.250,00</code> with a decimal comma), and parentheses read as a minus, the way a statement writes a payment:
           <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter at the top of
           the page.
         </p>
@@ -4560,13 +4490,13 @@ export const HELP_TOPICS = [
     section: 'general-concepts',
     title: 'Data on disk, and backups',
     surfaces: ['Backup / Restore (Settings)', 'Database (Settings)'],
-    summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
+    summary: `Transactions live in a plain-text database. Handle the file carefully if the data is considered sensitive.`,
     body: () => (
       <>
         <p>
           There are two SQLite databases which store almost all of the data for {APP_NAME}.
           Attachments are stored outside the databases in a documents directory next
-          to the data file. The console log sits beside it.
+          to the data file.
         </p>
         <p>
           Accounts, transactions, categories, tags are all stored in{' '}
@@ -4580,112 +4510,115 @@ export const HELP_TOPICS = [
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
         <HelpHeading anchor="backups">Backups</HelpHeading>
-        <p>*needs review*</p>
         <p>
-          Backups are made and restored by an administrator, under <strong>Backup / Restore</strong> on
-          the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. A backup holds
-          everything, in two parts, and what to put back is chosen when restoring.
+          Backups are made and restored by an administrator, using <strong>Backup / Restore</strong> on
+          the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. Everything is included
+          in a backup, the restore process can select which bits to restore.
         </p>
         <ul>
           <li>
-            <strong>Financial data</strong> &mdash; the ledger: categories, rules, owners, accounts,
-            transactions, attached documents and preferences. For each data connection it holds
-            everything except the credential: that the connection exists, its account mapping and how
-            far it had synced.
+            <strong>Ledger</strong> &mdash; categories, rules, owners, accounts,
+            transactions, attached documents and preferences. For data connections,
+            everything except the secret credential.
           </li>
           <li>
-            <strong>User sign-in</strong> &mdash; the sign-in accounts and settings, password hashes and
-            two-factor secrets included, and the backup keys.
+            <strong>Users &amp; security</strong> &mdash; the users, the sign-in settings, password hashes,
+            two-factor secrets, and the backup keys.
           </li>
           <li>
-            <strong>Data provider credentials</strong> &mdash; part of the user sign-in: the stored
-            credential for each connection and the provider secrets entered
-            with <strong>Configure</strong>, encrypted as they are in
-            the <HelpLink to="/help/credential-vault">vault</HelpLink>. To open them it carries every
-            user's vault unlock methods: passphrases, recovery codes and passkeys. Any of them opens the
-            backup.
+            <strong>Data provider credentials</strong> &mdash; the stored
+            credential for each connection and the provider secrets, encrypted as they are in
+            the <HelpLink to="/help/credential-vault">vault</HelpLink>. This can be unlocked with
+            any user's vault unlock methods: passphrases, recovery codes and passkeys.
           </li>
         </ul>
         <p>
-          The file is only as hard to break into as the weakest unlock method in it. Recovery codes and
-          passkeys can't be guessed, so they always go in. A backup that isn't encrypted leaves out any
-          vault passphrase that fails the current strength rule or hasn't been validated against it since
-          the rule changed. If that leaves no way to open the vault, the credentials are left out too. The
-          rest of the backup is still made. The page says beforehand what will be missing, and{' '}
-          <strong>Generate backup</strong> asks for confirmation first. When the
-          passphrase left out is the current user's, the warning carries <strong>Validate passphrase</strong>{' '}
-          or <strong>Change passphrase</strong>. Validating takes the typed passphrase only, since a passkey
-          opens the vault without validating it.
+          The encrypted contents are only as hard to break into as the weakest unlock method. Recovery codes and
+          passkeys are known to be strong, so they are always included. A backup that isn't encrypted omits any
+          vault passphrase that hasn't been validated by the strength rules (has not been used since
+          the rule changed as part of an upgrade). If that would leave no way to open the
+          vault, the credentials are
+          omitted. <strong>Generate backup</strong> complains in this situation and
+          requests confirmation. If the passphrase
+          for the user running the backup is not known to be strong,
+          the warning offers to <strong>Validate</strong>{' '}
+          or <strong>Change</strong> the passphrase.
         </p>
         <p>
-          A backup can be encrypted to a backup key, and {APP_NAME} can generate the key pairs. That
-          protects what the file holds in plain text: the transactions, the password hashes and the
-          two-factor secrets. An encrypted backup also carries every vault passphrase, since guessing at
-          one first needs the private key. The private key needs to be kept somewhere safe, apart from the
-          backups.
+          A backup can be encrypted which
+          protects the entire contents of the backup. Since this is not sensitive to attack
+          by guessing passphrases, an encrypted backup also carries every vault passphrase.
+          The private key needs to be kept somewhere safe, apart from the backup.
         </p>
-        <p>
-          <strong>Backup history</strong> lists the backups made, newest first: when, by whom, the file
-          name, its size, how much of that is attached documents, and the backup keys an encrypted
-          file was sealed to. <strong>credentials omitted</strong> marks a backup that left out the data
-          provider credentials stored here, and <strong>made from a database that failed its check</strong>{' '}
-          a backup made after the check below found damage. In Chrome and Edge, opened on the
-          computer running {APP_NAME} or over HTTPS, the backup is saved through a save dialog, which opens in the folder last used for backups: the history
-          records the name chosen there, and the page says when the file is saved. Other browsers
-          download it, so a backup that was not kept, or was saved under another name, is not reflected
-          there. An entry's menu corrects its filename or moves it to Settings → Trash. Entries older than the number of days set below the list are
-          removed, except the most recent one. The
-          history is part of the financial data, so restoring a backup from another system brings that
-          system's history with it, plus an entry for the restored file.
-        </p>
-
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
         <p>*needs review*</p>
         <p>
-          The restore offers each part the file holds, all ticked. The data provider credentials can
-          only be restored with the user sign-in, since the vault they come with opens for the users
-          restored beside them. Each part replaces what is there, whichever installation it lands on.
+          Generally the entire backup is
+          restored but in special circumstances one might want to skip some sections.
+          It only makes sense to restore the data provider credentials if
+          the users &amp; security is also restored, since the vault is not useful if it cannot be
+          unlocked.
+        </p>
+        <p>
+          <strong>Ledger.</strong> The ledger is replaced with the one in the backup.
+        </p>
+        <p>
+          <strong>Users &amp; security.</strong> The users, sign-in settings and backup keys are replaced
+          with the ones in the backup. Users not in the backup are removed, and everyone is signed out. If
+          the backup has sign-in turned on, the restore first asks for the username and password of an
+          administrator in the backup, so that someone can sign in afterwards.
+        </p>
+        <p>
+          <strong>Data provider credentials</strong> (only with Users &amp; security):
         </p>
         <ul>
           <li>
-            Restoring the financial data replaces the ledger and never removes a credential. A
-            connection that is both in the backup and on the installation keeps its credential and goes
-            back to the sync position it had when the backup was made, so the next sync fetches what
-            has arrived since. A connection in the backup that the installation does not have is created
-            without a credential, waiting to be reconnected. A connection on the installation that the
-            backup does not mention keeps its credential and loses its account
-            list. <strong>Refresh accounts</strong> in the connection's menu fetches the list again.
+            <strong>Ticked:</strong> the vault is replaced with the one in the backup. Users with a
+            passphrase, recovery code or passkey in the backup can open the vault with the ones they had
+            when the backup was made. Other users request vault access again. A connection the backup
+            doesn&apos;t have loses its credential and has to be reconnected.
           </li>
           <li>
-            Restoring the user sign-in replaces the sign-in accounts, settings and backup keys. Everyone
-            is signed out.
-          </li>
-          <li>
-            Restoring the data provider credentials replaces the vault with the one in the backup. Users
-            with a passphrase, recovery code or passkey in the backup have vault access afterwards, using
-            the ones in force at the time. Other users request vault access again. A credential added
-            since the backup was made is cleared and its connection has to be reconnected.
-          </li>
-          <li>
-            Without the credentials, whether not ticked or because the backup was made without them, the
-            existing vault contents are preserved. The vault is indexed by user information so only users
-            in the backup retain current vault access. The vault is reset if after restoring the backup
-            none of the users have access.
-          </li>
-          <li>
-            When the backup turns sign-in on, the restore first asks for the username and password of an
-            administrator in it, so someone can still sign in afterwards.
-          </li>
-          <li>
-            A backup made before <strong>Replace vault key</strong>, or before the vault was rebuilt for
-            a compromised passphrase, restores everything except the data provider credentials, which
-            are under a key that is no longer trusted. After a vault rebuilt for a forgotten passphrase,
-            restoring an older backup's data provider credentials replaces the credentials of connections
-            reconnected since, and the confirmation names them.
+            <strong>Not ticked, or not in the backup:</strong> the vault here is kept. Users removed by the
+            restore lose their vault access. If nobody left can open the vault, it is reset and the
+            credentials are cleared.
           </li>
         </ul>
         <p>
-          Restoring the financial data gives the installation a new backup identifier. Every backup made
+          <strong>Data connections.</strong> A connection&apos;s details, its accounts and its sync position
+          are part of the ledger, and its credential is part of users &amp; security. Restoring the ledger
+          matches connections up:
+        </p>
+        <ul>
+          <li>
+            A connection in both keeps its credential. Syncing picks up from where the backup left off, so
+            the next sync fetches what has arrived since.
+          </li>
+          <li>
+            A connection only in the backup comes back without a credential and has to be reconnected.
+          </li>
+          <li>
+            A connection only on this installation keeps its credential but loses its list of
+            accounts. <strong>Refresh accounts</strong> in the connection&apos;s menu fetches the list again.
+          </li>
+        </ul>
+        <p>
+          <strong>Older backups:</strong>
+        </p>
+        <ul>
+          <li>
+            A backup made before <strong>Replace vault key</strong>, or before the vault was rebuilt after a
+            passphrase was compromised, restores without its data provider credentials. They are under a
+            key that is no longer trusted.
+          </li>
+          <li>
+            After the vault was rebuilt for a forgotten passphrase, restoring an older backup&apos;s
+            credentials takes away the credentials of connections reconnected since. The confirmation
+            names them.
+          </li>
+        </ul>
+        <p>
+          Restoring the ledger gives the installation a new backup identifier. Every backup made
           before the restore, including the file just restored, is afterwards treated as coming from
           another system and asks for confirmation before it replaces anything. A backup made after the
           restore is the one to rely on.
@@ -4711,7 +4644,7 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             When the only problem is an index out of step with its table, <strong>Rebuild
-            indexes</strong> repairs it without losing anything.
+              indexes</strong> repairs it without losing anything.
           </li>
           <li>
             Anything else is repaired from a backup. The section names the newest backup made from
@@ -4777,39 +4710,30 @@ export const HELP_TOPICS = [
   {
     id: 'copied-database',
     section: 'general-concepts',
-    title: 'If the database or a backup is copied',
+    title: 'What to do if the database or an unencrypted backup is stolen',
     surfaces: ['Vault settings (Respond to an exposure)'],
-    summary: 'The transactions in a copied database or unencrypted backup are exposed for good. The provider credentials in it are encrypted, and are replaced or revoked at each provider so the copy cannot use them.',
+    summary: 'While the transactions in a copied database or unencrypted backup are exposed, the provider credentials are encrypted, but should be revoked at each provider.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          A copy of the database files, or of a data backup that was not encrypted, holds the
-          transactions in plain text. Nothing done afterwards changes what is in a file someone
-          already has.
-        </p>
-        <p>
-          The data provider credentials in the copy are encrypted, and what protects them is how well
-          the vault passphrase stands up to guessing, which can go on against a copy without limit. So
-          they are treated as reachable, and retired at each provider. That is the one step that
-          reaches a credential already in the copy.
+          A lost encrypted backup is not a concern as long as the private encryption
+          key is not also stolen. Data provider credentials are always encrypted on disk, and vault
+          passphrases must be strong enough to resist attempts to guess them. Even so, best practice is
+          to revoke the lost credentials at each provider and change the vault passphrase. A passphrase
+          guessed later is then of no use.
         </p>
 
         <HelpHeading anchor="steps">The steps, in order</HelpHeading>
         <ol>
           <li>
-            Open <HelpLink to="/help/vault-settings">Vault settings</HelpLink> from the strip at the
-            top of the Connections tab, and under <strong>Respond to an exposure</strong>{' '}
-            choose <strong>Replace connection credentials&hellip;</strong>. Each provider that supports
-            it issues a new credential, so the copied one stops working and the connection keeps
-            syncing.
+            Open <HelpLink to="/help/vault-settings">Vault settings</HelpLink> from
+            the Connections tab, and under <strong>Respond to an exposure</strong>{' '}
+            choose <strong>Replace connection credentials&hellip;</strong>.
           </li>
           <li>
-            Work through what is listed afterwards. A connection whose provider could not replace its
-            credential is revoked at the provider and then reconnected. A provider secret entered
-            with <strong>Configure</strong> is rotated at the provider, the new one is entered
-            with <strong>Configure</strong>, and the old one is then deleted at the provider, since it
-            can keep working until it is.
+            Go to each provider's website, revoke the existing credential and issue
+            a new one. Enter the new credential in the <strong>Configure</strong> menu.
+
           </li>
           <li>
             Change the vault passphrase, under <strong>Unlock methods</strong>.
@@ -4818,22 +4742,9 @@ export const HELP_TOPICS = [
             Choose <strong>Replace vault key&hellip;</strong>.
           </li>
           <li>
-            Make a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>. One made earlier
-            holds the replaced credentials, which the providers no longer accept.
+            Make a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>.
           </li>
         </ol>
-        <p>
-          Steps 3 and 4 protect what is encrypted from then on, the new credentials included. A
-          passphrase worked out from the copy would otherwise still open the vault, and the key it
-          reaches would still decrypt what the vault holds. Each step retires one of the two, so both
-          are needed. This is done once for an exposure and is not a routine to repeat.
-        </p>
-        <p>
-          Any other copy of the database, such as a second installation or one restored from a backup,
-          stops syncing the connections whose credentials were replaced. A connection card
-          reports <strong>reconnect needed</strong> when its provider no longer accepts the stored
-          credential.
-        </p>
       </>
     ),
   },
@@ -4842,46 +4753,42 @@ export const HELP_TOPICS = [
     section: 'general-concepts',
     title: 'Account security: password, passkeys and two-factor',
     surfaces: ['Sign-in protection (Settings)', 'Security (Settings)'],
-    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. A passkey signs in without a typed password and without a two-factor code; two-factor adds a code at sign-in and is optional.`,
+    summary: `Sign-in protection is available to keep people with access to the network from using the app. All of the users share the same data.`,
     body: () => (
       <>
         <p>
-          Sign-in protection exists to keep <strong>non-users out</strong> and to control access to
-          certain administrative functions (users can be designated an administrator or not).
-          Everyone who signs in sees and edits
-          the <strong>same shared data</strong>; the password guards <em>network</em> access only: it
-          is not disk encryption,
-          it is not a substitute for keeping the machine itself secure (see{' '}
-          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
+          Sign-in protection exists to keep <strong>non-users out</strong>. This could be other people
+          who have access to the machine running {APP_NAME}, or people who have access to the network
+          when {APP_NAME} is running as a server. Sign-in protection also limits access to the
+          set of administrative functions (users can be designated an administrator or not).
+          All {APP_NAME} users see and edit the same data; there is no concept of some data
+          being hidden from some users. See{' '}
+          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink> for
+          information on what needs to be protected on disk if that is of interest.
         </p>
-        <p>*needs review*</p>
         <p>
-
-          Sign-in protection is managed in the Server group of the <HelpLink to="/help/page-settings#server">Settings</HelpLink> page.
+          Sign-in protection is managed in the <HelpLink to="/help/page-settings#server">Settings</HelpLink> page.
           Enabling sign-in protection involves selecting a required password policy and creating a password
           for the current user who becomes an administrator. Other users will be prompted to create a password
-          when they next connect. A password can be entered for them by an administrator but they still will
-          need to choose their own password when they connect. Assigning a password is to prevent a different person
-          from claiming the account before the expected user logs in to set the password. Turning
-          sign-in protection off retains the passwords.
+          when they next connect. A password can be entered for them by an administrator but they will
+          be forced to change the password when they connect. Assigning a password prevents a different person
+          from claiming the account before the target user logs in.
         </p>
         <p>
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to
           all users, and it can be tightened or relaxed at any time. This does not affect existing passwords,
           only newly created passwords.
         </p>
-        <p>*needs review*</p>
         <p>
-          <strong>Strong</strong> requires a password that is hard to guess, judged by the
-          same strength check as the vault passphrase. Length and unrelated words count for more than mixing
-          in capitals, numbers and symbols, so a password like <code>Password1234567!</code> is refused.
-          Every field that sets a password offers <strong>Suggest a password</strong>: four random words
-          that meet every policy, Strong included.
+          <strong>Strong</strong> requires a password that is hard to guess. Length and unrelated words count for more than mixing
+          in capitals, numbers and symbols, so a password like <code>Password1234567!</code> is refused
+          while <code>rope-rockstar-shone-colt</code> is accepted.
         </p>
         <p>
-          Each user's own password is changed under <strong>Security</strong> on the{' '}
-          <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is
-          required, and the change signs the account out of every other browser.
+          Users change their passwords in <strong>Security</strong> on the{' '}
+          <HelpLink to="/help/page-settings">Settings</HelpLink> page. Changing the password
+          signs out all current browser sessions.
+
         </p>
         <p>
           <strong>Passkeys</strong> involve signing in with a fingerprint, face or device PIN instead of a typed
@@ -4890,18 +4797,13 @@ export const HELP_TOPICS = [
           in addition to a password; they do not replace it.
         </p>
         <p>
-          A passkey is <em>not</em> a vault passkey. The vault's passkeys unlock stored data
-          connection credentials (see{' '}
-          <HelpLink to="/help/vault-settings">Vault settings</HelpLink>); these sign in to the
-          application. Adding one here grants nothing in the vault, and an account may hold both.
+          Passkeys for signing in are separate from passkeys used to unlock the vault.
         </p>
         <p>
           <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
-          When it is on, the code is requested <strong>every fresh sign-in</strong> &mdash; a browser
-          with an active session is not asked again until that session ends, but there is no "trust
-          this device" that skips the code on a new sign-in. A passkey is the exception: the device
-          already checks a fingerprint, face or PIN before it will sign anything, so a passkey sign-in
-          completes without a code. If authenticator access is lost, the{' '}
+          When enabled the code is at every sign-in; there is no "trust this device" option. The code is
+          remembered for the duration of the active session.  2FA is only used with passwords, using a
+          passkey does not also ask for the authenticator code. If authenticator access is lost, the{' '}
           <strong>recovery codes</strong> displayed when authenticator use is enabled
           are the way back in, so save these in a password manager or somewhere equally safe.
         </p>
@@ -4911,6 +4813,45 @@ export const HELP_TOPICS = [
           and the data on it. When {APP_NAME} runs on the computer it is used from, anyone who can use that
           computer can read the database files directly, so sign-in protects use of the application
           rather than the data, and leaving two-factor off is reasonable.
+        </p>
+        <HelpHeading anchor="locked-out">Locked out</HelpHeading>
+        <p>
+          The administrator&apos;s password can be reset
+          from the command line. This process is also described in the{' '}
+          <a href="https://github.com/jeff162/luma#locked-out" target="_blank" rel="noreferrer">README&apos;s
+            <em> Locked out</em> section</a>.
+        </p>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>Installation</th><th>Command</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Windows or Linux download</td>
+                <td><code>luma --reset-password</code>, in the folder holding the program</td>
+              </tr>
+              <tr>
+                <td>macOS</td>
+                <td><code>/Applications/Luma.app/Contents/Resources/server/luma --reset-password</code></td>
+              </tr>
+              <tr>
+                <td>Docker</td>
+                <td><code>docker compose exec app python -m backend.desktop --reset-password</code></td>
+              </tr>
+              <tr>
+                <td>Source checkout</td>
+                <td><code>backend/venv/bin/python -m backend.desktop --reset-password</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          A list of accounts to choose from is provided and it asks for the new password. It is safe to run while{' '}
+          {APP_NAME} is running. The chosen account ends up as an active administrator with two-factor
+          off, and all current browser sessions are signed out. The vault passphrase is not affected; a
+          forgotten vault passphrase is covered under{' '}
+          <HelpLink to="/help/credential-vault#resolving-problems">the credential vault</HelpLink>.
         </p>
       </>
     ),

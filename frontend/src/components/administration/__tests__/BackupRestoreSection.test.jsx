@@ -449,42 +449,42 @@ describe('restoring a backup that holds both parts', () => {
     renderSection()
     await choose(user)
 
-    await user.click(screen.getByRole('checkbox', { name: /Financial data/ }))
-    await restore(user, 'Restore user sign-in')
+    await user.click(screen.getByRole('checkbox', { name: /Ledger/ }))
+    await restore(user, 'Restore users & security')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(false, true)))
 
-    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
-    expect(screen.getByRole('button', { name: 'Restore data' }).disabled).toBe(true)
+    await user.click(screen.getByRole('checkbox', { name: /Users & security/ }))
+    expect(screen.getByRole('button', { name: 'Restore ledger' }).disabled).toBe(true)
   })
 
-  it('restores only the financial data when that is all that is ticked', async () => {
+  it('restores only the ledger when that is all that is ticked', async () => {
     const user = userEvent.setup()
     restoreBackupFile.mockResolvedValue({ restored_counts: {} })
     renderSection()
     await choose(user)
 
-    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
-    await restore(user, 'Restore data', 'Restore data backup')
+    await user.click(screen.getByRole('checkbox', { name: /Users & security/ }))
+    await restore(user, 'Restore ledger', 'Restore ledger backup')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(true, false)))
   })
 
-  it('restores the user sign-in without the credentials when they are not ticked', async () => {
+  it('restores the users & security without the credentials when they are not ticked', async () => {
     const user = userEvent.setup()
     restoreBackupFile.mockResolvedValue({ restored_counts: {}, accounts: { users: 1 }, signed_out: true })
     renderSection()
     await choose(user)
 
     await user.click(screen.getByRole('checkbox', { name: /Data provider credentials/ }))
-    await restore(user, 'Restore data & user sign-in')
+    await restore(user, 'Restore ledger, users & security')
     await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(FILE, null, '', false, parts(true, true, '', '', false)))
   })
 
-  it('offers the credentials only with the user sign-in', async () => {
+  it('offers the credentials only with the users & security', async () => {
     const user = userEvent.setup()
     renderSection()
     await choose(user)
 
-    await user.click(screen.getByRole('checkbox', { name: /User sign-in/ }))
+    await user.click(screen.getByRole('checkbox', { name: /Users & security/ }))
     expect(screen.getByRole('checkbox', { name: /Data provider credentials/ }).disabled).toBe(true)
   })
 
