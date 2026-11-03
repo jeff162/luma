@@ -80,7 +80,9 @@ from backend.transport import reachable_from_network
 
 from .core import (
     IMPORTED_CATEGORY_SETTINGS_KEY,
+    MAX_IMPORT_FILE_BYTES,
     PAYPAL_SOURCE_KIND,
+    import_file_too_large,
     make_import_file_hash,
     parse_csv_text,
     run_import_parsed,
@@ -138,12 +140,6 @@ IGNORED_PREFIXES = (".", "~$", ".~lock.")
 # but its files go through the vendor's own importer rather than a column map. Spelled here rather than
 # imported from `amazon` to keep this module's import of that one lazy (it imports `core`, as this does).
 AMAZON_SOURCE_KIND = "marketplace:amazon"
-
-# An unattended path picks its own files, so it needs its own ceiling — the interactive import is
-# bounded by what a person is willing to select. Read into memory whole, like every other import, so
-# the cap is about the machine rather than about the format.
-MAX_WATCHED_FILE_BYTES = 64 * 1024 * 1024
-
 
 OUTSIDE_WATCH_ROOTS = (
     "This folder is outside the folders this server may watch: its imports folder and any named in "
@@ -517,9 +513,8 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
     connection held open across it would make this scan's own bookkeeping invisible to the request
     that is running it.
     """
-    if int(candidate["size"] or 0) > MAX_WATCHED_FILE_BYTES:
-        return {"state": WATCH_STATE_PARKED,
-                "reason": f"This file is larger than {MAX_WATCHED_FILE_BYTES // (1024 * 1024)} MB."}
+    if int(candidate["size"] or 0) > MAX_IMPORT_FILE_BYTES:
+        return {"state": WATCH_STATE_PARKED, "reason": import_file_too_large(None)}
     kind = _file_kind(profile.get("source_kind"), candidate["filename"])
     try:
         content = kind.read(candidate["path"])

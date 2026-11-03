@@ -285,7 +285,8 @@ rather than the runner label, because the labels name build infrastructure rathe
 the `<system>-<arch>` tag already in the archive *inside* the wrapper, so the two agree.
 
 "Tests first" is `.github/workflows/ci.yml`, *called* by the release workflow rather than copied into
-it — the same backend, unit, lint and browser lanes that gate every push and pull request. A release
+it — the same backend, unit, lint, browser and dependency-audit lanes that gate every push and pull
+request. A release
 that was gated on a second transcription of those checks would drift from them silently, in the
 workflow nobody reads until a build has already shipped.
 

@@ -28,7 +28,7 @@ class FakeUploadFile:
         self.filename = filename
         self._content = content.encode("utf-8")
 
-    async def read(self):
+    async def read(self, size: int = -1):
         return self._content
 
 

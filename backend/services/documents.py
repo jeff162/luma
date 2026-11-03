@@ -108,14 +108,18 @@ HTML_MIME_TYPE = "text/html"
 # An exported email. Accepted as an *upload* but never stored as one — see `_email_to_document`,
 # which converts it at ingest, so nothing downstream has to know this format exists.
 EMAIL_MIME_TYPE = "message/rfc822"
-IMAGE_MIME_TYPES = frozenset({
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/gif",
-    "image/tiff",
-    "image/bmp",
-})
+# Each stored image type, with the one Pillow decoder that may open it. Opening with only that decoder
+# keeps a file from reaching Pillow's other parsers by what its bytes claim, which is where most of its
+# security fixes have landed.
+IMAGE_DECODERS = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/webp": "WEBP",
+    "image/gif": "GIF",
+    "image/tiff": "TIFF",
+    "image/bmp": "BMP",
+}
+IMAGE_MIME_TYPES = frozenset(IMAGE_DECODERS)
 SUPPORTED_MIME_TYPES = frozenset({PDF_MIME_TYPE, TEXT_MIME_TYPE, HTML_MIME_TYPE}) | IMAGE_MIME_TYPES
 # What an upload may *arrive* as, which is one wider than what may be stored.
 ACCEPTED_UPLOAD_MIME_TYPES = SUPPORTED_MIME_TYPES | {EMAIL_MIME_TYPE}
@@ -363,7 +367,7 @@ def _downscale_image(data: bytes, mime_type: str) -> tuple[bytes, str]:
     above, so the honest failure is a document that was stored as delivered, not a rejected receipt.
     """
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data), formats=[IMAGE_DECODERS[mime_type]]) as image:
             image = ImageOps.exif_transpose(image)
             has_alpha = image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
             if max(image.size) > IMAGE_LONG_EDGE_PX:

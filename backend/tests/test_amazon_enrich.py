@@ -644,7 +644,7 @@ class AmazonOrdersTests(unittest.TestCase):
             self.filename = filename
             self._data = text.encode("utf-8")
 
-        async def read(self):
+        async def read(self, size: int = -1):
             return self._data
 
     def test_reimported_file_is_skipped_by_hash(self):

@@ -43,6 +43,7 @@ from .core import (
     STATEMENT_SNAPSHOT_KEY,
     ParsedFile,
     _get_or_create_paypal_profile,
+    read_import_upload,
     run_import_parsed,
 )
 
@@ -81,7 +82,7 @@ async def _read_uploads(files: list[UploadFile]) -> tuple[list[_Found], list[str
     seen: set[str] = set()
     for upload in files:
         name = upload.filename or "statement.pdf"
-        data = await upload.read()
+        data = await read_import_upload(upload)
         for member_name, member in _documents(name, data, unrecognized, unreadable):
             try:
                 statement = read_statement(member)

@@ -253,7 +253,7 @@ On a Linux host, if Docker with the Compose plugin is available, this is a strai
 1. Save `docker-compose.yml` from the [releases page](https://github.com/jeff162/luma/releases) into a
    folder of its own.
 
-2. Create a file named `.env` in the folder containing: `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+2. If a network name other than the default `luma.local` is desired, create a file named `.env` in the folder containing `MDNS_NAME=` followed by the desired name, without the `.local` ending.
 
 3. Start it, and read the address other computers use from the log:
 
@@ -280,7 +280,7 @@ If running from a source checkout, `docker compose up -d --build` builds the ima
 
 Run these as the user the server should run as, from the folder the download was unpacked into.
 
-1. Create a file named `.env` beside the program containing `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+1. If a network name other than the default `luma.local` is desired, create a file named `.env` beside the program containing `MDNS_NAME=` followed by the desired name, without the `.local` ending.
 
 2. Install Caddy from the distribution's packages.
 

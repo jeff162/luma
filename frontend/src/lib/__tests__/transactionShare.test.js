@@ -5,7 +5,7 @@
 // names a category the transaction is no longer in, in text that leaves the app for an email or a note.
 
 import { describe, expect, it } from 'vitest'
-import { TRANSACTION_SHARE_COLUMNS, getTransactionShareFields } from '../transactionShare.js'
+import { TRANSACTION_SHARE_COLUMNS, buildListShareText, getTransactionShareFields } from '../transactionShare.js'
 
 const categoryOf = txn => TRANSACTION_SHARE_COLUMNS.find(col => col.key === 'category').get(txn)
 
@@ -41,5 +41,14 @@ describe('the category a copied transaction reports', () => {
   it('reports a part row as the part it is', () => {
     // A category-scoped list returns one allocation, which has a category of its own.
     expect(categoryOf({ ...SPLIT, split_part_id: 'p2', category_name: 'Hardware' })).toBe('Hardware')
+  })
+})
+
+describe('the plain-text list copy pasted into a spreadsheet', () => {
+  it('keeps text that opens a formula as text, and a negative amount as a number', () => {
+    const [, row] = buildListShareText([{ id: 't3', date: '2026-01-02', merchant_name: '=HYPERLINK("x")', amount: -17.99 }])
+      .split('\n')
+    expect(row).toContain(`"'=HYPERLINK(""x"")"`)
+    expect(row).not.toContain("'-")
   })
 })

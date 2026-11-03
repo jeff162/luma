@@ -192,12 +192,14 @@ Neither surface appears on an installation with no proxy certificate to hand out
 **On Linux, the proxy's site file and the supervisor's unit are printed by the build itself**
 (`--caddyfile`, `--systemd-unit`; `backend/server_setup.py` has why). So a change to `MDNS_NAME` or
 `FRONTEND_PORT` means printing the site file again, and moving the folder means printing the unit
-again. `SESSION_COOKIE_SECURE=true` is set by hand in `.env`; nothing derives it.
+again. The session cookie is marked `Secure` whenever it is set over HTTPS, so nothing has to be set for
+it. A name the server is reached by other than its `.local` one, an IP address or a single label (a
+router's `.lan` name, an owned domain) has to be listed in `ALLOWED_HOSTS`, or requests to it are refused.
 
 What the two files rely on, for a proxy or supervisor other than these:
 
-- **The proxy terminates TLS and passes every request to the port.** It serves no files: the process
-  serves the interface as well as the API.
+- **The proxy terminates TLS and passes every request to the port**, keeping the `Host` the browser sent,
+  which the host check reads. It serves no files: the process serves the interface as well as the API.
 - **The proxy states the scheme and the client address** (`X-Forwarded-Proto`, `X-Forwarded-For`), which
   Caddy does unasked. uvicorn honors them from a loopback peer only, which is where the proxy is;
   without them `request.url.scheme` reports the internal HTTP hop and every HTTPS-conditional behavior

@@ -7,8 +7,9 @@
 #
 # **Two main jobs, in parallel.** The unit lane needs no browser; the browser lane spends most of its
 # wall clock installing Chromium and booting two servers. Splitting them pays the setup twice and gets
-# the slower half started at minute zero rather than after the faster half finishes. A third, small job
-# runs the backend suite alone on the newest Python a source checkout is said to work on.
+# the slower half started at minute zero rather than after the faster half finishes. Two small jobs
+# run beside them: the backend suite alone on the newest Python a source checkout is said to work on,
+# and an audit of the shipped dependencies for known vulnerabilities.
 #
 # **Why the browser lane is here at all.** It covers what nothing else does: the specs drive the app as
 # a user meets it — the dev server, a real backend against a throwaway database, a real DOM — so a
@@ -114,6 +115,35 @@ jobs:
 
       - name: Backend tests
         run: python -m pytest backend/tests -n auto
+
+  # Known vulnerabilities in what ships: the Python packages a kit carries (runtime and build) and the
+  # npm packages in the bundle. Development tooling is left out because it never reaches an install.
+  # A job of its own so a newly published advisory reads as what it is rather than as a broken test,
+  # and so it fails a release the same way it fails a push.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install pip-audit
+        run: python -m pip install pip-audit==2.10.1
+
+      - name: Audit Python packages
+        run: pip-audit -r backend/requirements.txt -r backend/requirements-build.txt
+
+      - name: Audit npm packages
+        working-directory: frontend
+        run: npm audit --omit=dev
 
   browser:
     name: Browser suite

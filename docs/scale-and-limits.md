@@ -107,8 +107,9 @@ A scan lists the folder and opens only the entries whose `(size, mtime)` moved; 
 - **The nav badge and the Tasks list never touch the filesystem.** Both read the persisted count in
   `import_watch_file`, because a network share is slower and less predictable than the database and
   these are read on every page load.
-- **An unattended import has a file-size ceiling** (`MAX_WATCHED_FILE_BYTES`). A file is read into
-  memory whole, and here nobody chose it; a larger file is parked.
+- **An import has a file-size ceiling** (`MAX_IMPORT_FILE_BYTES`), whether the file was dropped on the
+  Import page or found in a watched folder. Every importer reads its file into memory whole. A watched
+  file over it is parked; an upload over it is refused before more than the ceiling is read.
 
 ## Bulk operations must not accumulate
 

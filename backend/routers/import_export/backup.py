@@ -130,6 +130,18 @@ def _dated_backup_filename(stem: str, suffix: str) -> str:
 # file opened in a spreadsheet says why those cells are not category names.
 SPLIT_EXPORT_MARKER = "--split--"
 
+# Leading characters a spreadsheet reads as the start of a formula. Transaction text is largely written
+# by others — a merchant name from a bank, the note on a PayPal payment someone sent — so a cell starting
+# with one is prefixed with `'`, which every spreadsheet takes as "this is text". Only text is touched:
+# a negative amount starts with `-` and has to stay a number.
+SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def spreadsheet_safe(value):
+    if isinstance(value, str) and value.startswith(SPREADSHEET_FORMULA_PREFIXES) and value != SPLIT_EXPORT_MARKER:
+        return f"'{value}"
+    return value
+
 EXPORT_COLUMNS = {
     "date":          ("t.date",            "Date"),
     "merchant_name": ("COALESCE(t.display_name, t.merchant_name, t.raw_name)",   "Merchant"),
@@ -502,7 +514,7 @@ def export_transactions_csv(
                 {where}
                 ORDER  BY {order_by}
             """, params):
-                w.writerow([row[k] for k in col_keys])
+                w.writerow([spreadsheet_safe(row[k]) for k in col_keys])
                 yield buf.getvalue(); buf.seek(0); buf.truncate()
 
     return StreamingResponse(

@@ -383,7 +383,7 @@ class VaultPasskeyEndpointTests(unittest.TestCase):
     def test_a_cleartext_network_bind_cannot_either(self):
         with api_client() as (client, _):
             params = client.get("/api/auth/vault/passkey/params",
-                                headers={"host": "luma.example.org"}).json()
+                                headers={"host": "luma.home.arpa"}).json()
         self.assertFalse(params["available"])
         self.assertEqual(params["reason"], "insecure_context")
 

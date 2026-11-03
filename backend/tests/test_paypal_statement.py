@@ -138,7 +138,7 @@ class FakeUpload:
         self.filename = filename
         self._data = data
 
-    async def read(self):
+    async def read(self, size: int = -1):
         return self._data
 
 

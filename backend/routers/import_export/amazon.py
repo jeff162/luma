@@ -67,7 +67,7 @@ from backend.services.amazon_import import (
     read_export,
 )
 
-from .core import IMPORT_SUMMARY_KEY, _insert_imported_transaction, is_demo_data_loaded, make_hash, make_import_file_hash
+from .core import IMPORT_SUMMARY_KEY, _insert_imported_transaction, is_demo_data_loaded, make_hash, make_import_file_hash, read_import_upload
 
 router = APIRouter()
 
@@ -2519,7 +2519,7 @@ async def _read_amazon_uploads(files, known_files: "dict | None" = None):
     lists only the files taken."""
     named_texts = []
     for upload in files:
-        content = await upload.read()
+        content = await read_import_upload(upload)
         try:
             text = content.decode("utf-8-sig")
         except UnicodeDecodeError:

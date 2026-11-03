@@ -35,6 +35,7 @@ from .core import (
     AmountColumnMap,
     parse_amount,
     parse_csv_text,
+    read_import_upload,
 )
 
 router = APIRouter()
@@ -86,7 +87,7 @@ async def preview_csv(file: UploadFile = File(...)):
     - previous_batch_accounts: accounts imported in previous batch (for dup warning)
     - config_snapshot: column/account config from previous batch (to restore)
     """
-    content = await file.read()
+    content = await read_import_upload(file)
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:

@@ -62,6 +62,14 @@ proxies `/api` in development, and a downloaded build or the container image has
 therefore defaults to empty, since no shipped topology makes a cross-origin call. A path that is not a
 real file returns `index.html` for the client router, except under `/api`, which stays a JSON 404.
 
+**Every response passes three outermost middlewares** (`backend/http_hardening.py`): a host check that
+refuses a request addressed to a name not this server's, a cookie pass that adds `Secure` to anything set
+over HTTPS, and the security headers (framing limited to the app's own origin, `nosniff`, a content
+policy, `Referrer-Policy: same-origin`, and `Cache-Control: no-store` on everything but the hashed
+assets). FastAPI's generated API pages are switched off. The policy's script hashes are read from the built `index.html` at startup (`spa.py`), so the
+inline theme script is allowed without a hash to keep in step by hand. The session cookie itself is
+`SameSite=Strict`. What each defends is in `security-model.md` → *Other websites in the same browser*.
+
 ## Backend structure
 
 - **`backend/main.py`:** bootstrap, middleware, and router registration
@@ -740,8 +748,10 @@ checkout run against two databases needs two cookie names: each database signs w
 - The bind port and the frontend/Vite ports, consumed before the server binds.
 - `LUMA_USE_LOG_FILES` and `LUMA_BACKEND_READY_TIMEOUT`, read by the start scripts before Python runs,
   and `SERVER_MODE`, read by the launcher before it has a server.
-- `SESSION_COOKIE_SECURE`, a transport guarantee set at the deployment edge.
+- `SESSION_COOKIE_SECURE`, which forces the cookie's `Secure` flag for a proxy that does not report the
+  HTTPS it terminated. A cookie set over HTTPS is marked without it.
 - `CORS_ORIGINS`, empty by default because every topology is single-origin.
+- `ALLOWED_HOSTS`, the names beyond the always-answered ones that the host check accepts.
 - `LUMA_DEVELOPER_OPTIONS`, which gates destructive reset tooling.
 
 **Bootstrap ordering.** The session secret and cookie name are constructor arguments to
@@ -937,7 +947,7 @@ custody*; this section is the mechanism.
   terminates TLS at a reverse proxy with uvicorn on `--proxy-headers`. `backend/transport.py` detects
   loopback and HTTPS per request, reading loopback from the client's address and never from the `Host`
   header. Plain HTTP on a networked bind is acceptable only with no sign-in and no provider. This is
-  enforced by `SESSION_COOKIE_SECURE`, by `transport.require_protected_link` (which refuses operations
+  enforced by marking the session cookie `Secure` whenever it is set over HTTPS, by `transport.require_protected_link` (which refuses operations
   carrying a provider secret from another device in cleartext), and by a computed "Set up HTTPS" task
   (`tasks.py`) shown to whoever can act on it. The launcher declares what it started (`transport.declare_listener`):
   whether other devices can reach the installation, and whether they reach its plain HTTP directly. A

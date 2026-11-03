@@ -54,7 +54,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend import app_config, app_log_file, runtime_config, spa, transport
+from backend import app_config, app_log_file, http_hardening, runtime_config, spa, transport
 from backend.app_logging import log_warning
 from backend.db.control_database import (
     auth_required, get_user_by_id, init_control_db, reconcile_workspace_db_path,
@@ -304,7 +304,13 @@ async def lifespan(app: FastAPI):
 init_control_db()
 config = app_config.resolve()
 
-app = FastAPI(title=config.app_name, version=runtime_config.APP_VERSION, lifespan=lifespan)
+# No generated API pages (`/docs`, `/redoc`, `/openapi.json`). They sit outside `/api`, so the sign-in
+# check never reaches them, and the two interactive ones load their scripts from a CDN the content policy
+# refuses (`http_hardening.py`).
+app = FastAPI(
+    title=config.app_name, version=runtime_config.APP_VERSION, lifespan=lifespan,
+    docs_url=None, redoc_url=None, openapi_url=None,
+)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
     # Starlette's `SessionMiddleware` with a clock-skew-tolerant signer: a wall clock that steps
@@ -315,12 +321,10 @@ app.add_middleware(
     secret_key=config.session_secret,
     session_cookie=config.session_cookie_name,
     max_age=_SESSION_MAX_AGE_SECONDS,
-    # Mark the cookie Secure on a TLS-terminated (client-server) deployment so it never crosses the
-    # network in cleartext. Driven by an explicit env the install sets — NOT derived from the security
-    # profile (that is a recommendation, not a transport guarantee; deriving Secure from it would lock
-    # out a network-profile install running plain HTTP) and NOT hardcoded (that breaks the loopback
-    # desktop default). Left false for the loopback default where the cookie never leaves the machine.
-    https_only=config.session_cookie_secure,
+    # Strict, so no request another site starts carries the session. The interface loads without one and
+    # every request it then makes is same-site, so a link into the app from elsewhere costs nothing.
+    # `Secure` is added per request by `SecureCookieMiddleware` below, from the scheme the request arrived on.
+    same_site="strict",
 )
 
 # Off unless `TRACE_DB_CONTENTION` is set; `npm run ui:stress` sets it (`backend/db/contention_trace.py`).
@@ -369,3 +373,15 @@ def health():
 
 # Last, deliberately: this registers a catch-all that would shadow every route above it.
 spa_mounted = spa.mount_spa(app)
+
+# Outermost, so a refused host is answered before anything else runs, and every response — an error
+# included — leaves with the headers. `backend/http_hardening.py` has what each one defends.
+app.add_middleware(http_hardening.SecureCookieMiddleware, always=config.session_cookie_secure)
+app.add_middleware(
+    http_hardening.SecurityHeadersMiddleware,
+    policy=http_hardening.content_security_policy(spa.inline_script_hashes() if spa_mounted else ()),
+)
+app.add_middleware(
+    http_hardening.HostCheckMiddleware,
+    extra_hosts=http_hardening.parse_allowed_hosts(config.allowed_hosts),
+)

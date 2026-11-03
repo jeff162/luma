@@ -65,8 +65,11 @@ index in [`backlog/README.md`](backlog/README.md).
 ### [Security model](security-model.md)
 
 - [What is defended, and what is deliberately not](security-model.md#what-is-defended-and-what-is-deliberately-not)
+- [Other websites in the same browser](security-model.md#other-websites-in-the-same-browser)
+- [Known vulnerabilities in what ships](security-model.md#known-vulnerabilities-in-what-ships)
 - [Reading and deleting outside the data directory](security-model.md#reading-and-deleting-outside-the-data-directory)
 - [Rendering documents a user supplied](security-model.md#rendering-documents-a-user-supplied)
+- [Text from others in a spreadsheet](security-model.md#text-from-others-in-a-spreadsheet)
 - [Why provider credentials are the only things encrypted](security-model.md#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](security-model.md#revocation-in-both-directions)
 - [Identity and the network perimeter](security-model.md#identity-and-the-network-perimeter)

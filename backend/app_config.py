@@ -150,7 +150,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="session_cookie_secure",
         env_var="SESSION_COOKIE_SECURE",
         label="Secure session cookie",
-        help="Sends the session cookie over HTTPS only. Set by a TLS-terminated install; left off for the loopback default.",
+        help="Marks the session cookie for HTTPS only on every request. A cookie set over HTTPS is marked anyway, so this is needed only behind a proxy that does not report the HTTPS it terminated.",
         default="false",
         advanced=True,
     ),
@@ -159,6 +159,14 @@ SETTINGS: tuple[Setting, ...] = (
         env_var="CORS_ORIGINS",
         label="Allowed cross-origin callers",
         help="Other web origins whose pages may call this API from a browser with cookies. Empty by default: the SPA and the API are served on one origin (the dev server proxies /api, and everywhere else one process serves both), so nothing needs a grant.",
+        default="",
+        advanced=True,
+    ),
+    Setting(
+        key="allowed_hosts",
+        env_var="ALLOWED_HOSTS",
+        label="Additional host names",
+        help="Further names this server answers to, separated by commas. An IP address, localhost, a name without a dot, and names ending .local, .home.arpa or .internal are always answered; any other name, such as one a router assigns under .lan or an owned domain, has to be listed. Requests to an unlisted name are refused, which is what stops a website re-pointing its own name at this server.",
         default="",
         advanced=True,
     ),
@@ -501,6 +509,7 @@ class AppConfig:
     session_cookie_name: str
     session_cookie_secure: bool
     cors_origins: tuple[str, ...]
+    allowed_hosts: str
 
 
 def resolve() -> AppConfig:
@@ -514,4 +523,5 @@ def resolve() -> AppConfig:
         session_cookie_name=value_of("session_cookie_name"),
         session_cookie_secure=truthy(value_of("session_cookie_secure")),
         cors_origins=tuple(dict.fromkeys(origins)),
+        allowed_hosts=value_of("allowed_hosts"),
     )

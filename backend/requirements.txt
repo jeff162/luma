@@ -23,11 +23,11 @@ truststore==0.10.5
 segno==1.6.6
 # Downscales attached receipt photographs once, at ingest (services/documents.py). Bundles cleanly
 # into the PyInstaller kits, so the standalone builds are unaffected.
-Pillow==12.3.0
+Pillow==13.0.0
 # Reads the text layer a digital PDF already carries, so an attached invoice is searchable without
 # OCR (docs/data-model.md -> Attached documents). Pure Python with no dependencies of its own, which
 # is why it is preferred over the layout-aware alternatives.
-pypdf==6.20.1
+pypdf==6.21.4
 # Answers for the server's name on the local network in server mode (backend/mdns.py). The operating
 # system's own responder only publishes the machine's host name, and this is what makes a second name
 # work the same way on Windows, macOS and Linux. Imported only when a server starts.

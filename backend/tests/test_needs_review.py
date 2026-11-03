@@ -191,7 +191,7 @@ class _Upload:
         self.filename = "fixture.csv"
         self._content = content.encode("utf-8")
 
-    async def read(self):
+    async def read(self, size: int = -1):
         return self._content
 
 

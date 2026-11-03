@@ -28,7 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from backend import runtime_config
+from backend import http_hardening, runtime_config
 
 
 def dist_dir() -> Path:
@@ -61,3 +61,9 @@ def mount_spa(app: FastAPI) -> bool:
         return FileResponse(index)
 
     return True
+
+
+def inline_script_hashes() -> tuple[str, ...]:
+    """The content-policy hashes of the bundle's inline scripts (`http_hardening.inline_script_hashes`)."""
+    index = dist_dir() / "index.html"
+    return http_hardening.inline_script_hashes(index.read_text(encoding="utf-8")) if index.is_file() else ()

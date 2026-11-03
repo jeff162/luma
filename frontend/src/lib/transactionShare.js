@@ -76,6 +76,16 @@ export const TRANSACTION_SHARE_COLUMNS = [
   { key: 'amount', label: 'Amount', get: txn => formatTransactionAmount(txn.amount), align: 'right' },
 ]
 
+// Leading characters a spreadsheet reads as the start of a formula. Merchant names and the like are
+// largely written by others, so a text cell starting with one is prefixed with `'` in the plain-text
+// copy, which a spreadsheet takes as "this is text" (backup.py's CSV export does the same). The amount
+// column is left alone: a negative amount starts with `-` and has to stay a number.
+const SPREADSHEET_FORMULA_START = /^[=+\-@\t\r]/
+
+function spreadsheetSafe(text, col) {
+  return col.key !== 'amount' && SPREADSHEET_FORMULA_START.test(text) ? `'${text}` : text
+}
+
 export function getTransactionListRows(rows) {
   return (rows || []).map(txn => TRANSACTION_SHARE_COLUMNS.map(col => col.get(txn) || ''))
 }
@@ -107,7 +117,9 @@ function csvField(value) {
 
 export function buildListShareText(rows) {
   const header = TRANSACTION_SHARE_COLUMNS.map(col => csvField(col.label)).join(',')
-  const body = getTransactionListRows(rows).map(cells => cells.map(csvField).join(','))
+  const body = getTransactionListRows(rows).map(cells => (
+    cells.map((cell, i) => csvField(spreadsheetSafe(cell, TRANSACTION_SHARE_COLUMNS[i]))).join(',')
+  ))
   return [header, ...body].join('\n')
 }
 

@@ -2624,6 +2624,12 @@ export const HELP_TOPICS = [
           &mdash; renames, categories, notes. It cannot carry all of it, and is not a way to move or keep
           the data: a <HelpLink to="/help/data-and-backups">backup</HelpLink> is.
         </p>
+        <p>
+          Text starting with <code>=</code>, <code>+</code>, <code>-</code> or <code>@</code> is written
+          with a <code>'</code> in front, so a spreadsheet shows it as text rather than running it as a
+          formula. Merchant names and payment notes are written by others, and a formula can fetch web
+          addresses when the file is opened.
+        </p>
 
         <h4>Split transactions</h4>
         <p>
@@ -3798,10 +3804,9 @@ export const HELP_TOPICS = [
         </p>
         <ol>
           <li>
-            Create a file named <code>.env</code> beside the program containing the
-            line <code>SESSION_COOKIE_SECURE=true</code>. To answer to a name other
-            than <code>luma.local</code>, add <code>MDNS_NAME=</code> followed by the name, without
-            the <code>.local</code> ending.
+            To answer to a name other than <code>luma.local</code>, create a file
+            named <code>.env</code> beside the program containing <code>MDNS_NAME=</code> followed by
+            the name, without the <code>.local</code> ending.
           </li>
           <li>Install Caddy from the Linux distribution's packages.</li>
           <li>

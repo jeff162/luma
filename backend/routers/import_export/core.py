@@ -161,6 +161,26 @@ from backend.services.money_movement import (
 
 router = APIRouter()
 
+# The largest file an import reads. Every importer reads its file into memory whole, so the ceiling is
+# about the machine rather than the format, and it is the same however the file arrives: chosen on the
+# Import page or picked up from a watched folder. Real exports are a small fraction of it.
+MAX_IMPORT_FILE_BYTES = 64 * 1024 * 1024
+
+
+def import_file_too_large(filename: str | None) -> str:
+    return (f"{filename or 'This file'} is larger than {MAX_IMPORT_FILE_BYTES // (1024 * 1024)} MB, "
+            "which is more than any export this import reads.")
+
+
+async def read_import_upload(upload: UploadFile) -> bytes:
+    """An uploaded import file, refused with a 413 when it passes `MAX_IMPORT_FILE_BYTES`. Reads one byte
+    past the ceiling rather than the whole file, so an oversized upload is never held in memory."""
+    content = await upload.read(MAX_IMPORT_FILE_BYTES + 1)
+    if len(content) > MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=import_file_too_large(upload.filename))
+    return content
+
+
 MAX_DISTINCT_VALUES_PER_COLUMN = 500
 
 # What a file offered and the import did not take, kept per row so the file's report can show it after
@@ -2996,7 +3016,7 @@ async def run_import(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid config JSON")
 
-    content = await file.read()
+    content = await read_import_upload(file)
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:

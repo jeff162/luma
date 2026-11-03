@@ -100,10 +100,17 @@
 # MDNS_NAME=luma
 
 # SESSION_COOKIE_SECURE [all]
-# Sends the session cookie only over HTTPS. For a server installation behind a TLS-terminating reverse
-# proxy. A downloaded build outside server mode serves plain HTTP to this computer only and must leave
-# it off. Default: false
+# Marks the session cookie for HTTPS only on every request. A cookie set over HTTPS is marked anyway, so
+# this is needed only behind a proxy that does not report the HTTPS it terminated. A downloaded build
+# outside server mode serves plain HTTP to this computer only and must leave it off. Default: false
 # SESSION_COOKIE_SECURE=false
+
+# ALLOWED_HOSTS [all]
+# Further names this server answers to, separated by commas. An IP address, localhost, a name without a
+# dot, and names ending .local, .home.arpa or .internal are always answered. Any other name, such as a
+# router's .lan name or an owned domain, is refused until it is listed here, which is what stops a website
+# re-pointing its own name at this server. Default: empty
+# ALLOWED_HOSTS=luma.example.invalid
 
 # WATCH_FOLDER_ROOTS [all]
 # The folders a data source may watch, with everything inside them. Several are separated by : on Linux

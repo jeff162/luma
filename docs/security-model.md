@@ -19,8 +19,11 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 ## Contents
 
 - [What is defended, and what is deliberately not](#what-is-defended-and-what-is-deliberately-not)
+- [Other websites in the same browser](#other-websites-in-the-same-browser)
+- [Known vulnerabilities in what ships](#known-vulnerabilities-in-what-ships)
 - [Reading and deleting outside the data directory](#reading-and-deleting-outside-the-data-directory)
 - [Rendering documents a user supplied](#rendering-documents-a-user-supplied)
+- [Text from others in a spreadsheet](#text-from-others-in-a-spreadsheet)
 - [Why provider credentials are the only things encrypted](#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](#revocation-in-both-directions)
   - [Responding to an exposure](#responding-to-an-exposure)
@@ -62,6 +65,48 @@ published to the internet does not.
 
 The property the vault does buy is narrow: **a leaked database is not a leaked credential.** No live
 unlock secret ⇒ no KEK ⇒ nothing opens.
+
+## Other websites in the same browser
+
+The browser that opens the app also opens arbitrary websites, so a page elsewhere is an attacker the app
+meets on every topology, including a loopback install with sign-in off, where nothing else stands in the
+way. Each defence below closes a different way in (`backend/http_hardening.py`):
+
+- **A request addressed to a name that is not this server's is refused.** This is what stops DNS
+  rebinding: a page re-points its own domain at 127.0.0.1, and its same-origin requests then reach a
+  loopback install, which with sign-in off would answer anything. The request still carries the page's
+  domain in `Host`, so only names no public DNS could serve are answered without being listed: IP
+  literals, `localhost`, single labels, and the private-network suffixes. Any other name an install is
+  reached by has to be listed in `ALLOWED_HOSTS`. The header is read only to refuse; where a request came
+  from is still read from the connection (*Transport security*).
+- **The session cookie is `SameSite=Strict`**, so no request another site starts carries it, and with
+  JSON bodies that only a same-origin page can send, a forged write has nothing to ride on. It costs
+  nothing because the interface loads without the cookie and every request it then makes is same-site.
+- **A cookie set over HTTPS is marked `Secure`**, so it never goes back over the cleartext hop a `.local`
+  name takes before the proxy redirects.
+- **The app can be framed only by itself**, which stops another page overlaying it to steer clicks. Its
+  own document viewer is the one frame it needs.
+- **The content policy lets a page run only the app's own script and Plaid Link's.** It is a second line
+  behind React's escaping, should markup ever reach the page. Inline styles stay allowed because the
+  interface is styled inline throughout. The development server does not send the policy, so a change
+  that would break it shows only in a built copy.
+- **Responses stay out of the browser's disk cache, and a followed link sends no address of the app's.**
+  The bundle's hashed assets are the one exception to the first, being code that is renamed whenever it
+  changes.
+- **There are no generated API pages.** FastAPI's `/docs`, `/redoc` and `/openapi.json` would sit outside
+  `/api`, where the sign-in check never reaches.
+
+**What is deliberately not sent: HSTS.** A LAN install's HTTPS rests on a `.local` name and a certificate
+from its own proxy's authority. Telling browsers to refuse plain HTTP to that name for months would turn a
+change of proxy into a lock-out, for little gain on a network the model already assumes is the operator's.
+
+## Known vulnerabilities in what ships
+
+The Python packages a kit carries and the npm packages in the bundle are audited for published
+vulnerabilities on every push, and so before every release (the *Dependency audit* job in
+`.github/workflows/ci.yml`). A newly published advisory fails the build until the pin moves; development
+tooling is left out, since it never reaches an install. The parsers of files from outside — Pillow for
+images, pypdf for PDFs — are where advisories cluster, so they are the ones to move first.
 
 ## Reading and deleting outside the data directory
 
@@ -115,6 +160,19 @@ rendered as untrusted:
   the app read back edits made in place, and it is safe only because no script runs in the frame. Adding
   `allow-scripts` alongside it would hand the pasted markup the app's origin, including the ability to lift
   its own sandbox — the two tokens are never combined.
+- **A stored image is decoded only by the decoder for the type its bytes were identified as**
+  (`IMAGE_DECODERS` in `services/documents.py`), so a file cannot reach Pillow's other parsers by what it
+  claims to be. Image and PDF parsers are where these libraries' published vulnerabilities cluster.
+
+## Text from others in a spreadsheet
+
+Merchant names, raw descriptions and payment notes are largely written by someone else — a bank, a
+marketplace, whoever sent a PayPal payment. A spreadsheet runs a cell that opens with `=`, `+`, `-` or `@`
+as a formula, which can fetch addresses or, in older Excel, start programs. So the CSV export and the
+plain-text list copy write such a text cell with a leading `'`, which a spreadsheet takes as text
+(`spreadsheet_safe` in `routers/import_export/backup.py`, mirrored in `frontend/src/lib/transactionShare.js`).
+Numbers are left alone, since a negative amount opens with `-` and has to stay a number. The rich-text
+copy is left alone too: it is pasted into an email or a document, where a stray `'` would only be noise.
 
 ## Why provider credentials are the only things encrypted
 
@@ -420,7 +478,8 @@ plain HTTP; a networked deployment terminates TLS at a reverse proxy, and loopba
 
 **Topology is detected per request, not chosen**, because the same install is loopback from its own box
 and networked from another. **Where a request came from is read from the connection, never from what the
-request says** — the `Host` header is the client's to write (`backend/transport.py`).
+request says** — the `Host` header is the client's to write (`backend/transport.py`). It is read only to
+refuse a name that is not this server's (*Other websites in the same browser*).
 
 **The permissible-HTTP rule.** Plain HTTP on a non-loopback bind is coherent **only when both** hold: no
 data provider is configured, **and** the instance is passwordless. The reason to run a perimeter is
