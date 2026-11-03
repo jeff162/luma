@@ -599,7 +599,7 @@ export default function ImportRuleSuggestions() {
       : `Imported ${describeBatch(batch)}`
   const emptyStateTitle = isSystemContext ? 'No categorized imports yet' : (isProfileContext ? 'Data source not found' : 'Import not found')
   const emptyStateDescription = isSystemContext
-    ? 'Use the categories present in the data from Import to include an imported file in rule suggestions.'
+    ? "Check “Import the transactions with their existing categories” on a file's card on the Import page to include it in rule suggestions."
     : isProfileContext
       ? 'This data source may have been deleted or no longer has imported files attached.'
       : 'This import may have been undone or is no longer available in Recent imports.'

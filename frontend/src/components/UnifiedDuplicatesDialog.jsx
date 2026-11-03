@@ -14,10 +14,11 @@
 // Import page (which is the only place that can render a batch-detail panel).
 //
 // Per-row actions:
-//   * soft_flag row → "Keep" (broad assertion: records the two accounts as distinct; clears the
-//     flag here AND every other flagged row between the same account pair; stops future imports
-//     from re-flagging the pair) | "Reject" (confirms as a real duplicate; row leaves the ledger
-//     and graduates into the rejected pool)
+//   * soft_flag row → "Keep both" (this pair only: records the two rows as distinct so a later import
+//     or re-scan doesn't re-flag them; whether the two *accounts* are the same is asked separately by
+//     AccountIdentityPrompt) | "Discard new" (confirms as a real duplicate; row leaves the ledger and
+//     graduates into the rejected pool) | "Replace existing" (the incoming row survives and the
+//     existing one is removed)
 //   * hard_reject row from import_batch_duplicate → "Import anyway" (re-injects the row)
 //   * hard_reject row from a confirmed soft-flag → "Restore" (un-reject; row returns to ledger)
 //
@@ -873,7 +874,7 @@ export default function UnifiedDuplicatesDialog({
               variant="secondary"
               disabled={pendingBulk || selectionSummary.keep === 0}
               onClick={() => runBulk('keep')}
-              title="These are different transactions: keep the new row too, mark the two accounts as distinct, and cascade-clear every other flagged row between the same account pair. Future imports skip the pair."
+              title="These are different transactions: keep both rows of each selected pair. Neither a later import nor a re-scan flags those pairs again."
             >
               Keep both ({selectionSummary.keep})
             </Button>

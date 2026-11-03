@@ -2918,7 +2918,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
             <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
               {usedImportedCategories
                 ? 'Because categories present in the data were used for this file, missing categories were added under Unassigned, the imported transactions kept those categories, and the file now contributes to system-wide rule suggestions.'
-                : 'This file appears to already carry its own categories. If that data is clean and curated, turn on “categories present in the data” on its card below — that keeps those categories on the imported transactions and uses them to suggest rules. If only some accounts or owners are curated, you can scope it to just those.'}
+                : 'This file appears to already carry its own categories. If that data is clean and curated, check “Import the transactions with their existing categories” on its card below — that keeps those categories on the imported transactions and uses them to suggest rules. If only some accounts or owners are curated, you can scope it to just those.'}
             </div>
           </div>
         ) : null}

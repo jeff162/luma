@@ -812,23 +812,12 @@ export const HELP_TOPICS = [
         </p>
 
         <h4>Adding the split transaction details</h4>
+        <p>*needs review*</p>
         <p>
-          The editor opens five ways -- from the row's right-click menu
-          (<strong>Split&hellip;</strong>, or <strong>Edit split&hellip;</strong> on one already split),
-          from the <strong>Split (N)</strong> marker that a split row shows in its category column,
-          from the <strong>Split&hellip;</strong> button beside the category in the transaction detail
-          panel, from the same button on the <strong>+New</strong> panel while a transaction is being
-          entered by hand, or from <strong>Split&hellip;</strong> on a <strong>Matched</strong> or{' '}
-          <strong>No charge found</strong> row of the{' '}
-          <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink>. All five land in
-          the same dialog.
-        </p>
-        <p>
-          On <strong>+New</strong> the amount comes first &mdash; a split divides it, so the button waits
-          until one is entered. The items are held with the form rather than saved: the transaction and
-          its items are recorded together when <strong>Add transaction</strong> is pressed, and the
-          category box is replaced by a <strong>Split (N)</strong> marker that reopens the editor
-          meanwhile. <strong>Remove split</strong> there returns the form to a single category.
+          <strong>Split&hellip;</strong> opens the editor, from a transaction's right-click menu or its
+          detail panel. On a transaction already split, clicking its <strong>Split (N)</strong> marker
+          reopens it. A transaction entered by hand on <strong>+New</strong> can be split once its amount is
+          entered, and is saved with its items when <strong>Add transaction</strong> is pressed.
         </p>
         <p>
           The split transaction editor reads as a small ledger &mdash; <strong>Description</strong>, <strong>Category</strong>, <strong>Amount</strong>,
@@ -837,29 +826,15 @@ export const HELP_TOPICS = [
           transaction. <strong>+ Item</strong> adds another line. A split transaction needs at least two pieces.
         </p>
         <p>
-          <strong>Remaining</strong> counts down as the amounts are filled in, and turns
-          into <strong>Fully allocated</strong> when the items account for the transaction exactly.
-          <strong> Save split</strong> stays unavailable until then.
-          <strong> Add remainder to selected</strong> drops whatever is left into the line last worked
-          in -- useful for the final line. <strong>Distribute remainder</strong> spreads it across every
-          line that has an amount, in proportion to each -- one way to fold tax and shipping into item
-          prices entered without them. Either one turns into an undo to reverse the operation.
+          <strong>Remaining</strong> counts down as amounts are entered, and <strong>Save split</strong>{' '}
+          is available once it reads <strong>Fully allocated</strong>. <strong>Add remainder to
+          selected</strong> puts what is left on the current line. <strong>Distribute remainder</strong>{' '}
+          spreads it across the lines in proportion to their amounts, which is one way to fold tax and
+          shipping into item prices. Each can be undone.
         </p>
-
-        <h4>What the editor will not accept</h4>
-        <ul>
-          <li>
-            <strong>The items must add up to the transaction.</strong>
-          </li>
-          <li>
-            <strong>Every item points the same way as the transaction</strong> -- all money out, or all
-            money in. A refunded item within a purchase is not currently expressible.
-          </li>
-        </ul>
         <p>
-          Two items <em>may</em> name the same category, and that is on purpose rather than an oversight.
-          Two things bought together often classify alike, and folding them into one line would throw away
-          exactly the detail a split exists to keep -- two records at two prices are two purchases.
+          Every item has to go the same direction as the transaction, all money out or all money in, so a
+          refunded item within a purchase can't be entered.
         </p>
 
         <HelpHeading anchor="imported-order">Splitting an imported order</HelpHeading>
@@ -894,7 +869,7 @@ export const HELP_TOPICS = [
           <HelpLink to="/help/searching-transactions">transaction search</HelpLink>. A{' '}
           <HelpLink to="/help/csv-export">CSV export</HelpLink> lists a split transaction once, at its full
           amount, with <code>--split--</code> in place of a category. Copying transactions to the clipboard
-          names every category the split touched instead, since that text is read rather than re-imported.
+          lists every category the split uses.
         </p>
         <p>
           Tags behave the way they read. A tag put on the transaction applies to the whole thing and to
@@ -905,15 +880,9 @@ export const HELP_TOPICS = [
 
         <h4>Undoing it</h4>
         <p>
-          <strong>Remove split</strong> returns the transaction to a single category -- the one it carried
-          before it was split, which is kept for exactly this. Assigning a single category to a split row
-          any other way is refused.
-        </p>
-        <p>
-          Automatic categorization leaves a split alone. <strong>Categorize</strong> skips it, and
-          even applying a rule to its matching transactions -- which otherwise overrides a category set by
-          hand -- will not overwrite one, reporting how many it left instead.
-          See{' '}<HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
+          <strong>Remove split</strong> returns the transaction to the category it had before it was split.
+          A split transaction's category can't be changed any other way, and{' '}
+          <HelpLink to="/help/re-categorizing">rules</HelpLink> never change it.
         </p>
       </>
     ),
@@ -1073,102 +1042,62 @@ export const HELP_TOPICS = [
 
         <h4>Changing what is paired</h4>
         <p>
-          Both ways to undo a pairing are in the record itself. <strong>&times;</strong> beside a
-          transaction removes that one; <strong>Stop tracking this reimbursement</strong> dissolves the
-          record entirely. Neither recategorizes anything or moves money &mdash; the transactions stay
-          as they are and the money owed back goes back to being untracked. Pairing them again is the
-          undo. Removing the last transaction dissolves the record too, since it would then describe
-          nothing.
+          In the record, <strong>&times;</strong> beside a transaction removes it, and{' '}
+          <strong>Stop tracking this reimbursement</strong> removes the record. Neither changes the
+          transactions themselves.
         </p>
         <p>
-          While a record claims money in a transaction, that much has to stay in the{' '}
-          <em>Reimbursable</em> group. Raising the reimbursable portion of a split is always allowed,
-          and so is lowering it as far as what the record claims &mdash; anything below that, and
-          recategorizing or un-splitting the row outright, is refused, naming the amount claimed. A
-          record left claiming money its transaction no longer holds would report a balance owed that
-          nothing backs. Removing the transaction from the record first, with the{' '}
-          <strong>&times;</strong> above, releases the row to be categorized however suits.
+          While a record includes a transaction, the amount it claims has to stay in
+          the <em>Reimbursable</em> group. Lowering a split's reimbursable portion below that amount,
+          recategorizing the row or removing the split is refused. Removing the transaction from the
+          record first frees it.
         </p>
 
         <h4>Being reminded about one</h4>
         <p>
-          An expense that is never chased is the one way this arrangement can still mislead: money parked
-          in the group stays out of spending totals for as long as it sits there, so a repayment that
-          never arrives quietly understates a month for good. A receivable that has been outstanding
-          longer than expected therefore appears on the Tasks page.
+          An expense still waiting for repayment stays out of spending totals, so one that is never repaid
+          would understate its month. An expense outstanding too long appears on the Tasks page.
         </p>
         <p>
-          How long is "longer than expected" is set at the foot of the{' '}
-          <strong>Reimbursements</strong> report, and it is measured from the date of the transaction
-          rather than from when the record was made -- an expense entered months after the fact is
-          already overdue, and recording it should not push the reminder further away. Thirty days suits
-          a work expense; a set of tickets that will not be settled until the night itself is the case
-          for setting a date directly on the record instead. <strong>0</strong> switches the default off
-          altogether, and records with their own dates still work.
+          <strong>Ask about anything still owed after</strong>, at the foot of
+          the <strong>Reimbursements</strong> report, sets how long. It counts from the date of the
+          transaction, not from when it was tracked. <strong>0</strong> turns the default off.
         </p>
         <p>
-          Each record carries its own answer: the default, a chosen date, or no reminder at all. A due
-          record offers <strong>Not yet</strong>, which pushes it out without any further decision --
-          most of the time a reminder needs nothing more than that. Money that has not been tracked has
-          no record to hold a date, so it follows the default until it is tracked.
+          A record can instead use its own date or have no reminder. A due record
+          offers <strong>Not yet</strong>, which pushes the reminder out.
         </p>
         <p>
-          Where more than one person is set up as an owner, the reminders arrive as one task per owner,
-          based on the account each transaction sits on. That way one person's outstanding expenses
-          can be worked through without wading through another's. Every task is visible to
-          everyone; the split is there to make them separable, not private.
+          Where more than one person is set up as an owner, each owner gets a separate task for the
+          expenses on their accounts. Everyone can see every task.
         </p>
 
         <h4>Finishing one</h4>
         <p>
-          <strong>Mark complete</strong> closes the record. What it does depends on whether the two
-          sides balance, and the button is emphasized only in the case where nothing has to be decided.
-        </p>
-        <p>
-          A record that is fully repaid offers <strong>Mark complete</strong> on its row in the
-          <strong> Reimbursements</strong> list as well, since that ending asks nothing: it moves no
-          money and needs no category. Anything with money left over is completed in the record, where
-          that money is given its destination.
+          <strong>Mark complete</strong> closes the record. A record repaid in full can also be completed
+          from its row in the <strong>Reimbursements</strong> list. Anything else is completed in the
+          record, where the money left over is given a category.
         </p>
         <ul>
+          <li><strong>Repaid in full</strong> &mdash; nothing changes. The record is closed.</li>
           <li>
-            <strong>Repaid in full</strong> -- nothing moves. The two sides already cancel, so completing
-            only records that it is finished, and it drops off the outstanding list.
+            <strong>Repaid short</strong> &mdash; the shortfall becomes spending on the expense, in a
+            category chosen then, and counts in the expense's month.
           </li>
           <li>
-            <strong>Repaid short</strong> -- the shortfall was really spent, so it moves onto the expense
-            under a category chosen at that point. This updates the month the expense is in, which is the
-            intended effect: that is what the purchase actually cost once the repayment is known to be
-            final.
+            <strong>Repaid over</strong> &mdash; the surplus is categorized on the repayment, in its month.
           </li>
-          <li>
-            <strong>Repaid over</strong> -- the surplus arrived with the overpayment, so it is
-            booked against the repayment, in that month. The original expense is left alone.
-          </li>
-          <li>
-            <strong>Never repaid</strong> -- the whole amount was spending after all, and completing
-            records it as such. The button stays available but not emphasized, since a reimbursement with
-            nothing linked against it is far more often unfinished than written off.
-          </li>
+          <li><strong>Never repaid</strong> &mdash; the whole amount becomes spending.</li>
         </ul>
         <p>
-          Any amount left over has to be given a category, so there is no way to close a reimbursement
-          leaving money unaccounted for in the group. <strong>Reopen</strong> reverses a completion
-          exactly, putting back whatever it moved.
-        </p>
-        <p>
-          Completed reimbursements stay in the category they were already in. Their two sides cancel, so
-          they never distort what the group says is outstanding, and leaving them put is what keeps them
-          findable.
+          <strong>Reopen</strong> undoes a completion, putting back whatever it moved.
         </p>
 
         <h4>What the group will not allow</h4>
         <p>
-          The <strong>Reimbursable</strong> group can be renamed and its contents are entirely the
-          user's to add to, rename and remove. The group itself cannot be deleted, moved inside
-          another group, or counted toward spending totals: each of those would either strand money owed
-          back where nothing can find it, or silently restore the overstatement the group exists to
-          remove.
+          The <strong>Reimbursable</strong> group can be renamed, and its categories added, renamed and
+          removed. The group itself cannot be deleted, moved inside another group, or counted toward
+          spending.
         </p>
       </>
     ),
@@ -1583,7 +1512,7 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="applying-rules">Manually applying rules, and rule checkups</HelpHeading>
         <p>
           <strong>Categorize</strong> re-applies the rules across the ledger, leaving any
-          transactions which were modified manually alone. <HelpLink to="/help/re-categorizing">How transactions get categorized</HelpLink> contains details
+          transactions which were modified manually alone. <HelpLink to="/help/re-categorizing">When rules are applied</HelpLink> contains details
           regarding which rows are allowed to touch.
         </p>
         <p>
@@ -1604,12 +1533,12 @@ export const HELP_TOPICS = [
   {
     id: 're-categorizing',
     section: 'rules',
-    title: 'How transactions get categorized',
+    title: 'When rules are applied',
     surfaces: ['Rules page'],
-    summary: 'Rules are applied to categorize imported and synced transactions as they arrive, with any imported categorization filling in only what is not covered by the rules. The rules always come first, so it does not matter whether a rule or the file arrived first. Afterward, Categorize re-applies rules but never disturbs a category set by hand; applying a rule to its matching transactions is full-force and overrides even that. A closing section ranks the categorization sources for anyone who wants the full model.',
+    summary: 'Rules are applied as transactions arrive, and again on request.',
     body: () => (
       <>
-        <p>*needs review* (don't understand the 2nd 2 sentences of the short text)</p>
+        <p>*needs review*</p>
         <p>Rules are applied in two situations, as transactions arrive and after certain user actions.
         </p>
         <h4>As transactions arrive</h4>
@@ -1620,95 +1549,39 @@ export const HELP_TOPICS = [
           by the <strong>Apply categorization rules on import</strong> option which defaults to on.
         </p>
         <p>
-          If <strong>use the categories present in the data</strong> is selected the categories in the file are
+          If <strong>Import the transactions with their existing categories</strong> is checked, the categories in the file are
           imported for use and the transactions are imported with their categorization in the file.
           This is generally done as part of an initial seeding from another tool, not with every imported file.
           Rules still take precedence, the file's category fills in only rows which are not covered
           by an existing rule. When there are no rules, all the categorized transactions retain their
           categories. As rules are added, this starts to change and rules added later can claim
           rows which were imported with their category from the file.
-        </p><p>
-          original text below - the last sentence is a puzzle:</p><p>
-          A file imported with use the categories present in the data can also bring its own categories, generally as part of an initial seeding from another tool. Rules still come first: the file's category fills in only rows no rule claims. That stays true afterward -- a rule created later takes those rows the next time Categorize runs, just as it would have at import. The file's label stays on every row either way.
-
-        </p>
-        <h4>Once transactions are in</h4>
-        <p>
-          After that, a category can change in a few ways, and the two bulk actions that
-          re-categorize -- <strong>Categorize</strong> and a rule's <strong>apply to matching
-            transactions</strong> -- treat a row's origin differently. The practical effect of each is
-          below; a closing section ranks the sources in full for anyone who wants it.
         </p>
         <h4>Categorize</h4>
         <p>
-          The <strong>Categorize</strong> button (on the Rules page) re-applies every rule
-          across the whole ledger, but only to rows that are <strong>not pinned</strong> -- those
-          categorized by a rule or by a trusted import, and those still uncategorized. It deliberately
-          leaves alone anything categorized <em>by hand</em>. It only ever <em>sets</em>
-          or <em>changes</em> a category, never removes one: a rule-assigned row that no longer matches
-          any rule <em>keeps</em> its category, so deleting or narrowing a rule doesn't
-          silently un-categorize the transactions it already handled. It is the pass to run after adding
-          or changing rules, to refresh categorization without disturbing earlier work.
+          The <strong>Categorize</strong> button on the Rules page runs every rule across the whole
+          ledger. Run it after adding or changing rules. A category set by hand is left alone.
+          Categorize never removes a category, so a transaction that no longer matches any rule keeps
+          the one it has.
+        </p>
+        <h4>Applying a rule when it is saved</h4>
+        <p>
+          Saving a rule offers <strong>Apply this rule now to N matching existing transactions</strong>.
+          Unlike Categorize, this also changes categories set by hand.
+        </p>
+        <h4>Undoing a rule's categorizations</h4>
+        <p>
+          When a rule turns out to be wrong, deleting or editing it offers to <strong>re-evaluate</strong> the
+          transactions it categorized. Each one goes to another matching rule, back to the category from
+          its imported file, or to uncategorized.
         </p>
         <p>
-          To deliberately <em>undo</em> a rule's categorizations -- when a rule was wrong -- use the{' '}
-          <strong>re-evaluate this rule's transactions</strong> option offered when a rule is deleted or
-          edited. It re-runs just those rows against the remaining rules, so they fall to another matching
-          rule, rather than keeping the removed rule's category. A row no remaining rule claims goes back to
-          the category its file gave it, when it came from a file imported with <strong>use the categories
-            present in the data</strong>, and otherwise to uncategorized.
-        </p>
-        <h4>Apply a rule to its matching transactions</h4>
-        <p>
-          When a rule is saved -- for example from the toast offered after categorizing a transaction --
-          it offers to apply to every transaction its matcher catches: the keyword together with any
-          owner, account, or amount limits. This apply is <strong>full force</strong>. It claims all
-          matching rows and sets them to the rule's category, <strong>including rows categorized by hand
-            or by a trusted import</strong>. It is the one bulk action that overrides a manual edit, so
-          the match count is worth a glance before applying if manual edits might be caught in it.
-        </p>
-        <h4>How categorization sources rank</h4>
-        <p>
-          Every categorized transaction records where its category came from, and whether that origin is
-          protected from automatic re-categorization. From strongest to weakest:
-        </p>
-        <ul>
-          <li><strong>Manual</strong> -- set by hand on the transaction. Protected from automatic
-            re-runs; changed afterward only by another manual edit or a full-force rule apply.</li>
-          <li><strong>Rule</strong> -- assigned by a matching rule. Not pinned, so Categorize
-            re-evaluates it (it can move to another rule, but is never cleared) and a full-force apply
-            overwrites it; it is reverted only by the opt-in <em>re-evaluate</em> when the rule is deleted
-            or edited.</li>
-          <li><strong>Trusted import</strong> -- the category came from a file imported with
-            <strong> use the categories present in the data</strong>, and no rule claims the row. Not pinned: any
-            matching rule takes it, whether through Categorize or a rule apply, turning it into a rule
-            categorization. The Generate-rules conflict screen can also re-categorize it in place -- see
-            below.</li>
-          <li><strong>Uncategorized</strong> -- no category yet; any rule is free to claim it. (A row whose
-            imported category was <em>cleared</em> when a suggested rule was rejected sits here too: rules
-            can categorize it, but the discarded file label is kept on the row and never re-applied.)</li>
-        </ul>
-        <p>
-          The asymmetry is the part to remember: <strong>Categorize</strong> respects a manual
-          category, while a rule's <strong>apply to matching</strong> does not.
+          A <HelpLink to="/help/transaction-splits">split transaction</HelpLink> is never changed by a
+          rule. Its categories are the items it was divided into.
         </p>
         <p>
-          One deliberate exception lives on the{' '}
-          <HelpLink to="/help/generate-rules">Generate-rules conflict screen</HelpLink>:
-          re-categorizing a row there corrects the file's category and the row <em>stays</em> a
-          trusted-import categorization (and keeps informing rule suggestions until a rule claims it).
-          Only <strong>Preserve</strong> turns such a row into a manual exception. It is the one place a
-          trusted-import categorization is edited while staying trusted-import.
-        </p>
-        <p>
-          A <HelpLink to="/help/transaction-splits">split transaction</HelpLink> sits outside all of this.
-          Its categorization is the set of items it was divided into, so both passes leave it alone --
-          even a full-force rule apply, which reports how many it skipped rather than overwriting them.
-        </p>
-        <p>
-          To check a single transaction's current source, open its detail panel: a small <strong>manual</strong>
-          label sits beside a pinned category, and the details show a <strong>Categorized by</strong> line naming
-          the source -- a rule, a manual edit, or the category present in the source data.
+          A transaction's edit panel shows <strong>manual</strong> beside a category set by hand, and
+          its <strong>Categorized by</strong> line says where the category came from.
         </p>
       </>
     ),
@@ -1718,7 +1591,7 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are ranked by an algorithm that prioritizes more specific rules, with one manual setting: a rule set to low priority gives way to every normal one. The order of importance is priority, narrow scope, keyword length, then the narrower amount range. Ambiguous situations which require adjusting the rules are listed by Rules checkup: amount ranges that overlap without one containing the other and two separate keywords that both appear in the same transaction.',
+    summary: 'Which rule wins when more than one matches a transaction, and how Rule checkup finds the cases where the winner is arbitrary.',
     body: () => (
       <>
         <p>
@@ -1735,109 +1608,47 @@ export const HELP_TOPICS = [
           set. A rule for charges over $3,000 matches strictly fewer transactions than one for charges
           over $300, so it wins wherever both apply.
         </p>
+        <p>
+          A range that sits entirely inside another is the way to split one merchant's charges across
+          categories by amount. The inner range wins where both match.
+        </p>
         <h4>Low priority</h4>
         <p>*needs review*</p>
         <p>
-          The one part of the ranking set by hand is a rule's <strong>Priority</strong>. A rule set
-          to <strong>Low</strong> gives way to every normal rule matching the same transaction, ahead of
-          all the terms above. It is meant for a generic rule whose text turns up inside other merchants'
-          descriptions, such as <em>electronic payment</em>. Rather than lengthening every other rule's
-          keyword to outrank it, the generic rule is set to low once. Priority is set in the rule editor
-          or from Rule checkup, and changing it re-applies the rules to the transactions the rule matches.
+          A rule's <strong>Priority</strong> can be set to <strong>Low</strong>, in the rule editor or
+          from Rule checkup. A low-priority rule gives way to every normal rule matching the same
+          transaction, ahead of all the terms above. It is meant for a generic rule whose text turns up
+          inside other merchants' descriptions, such as <em>electronic payment</em>, so the other rules
+          don't need longer keywords to outrank it.
         </p>
-        <h4>Checking for rules that compete</h4>
+        <h4>Rule checkup</h4>
         <p>
-          <strong>Rule checkup</strong> on the Rules page lists the pairs which overlap.
-          Running the check changes nothing on its own; it opens a report with what it
-          found, and each rule can be opened for editing from there. The report also lists{' '}
+          <strong>Rule checkup</strong> on the Rules page lists pairs of rules that compete for the same
+          transactions, each section with a short explanation, and either rule can be opened for editing
+          from there. It also lists{' '}
           <HelpLink to="/help/rule-amount-drift">charges that have drifted out of a rule's range</HelpLink>.
         </p>
-        <p>*needs review*</p>
-        <p>
-          Rule checkup reports:
-        </p>
+        <p>The findings are either <strong>to settle</strong> or <strong>for information</strong>.</p>
         <ul>
           <li>
-            <strong>Amount ranges that overlap</strong> -- two rules for the same merchant whose ranges
-            cross without one sitting inside the other, such as $300 to $4,000 against $3,000 and up. A
-            $3,500 charge matches both and neither rule is the more specific one, so which of them wins
-            is arbitrary. The way to settle this is to refine the conditions so they do not overlap, or
-            to set one of the rules to low priority.
+            <strong>Amount ranges that overlap</strong> and <strong>Rules that match the same
+              transaction</strong> are to settle: which rule wins is arbitrary. Narrow one rule's keyword
+            or range, or set the more generic rule to low priority. These can't be dismissed, and an
+            import, sync or Categorize that runs into one also raises a task on the Tasks page.
           </li>
           <li>
-            <strong>Rules that match the same transaction</strong> -- two keywords that are unrelated to
-            each other, both turning up in one merchant name, such as <em>northgate</em>
-            and <em>riverstone</em> in "NORTHGATE RIVERSTONE SUPPLY". The longer keyword wins, which
-            settles nothing here: keyword length stands in for being more specific only where one
-            keyword sits inside the other, and these do not. The finding carries the transaction it
-            found and how many others like it there are, since without a real transaction matching both
-            there would be nothing to report. The way to settle it is to narrow whichever keyword is
-            reaching further than intended, or to set the more generic rule to low priority.
+            <strong>A low-priority rule losing to a broader one</strong> is also to settle. It is usually
+            a priority set on the wrong rule.
           </li>
           <li>
-            <strong>Merchant matchers that nest</strong> -- one rule's keyword contained in
-            another's, such as <em>northgate</em> and <em>northgate prime</em>, with no owner or account
-            limit on the shorter one that the longer one lacks. Nothing is wrong here: the longer keyword
-            wins where both match, and the pair is listed so that is visible. Where both rules take the
-            same action, and the shorter one takes every charge the longer one does, the longer one changes
-            nothing, so the finding offers to <strong>delete</strong> it, recoverable from the rules trash.
-          </li>
-          <li>
-            <strong>Rules where a limit decides</strong> -- the same nesting, but the shorter keyword is
-            limited to an owner or an account the longer one is not. Neither rule contains the other, and
-            because owner and account limits count before keyword length, the shorter keyword wins on
-            that owner's or account's transactions. It is listed only when a real transaction matches both
-            and the two rules do different things to it.
-          </li>
-          <li>
-            <strong>A low-priority rule losing to a broader one</strong> -- the longer keyword would win,
-            but it is set to low priority, so the shorter one wins where both match and the two rules do
-            different things. This is usually a priority set on the wrong rule.
+            The rest are for information: the more specific rule wins, which is usually what was
+            intended. Where one rule of a pair changes nothing, the report offers to delete it, and it
+            can be restored from the rules trash.
           </li>
         </ul>
         <p>
-          Plenty of the nesting pairs are deliberate, so those can be <strong>dismissed</strong> -- an
-          acknowledgement, not a fix, which drops the pair from the list and from the counts so what is
-          left is what still wants a decision. Nothing is lost: <strong>Show dismissed</strong> brings the
-          acknowledged set back, and each one can be restored. A dismissal covers the situation it was
-          made about rather than the pair of rules forever, so an edit that changes what the finding says
-          -- a narrower rule that becomes surplus and can now be deleted -- raises it again.
-        </p>
-        <p>*needs review*</p>
-        <p>
-          <strong>Competing rules that file the same way</strong> is the last section, and it holds
-          pairs from either of the two sections above where it makes no difference which rule wins.
-          Every rule that matches a transaction contributes to it, and each action is decided on its
-          own: the category comes from the highest-ranked matching rule that sets one, the rename the
-          same way, and the tags of every matching rule are added. So the winner matters only when both
-          rules set a category and the categories differ, both rename to different names, or both track
-          a recurring series, since a transaction joins only one series. Anything else -- two spellings
-          of one merchant filing to one place is the usual shape -- needs no refining and can be
-          dismissed. Where the two rules take exactly the same actions and every transaction one of
-          them matches is matched by the other as well, the finding offers to delete it. A dismissal
-          there lapses if the winner starts to matter, which puts the pair back among the warnings.
-        </p>
-        <p>
-          <strong>Overlapping ranges and rules matching the same transaction cannot be dismissed.</strong>{' '}
-          The outcome in both cases is arbitrary rather than undecided: the same rule wins every time,
-          but for a reason that has nothing to do with the two rules in question -- which range happens
-          to be arithmetically smaller, or which keyword happens to be longer. An acknowledgement would
-          leave the ledger categorized by that accident with the report calling it settled, so these stay
-          listed until the conditions are refined.
-        </p>
-        <p>*needs review*</p>
-        <p>
-          These two do not wait for the checkup to be run. Whenever rules are applied -- an import, a
-          sync, <strong>Categorize</strong>, or a rule saved and applied -- a transaction that two rules
-          match this way is noted, and the pair raises a task on the Tasks page and adds to the count on
-          the <strong>Rule checkup</strong> button. Dismissing the task hides it until another pair is
-          found. The pair itself stays in the report until the rules are refined, and leaves the count
-          as soon as they are.
-        </p>
-        <p>
-          Ranges where one sits entirely inside the other are deliberately not reported. That case has a
-          clear answer already -- the inner range wins -- and it is the recommended way to split one
-          merchant's charges across categories.
+          A finding that is fine as it is can be dismissed, and <strong>Show dismissed</strong> brings it
+          back. A rule edit that changes the finding lists it again.
         </p>
       </>
     ),
@@ -1901,56 +1712,37 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'Generating rules from transactions in an imported file',
     surfaces: ['Import (rule suggestions)'],
-    summary: 'Generate rules studies a file whose transactions are already categorized and proposes rules that reproduce that categorization on future data; the output is rules, not a re-categorization of the file. When one merchant is filed under several categories the suggestions form a conflict set, which can be resolved in different ways for different results.',
+    summary: 'Generate rules proposes rules that reproduce the categories in an imported file on future transactions. When one merchant is filed under several categories, its suggestions form a conflict set.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           If the data comes from another tool where the transactions already carry meaningful categories,
-          tell {APP_NAME} the import's category data is useful (turn on <strong>use the categories present in the data</strong>
-          on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
-          the pool of categories to be grouped by <strong>Group Imported Categories</strong>, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
+          tell {APP_NAME} the import's category data is useful (check <strong>Import the transactions with their
+          existing categories</strong> on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
+          the pool of categories to be grouped by <strong>Group imported categories</strong>, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data.
         </p>
         <p>
-          A review that draws on several files (all categorized imports, or a data source) names how many it
-          uses; clicking that count lists the files, and choosing one opens its transactions.
+          The result is rules. The imported rows are already categorized and mostly stay as they are. Two
+          things here do change them: accepting a suggestion applies its rule, including any edits made to
+          it first, to the rows that produced it, and resolving a conflict can re-categorize rows.
         </p>
-        <p>
-          The output of <strong>Generate rules</strong> is rules, not a
-          re-categorization of the file; the imported rows are already categorized.
-          The goal is to capture the <em>pattern</em> so future imports categorize themselves.
-          That said, two things on this screen do still change the underlying rows.
-        </p>
-        <ol type="a">
-          <li>
-            Accepting a suggestion applies its rule to exactly the rows that generated it, so an edit
-            made to the rule before accepting it (a tweaked category, added tags, a rename) lands on those
-            rows too, and they shift from their file category to
-            rule-governed (see{' '} <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>).
-          </li>
-          <li>
-            Resolving a conflict has various options to re-categorize rows.
-          </li>
-        </ol>
-        <p>Available actions for each suggested rule:</p>
+        <p>Each suggested rule can be:</p>
         <ul>
-          <li><strong>Save</strong> it (optionally after editing its keyword, category, owner/account
-            scope, amount range, rename, or tags),</li>
-          <li><strong>Defer</strong> it to decide later, or</li>
-          <li><strong>Discard</strong> -- reject the proposed rule. The two buttons
-            under <strong>discard and&hellip;</strong> choose what happens to the rows it covered:
+          <li><strong>Saved</strong>, after editing it if needed.</li>
+          <li><strong>Deferred</strong>, to decide later.</li>
+          <li>
+            <strong>Discarded</strong>, with one of two choices under <strong>discard and&hellip;</strong>:
             <ul>
               <li>
-                <strong>keep categorization</strong> leaves them exactly as imported -- the file's category
-                stays, and a matching rule created later still takes them, as it would any imported row.
-                This is the choice for a file category that is right but not worth a rule (an annual fee
-                filed under its own category). To keep a row out of every rule's reach, set its category by
-                hand instead.
+                <strong>keep categorization</strong> leaves the rows as imported. This is for a file
+                category that is right but not worth a rule, such as an annual fee filed under its own
+                category.
               </li>
               <li>
-                <strong>remove categorization</strong> clears the category
-                instead, freeing the rows for rules to categorize later (the discarded file label is kept on
-                the row but is never re-applied). This is for a file category that was wrong or messy.
+                <strong>remove categorization</strong> clears the rows' category so rules can categorize
+                them later. This is for a file category that was wrong or messy.
               </li>
             </ul>
           </li>
@@ -1959,61 +1751,35 @@ export const HELP_TOPICS = [
           Deferring an accepted suggestion, or returning it to pending, undoes the accept: the rule it
           created goes to the trash and its rows return to the categories they had before.
         </p>
-        <h4>Conflict sets, and the different ways to resolve them</h4>
+
+        <h4>Conflict sets</h4>
         <p>
-          When the same merchant was filed under <strong>several different categories</strong>, a single
-          rule cannot reproduce all of them, so those suggestions are grouped into
-          a <strong>conflict set</strong>. Open the set to see the competing categories and the matching
-          rows. The resolution chosen determines the result:
+          When the same merchant was filed under <strong>several different categories</strong>, one rule
+          can't reproduce all of them, so those suggestions are grouped into a <strong>conflict
+          set</strong>. Opening the set shows the competing categories and the matching rows. There are
+          three ways to resolve one:
         </p>
         <ul>
-          <li><strong>Narrow the rules so they no longer overlap.</strong> Add a distinguishing filter
-            (owner, account, or amount) to each rule so each claims its own subset, keeping more than
-            one rule for the merchant.</li>
-          <li><strong>Pick one category for the merchant and re-categorize the rest.</strong> The
-            matching-transactions viewer can set the majority category in bulk to collapse the conflict
-            to a single rule. Re-categorizing here <em>corrects the file's category</em>, and the rows
-            stay trusted-import categorizations, so they keep informing the suggestions.</li>
-          <li><strong>Keep an outlier as a one-off.</strong> <strong>Preserve</strong> a genuinely
-            distinct row to record it as a manual exception: rules leave it alone and it drops out of
-            the suggestions entirely, rather than re-surfacing as a conflict.</li>
+          <li><strong>Narrow the rules so they no longer overlap.</strong> Add an owner, account or amount
+            condition to each rule, so each covers its own share of the merchant's transactions.</li>
+          <li><strong>Pick one category for the merchant.</strong> The matching-transactions list can
+            re-categorize the rest in bulk, which leaves one rule. This corrects the file's category, so
+            the rows still count toward the suggestions.</li>
+          <li><strong>Keep an outlier as a one-off.</strong> <strong>Preserve This Categorization</strong> sets the row's
+            category by hand. It drops out of the suggestions, and Categorize leaves it alone.</li>
         </ul>
         <p>
-          The last two produce subtly different results: a bulk re-categorize
-          keeps rows in the import learning set and re-targets the rule, while Preserve carves a
-          row out as an untouchable manual decision. How those properties affect subsequent behavior is covered
-          in <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
+          <strong>No conflicts</strong>, in the bulk actions bar, hides the suggestions in conflict sets,
+          so <strong>Select all</strong> picks up only the straightforward ones.
         </p>
+
+        <h4>Older suggestions</h4>
         <p>
-          To get the straightforward suggestions out of the way first, turn on <strong>No conflicts</strong> in
-          the bulk actions bar. Suggestions in a conflict set are hidden, so <strong>Select all</strong> picks
-          up only the rest. Turning it on also deselects any conflict-set suggestions already selected.
-        </p>
-        <h4>Older suggestions, and clearing them out in bulk</h4>
-        <p>
-          Rules are forward-looking, so a merchant pattern with no recent activity is unlikely to recur.
-          As an aid when importing older transaction history, suggested rules whose newest matching transaction
-          falls outside the <strong>Look back</strong> window move
-          off the main <strong>Pending</strong> list onto a separate <strong>Older</strong> pill, so the pending count
-          reflects only patterns that are still live. Nothing is lost -- widening the look-back window
-          brings them back, and the underlying rows are untouched by the lens itself.
-        </p>
-        <p>
-          Because older suggestions are already out of the way, settling them is optional -- a stale tail
-          can simply be left alone. Alternatively, open the <strong>Older</strong> pill, select several
-          rows at once, and apply a bulk disposition:
-        </p>
-        <ul>
-          <li><strong>Discard, keep categories</strong> marks them
-            reviewed while leaving their rows exactly as imported (for a pattern not
-            worth a rule)
-          </li>
-          <li>
-            <strong>Discard, clear categories</strong> additionally clears those rows so future rules may categorize them
-          </li>
-        </ul>
-        <p>
-          Both choices have the same effect on the row's import state as the single-suggestion <strong>Discard</strong>.
+          A suggestion whose newest matching transaction is older than the <strong>Look back</strong>{' '}
+          window moves from <strong>Pending</strong> to the <strong>Older</strong> pill, since a merchant
+          with no recent activity is unlikely to recur. Widening the window brings them back. They can be
+          left alone, or selected together and settled with <strong>Discard, keep categories</strong> or{' '}
+          <strong>Discard, clear categories</strong>, which work like the single Discard choices.
         </p>
         <p>
           See also:{' '}
@@ -2070,16 +1836,25 @@ export const HELP_TOPICS = [
     section: 'accounts',
     title: 'Merging accounts to reconcile',
     surfaces: ['Accounts page'],
-    summary: "Merging two accounts that represent the same physical account auto-confirms the overlaps both sources describe identically; order doesn't matter and detaching reverses it.",
+    summary: 'Merging records that two accounts are the same real account, and settles the duplicates between them.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
-          Merging two accounts on the Accounts page means <strong>"these are the same physical
-            account."</strong> When they genuinely are, merging <strong>auto-confirms the overlaps both
-              sources describe identically</strong>; a pair the two sources worded differently stays in
-          review. The order is irrelevant: <em>importing then merging</em> and
-          <em> merging then importing</em> reach the same state. <strong>Detaching</strong> an account
-          reverses the merge's auto-confirmations &mdash; your explicit Reject / Replace decisions are kept.
+          Merging says two accounts are the same real account, such as one card named differently by two
+          sources. To merge, drag one account onto the other on the Accounts page. Only accounts of the
+          same type can be merged, and dragging onto one that can't be merged says why. Dragging a merged
+          account out to the top level detaches it.
+        </p>
+        <p>
+          A transaction both accounts hold, described the same way by both sources, is{' '}
+          <HelpLink to="/help/removed-as-duplicates">removed as a duplicate</HelpLink>. One described
+          differently stays on the <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> for
+          review. The result is the same whether the accounts are merged before or after the import.
+        </p>
+        <p>
+          Detaching puts back the duplicates the merge removed. Decisions made on the duplicate report,
+          such as <strong>Discard new</strong> or <strong>Replace existing</strong>, are kept.
         </p>
       </>
     ),
@@ -2136,71 +1911,49 @@ export const HELP_TOPICS = [
         </p>
 
         <h4>Which transactions belong</h4>
+        <p>*needs review*</p>
         <p>
-          Membership is <strong>recomputed on every scan</strong>: it is a cache of what currently matches,
-          not a hand-kept list.
-        </p>
-        <ul>
-          <li>
-            <strong>Remove from the series</strong> -- for a transaction the scan swept in by mistake. It stays
-            out across future scans. An <strong>Amount changed</strong> finding offers the same thing
-            as <strong>Exclude from series</strong>. A removal is reversible: undo it from the prompt, from the removed
-            transaction's own right-click menu (<strong>Restore to recurring series</strong>), or from
-            the <strong>removed</strong> list inside the series.
-          </li>
-        </ul>
-        <p>
-          There is no way to force a transaction into a series it does not match. A series is
-          defined by what recurs, so a charge that merely shares a payee and category with one -- a late
-          fee on a tax payment, say -- is not part of it, and forcing it in would distort the series and
-          the totals read from it. A charge that ought to belong and does not is a matching problem:
-          correct its merchant name, or widen the rule that defines the series. Editing a transaction
-          re-checks which series it belongs to, so a correction takes effect straight away.
+          Which transactions belong is worked out again on every scan, from what currently matches.
         </p>
         <p>
-          <strong>Matching by amount.</strong> A series normally ignores amount when deciding what belongs.
-          When one payee bills two things in the same category that only the amount tells apart -- two
-          subscriptions at different prices -- the <strong>Amount</strong> button on the series card turns on
-          matching by amount: only charges within or near the range the series has charged join it, or a
-          range can be set by hand instead. A series defined by a rule has no Amount button; the rule's own amount condition does
-          the same job and is changed by editing the rule.
+          <strong>Remove from recurring series</strong>, in a transaction's right-click menu, takes out one
+          the scan swept in by mistake, and it stays out after later scans. An <strong>Amount
+          changed</strong> finding offers the same thing as <strong>Exclude from series</strong>.{' '}
+          <strong>Restore to recurring series</strong>, in the same menu, or the <strong>removed</strong>{' '}
+          list inside the series, puts it back.
         </p>
         <p>
-          A transaction carries a small ↻ marker while it belongs to a series, and its editor links through
-          to that series. Right-clicking a transaction offers <strong>Mark as recurring</strong>, <strong>Remove</strong>,
-          or <strong>Restore</strong>, whichever fits.
+          A transaction can't be added to a series it doesn't match. To bring one in, correct its merchant
+          name or widen the rule that defines the series.
+        </p>
+        <p>
+          <strong>Matching by amount.</strong> A series normally ignores amount. When one payee bills two
+          things in the same category that only the amount tells apart, such as two subscriptions at
+          different prices, the <strong>Amount</strong> button on the series card limits the series to
+          charges near the amounts it has charged, or to a range set by hand. A series defined by a rule
+          has no Amount button; the rule's amount condition does the same job.
+        </p>
+        <p>
+          A transaction in a series carries a small ↻ marker, and its editor links to the series.
         </p>
 
         <h4>Transfers between two accounts</h4>
         <p>
-          A transfer -- or a credit-card payment -- moves money between two accounts. If both accounts
-          are tracked, it arrives as two transactions. The scan matches the two transactions and treats the
-          movement as a single transaction naming both accounts.
+          A transfer or credit-card payment between two tracked accounts arrives as two transactions. The
+          scan pairs them by amount (the same amount in opposite directions, a few days apart) rather than
+          by name, and treats them as one series naming both accounts. That keeps a payment made for years
+          as one series even when the banks change how they describe it. A transfer to or from an account
+          not tracked here is an ordinary series.
         </p>
         <p>
-          These pairs are found by matching the amounts -- same amount, opposite directions, within a few days
-          -- rather than by name. Two institutions often describe one payment quite differently, and
-          those descriptions can change over the years; matching on the money means a payment made monthly
-          for a decade stays one series no matter how its wording drifted. A transfer with only one side
-          on the books, because the other account is not tracked here, is an ordinary series.
+          A paired transfer takes its transactions out of any series matched by name. A series defined by a
+          rule keeps everything its rule matches.
         </p>
         <p>
-          A matched-up transfer takes over its own transactions, even where those transactions already
-          sit in a series matched by name -- one payment recorded twice is still one payment, and the
-          name is the part that drifts. Nothing is deleted by this: a series that also covers charges
-          outside the transfer keeps those charges. The exception is a series backed by a rule, which
-          keeps everything its rule names.
-        </p>
-        <p>
-          One situation stops a transfer being matched up, and it is listed
-          under <strong>Transfer &amp; payment review</strong> on the Recurring page: where more than one
-          transaction matches equally well, nothing is paired at all, because the data does not say
-          which is the other half. Choosing the right one there settles it, and the answer is remembered.
-        </p>
-        <p>
-          The suggestion can be rejected as well as answered. Dismissing an unmatched transfer leaves it
-          matched by merchant name, as before. Dismissed items drop off the list and collect at the foot
-          of the panel, where they can be undone.
+          When more than one transaction could be the other half, nothing is paired, and the transfer is
+          listed under <strong>Transfer &amp; payment review</strong> on the Recurring page. Choosing the
+          right one settles it. <strong>Dismiss</strong> leaves it matched by merchant name. Dismissed items
+          collect at the foot of the panel, where they can be undone.
         </p>
 
         <h4>What needs attention</h4>
@@ -2318,7 +2071,7 @@ export const HELP_TOPICS = [
         <p>
           See also:{' '}
           <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink> and{' '}
-          <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
+          <HelpLink to="/help/re-categorizing">when rules are applied</HelpLink>.
         </p>
       </>
     ),
@@ -2696,55 +2449,43 @@ export const HELP_TOPICS = [
             <tbody>
               <tr>
                 <td><strong>Set vault passphrase</strong></td>
-                <td>Shown before a vault exists. The passphrase protects the key the credentials are
-                  encrypted with, so it has to be a strong one: long enough, and hard to guess. How hard
-                  is estimated as it is typed, against lists of common words, names and patterns, and
-                  the dialog says what would make it stronger. Several unrelated words work well, and
-                  the dialog can suggest some.</td>
+                <td>Shown before a vault exists. The passphrase has to be strong. The dialog rates it as
+                  it is typed, says what would make it stronger, and can suggest one. Several unrelated
+                  words work well.</td>
               </tr>
               <tr>
                 <td><strong>Your vault passphrase is considered too easy to guess</strong></td>
-                <td>Shown when a passphrase set under an earlier, weaker rule no longer passes the current
-                  one. It is checked each time it is typed to unlock. When the rule, or the estimate behind
-                  it, changes, the strip and a <strong>Confirm your vault passphrase</strong> task ask for
-                  it to be typed once rather than a passkey used, since a passkey cannot be used to check
-                  it: the locked strip by unlocking, and the unlocked strip and the task with{' '}
-                  <strong>Validate passphrase</strong>; unencrypted backups leave the passphrase out until
-                  then. It still opens the vault, but until it is changed, in Vault settings, from its task or
-                  from the backup page, data providers cannot be connected and unencrypted backups leave
-                  it out. Only the person whose passphrase it is can change it.</td>
+                <td>The strength rule has become stricter since the passphrase was set. It still opens
+                  the vault, but data providers cannot be connected, and backups leave out the
+                  credentials, until it is changed in Vault settings. Only the person whose passphrase it
+                  is can change it.</td>
               </tr>
               <tr>
-                <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
-                <td>Shown while the vault is locked. The passkey button appears once a passkey has been
-                  added in <HelpLink to="/help/vault-settings">Vault settings</HelpLink>.</td>
+                <td><strong>Validate passphrase</strong></td>
+                <td>Shown after the strength rule changes. The passphrase has to be typed once so it can be
+                  checked; a passkey cannot be checked. Until then, backups leave out the
+                  credentials.</td>
+              </tr>
+              <tr>
+                <td><strong>Unlock with a passkey</strong></td>
+                <td>Appears once a passkey has been added in Vault settings.</td>
               </tr>
               <tr>
                 <td><strong>Lock</strong></td>
-                <td>Closes the vault now. Left alone it locks after eight hours without use, and when
-                  the application restarts. An unlock belongs to the browser it was made in; another
-                  browser or device unlocks separately.</td>
-              </tr>
-              <tr>
-                <td><strong>Vault settings</strong></td>
-                <td>Shown while the vault is unlocked: the unlock methods, the recovery code, who else
-                  can open the vault, and replacing the key. See{' '}
-                  <HelpLink to="/help/vault-settings">Vault settings</HelpLink>.</td>
+                <td>Closes the vault now. It also locks after eight hours without use, and when the
+                  application restarts. Each browser unlocks separately.</td>
               </tr>
               <tr>
                 <td><strong>Request vault access</strong></td>
-                <td>Shown to a user of an installation where someone else has already created the vault.
-                  The request sets that user&apos;s own passphrase, and then waits until someone who can
-                  already open the vault approves it in Vault settings. The strip tells that person a
-                  request is waiting.</td>
+                <td>Shown when someone else has already created the vault. The request sets a passphrase,
+                  and someone who can already open the vault approves it in{' '}
+                  <HelpLink to="/help/vault-settings">Vault settings</HelpLink>.</td>
               </tr>
               <tr>
-                <td><strong>Can&apos;t open it?</strong></td>
-                <td>Shown while the vault is locked, for a forgotten passphrase. It lists the ways back
-                  in, cheapest first: a passkey, another person who can open the vault, the recovery
-                  code, a backup holding the vault, with what opens each one. The last resort rebuilds the vault. That keeps the ledger
-                  and each connection&apos;s account mapping, and every connection has to be
-                  reconnected.</td>
+                <td><strong>Can't open it?</strong></td>
+                <td>Lists the ways back in after a forgotten passphrase. The last resort rebuilds the
+                  vault, which keeps the ledger and every connection's account mapping, but every
+                  connection has to be reconnected.</td>
               </tr>
             </tbody>
           </table>
@@ -3353,172 +3094,94 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Amazon reconciliation report',
     surfaces: ['Import history (transactions ↗ pill)'],
-    summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in the ledger, and includes tools to resolve ambiguous situations.',
+    summary: 'After an Amazon import, the reconciliation report shows how the orders line up with the card charges in the ledger, and lists the ones that need a decision.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
-          After importing Amazon orders, {APP_NAME} pairs each order with the card charge that paid for it and
-          excludes that charge so the money counts once. The <strong>reconciliation report</strong> shows how
-          that went &mdash; open it from <strong>View reconciliation report </strong> after an import, or from
-          the file's <strong>transactions ↗</strong> pill in the import history. It floats free of the page
-          (drag, resize, or <strong>Minimize</strong> it to the nav bar), so it can be put aside if there
-          is a need to inspect transactions and come back to it.
+          After importing Amazon orders, {APP_NAME} pairs each order with the card charge that paid for it
+          and excludes that charge, so the money counts once. The <strong>reconciliation report</strong>{' '}
+          shows how that went. It opens from the <strong>N transactions</strong> pill on the file's card in
+          the import history, which also shows <strong>N to resolve</strong> while anything needs a
+          decision. The report can be moved, resized or minimized to the nav bar while transactions are
+          looked at elsewhere.
         </p>
-        <p>
-          Rows group into:
-        </p>
+
+        <h4>Rows that need a decision</h4>
         <ul>
-          <li><strong>Duplicate detected</strong> &mdash; two or more identical charges made the order ambiguous,
-            perhaps the same charge imported twice.
-            <p>
-              Resolve with:
-            </p>
-            <ul>
-              <li>
-                <strong>Merge, keep one</strong> keeps the richest copy (folding in any detail
-                the others carried), trashes the rest, and matches the order;
-              </li>
-              <li>
-                <strong> Not duplicates</strong> marks the copies as distinct purchases instead
-                (never re-flagged; the order falls back to the unmatched path, and a copy dated on
-                the order itself is re-suggested for review). When other unmatched orders share the
-                amount, Merge isn't offered &mdash; use Not duplicates, or the per-copy Discard.
-              </li>
-              <li>
-                <strong>Discard</strong> for a copy you know is a double import.
-              </li>
-            </ul>
+          <li>
+            <strong>Duplicate detected</strong> &mdash; two or more identical charges could have paid the
+            order, usually the same charge imported twice. <strong>Merge &rarr; keep one</strong> keeps the
+            copy with the most detail, trashes the rest and matches the order. <strong>Discard</strong>{' '}
+            beside a copy trashes just that one. <strong>Not duplicates</strong> keeps them all as separate
+            purchases. Merge isn't offered when another unmatched order has the same amount.
           </li>
           <li>
-            <strong>Duplicate · review</strong> &mdash; a same-amount charge, but <em>outside</em> the
-            strict &plusmn;3-day match window but within two weeks. Likely still a double import, but the dates
-            don't corroborate it &mdash; so examine each copy (hover for its origin detail), then resolve with
-            the same <strong>Merge / Discard / Not duplicates</strong> &mdash; per row, or use bulk-Edit.
-            The merged-away copy is restorable from Settings → Trash.
+            <strong>Duplicate &middot; review</strong> &mdash; the same, but the copies are more than three
+            days from the order. Hovering a copy shows where it came from.
           </li>
           <li>
-            <strong>No charge found</strong> &mdash; counted, but no charge was matched to exclude (an untracked
-            card, history that predates your imports, an order whose export named no card and whose charge
-            doesn't read as Amazon, or a miss). Sometimes searching for the amount locates the corresponding
-            transaction. A charge that arrives later &mdash; the card synced or imported after the Amazon
-            file &mdash; is matched then, when it is the order's only candidate. These orders count toward the
-            import's needs-attention total so a stray one gets a look;
-            when there's genuinely nothing to link mark it as reviewed.
-            <p>
-              Resolve with:
-            </p>
-            <ul>
-              <li>
-                <strong>Link charges…</strong> opens a picker over the unaccounted charges with a running
-                sum against the order total &mdash; check the charge(s) that paid for it (several, if the
-                order was split) and link them. A mismatched sum warns but doesn't block.
-              </li>
-              <li>
-                <strong>Mark reviewed</strong> acknowledges it &mdash; it stays listed here but drops out of the attention count so it won't
-                keep nagging (Undo puts it back). Works per row or on a bulk selection.
-              </li>
-            </ul>
+            <strong>Matched &middot; review</strong> &mdash; no single charge equals the order, but a set of
+            charges adds up to it, usually one per shipment. <strong>Accept</strong> links them.{' '}
+            <strong>Dismiss</strong> leaves the order unmatched, and the set isn't suggested again.
           </li>
           <li>
-            <strong>Matched · review</strong> &mdash; no single charge equals the order total, but a unique set
-            of unaccounted charges sums to it: Amazon billed the order per shipment. A <em>single</em>-charge
-            suggestion carries a note naming why it didn't match automatically &mdash; outside the
-            ±3-day window, a cent off the total, or imported after the order was.
-            <p>
-              Resolve with:
-            </p>
-            <ul>
-              <li>
-                <strong>Accept</strong> links the whole set.
-              </li>
-              <li>
-                <strong>Dismiss</strong> if it's not a match (it won't be re-suggested). A set spanning
-                more than a week is flagged so it can be eyeballed first.
-              </li>
-            </ul>
+            <strong>No charge found</strong> &mdash; nothing was matched, often because the card isn't
+            tracked or the order predates the card's history. Searching for the amount sometimes finds the
+            charge. <strong>Link charges&hellip;</strong> picks it by hand, with a running total
+            against the order. <strong>Mark reviewed</strong> is for an order with nothing to link. A
+            charge that arrives later is matched then.
           </li>
           <li>
-            <strong>Unaccounted · duplicate</strong> &mdash; unaccounted charges that look like <em>copies of each
-              other</em> (same account and amount, days apart) with no order for either &mdash; the double import the
-            general dedupe can't catch. Resolve with <strong>Merge / Discard / Not duplicates</strong> &mdash; per row,
-            or use Bulk Edit. The merged-away copy is restorable from Settings → Trash.
+            <strong>Unaccounted &middot; duplicate</strong> &mdash; charges that look like copies of each
+            other, with no order for either. Resolved like Duplicate detected.
           </li>
           <li>
-            <strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
-            uses, in this import's date range, that no order accounts for. Best-effort, but surfaced for a look:
-            these count toward the import's needs-attention total so a stray one (say, a duplicate the
-            report couldn't pair) gets noticed.
-            <p>
-              Resolve with:
-            </p>
-            <ul>
-              <li>
-                <strong>Trash</strong> sends one to Trash &mdash; the escape
-                hatch for that unpaired duplicate. It acts on the whole row and also has the bulk
-                operation, <strong>Move to trash</strong>. Discarded rows land in
-                Settings → Trash's <strong>Transactions</strong> section.
-              </li>
-              <li>
-                <strong>Discard</strong> on a stacked duplicate row works per-copy.
-                Discarded rows land in Settings → Trash's <strong>Duplicate transactions</strong>.
-              </li>
-              <li>
-                <strong>Mark reviewed</strong> acknowledges it so it drops out of the attention
-                count (Undo restores it) &mdash; for a charge that is just a purchase the export
-                didn't cover, with nothing to fix. Works per row or on a bulk selection.
-              </li>
-            </ul>
+            <strong>Unaccounted charge</strong> &mdash; a charge that looks like Amazon, in the import's
+            date range, that no order explains. Usually a purchase the export didn't cover, which{' '}
+            <strong>Mark reviewed</strong> acknowledges. <strong>Trash</strong> removes one that is a
+            duplicate.
           </li>
-          <li>
-            <strong>Matched</strong> &mdash; the order and the charge(s) it excluded. If a pairing is wrong
-            (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
-            order's), <strong>Unlink</strong> detaches the charge &mdash; its original category is
-            restored and the order returns to <strong>No charge found</strong>, where <strong>Link charges…</strong>
-            can pair it correctly. An unlinked charge is never matched to that order again automatically.</li>
         </ul>
-        <p>*needs review*</p>
         <p>
-          <strong>Matched</strong> and <strong>No charge found</strong> rows also offer{' '}
-          <strong>Split&hellip;</strong> (<strong>Edit split&hellip;</strong> once split), so an order can be
-          divided across categories while it is being reviewed, without finding it again in the ledger &mdash;
-          see <HelpLink to="/help/transaction-splits#imported-order">splitting an imported order</HelpLink>.
-          An order with a single item has nothing to divide and doesn't offer it; the ledger's
-          own <strong>Split&hellip;</strong> still does.
+          Merged and discarded copies can be restored from Settings &rarr; Trash.
+        </p>
+
+        <h4>Matched orders</h4>
+        <p>
+          When a pairing is wrong, <strong>Unlink</strong> detaches the charge. The charge gets its
+          category back, and the order returns to <strong>No charge found</strong>. That charge is not
+          matched to the order automatically again.
         </p>
         <p>
-          Hover any order or charge for its <strong>origin detail</strong> (source file, captured fields,
-          imported category), and use the <strong>↗</strong> beside an order to open the Amazon page for
-          that order.
-        </p>
-        <h4>How an order&apos;s charge is found</h4>
-        <p>*needs review*</p>
-        <p>
-          An order is matched to a charge of the same amount within three days of it, and only when exactly
-          one such charge qualifies. Which accounts qualify depends on what the order says about how it was
-          paid. A card mapped to an account on the{' '}
-          <HelpLink to="/help/amazon-funding-sources">Amazon import form</HelpLink> limits the search to
-          that account, and the mapping follows the card if its account is later merged into another.
-          Without a mapping, the card&apos;s last four digits rule out accounts whose card number
-          disagrees. An order that names no card at all (a digital order, or one paid off-card) has
-          neither, so the charge must at least read as Amazon (<em>AMZN</em> or <em>AMAZON</em>);
-          otherwise any same-amount charge nearby, on any account, would do.
+          <strong>Split&hellip;</strong> on a Matched or No charge found row divides the order across
+          categories without finding it in the ledger. See{' '}
+          <HelpLink to="/help/transaction-splits#imported-order">splitting an imported order</HelpLink>.
+          A single-item order doesn't offer it.
         </p>
         <p>
-          The cost of that rule is a miss: an off-card order whose charge reads as something else &mdash;
-          paid through PayPal, so the card says <em>PAYPAL</em> &mdash; lands in{' '}
-          <strong>No charge found</strong>, and <strong>Link charges&hellip;</strong> pairs it by hand. A
-          miss is easy to see and fix; a wrong match would quietly exclude an unrelated charge from the
-          totals.
+          Hovering an order or charge shows its origin detail. The <strong>↗</strong> beside an order opens
+          it on Amazon.
+        </p>
+
+        <h4>How an order's charge is found</h4>
+        <p>
+          An order is matched to a charge of the same amount within three days, and only when exactly one
+          charge qualifies. A card mapped to an account on the{' '}
+          <HelpLink to="/help/amazon-funding-sources">Amazon import form</HelpLink> limits the search to that
+          account. Without a mapping, the card's last four digits rule out accounts with a different card
+          number.
         </p>
         <p>
-          For batch cleanup, filter with the pills, tick the row checkboxes (or the select-all header), and the
-          bulk bar applies <strong>Merge / Accept / Dismiss / Unlink / Move to trash</strong> to every selected
-          row that supports it. Rows of different kinds accept different actions, so each button carries the
-          number of your selection it applies to &mdash; a selection can be mixed, and each action reaches
-          only its own rows.
-          Items needing action also show as an <strong>N to resolve</strong> warning on the file card and a task
-          on the Tasks page; both clear as you resolve them. Everything the import itself did reverses if you
-          undo it.
+          An order that names no card, such as a digital order, only matches a charge that reads as Amazon
+          (<em>AMZN</em> or <em>AMAZON</em>). One paid through PayPal lands in <strong>No charge
+          found</strong> and is linked by hand.
+        </p>
+
+        <h4>Several rows at once</h4>
+        <p>
+          Selected rows are resolved together from the bar above the list. Each button shows how many of
+          the selected rows it applies to. Undoing the import reverses everything it did.
         </p>
       </>
     ),
@@ -3672,66 +3335,52 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
     surfaces: ['Import (file ↗ report)', 'Duplicate-detection report'],
-    summary: `When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision, and the only category counted as pending work (the file's "to review" count and the Tasks warning). Matched · review and Rejected · review are already rejected and advisory: examine one, Import anyway if it shouldn't have been rejected, or Mark reviewed. Everything else is settled. Hover over a pill for a short explanation.`,
+    summary: 'The duplicate report lists the rows an import held back as duplicates or flagged as possible ones. Review rows need a decision, the other amber pills are worth a look, and the rest are settled. Hovering a pill explains it.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           {APP_NAME} builds one clean ledger out of several sources over time, and the same activity often
           arrives more than once &mdash; once from a card, again from the bank that pays it off, from an
           aggregator that has seen both, or simply because two CSV exports contain overlapping data which is a
-          common situation. The dedupe engine settles the clear, high-confidence cases and surfaces the rest.
+          common situation. Duplicate detection settles the clear cases and lists the rest here.
         </p>
-        <p>There are two major types:</p>
         <ul>
-          <li><strong>Review</strong> &mdash; an undecided match that <em>needs a decision</em>, usually a{' '}
-            <HelpLink to="/help/cross-account-duplicates">cross-account duplicate</HelpLink>. This is the
-            category that counts as <strong>pending work</strong>: it drives the "Possible duplicate
-            transactions" item on the Tasks page. The file card's own "to review" count is wider &mdash; it
-            adds the advisory rejects below, which want a look but never reach the Tasks page.</li>
-          <li><strong>Matched &middot; review</strong> and <strong>Rejected &middot; review</strong> &mdash;
-            the <strong>Matched nearby date</strong> and <strong>No specific match</strong> outcomes of a
-            covered range. These were already rejected at import and are <em>advisory</em> &mdash; they do
-            <em> not</em> count as pending work. Examine them to confirm the rejection was right; a row
-            that should <em>not</em> have been rejected can be retained with <strong>Import anyway</strong>,
-            and the rest can be left alone or cleared from the pills with <strong>Mark reviewed</strong> (in
-            bulk). Often a <strong>No specific match</strong> transaction can be matched to a transaction
-            further out (search by the amount) than the pairing window reaches, but sometimes it really is a
-            transaction which should be included. The remaining covered-range outcomes &mdash;{' '}
-            <strong>Matched another account</strong> and <strong>Matched transfer</strong> &mdash; are settled
-            and ask for nothing; they carry their own filters beside <strong>Removed later</strong>. See{' '}
-            <HelpLink to="/help/covered-range-review">covered-range review</HelpLink>.</li>
+          <li>
+            <strong>Review</strong> &mdash; a possible duplicate that needs a decision, usually
+            a <HelpLink to="/help/cross-account-duplicates">cross-account duplicate</HelpLink>. These are
+            what the <em>Possible duplicate transactions</em> task on the Tasks page counts.
+          </li>
+          <li>
+            <strong>Matched &middot; review</strong> and <strong>Rejected &middot; review</strong> (the
+            {' '}<strong>Matched nearby date</strong> and <strong>No specific match</strong> pills) &mdash;
+            rows already held back that are worth a look. <strong>Import anyway</strong> brings in one that
+            should not have been held back, and <strong>Mark reviewed</strong> clears the rest. They count
+            toward the file card's to-review number but not toward the Tasks page.
+            See <HelpLink to="/help/covered-range-review">covered-range duplicates</HelpLink>.
+          </li>
+          <li>Everything else is settled and needs nothing.</li>
         </ul>
         <p>
-          Click a pill to filter by a group (the header checkbox then selects all of
-          it); <strong>hover on a pill</strong> for a short explanation of what it means.
+          Clicking a pill shows only those rows, and the header checkbox then selects all of them.
         </p>
+        <h4>Adding detail to the existing transaction</h4>
         <p>
-          A rejected duplicate's detail can be captured and added to the retained transaction.
-          When it unambiguously matches one existing
-          transaction, <strong>Enrich</strong> folds the <em>new</em> detail (a memo, a transaction id, a
-          richer name) into that transaction's source record &mdash; additive and reversible
-          (<strong>Unenrich</strong> removes exactly what was added). The file card's
-          <strong> Enrich existing transactions from this source</strong> checkbox does the same for the
-          whole file at once &mdash; at any time, since rejected rows keep their full detail &mdash; and a
-          data source can opt in permanently on its mapping screen so future imports enrich automatically.
-          Once a row has enriched its match, its Kind reads <strong>Matched</strong> (green) rather than
-          "Rejected": it was recognized as one already held and contributed its detail, not
-          discarded. A row whose covered-range outcome has a name of its own keeps that name instead &mdash;
-          enriching a <strong>Matched &middot; review</strong> row does not settle the question the review is
-          asking. The additional information becomes part of the hover text displayed when hovering
-          over the merchant name and is available for use in rules and when searching for
-          transactions.
+          A row held back as a duplicate sometimes carries detail the existing transaction lacks, such as
+          a memo or a fuller name. <strong>Enrich existing</strong> adds that detail to the existing
+          transaction, and <strong>Undo enrich</strong> takes it out again. <strong>Enrich existing
+            transactions from this source</strong>, on the file's card or on the data source, does this for
+          every row. An enriched row reads <strong>Matched</strong>, in green. The added detail shows when
+          hovering the merchant name, and rules and search use it.
         </p>
+        <h4>Changing a decision</h4>
         <p>
-          Both directions are reversible. A row rejected at import never reached the ledger,
-          and <strong>Import anyway</strong> brings it in. A rejection lasts only as long as the import it
-          was made against: undoing or replacing that file (or removing a connection&apos;s synced
-          transactions) checks the row again, and it comes in unless something else in the ledger still
-          accounts for it. A transaction that was imported and removed
-          afterwards is listed under <strong>Removed later</strong>, and <strong>Restore</strong> puts
-          it back &mdash; see{' '}
+          <strong>Import anyway</strong> brings in a row that was held back. A transaction that was imported
+          and removed afterwards is listed under <strong>Removed later</strong>, where{' '}
+          <strong>Restore</strong> puts it back (see{' '}
           <HelpLink to="/help/removed-as-duplicates">a transaction that was imported, then
-            removed</HelpLink>.
+            removed</HelpLink>). Undoing the import a row was matched against checks the row again, and it
+          comes in unless something else in the ledger accounts for it.
         </p>
         <p>
           A single file listing the same purchase twice is a different problem
@@ -3745,7 +3394,7 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Resolving a cross-account duplicate',
     surfaces: ['Duplicate-detection report'],
-    summary: 'A Cross-account match means what appears to be the same transaction came in from different sources on different accounts. Options are: Keep both (they\'re two distinct transactions), Discard new, or Replace existing. Keep existing/Replace options related to what account the transaction is mapped to.',
+    summary: 'A Review row looks like a transaction already in the ledger, usually the same one arriving on a different account. Each one needs a decision.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -3756,48 +3405,38 @@ export const HELP_TOPICS = [
           has the account wrong or the two sources have different names for the same account and they haven't been
           paired up in {APP_NAME}.
         </p>
+        <h4>Same account or different accounts</h4>
         <p>
-          Accounts whose types can&apos;t be the same account, such as a credit card and a checking or
-          PayPal account, are never matched: the same amount on both is a payment between them. A PayPal
-          payment and the card or bank charge that funded it are matched in
-          the <HelpLink to="/help/paypal-reconciliation">PayPal reconciliation</HelpLink> instead.
-        </p>
-        <p>
-          If the two accounts get merged, the pair is no longer called cross-account, and the wording
-          decides what becomes of it. The amount already matches &mdash; that is what flagged the pair
-          &mdash; so where both sources also describe it identically, the merge confirms the duplicate and
-          the row leaves the active ledger as a <strong>duplicate in this account (confirmed)</strong>.
-          A purchase that repeats every few days at the same price is the exception: only the date tells
-          the visits apart, so unless both copies carry the same date the pair stays in review.
-          When one copy is still pending and the other has posted, the pending copy is the one removed,
-          and its renames, notes and tags move to the posted copy.
-          Detaching the accounts reverses that, and a single row can be restored on its own. Where the two
-          descriptions merely resemble each other, or share nothing but the payee, that is not conclusive,
-          so the row stays in review as a <strong>possible duplicate in this
-            account</strong> (or <strong>same payee, different wording</strong>) and still needs one of
-          the three actions below.
-        </p>
-        <p>
-          There are three actions:
+          When rows are flagged between two accounts, the report first asks whether they are the same
+          account. Either answer settles every flagged row between them.
         </p>
         <ul>
-          <li><strong>Keep both</strong> &mdash; they really are two different transactions. If the accounts weren't merged this also
-            asserts <em>these two accounts are distinct</em>, so future imports stop re-flagging the pair.</li>
-          <li><strong>Discard new</strong> &mdash; the just-imported row is the duplicate; keep the copy
-            already in the ledger.</li>
-          <li><strong>Replace existing</strong> &mdash; the just-imported row is the <em>better</em> record
-            (e.g. it has the correct account, or it is the posted copy of a pending charge). Keep it and
-            remove the existing one; the existing row&apos;s renames, notes and tags move to it.</li>
+          <li>
+            <strong>Same account &mdash; merge them</strong> merges the two accounts. Copies that match
+            exactly are removed as duplicates. Rows that only look similar stay for review.
+          </li>
+          <li>
+            <strong>Different accounts &mdash; keep both</strong> keeps every row, and future imports stop
+            checking the pair. The pair is listed under <strong>Duplicate detection exceptions</strong> in
+            Settings, where <strong>Forget</strong> undoes it.
+          </li>
+        </ul>
+        <h4>Deciding one row</h4>
+        <ul>
+          <li><strong>Keep both</strong> &mdash; they are two different transactions. The pair is not
+            flagged again.</li>
+          <li><strong>Discard new</strong> &mdash; the new row is the duplicate.</li>
+          <li><strong>Replace existing</strong> &mdash; the new row is the better record, such as the one on
+            the correct account or the posted copy of a pending charge. The existing row is removed, and its
+            renames, notes and tags move to the new one.</li>
         </ul>
         <p>
-          A pending amount carries a <strong>P</strong> marker. When the existing row is pending and the
-          new one has posted, Replace existing is listed first: Discard new would keep the pending copy,
-          which is left out of every total and which nothing will settle.
+          When the existing copy is pending (marked <strong>P</strong>) and the new one has posted, use
+          Replace existing. Discard new would keep the pending copy, which is left out of every total.
         </p>
         <p>
-          For Replace existing, the categorization comes from the new file if the new file is the only
-          file with the box checked to import categories from the file. If both files, only the old file, or neither file,
-          has that box checked, the category remains unchanged; it comes from the initial import.
+          With Replace existing, the category comes from the new row only when the new file is the only one
+          of the two whose imported categories are used. Otherwise the existing row's category is kept.
         </p>
       </>
     ),
@@ -3807,81 +3446,48 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reviewing covered-range duplicates',
     surfaces: ['Duplicate-detection report'],
-    summary: 'A row landing inside a date range an earlier import already covered is rejected as a presumed duplicate, and is then paired against the ledger to name what it duplicates \u2014 the exact day first, then \u00b11, then outward to a week, then across other accounts. Most outcomes are settled and need nothing. Two ask for a look: Matched \u00b7 review (the counterpart sits several days off) and Rejected \u00b7 review (nothing paired at all, so the row may be genuinely missing).',
+    summary: 'A row dated inside a period an earlier import already covered is held back as a duplicate, and the report names the transaction it matched. Matched nearby date and No specific match are worth a look. The rest are settled.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          An import is allowed to be missing transactions at the edges, but it is assumed that after seeing
-          a transaction from a given source, the import contains all the transactions from that source up
-          to the end of the time period covered by the import (again, allowing for fuzziness at the edges).
-          A later import landing inside that range is therefore rejected as a presumed duplicate, and{' '}
-          {APP_NAME} looks for the transaction it duplicates: by date and amount on the same account
-          &mdash; the exact day, then &plusmn;1, then outward a day at a time to a week &mdash; and, failing
-          that, on other accounts.
+          Once an import has covered a period for an account, a later import of the same period is assumed
+          to repeat it. Its rows are held back as duplicates, and the report shows the transaction each one
+          matched. Re-importing a file, or importing an export that overlaps an earlier one, works this
+          way. The <strong>Kind</strong> column names the outcome.
         </p>
-        <p>
-          Re-importing a file, or importing a second export that overlaps the first, puts every overlapping
-          row through this. Most of them pair cleanly and are settled where they stand. The report&apos;s{' '}
-          <strong>Kind</strong> column names the outcome.
-        </p>
-
-        <p><strong>Worth a look</strong> &mdash; these two carry the amber pills:</p>
+        <h4>Worth a look</h4>
         <ul>
-          <li><strong>Matched &middot; review</strong> &mdash; a counterpart turned up only after the date
-            window widened past the exact day; each row states how far apart the two are. Posting dates drift
-            between sources for several reasons &mdash; pending vs. posted timing, weekend or holiday
-            settlement, and time-zone differences on foreign charges &mdash; so the same transaction can sit
-            several days apart in two sources, and the further apart the pair sits the more it is worth a
-            glance before clearing. Once the pair looks right, <strong>Mark reviewed</strong> clears it from
-            the needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the
-            rows and import both.</li>
-          <li><strong>Rejected &middot; review</strong> &mdash; the date is covered but nothing paired with
-            it at all, anywhere in the window or across accounts. That makes it the row to actually
-            investigate: it is usually present in one source and genuinely missing from the other, in which
-            case <strong>Import anyway</strong> keeps it. A row with a payee name gets one more check first:
-            when the same payment &mdash; the same amount and a distinctive part of the name &mdash; already
-            sits on another account within a couple of weeks, the row stays rejected and reads{' '}
-            <strong>Matched another account</strong>; when nothing does, it is a payment the earlier source
-            never saw (a subscription paid from a wallet balance, say) and it imports. What is left here is
-            mostly money movement with no payee &mdash; deposits, withdrawals, currency conversions,
-            holds.</li>
+          <li>
+            <strong>Matched &middot; review</strong> (the <strong>Matched nearby date</strong> pill) &mdash;
+            the match is a few days away, which is common because sources post on different dates. Each row
+            says how far apart the two are. <strong>Mark reviewed</strong> once the pair looks right. If they
+            are different transactions, <strong>Import anyway</strong> brings the row in.
+          </li>
+          <li>
+            <strong>Rejected &middot; review</strong> (the <strong>No specific match</strong> pill) &mdash;
+            nothing matched it. This is the row to investigate: it is often missing from the other source,
+            and <strong>Import anyway</strong> brings it in. Searching for the amount sometimes finds the
+            match further away. Most rows here are deposits, withdrawals and other money movement with no
+            payee name.
+          </li>
         </ul>
-
-        <p>
-          <strong>Settled</strong> &mdash; named so a rejection can be audited, but asking for nothing. Each
-          has its own filter beside <strong>Removed later</strong>:
-        </p>
+        <h4>Settled</h4>
         <ul>
-          <li><strong>Matched</strong> &mdash; paired on the exact date or &plusmn;1 day. Where the row
-            carried detail its match lacked, that detail was folded in and the row reads green.</li>
-          <li><strong>Matched another account</strong> &mdash; the same charge, in the same direction,
-            already sits on another account within a couple of weeks, matched on a distinctive part of the
-            name. One payment recorded twice by two sources: an aggregator&apos;s export and a card&apos;s own
-            download both carry the card charge behind a wallet purchase. The money left once, so the second
-            copy is not a new transaction. This is the ordinary outcome when two exports overlap.</li>
-          <li><strong>Matched transfer</strong> &mdash; an equal-and-opposite row naming this account sits on
-            another one, a few days apart: a wallet deposit whose funding charge is already recorded. Two
-            legs of one movement, and the other leg is on the books, so this one is correctly not
-            re-imported. Because the twin is the <em>other</em> leg rather than the same transaction, its
-            detail is never folded into it.
-            <p>
-              The account&apos;s name is looked for in the other row&apos;s name, its original statement
-              name and any text captured from its file, so renaming a row never hides it from this match.
-              Renaming can help: a bank&apos;s card-payment row renamed to name the card it pays off lets
-              that payment pair the way a wallet&apos;s funding leg does. A rename affects later imports and
-              a reopened report, not a rejection already recorded.
-            </p></li>
+          <li><strong>Matched</strong> &mdash; found on the same date or a day off.</li>
+          <li>
+            <strong>Matched another account</strong> &mdash; the same charge is already on another account,
+            usually because two sources both recorded it, such as an aggregator's export and the card's own
+            download.
+          </li>
+          <li>
+            <strong>Matched transfer</strong> &mdash; the other half of a transfer is already on another
+            account, such as the card charge that funded a wallet deposit.
+          </li>
         </ul>
         <p>
-          Neither settled outcome is a verdict of its own: the coverage rule had already rejected the row,
-          and the cross-account lookups run afterwards only so the report can name something rather than
-          report nothing. Both are counted in the file card&apos;s duplicates total.{' '}
-          <strong>Import anyway</strong> stays available on both, for the rare row that really is separate.
-        </p>
-        <p>
-          A stored verdict names the accounts as they stood on import day. Merging two accounts afterwards
-          does not revisit it, so an old report can describe a split that has since been healed.
+          <strong>Import anyway</strong> stays available on all of these, for the rare row that is a
+          separate transaction.
         </p>
         <p>
           See also: <HelpLink to="/help/duplicate-report">reading the duplicate-detection report</HelpLink>.
@@ -3984,18 +3590,15 @@ export const HELP_TOPICS = [
         <p>*needs review*</p>
         <p>
           Most duplicates are caught during the import and never reach the ledger. A few are removed
-          afterwards: the older copy when a{' '}
-          <HelpLink to="/help/cross-account-duplicates">Review</HelpLink> row is settled
-          with <strong>Replace existing</strong>, the newer one when it is settled
-          with <strong>Discard new</strong>, the copies an account{' '}
-          <HelpLink to="/help/merging-accounts">merge</HelpLink> finds, or a doubled charge merged on
-          the <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink>. Such a transaction was in its
-          file&apos;s ledger and no longer is.
+          afterwards, by a decision on a{' '}
+          <HelpLink to="/help/cross-account-duplicates">Review</HelpLink> row, an account{' '}
+          <HelpLink to="/help/merging-accounts">merge</HelpLink>, or a doubled charge merged on
+          the <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink>.
         </p>
         <p>
-          It stays on the <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> of the import
-          it came from, under <strong>Removed later</strong>. A Replace removes the older copy, so that
-          can be a different file from the one where the decision was made.
+          A removed row stays on the <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> of
+          the import it came from, under <strong>Removed later</strong>. <strong>Replace existing</strong>{' '}
+          removes the older copy, so that can be a different file from the one where the decision was made.
           The <strong>Removed as duplicates</strong> line in that file&apos;s ledger
           (the <strong>↗</strong>) opens the report on just those rows.
         </p>
@@ -4553,53 +4156,34 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
         <p>*needs review*</p>
         <p>
-          Generally the entire backup is
-          restored but in special circumstances one might want to skip some sections.
-          It only makes sense to restore the data provider credentials if
-          the users &amp; security is also restored, since the vault is not useful if it cannot be
-          unlocked.
-        </p>
-        <p>
-          <strong>Ledger.</strong> The ledger is replaced with the one in the backup.
-        </p>
-        <p>
-          <strong>Users &amp; security.</strong> The users, sign-in settings and backup keys are replaced
-          with the ones in the backup. Users not in the backup are removed, and everyone is signed out. If
-          the backup has sign-in turned on, the restore first asks for the username and password of an
-          administrator in the backup, so that someone can sign in afterwards.
-        </p>
-        <p>
-          <strong>Data provider credentials</strong> (only with Users &amp; security):
+          Generally the whole backup is restored. Each part can be left out, and the restore lists what
+          each one replaces.
         </p>
         <ul>
           <li>
-            <strong>Ticked:</strong> the vault is replaced with the one in the backup. Users with a
-            passphrase, recovery code or passkey in the backup can open the vault with the ones they had
-            when the backup was made. Other users request vault access again. A connection the backup
-            doesn&apos;t have loses its credential and has to be reconnected.
+            <strong>Users &amp; security</strong> removes users not in the backup and signs everyone out.
+            If the backup has sign-in turned on, the restore first asks for the username and password of
+            an administrator in the backup, so that someone can sign in afterwards.
           </li>
           <li>
-            <strong>Not ticked, or not in the backup:</strong> the vault here is kept. Users removed by the
-            restore lose their vault access. If nobody left can open the vault, it is reset and the
-            credentials are cleared.
+            <strong>Data provider credentials</strong> &mdash; a connection the backup doesn't have loses
+            its credential and has to be reconnected.
           </li>
         </ul>
         <p>
-          <strong>Data connections.</strong> A connection&apos;s details, its accounts and its sync position
-          are part of the ledger, and its credential is part of users &amp; security. Restoring the ledger
-          matches connections up:
+          Restoring the ledger matches the data connections up:
         </p>
         <ul>
           <li>
-            A connection in both keeps its credential. Syncing picks up from where the backup left off, so
-            the next sync fetches what has arrived since.
+            A connection in both keeps its credential, and the next sync fetches what has arrived since
+            the backup.
           </li>
           <li>
-            A connection only in the backup comes back without a credential and has to be reconnected.
+            A connection only in the backup has to be reconnected.
           </li>
           <li>
-            A connection only on this installation keeps its credential but loses its list of
-            accounts. <strong>Refresh accounts</strong> in the connection&apos;s menu fetches the list again.
+            A connection only on this installation loses its list of accounts.{' '}
+            <strong>Refresh accounts</strong> in the connection's menu fetches it again.
           </li>
         </ul>
         <p>
@@ -4607,95 +4191,70 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            A backup made before <strong>Replace vault key</strong>, or before the vault was rebuilt after a
-            passphrase was compromised, restores without its data provider credentials. They are under a
-            key that is no longer trusted.
+            A backup made before <strong>Replace vault key</strong>, before the vault was rebuilt after a
+            passphrase was compromised, or before{' '}
+            <HelpLink to="/help/vault-settings#exposure">Respond to an exposure</HelpLink>, does not bring
+            back working data provider credentials.
           </li>
           <li>
-            After the vault was rebuilt for a forgotten passphrase, restoring an older backup&apos;s
-            credentials takes away the credentials of connections reconnected since. The confirmation
-            names them.
+            After the vault was rebuilt for a forgotten passphrase, restoring an older backup's
+            credentials removes those of connections reconnected since. The confirmation names them.
+          </li>
+          <li>
+            A backup opens with the passphrases and recovery codes in use when it was made, so a replaced
+            one is worth keeping, with the date, for as long as that backup might be restored.
           </li>
         </ul>
         <p>
-          Restoring the ledger gives the installation a new backup identifier. Every backup made
-          before the restore, including the file just restored, is afterwards treated as coming from
-          another system and asks for confirmation before it replaces anything. A backup made after the
-          restore is the one to rely on.
-        </p>
-        <p>
-          A passphrase or recovery code that has been replaced is worth keeping, with the date it was
-          replaced, for as long as a backup made under it might be restored.
-        </p>
-        <p>
-          A backup made before <strong>Respond to an exposure</strong> was used
-          in <HelpLink to="/help/vault-settings#exposure">Vault settings</HelpLink> holds credentials
-          the providers no longer accept.
+          After the ledger is restored, every earlier backup, including the one just restored, asks for
+          confirmation as if it came from another system. A backup made after the restore is the one to
+          rely on.
         </p>
 
         <HelpHeading anchor="checking">Checking the databases</HelpHeading>
         <p>*needs review*</p>
         <p>
-          <strong>Database</strong> in the Server group of Settings checks both files: that nothing in
-          either one is damaged, and that no row refers to another row that is gone. It does not check
-          that the data itself makes sense. The check also runs before every backup and after every
-          restore.
+          <strong>Database</strong> in the Server group of Settings checks both files for damage, and for
+          rows that refer to rows that are gone. It does not check that the data makes sense. The check
+          also runs before every backup and after every restore.
         </p>
         <ul>
           <li>
-            When the only problem is an index out of step with its table, <strong>Rebuild
-              indexes</strong> repairs it without losing anything.
+            When the only problem is an index, <strong>Rebuild indexes</strong> repairs it without losing
+            anything.
           </li>
           <li>
             Anything else is repaired from a backup. The section names the newest backup made from
-            databases that passed. A backup can still be made from a database that failed, after a
-            confirmation, but it may be missing rows the damage hides, and its history entry says so.
+            databases that passed. A backup made from a damaged database may be missing rows.
           </li>
           <li>
-            A restore rewrites the tables inside the existing files, so damage to a file itself can
-            outlast it, and the restore says so when the check afterwards fails. To start from clean
-            files, stop {APP_NAME}, move its database files aside (Startup configuration shows where
-            they are), start it again and restore the backup into the new, empty databases.
+            A restore does not replace the files themselves, so damage to a file can remain afterwards,
+            and the restore says so. To start from clean files, stop {APP_NAME}, move its database files
+            aside (Startup configuration shows where they are), start it again and restore the backup.
           </li>
         </ul>
 
         <HelpHeading anchor="credentials-restore-passphrase">Restoring an older credentials backup</HelpHeading>
+        <p>*needs review*</p>
         <p>
-          Earlier versions made a separate credentials backup. It still restores, into the vault already
-          on the installation, and replaces only the credentials.
+          Earlier versions made a separate credentials backup. It still restores, replacing only the
+          credentials, into a vault that exists here and is unlocked.
         </p>
-        <div className="help-table-scroll">
-          <table>
-            <thead>
-              <tr><th>Restoring to</th><th>Asked for</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>The installation that made the backup</td>
-                <td>Nothing, with the vault unlocked. The backup of any user restores, and a passphrase
-                  changed since the backup makes no difference.</td>
-              </tr>
-              <tr>
-                <td>The same installation, after the vault was rebuilt for a forgotten passphrase</td>
-                <td>One of the generating user's unlock methods as it was at the time: the passphrase,
-                  the recovery code, or a passkey.</td>
-              </tr>
-              <tr>
-                <td>The same installation, after <strong>Replace vault key</strong> or a vault rebuilt
-                  for a compromised passphrase</td>
-                <td>Nothing is restored. The credentials in the file are under a key that is no longer
-                  trusted, so the connections are reconnected instead.</td>
-              </tr>
-              <tr>
-                <td>A different installation</td>
-                <td>The same. No other user's passphrase opens the file. A passkey is offered only where
-                  the new installation is reached at the same name the passkey was added at (for
-                  example <code>luma.local</code>), over HTTPS. The vault on the new installation has to
-                  exist and be unlocked, under whatever passphrase was set there.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <ul>
+          <li>
+            On the installation that made it, nothing more is asked.
+          </li>
+          <li>
+            After the vault was rebuilt for a forgotten passphrase, or on a different installation, the
+            restore asks for an unlock method of the user who made the backup, as it was then: the
+            passphrase, the recovery code or a passkey. A passkey works only where the installation is
+            reached at the same name it was added at (for example <code>luma.local</code>), over HTTPS.
+          </li>
+          <li>
+            After <strong>Replace vault key</strong>, or a rebuild for a compromised passphrase, nothing is
+            restored, and the connections have to be reconnected.
+          </li>
+        </ul>
 
         <HelpHeading anchor="exposed-files">If the database files are exposed</HelpHeading>
         <p>
@@ -4851,7 +4410,7 @@ export const HELP_TOPICS = [
           {APP_NAME} is running. The chosen account ends up as an active administrator with two-factor
           off, and all current browser sessions are signed out. The vault passphrase is not affected; a
           forgotten vault passphrase is covered under{' '}
-          <HelpLink to="/help/credential-vault#resolving-problems">the credential vault</HelpLink>.
+          <HelpLink to="/help/credential-vault">the credential vault</HelpLink>.
         </p>
       </>
     ),
