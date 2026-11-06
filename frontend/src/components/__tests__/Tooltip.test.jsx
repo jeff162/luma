@@ -107,6 +107,27 @@ describe('Tooltip scroll handling', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  // Clicking a document or note marker opens a dialog under a pointer that has not moved, so no
+  // mouseleave comes; the hint used to open over that dialog when the dwell ran out.
+  it('cancels a pending open when the trigger is pressed, and the focus that follows does not reopen it', () => {
+    vi.useFakeTimers()
+    const trigger = renderTooltip({ openDelay: ROW_HOVER_OPEN_DELAY_MS })
+
+    hover(trigger)
+    trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    fireEvent.focus(trigger.firstChild)
+    act(() => { vi.advanceTimersByTime(ROW_HOVER_OPEN_DELAY_MS * 2) })
+
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it('stays open when the press is inside an interactive card', () => {
+    const trigger = renderTooltip({ interactive: true })
+    hover(trigger)
+    act(() => { screen.getByRole('tooltip').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+  })
+
   it('cancels a pending open when a scroll starts during the dwell', () => {
     vi.useFakeTimers()
     const trigger = renderTooltip({ openDelay: ROW_HOVER_OPEN_DELAY_MS })

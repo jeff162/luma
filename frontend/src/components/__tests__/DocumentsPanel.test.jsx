@@ -201,7 +201,7 @@ describe('DocumentsPanel', () => {
 
     pasteInto(box, RICH_RECEIPT)
 
-    const preview = await screen.findByTitle('Preview of the pasted receipt')
+    const preview = await screen.findByLabelText('Preview of the pasted receipt')
     // Same origin so edits can be read back, and nothing else: with scripts it could reach the app.
     expect(preview.getAttribute('sandbox')).toBe('allow-same-origin')
     expect(preview.getAttribute('srcdoc')).toContain('<td>$350.00</td>')
@@ -224,7 +224,7 @@ describe('DocumentsPanel', () => {
     const user = userEvent.setup()
     render(<DocumentsPanel txnId="t1" />)
     pasteInto(await findBox(), RICH_RECEIPT)
-    const preview = await screen.findByTitle('Preview of the pasted receipt')
+    const preview = await screen.findByLabelText('Preview of the pasted receipt')
     const doc = preview.contentDocument
     doc.body.innerHTML = '<table><tr><td>Professional Tune Up</td><td>$350.00</td></tr></table>'
     doc.dispatchEvent(new Event('input'))
@@ -245,11 +245,11 @@ describe('DocumentsPanel', () => {
     const user = userEvent.setup()
     render(<DocumentsPanel txnId="t1" />)
     pasteInto(await findBox(), RICH_RECEIPT)
-    await screen.findByTitle('Preview of the pasted receipt')
+    await screen.findByLabelText('Preview of the pasted receipt')
 
     await user.click(screen.getByRole('button', { name: 'Convert to plain text' }))
 
-    expect(screen.queryByTitle('Preview of the pasted receipt')).toBeNull()
+    expect(screen.queryByLabelText('Preview of the pasted receipt')).toBeNull()
     const box = screen.getByLabelText('Drop or paste a document')
     expect(box.value).toBe(RICH_RECEIPT['text/plain'])
     await user.clear(box)
@@ -266,13 +266,13 @@ describe('DocumentsPanel', () => {
     const user = userEvent.setup()
     render(<DocumentsPanel txnId="t1" />)
     pasteInto(await findBox(), RICH_RECEIPT)
-    await screen.findByTitle('Preview of the pasted receipt')
+    await screen.findByLabelText('Preview of the pasted receipt')
     await user.click(screen.getByRole('button', { name: 'Convert to plain text' }))
     await user.clear(screen.getByLabelText('Drop or paste a document'))
 
     await user.click(screen.getByRole('button', { name: 'Discard and return to HTML' }))
 
-    await screen.findByTitle('Preview of the pasted receipt')
+    await screen.findByLabelText('Preview of the pasted receipt')
     await user.click(screen.getByRole('button', { name: 'Attach' }))
     await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
     const sent = api.attachTransactionDocument.mock.calls[0][1]
@@ -289,7 +289,7 @@ describe('DocumentsPanel', () => {
 
     pasteInto(box, RICH_RECEIPT)
 
-    expect(screen.queryByTitle('Preview of the pasted receipt')).toBeNull()
+    expect(screen.queryByLabelText('Preview of the pasted receipt')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Attach' }))
     const sent = api.attachTransactionDocument.mock.calls[0][1]
     expect(sent.type).toBe('text/plain')
@@ -300,7 +300,7 @@ describe('DocumentsPanel', () => {
     const user = userEvent.setup()
     render(<DocumentsPanel txnId="t1" />)
     pasteInto(await findBox(), RICH_RECEIPT)
-    await screen.findByTitle('Preview of the pasted receipt')
+    await screen.findByLabelText('Preview of the pasted receipt')
 
     await user.click(screen.getByRole('button', { name: 'Discard' }))
 

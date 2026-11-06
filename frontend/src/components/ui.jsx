@@ -107,9 +107,12 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   const [fit, setFit] = useState(null)
   const closeTimer = useRef(null)
   const openTimer = useRef(null)
-  // The live scroll/right-click dismissal while this tooltip is armed or showing, held as a ref so it
+  // The live scroll/right-click/press dismissal while this tooltip is armed or showing, held as a ref so it
   // can be attached the instant a hover lands — see `armDismissal`.
   const dismissalRef = useRef(null)
+  // Set by a press, so the focus that the same press gives the trigger does not open the hint again.
+  // Cleared when the pointer leaves or focus moves on.
+  const pressedRef = useRef(false)
   useEffect(() => () => {
     clearTimeout(closeTimer.current)
     clearTimeout(openTimer.current)
@@ -131,6 +134,11 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
    * because the menu may be opened from an ancestor of the trigger (transaction rows put the handler on
    * the row, not the cell) or from somewhere else on the page entirely.
    *
+   * A press dismisses too, as a native `title` does. A trigger that opens something (a document, a
+   * note) puts its dialog under a pointer that has not moved, so no `mouseleave` comes, and a press
+   * inside the dwell would otherwise open the hint a moment later on top of that dialog. A press inside
+   * an `interactive` card is left alone, since that card is there to be used.
+   *
    * **This is armed imperatively from `show`, not by an effect keyed on `open`, and that is the whole
    * difference between dismissing a right-click and missing it.** An effect cannot run until React has
    * re-rendered, and the events race it: `mouseover` → `contextmenu` on a transaction row measures
@@ -149,17 +157,24 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
       setOpen(false)
       disarmDismissal()
     }
-    dismissalRef.current = dismiss
+    const dismissOnPress = event => {
+      if (tipRef.current?.contains(event.target)) return
+      pressedRef.current = true
+      dismiss()
+    }
+    dismissalRef.current = { dismiss, dismissOnPress }
     window.addEventListener('scroll', dismiss, true)
     window.addEventListener('contextmenu', dismiss, true)
+    window.addEventListener('pointerdown', dismissOnPress, true)
   }
 
   function disarmDismissal() {
-    const dismiss = dismissalRef.current
-    if (!dismiss) return
+    const listeners = dismissalRef.current
+    if (!listeners) return
     dismissalRef.current = null
-    window.removeEventListener('scroll', dismiss, true)
-    window.removeEventListener('contextmenu', dismiss, true)
+    window.removeEventListener('scroll', listeners.dismiss, true)
+    window.removeEventListener('contextmenu', listeners.dismiss, true)
+    window.removeEventListener('pointerdown', listeners.dismissOnPress, true)
   }
   // Position only once the tooltip is mounted, so its real measured size is known. A portaled DOM
   // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
@@ -194,6 +209,7 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     })
     : children
   function show() {
+    if (pressedRef.current) return
     clearTimeout(closeTimer.current)
     // Before anything that can open, so a right-click arriving in the same frame as the hover is still
     // caught (see armDismissal).
@@ -205,6 +221,7 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     openTimer.current = setTimeout(() => setOpen(true), openDelay)
   }
   function hide() {
+    pressedRef.current = false
     clearTimeout(openTimer.current)
     // The dismissal outlives an `interactive` hint's closing grace on purpose: the pointer crossing into
     // the card keeps it open (the card's own `onMouseEnter` clears this timer), and it still has to get

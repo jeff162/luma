@@ -257,7 +257,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   Derive the reason and the disabling condition from one expression. Where a capability simply does not apply, remove the control instead.
 - **Tooltips.** `Tooltip` is the default for hover content. A native `title` is fine for a plain-text
   hint. Converting a `title` to `Tooltip` needs an `aria-label`, or `describeTrigger` for a description. A
-  hint on a row of a scrolling list takes `openDelay={ROW_HOVER_OPEN_DELAY_MS}`.
+  hint on a row of a scrolling list takes `openDelay={ROW_HOVER_OPEN_DELAY_MS}`. A `title` always shows on
+  hover, so an element that needs only an accessible name, such as an `<iframe>`, takes `aria-label`.
 - **A bulk action reports partial success as partial** (`Promise.allSettled` with
   `summarizeBulkOutcome`). Rows that failed stay selected and the reload runs regardless.
 

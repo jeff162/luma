@@ -186,7 +186,7 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
           ) : (
             <iframe
               src={fileUrl}
-              title={doc.filename}
+              aria-label={doc.filename}
               style={{ width: '100%', height: vh(70), border: 'none', borderRadius: 8, background: 'var(--surface)' }}
             />
           )}

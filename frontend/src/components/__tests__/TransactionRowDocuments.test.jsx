@@ -48,7 +48,7 @@ describe('the ledger document marker', () => {
 
     // Straight to the viewer: one document has nothing to choose between, so a chooser would be a
     // pointless click in the common case.
-    expect(screen.getByTitle('repair-invoice.pdf')).toBeTruthy()
+    expect(screen.getByLabelText('repair-invoice.pdf')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
   })
 
@@ -106,11 +106,11 @@ describe('the ledger document marker', () => {
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.type(await screen.findByLabelText('Document text'), ' edited')
     await user.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(screen.getByTitle(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file'))
+    await waitFor(() => expect(screen.getByLabelText(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file'))
 
     await user.click(screen.getByRole('button', { name: 'Close' }))
     await user.click(screen.getByLabelText('Open the attached document'))
-    expect(screen.getByTitle(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file')
+    expect(screen.getByLabelText(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file')
   })
 
   it('is absent when the transaction carries nothing', () => {

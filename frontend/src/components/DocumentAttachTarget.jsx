@@ -168,7 +168,7 @@ export default function DocumentAttachTarget({ upload, onUploaded, actions = nul
           sandbox="allow-same-origin"
           srcDoc={richPaste.preview}
           onLoad={enableFrameEditing}
-          title="Preview of the pasted receipt"
+          aria-label="Preview of the pasted receipt"
           style={{
             width: '100%', height: 260, boxSizing: 'border-box',
             border: '1px solid var(--border)', borderRadius: 6, background: '#fff',
