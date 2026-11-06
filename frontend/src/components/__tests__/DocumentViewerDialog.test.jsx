@@ -15,6 +15,7 @@ vi.mock('../../lib/api.js', () => ({
   api: {
     documentFileUrl: (id, opts) => `/api/documents/${id}/file${opts?.download ? '?download=true' : ''}`,
     getDocumentText: vi.fn(),
+    probeDocumentFile: vi.fn(),
     editDocumentText: vi.fn(),
   },
 }))
@@ -25,6 +26,7 @@ const REPLACEMENT = { ...NOTE, id: 'doc-9' }
 beforeEach(() => {
   api.getDocumentText.mockResolvedValue('Brake pads 249.50\n-- signature')
   api.editDocumentText.mockResolvedValue({ document: REPLACEMENT })
+  api.probeDocumentFile.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -106,5 +108,19 @@ describe('DocumentViewerDialog editing', () => {
     expect(await screen.findByText(/cannot be empty/)).toBeTruthy()
     expect(screen.getByLabelText('Document text').value).toBe(' ')
     expect(onDocumentReplaced).not.toHaveBeenCalled()
+  })
+})
+
+describe('DocumentViewerDialog viewing', () => {
+  it('shows why a file cannot be served instead of a blank frame', async () => {
+    api.probeDocumentFile.mockRejectedValue(new Error("The server cannot read this document's file (Permission denied)."))
+    render(<DocumentViewerDialog document={{ ...NOTE, mime_type: 'application/pdf' }} onClose={vi.fn()} />)
+    expect((await screen.findByRole('alert')).textContent).toMatch(/cannot read this document's file/)
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+
+  it('shows the file once it can be served', async () => {
+    render(<DocumentViewerDialog document={{ ...NOTE, mime_type: 'image/jpeg' }} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('img')).toBeTruthy())
   })
 })

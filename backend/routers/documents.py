@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.services import database_health
 from backend.services.restore_state import require_no_pending_restore
 from backend.services.documents import (
     MAX_DOCUMENT_BYTES,
@@ -157,6 +158,19 @@ def get_document_file(document_id: str, download: bool = False):
         # a restore reports rather than hides. Said plainly, because "your receipt is gone" and "the
         # server broke" call for different reactions from the person reading it.
         raise HTTPException(status_code=404, detail="This document's file is missing from the store.")
+    # Opened before answering, because the response's headers go out before its body is read: a file that
+    # is there but cannot be opened would otherwise end as a dropped connection behind a 200, which a
+    # viewer shows as a blank. Typically its owner is left over from data moved across from another user.
+    try:
+        with open(path, "rb"):
+            pass
+    except OSError as exc:
+        user = database_health.server_user()
+        raise HTTPException(status_code=500, detail={
+            "code": "document_unreadable",
+            "message": f"The server cannot read this document's file ({exc.strerror or exc}). It has to be "
+                       f"readable by '{f'{user}' if user else ''}' on the server.",
+        })
     return _document_response(path, row, download)
 
 

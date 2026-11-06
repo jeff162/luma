@@ -321,6 +321,32 @@ def _update_available_task(request: Request | None) -> dict | None:
     }
 
 
+def _watched_folder_task(request: Request | None) -> dict | None:
+    """Watched folders the last scan could not list (`watch.unreadable_folders`). Nothing in one is
+    imported until it can be, which a note beside the source on the File Sources tab does not make
+    plain. Shown to who can change the folder: the watch settings are an administrator's."""
+    if request is None or not is_admin_or_local(request):
+        return None
+    from backend.routers.import_export.watch import unreadable_folders
+    with get_db() as conn:
+        folders = unreadable_folders(conn)
+    if not folders:
+        return None
+    named = "; ".join(f"{f['name']} ({f['watch_dir']}): {f['watch_notice']}" for f in folders[:3])
+    more = f"; and {len(folders) - 3} more" if len(folders) > 3 else ""
+    return {
+        "id":          "watched_folder_unreadable",
+        "title":       "A watched folder is not being checked" if len(folders) == 1
+                       else "Watched folders are not being checked",
+        "description": f"{named}{more}. Nothing in {'it' if len(folders) == 1 else 'them'} is imported until "
+                       "the server can read the folder again.",
+        "count":       len(folders),
+        "link":        "/import-export?tab=sources",
+        "link_label":  "Open File Sources",
+        "severity":    SEVERITY_WARNING,
+    }
+
+
 def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
@@ -464,6 +490,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     if update_task:
         tasks.append(update_task)
 
+    folder_task = _watched_folder_task(request)
+    if folder_task:
+        tasks.append(folder_task)
+
     with get_db() as conn:
         owner_count = conn.execute("""
             SELECT COUNT(*) AS n FROM owner
@@ -593,6 +623,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
         watch_attention = attention_counts(conn)
         if watch_attention["total"]:
             waiting = watch_attention["total"]
+            unreadable = watch_attention["unreadable"]
             tasks.append({
                 "id":          "watched_import_files",
                 "title":       "Files waiting in a watched folder",
@@ -600,7 +631,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
                                "than imported — an account the data source has not been shown, a layout it is "
                                + ("not set up for, or a file that could not be deleted after import. "
                                   if watch_attention["purge_failed"] else "not set up for, or an import that failed. ")
-                               + "Open each one in the import flow to finish it.",
+                               + "Open each one in the import flow to finish it."
+                               + (f" {unreadable} of them cannot be read by the server, which needs the file's owner "
+                                  "or permissions changed first."
+                                  if unreadable else ""),
                 "count":       waiting,
                 "link":        "/import-export",
                 "link_label":  "Open Import",

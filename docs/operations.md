@@ -468,6 +468,13 @@ Anything else is a backup: the section names the newest one made from databases 
 rows are reported per table and parent, with no repair, because each case is a decision about what the
 data means.
 
+**The documents folder is checked with them**, as the third place the data lives: every attached
+document's file has to open. A missing one is not reported here, since that drift is tolerated
+(`data-model.md` → *Attached documents*). One that exists and cannot be opened is a failure, and it is the one
+failure that stops a backup rather than asking first, because the backup cannot carry the file and the
+server wrote every one. The usual cause is data moved across from another user and still owned by them;
+the section names the folder and the user the server runs as.
+
 ---
 
 ## Obstacles

@@ -17,6 +17,7 @@ vi.mock('../../lib/api.js', () => ({
     getTags: vi.fn().mockResolvedValue([]),
     documentFileUrl: id => `/api/documents/${id}/file`,
     getDocumentText: vi.fn(),
+    probeDocumentFile: async () => {},
     editDocumentText: vi.fn(),
   },
 }))

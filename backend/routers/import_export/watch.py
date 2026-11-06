@@ -109,6 +109,9 @@ WATCH_STATE_DISMISSED = "dismissed"
 
 # The states that mean "this file is waiting on a person", which is what the Task counts.
 WATCH_ATTENTION_STATES = (WATCH_STATE_PARKED, WATCH_STATE_ERROR, WATCH_STATE_PURGE_FAILED)
+# How an `error` row's reason opens when the file itself could not be read, which is what Tasks counts
+# apart: the answer is the file's owner or permissions, not the import flow.
+UNREADABLE_FILE_REASON = "This file could not be read"
 
 PURGE_NEVER = "never"
 PURGE_AFTER_DAYS = "after_days"
@@ -367,16 +370,30 @@ def attention_counts(conn) -> dict:
     row = conn.execute(
         f"""
         SELECT COUNT(*) AS total,
-               SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS purge_failed
+               SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS purge_failed,
+               SUM(CASE WHEN state = ? AND reason LIKE ? THEN 1 ELSE 0 END) AS unreadable
         FROM   import_watch_file
         WHERE  state IN ({placeholders})
         """,
-        (WATCH_STATE_PURGE_FAILED, *WATCH_ATTENTION_STATES),
+        (WATCH_STATE_PURGE_FAILED, WATCH_STATE_ERROR, f"{UNREADABLE_FILE_REASON}%", *WATCH_ATTENTION_STATES),
     ).fetchone()
     return {
         "total": int(row["total"] or 0),
         "purge_failed": int(row["purge_failed"] or 0),
+        "unreadable": int(row["unreadable"] or 0),
     }
+
+
+def unreadable_folders(conn) -> list[dict]:
+    """Watched folders the last scan could not list, with why. Nothing in one is imported until it can
+    be, so each is a Task rather than only a note beside the source."""
+    return [dict(row) for row in conn.execute(
+        """
+        SELECT name, watch_dir, watch_notice FROM csv_import_profile
+        WHERE  watch_enabled = 1 AND watch_notice IS NOT NULL AND watch_notice != ''
+        ORDER  BY name
+        """
+    )]
 
 
 def _record_outcome(conn, file_id: str, state: str, *, reason: Optional[str] = None,
@@ -519,7 +536,7 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
     try:
         content = kind.read(candidate["path"])
     except OSError as error:
-        return {"state": WATCH_STATE_ERROR, "reason": f"This file could not be read: {error.strerror or error}"}
+        return {"state": WATCH_STATE_ERROR, "reason": f"{UNREADABLE_FILE_REASON}: {error.strerror or error}"}
     return kind.import_file(profile, candidate, content)
 
 

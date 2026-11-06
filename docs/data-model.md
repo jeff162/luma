@@ -2594,7 +2594,9 @@ Storage:
 - **They ride the data backup**: rows in the `documents` section, each file as `documents/<id>`. Their
   digests are not repeated in `meta.json`.
 - **Drift resolves toward keeping the ledger.** An export whose file is missing writes the row without
-  its member. A restore reports a document it could not write or that failed its digest, deletes a
+  its member. A file that is there but cannot be opened is not drift but a setup mistake (an owner left
+  over from another user), so the export refuses and names it, as the database check does, and serving it answers with the reason
+  instead of a 200 that drops partway. A restore reports a document it could not write or that failed its digest, deletes a
   corrupt file, and continues.
 
 Content:

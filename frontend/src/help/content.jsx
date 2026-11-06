@@ -828,7 +828,7 @@ export const HELP_TOPICS = [
         <p>
           <strong>Remaining</strong> counts down as amounts are entered, and <strong>Save split</strong>{' '}
           is available once it reads <strong>Fully allocated</strong>. <strong>Add remainder to
-          selected</strong> puts what is left on the current line. <strong>Distribute remainder</strong>{' '}
+            selected</strong> puts what is left on the current line. <strong>Distribute remainder</strong>{' '}
           spreads it across the lines in proportion to their amounts, which is one way to fold tax and
           shipping into item prices. Each can be undone.
         </p>
@@ -1719,7 +1719,7 @@ export const HELP_TOPICS = [
         <p>
           If the data comes from another tool where the transactions already carry meaningful categories,
           tell {APP_NAME} the import's category data is useful (check <strong>Import the transactions with their
-          existing categories</strong> on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
+            existing categories</strong> on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
           the pool of categories to be grouped by <strong>Group imported categories</strong>, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data.
         </p>
@@ -1756,7 +1756,7 @@ export const HELP_TOPICS = [
         <p>
           When the same merchant was filed under <strong>several different categories</strong>, one rule
           can't reproduce all of them, so those suggestions are grouped into a <strong>conflict
-          set</strong>. Opening the set shows the competing categories and the matching rows. There are
+            set</strong>. Opening the set shows the competing categories and the matching rows. There are
           three ways to resolve one:
         </p>
         <ul>
@@ -1918,7 +1918,7 @@ export const HELP_TOPICS = [
         <p>
           <strong>Remove from recurring series</strong>, in a transaction's right-click menu, takes out one
           the scan swept in by mistake, and it stays out after later scans. An <strong>Amount
-          changed</strong> finding offers the same thing as <strong>Exclude from series</strong>.{' '}
+            changed</strong> finding offers the same thing as <strong>Exclude from series</strong>.{' '}
           <strong>Restore to recurring series</strong>, in the same menu, or the <strong>removed</strong>{' '}
           list inside the series, puts it back.
         </p>
@@ -2801,6 +2801,11 @@ export const HELP_TOPICS = [
             a PayPal statement</li>
         </ul>
         <p>
+          A file or folder the server cannot read is fixed on the server, by giving it to the user the
+          server runs as. A folder that cannot be read imports nothing, and a task names it until the next
+          check can read it again.
+        </p>
+        <p>
           The fix is made wherever it belongs &mdash; pointing a value whose account was deleted at
           another one under <strong>Account mappings</strong> when editing the data source on the{' '}
           <strong>File Sources</strong> tab, for instance. The next check picks the file up on its own and the task
@@ -3181,7 +3186,7 @@ export const HELP_TOPICS = [
         <p>
           An order that names no card, such as a digital order, only matches a charge that reads as Amazon
           (<em>AMZN</em> or <em>AMAZON</em>). One paid through PayPal lands in <strong>No charge
-          found</strong> and is linked by hand.
+            found</strong> and is linked by hand.
         </p>
 
         <h4>Several rows at once</h4>
@@ -4114,14 +4119,14 @@ export const HELP_TOPICS = [
             providers</HelpLink>{' '} are encrypted and are spread across both files.
         </p><p>
           Protection for the transaction data comes from the computer's security (disk encryption,
-          OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
-          A sign-in password is available to restrict <em>network</em> access to the app.
+          OS login, who can physically reach the machine, who has access to the network).
+          A sign-in password is available to restrict <em>network</em> access to {APP_NAME}.
         </p>
         <HelpHeading anchor="backups">Backups</HelpHeading>
         <p>
           Backups are made and restored by an administrator, using <strong>Backup / Restore</strong> on
           the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. Everything is included
-          in a backup, the restore process can select which bits to restore.
+          in a backup, the restore process can select which of the following to restore:
         </p>
         <ul>
           <li>
@@ -4155,20 +4160,20 @@ export const HELP_TOPICS = [
         <p>
           A backup can be encrypted which
           protects the entire contents of the backup. Since this is not sensitive to attack
-          by guessing passphrases, an encrypted backup also carries every vault passphrase.
+          by guessing passphrases, an encrypted backup carries every vault passphrase.
           The private key needs to be kept somewhere safe, apart from the backup.
         </p>
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
         <p>*needs review*</p>
         <p>
-          Generally the whole backup is restored. Each part can be left out, and the restore lists what
-          each one replaces.
+          Generally the whole backup is restored. Selective restores are supported for use in
+          special circumstances such as moving the ledger but not the Users and Security information.
         </p>
         <ul>
           <li>
             <strong>Users &amp; security</strong> removes users not in the backup and signs everyone out.
-            If the backup has sign-in turned on, the restore first asks for the username and password of
-            an administrator in the backup, so that someone can sign in afterwards.
+            If the backup has sign-in turned on, the restore  asks for the username and password of
+            an administrator in the backup to ensure someone can sign in afterwards.
           </li>
           <li>
             <strong>Data provider credentials</strong> &mdash; a connection the backup doesn't have loses
@@ -4219,11 +4224,18 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="checking">Checking the databases</HelpHeading>
         <p>*needs review*</p>
         <p>
-          <strong>Database</strong> in the Server group of Settings checks both files for damage, and for
-          rows that refer to rows that are gone. It does not check that the data makes sense. The check
-          also runs before every backup and after every restore.
+          <strong>Database</strong> in the Server group of Settings checks both files for damage, for
+          rows that refer to rows that are gone, and that every attached document's file can be read. It
+          does not check that the data makes sense. The check also runs before every backup and after
+          every restore.
         </p>
         <ul>
+          <li>
+            Documents on the server need to be readable by the user which the server runs
+            as in order for a backup to be made. If the backup complains that there is a
+            problem, the Database maintenance screen may have more details or check
+            the permissions related to the documents on the server.
+          </li>
           <li>
             When the only problem is an index, <strong>Rebuild indexes</strong> repairs it without losing
             anything.

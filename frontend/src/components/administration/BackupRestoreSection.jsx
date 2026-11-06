@@ -300,10 +300,17 @@ export default function BackupRestoreSection() {
   // is worth more than none; the server records the outcome on the history entry either way. A check that
   // cannot run does not hold the backup up. The save picker still opens within the click's activation, as
   // the check takes a fraction of a second, and after a warning the confirming click is the gesture.
+  // Document files the server cannot read do refuse, as the server would: the backup cannot carry them.
   async function startBackup(encrypted, recipientIds = null) {
     setDownloading(true)
     const check = await api.checkDatabases().catch(() => null)
     setDownloading(false)
+    const unreadable = check?.databases?.documents?.unreadable || 0
+    if (unreadable) {
+      setBackupMsg(`❌ Backup cannot be run: the server cannot read ${unreadable} of `
+        + 'the attached documents. Settings → Database Maintenance has further details.')
+      return
+    }
     if (check && !check.ok) {
       setBackupCheckWarning({ encrypted, recipientIds })
       return

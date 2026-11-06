@@ -1,13 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Whether the two databases are intact, and what they hold.
+"""Whether the two databases and the attached documents are intact, and what the databases hold.
 
 **The check is structural only.** It runs SQLite's `integrity_check` (pages, B-trees, records, and every
 index agreeing with its table) and `foreign_key_check` (rows pointing at a parent that is gone), which
 are separate passes: a database can pass the first with a table full of orphans. Neither knows anything
 about the app's own invariants, so a database that passes is a file that is not damaged, not a ledger
 that is coherent (`docs/operations.md` → *Checking the databases*).
+
+**The documents folder is checked beside them**, as the third store the data lives in: every attached
+document's file has to open. One that exists but cannot be read was written by someone other than this
+server, typically after the data was moved across from another user, and a backup cannot carry it. A
+missing file is not reported here: that drift is possible by construction and has its own handling, in
+the backup and the restore (`backup._write_document_members`).
 
 **It reads through a read-only connection**, so checking never creates a missing file, never takes a
 write lock and never changes what it is checking. A file too damaged to open is a failed check, not an
@@ -24,6 +30,7 @@ restore. At ledger scale it takes about a tenth of a second, so it is never back
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from collections import Counter
@@ -33,11 +40,14 @@ from pathlib import Path
 from backend.app_logging import log_info, log_warning
 from backend.db import control_database
 from backend.db.database import current_db_path, get_db
+from backend.services.documents import DOCUMENTS_DIR_NAME, is_safe_document_id
 
 # The two databases, by the names the backup already gives their contents: the financial data, and the
 # accounts part (sign-in, backup keys, the vault).
 DATA = "data"
 ACCOUNTS = "accounts"
+# The attached documents' files, checked with the databases (see above).
+DOCUMENTS = "documents"
 
 # The messages `integrity_check` writes for an index out of step with its table — the one kind of
 # problem `REINDEX` repairs completely.
@@ -87,9 +97,56 @@ def check_database(path: str) -> dict:
         return {"ok": False, "problems": [str(exc)], "orphans": [], "indexes_repairable": False}
 
 
+def server_user() -> str | None:
+    """The account this server runs as, which is who has to be able to read the files it keeps."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except (ImportError, KeyError, AttributeError):
+        pass
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:                                               # pragma: no cover - defensive
+        return None
+
+
+def check_documents(data_path: str) -> dict:
+    """Whether every attached document's file can be opened. Shaped like a database's result, plus the
+    count of `unreadable` files, which is what refuses a backup, the `folder` they live in and the
+    `server_user` who has to be able to read them."""
+    folder = Path(data_path).parent / DOCUMENTS_DIR_NAME
+    result = {"ok": True, "problems": [], "orphans": [], "indexes_repairable": False, "unreadable": 0,
+              "folder": str(folder), "server_user": server_user()}
+    if not Path(data_path).exists():
+        return result
+    try:
+        with closing(_open_read_only(data_path)) as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'document'").fetchone():
+                return result
+            rows = conn.execute("SELECT id, filename FROM document ORDER BY rowid").fetchall()
+    except sqlite3.Error as exc:
+        return {**result, "ok": False, "problems": [f"The documents could not be listed: {exc}"]}
+    for row in rows:
+        if not is_safe_document_id(row["id"]):
+            continue
+        try:
+            with open(folder / row["id"], "rb"):
+                pass
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            result["unreadable"] += 1
+            result["problems"].append(
+                f"The file for {row['filename']} ({row['id']}) cannot be read: {exc.strerror or exc}.")
+    result["ok"] = not result["problems"]
+    return result
+
+
 def check_databases() -> dict:
-    """Both databases, each under its name, and whether both passed."""
+    """Both databases and the documents, each under its name, and whether all passed."""
     databases = {name: check_database(path) for name, path in _paths().items()}
+    databases[DOCUMENTS] = check_documents(_paths()[DATA])
     for name, result in databases.items():
         if not result["ok"]:
             log_warning(f"[db] the {name} database failed its check: {result['problems'][:3]} "

@@ -921,6 +921,16 @@ export const api = {
       }
       return res.text()
     }),
+  // Whether a document's file can be served, asked for one byte of it. The viewer's <img>/<iframe> cannot
+  // see an error response, so it asks this first and shows the server's message instead of a blank.
+  probeDocumentFile: (documentId) =>
+    trackedFetch(`${BASE}/documents/${documentId}/file`, { headers: { Range: 'bytes=0-0' } }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      await res.body?.cancel()
+    }),
   // A URL rather than a fetch: the viewer points an <img>/<iframe> straight at it, so the bytes never
   // pass through JavaScript. `download` swaps the disposition for a save.
   documentFileUrl: (documentId, { download = false } = {}) =>

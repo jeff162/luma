@@ -92,6 +92,7 @@ from backend.services.preferences import SHARED_SCOPE_ID, forget_startup_routes,
 from backend.services.documents import (
     copy_document_file_from,
     document_file_path,
+    documents_dir,
     file_digest,
     is_safe_document_id,
     missing_document_ids,
@@ -825,6 +826,24 @@ def _stream_file_out(fileobj):
         fileobj.close()
 
 
+class DocumentFilesUnreadable(Exception):
+    """Attached documents whose files exist but cannot be opened, as (filename, reason) pairs. The backup
+    is refused rather than made without them: this server wrote every one, so a file it cannot read is a
+    setup mistake to correct (an owner or permission left over from another user), not drift."""
+
+    def __init__(self, files: list[tuple[str, str]]):
+        super().__init__(f"{len(files)} document files cannot be read")
+        self.files = files
+
+
+def document_files_unreadable_message(count: int, names: list[str], folder: str, user: Optional[str]) -> str:
+    shown = ", ".join(names[:3]) + (f" and {count - 3} more" if count > 3 else "")
+    files = "the file" if count == 1 else f"{count} files"
+    reader = f"the user the server runs as ({user})" if user else "the user the server runs as"
+    return (f"The backup was not made: the server cannot read {files} for {shown}. Every file in {folder} "
+            f"has to be readable by {reader}. Settings → Database lists them.")
+
+
 def _write_document_members(conn, zf) -> None:
     """Add every attached document's file to the archive, one member per document.
 
@@ -842,15 +861,24 @@ def _write_document_members(conn, zf) -> None:
     store writes the file before the row, and nothing outside this app is stopped from deleting one), and
     refusing to produce a backup is the worst available response to it: it would withhold the ledger over
     one unreadable receipt. The row rides without its member and the restore reports it as missing.
+
+    **A file that is there but cannot be opened does fail it** (`DocumentFilesUnreadable`), once every
+    other file has been tried so the refusal can name them all.
     """
-    for row in conn.execute("SELECT id FROM document ORDER BY rowid"):
+    unreadable = []
+    for row in conn.execute("SELECT id, filename FROM document ORDER BY rowid"):
         path = document_file_path(row["id"])
         try:
             source = open(path, "rb")
         except FileNotFoundError:
             continue
+        except OSError as exc:
+            unreadable.append((row["filename"], exc.strerror or str(exc)))
+            continue
         with source, zf.open(_zip_member_info(_document_member(row["id"]), zipfile.ZIP_STORED), "w") as member:
             shutil.copyfileobj(source, member, STREAM_CHUNK_BYTES)
+    if unreadable:
+        raise DocumentFilesUnreadable(unreadable)
 
 
 def _write_ndjson_member(zf, name: str, rows) -> dict:
@@ -1179,7 +1207,8 @@ def export_backup(
 
     The databases are checked first and the outcome goes on the history row (`services/database_health.py`).
     A failed check never stops the backup: the page has already warned, and a backup of a failing database
-    is worth more than none.
+    is worth more than none. A document file the server cannot read does stop it, with a 409 naming the
+    files (`DocumentFilesUnreadable`).
     """
     user = getattr(request.state, "user", None)
     if saved_as is not None:
@@ -1200,7 +1229,15 @@ def export_backup(
     artifact = backup_temp_file()
     try:
         with get_db() as conn:
-            written = write_backup_archive(conn, artifact, BACKUP_KIND_FULL, accounts_part, made_by)
+            try:
+                written = write_backup_archive(conn, artifact, BACKUP_KIND_FULL, accounts_part, made_by)
+            except DocumentFilesUnreadable as exc:
+                raise HTTPException(status_code=409, detail={
+                    "code": "documents_unreadable",
+                    "message": document_files_unreadable_message(
+                        len(exc.files), [name for name, _ in exc.files], str(documents_dir()),
+                        database_health.server_user()),
+                })
         if encrypted:
             # The plain archive becomes the plaintext of the encrypted one; the database is no longer
             # needed, so the connection is already closed by the time the cipher runs.

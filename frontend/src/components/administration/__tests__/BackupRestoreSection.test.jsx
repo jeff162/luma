@@ -18,7 +18,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { useState } from 'react'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const downloadUrl = vi.fn()
@@ -38,6 +38,7 @@ const NOTHING_LEFT_OUT = { credentials_left_out: null, encrypted_credentials_lef
 let backupStatus = NOTHING_LEFT_OUT
 const PASSED = { ok: true, databases: {} }
 let databaseCheck = PASSED
+let checksRun = 0
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
@@ -47,7 +48,7 @@ vi.mock('../../../lib/api.js', () => ({
     getBackupRecipients: async () => recipients,
     getAuthStatus: async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
     getBackupStatus: async () => backupStatus,
-    checkDatabases: async () => databaseCheck,
+    checkDatabases: async () => { checksRun += 1; return databaseCheck },
     getBackupHistory: async () => ({ backups: [], retention_days: 365 }),
     exportBackup: (encrypted, ids, savedAs) => (
       encrypted
@@ -101,6 +102,7 @@ afterEach(() => {
   inspection = { kind: 'credentials', container: 'zip', encrypted: false }
   backupStatus = NOTHING_LEFT_OUT
   databaseCheck = PASSED
+  checksRun = 0
 })
 
 const KEYS = [
@@ -208,6 +210,16 @@ describe('the backup', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Generate backup' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Back up anyway' }))
     await waitFor(() => expect(downloadUrl).toHaveBeenCalledWith('/api/import-export/backup'))
+  })
+
+  it('refuses outright when the server cannot read attached document files', async () => {
+    databaseCheck = { ok: false, databases: { documents: { ok: false, unreadable: 2 } } }
+    renderSection()
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate backup' }))
+    await waitFor(() => expect(checksRun).toBe(1))
+    await act(async () => {})
+    expect(screen.queryByText('Back up a database that failed its check?')).toBeNull()
+    expect(downloadUrl).not.toHaveBeenCalled()
   })
 
   it('reports a failed download in the page instead of navigating away', async () => {

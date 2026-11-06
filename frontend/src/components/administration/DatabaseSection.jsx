@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * Settings -> Database: whether the two databases are intact, what they hold, and the housekeeping that
- * gives space back. Administrators only, since a repair or a compaction locks a database for everyone.
+ * Settings -> Database: whether the two databases and the attached documents' files are intact, what the
+ * databases hold, and the housekeeping that gives space back. Administrators only, since a repair or a compaction locks a database for everyone.
  *
  * The check is structural (`backend/services/database_health.py`): it says whether a file is damaged, not
  * whether the ledger makes sense, and the copy never claims more. A failure always comes with its next
@@ -14,6 +14,9 @@
  *
  * The reading lives in `lib/useDatabaseState.js`, because the page owns the section's title and the
  * refresh sits beside it.
+ *
+ * A document file the server cannot open is answered apart from the databases: the files are this server's
+ * own, so the fix is their owner or permissions, and no backup can be made until it is.
  */
 
 import { useState } from 'react'
@@ -31,6 +34,8 @@ const DATABASES = [
   ['data', 'Financial data'],
   ['accounts', 'Users & security'],
 ]
+// Checked with the databases, as the folder the attached files are kept in, but with no space to report.
+const CHECKED = [...DATABASES, ['documents', 'Attached documents']]
 const SHOWN_PROBLEMS = 5
 const SHOWN_TABLES = 10
 const MUTED = { fontSize: 13, color: 'var(--muted)', lineHeight: 1.55 }
@@ -51,7 +56,7 @@ function CheckResult({ label, result, first }) {
         <StatusPill tone={result?.ok ? 'accent2' : 'danger'}>{result?.ok ? 'Passed' : 'Failed'}</StatusPill>
         <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
       </div>
-      {result?.ok ? <div style={MUTED}>No damage found.</div> : (
+      {result?.ok ? null : (
         <div style={{ ...MUTED, display: 'grid', gap: 2 }}>
           {lines.slice(0, SHOWN_PROBLEMS).map((line, i) => <div key={i} style={{ overflowWrap: 'anywhere' }}>{line}</div>)}
           {lines.length > SHOWN_PROBLEMS ? (
@@ -96,6 +101,18 @@ function NextStep({ onlyIndexes, anyRepairable, backups, repairing, onRepair }) 
           </Button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+// What to do about document files the server cannot open: they are this server's own, so the answer is
+// their owner or permissions, never a backup (which cannot be made while they stand).
+function DocumentsNextStep({ result }) {
+  return (
+    <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', ...MUTED }}>
+      Every file in <code>{result.folder}</code> has to be readable by{' '}
+      {result.server_user ? <><em>{result.server_user}</em> on the server</> : 'the server’s run-as user'}.
+      Check the file and directory ownership and permissions on the server.
     </div>
   )
 }
@@ -202,6 +219,7 @@ export default function DatabaseSection({ db, storage, onStorageChanged }) {
 
   const check = state?.check
   const failing = check ? DATABASES.map(([key]) => check.databases[key]).filter(r => r && !r.ok) : []
+  const documents = check?.databases.documents
   const anyRepairable = failing.some(r => r.indexes_repairable)
   const onlyIndexes = failing.length > 0 && failing.every(r => r.indexes_repairable && !r.orphans.length)
 
@@ -212,17 +230,18 @@ export default function DatabaseSection({ db, storage, onStorageChanged }) {
       {check ? (
         <Subsection title="Database Integrity">
           <Card style={{ padding: 0 }}>
-            {DATABASES.map(([key, label], i) => (
+            {CHECKED.map(([key, label], i) => check.databases[key] ? (
               <CheckResult key={key} label={label} result={check.databases[key]} first={i === 0} />
-            ))}
+            ) : null)}
             {failing.length ? (
               <NextStep onlyIndexes={onlyIndexes} anyRepairable={anyRepairable} backups={backups}
                 repairing={repairing} onRepair={repair} />
             ) : null}
+            {documents && !documents.ok ? <DocumentsNextStep result={documents} /> : null}
           </Card>
           <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-            Checks the integrity of each file and that there are no rows which refer to a non-existent row.
-            Does not verify data consistency.
+            Checks the integrity of each file, that there are no rows which refer to a non-existent row and
+            that every attached document&rsquo;s file can be read. Does not verify data consistency.
           </div>
         </Subsection>
       ) : null}
@@ -239,15 +258,14 @@ export default function DatabaseSection({ db, storage, onStorageChanged }) {
       <Subsection title="Import storage">
         <div style={{ ...MUTED, display: 'grid', gap: 8, marginBottom: 10 }}>
           <p style={{ margin: 0 }}>
-            There are various rows in an import which are omitted for some reason and others which
+            There are various rows in an import which are omitted and others which
             are discarded by the duplicate resolution process. This data is saved to support altering
-            a decision regarding duplicates and to allow importing rows which were rejected or skipped
-            for some reason.
+            a decision regarding duplicates and to allow importing rows which were rejected or skipped.
           </p>
           <p style={{ margin: 0 }}>
             <strong>Free up import space</strong> clears this record. Transactions are unaffected
-            and the Import Record is marked as cleared in the import history. Once this is cleared
-            the duplicate decisions cannot be revisited nor can skipped or rejected rows be imported without
+            and the affected Import Records are flagged as cleared in the history. After freeing the space,
+            duplicate decisions cannot be revisited nor can skipped or rejected rows be imported without
             re-importing the original file.
           </p><p>
             Clearing cannot be undone.

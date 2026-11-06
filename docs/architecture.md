@@ -652,6 +652,10 @@ folder, although the upload expands one: an archive found on disk is one nobody 
   only a new or changed entry is read, hashed and parsed, then matched against
   `import_batch.file_content_hash`. The table is a cache and is outside backups (`data-model.md` →
   *Watched import folders*).
+- **A folder the scan cannot list is skipped whole** and keeps the reason in
+  `csv_import_profile.watch_notice`, which raises an administrator's Task until a scan can list it again. A
+  file that cannot be read is an `error` row whose reason the waiting-files Task counts apart, since its
+  answer is the file's owner or permissions rather than the import flow.
 - **Anything the stored mapping does not answer parks the file** and raises a Task, which opens the
   ordinary import flow with the file pre-seeded (`GET /import-export/watch/files/{id}/content`). A
   parked file is retried on every pass, so mapping the account (or the Amazon funding card) in the

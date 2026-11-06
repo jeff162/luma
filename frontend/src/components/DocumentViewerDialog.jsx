@@ -19,6 +19,10 @@ import { vh } from '../lib/displaySize.js'
  * paging and text selection. The server sends a sandbox CSP with the file, so the embedded viewer
  * cannot script against this origin — the reason that header exists rather than being belt-and-braces.
  *
+ * **The file is asked for one byte first** (`api.probeDocumentFile`), because neither element exposes an
+ * error response: a file that is missing or that the server cannot read would otherwise show as a blank.
+ * The server's message is shown in its place.
+ *
  * There is no in-app zoom, rotate or page control, deliberately: every browser already ships those for
  * both element types, and "Open in a new tab" hands the document to the full viewer for anything more.
  *
@@ -36,7 +40,21 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
   // A ref rather than state, because a same-tick double press sees the state from before the first one.
   const busy = useRef(false)
 
+  // null until the probe answers, then 'ok' or the server's message for a file it cannot serve.
+  const [fileState, setFileState] = useState(null)
+  const unservable = fileState !== null && fileState !== 'ok'
+
   const canEdit = doc?.mime_type === 'text/plain' && !!onDocumentReplaced
+
+  useEffect(() => {
+    if (!doc?.id) return undefined
+    let current = true
+    setFileState(null)
+    api.probeDocumentFile(doc.id)
+      .then(() => { if (current) setFileState('ok') })
+      .catch(err => { if (current) setFileState(err.message || 'This document could not be opened.') })
+    return () => { current = false }
+  }, [doc?.id])
 
   useEffect(() => {
     if (openInEdit && canEdit) startEditing()
@@ -109,17 +127,27 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
       ) : (
         <>
           {canEdit ? <Button variant="secondary" onClick={startEditing}>Edit</Button> : null}
-          {/* A plain link, not a fetch-and-save: the browser is already able to stream this to disk,
-              and routing it through JavaScript would only add a copy in memory. */}
-          <a
-            href={api.documentFileUrl(doc.id, { download: true })}
-            style={{ textDecoration: 'none' }}
-          >
-            <Button variant="secondary">Download</Button>
-          </a>
-          <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-            <Button variant="secondary">Open in a new tab</Button>
-          </a>
+          {/* Plain links, not a fetch-and-save: the browser is already able to stream this to disk,
+              and routing it through JavaScript would only add a copy in memory. A file the server
+              could not open has no link, since a disabled button inside one still follows it. */}
+          {unservable ? (
+            <>
+              <Button variant="secondary" disabled>Download</Button>
+              <Button variant="secondary" disabled>Open in a new tab</Button>
+            </>
+          ) : (
+            <>
+              <a
+                href={api.documentFileUrl(doc.id, { download: true })}
+                style={{ textDecoration: 'none' }}
+              >
+                <Button variant="secondary">Download</Button>
+              </a>
+              <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                <Button variant="secondary">Open in a new tab</Button>
+              </a>
+            </>
+          )}
           <Button onClick={onClose}>Close</Button>
         </>
       )}
@@ -147,7 +175,9 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'var(--surface2)', borderRadius: 8, minHeight: 360,
         }}>
-          {isImage ? (
+          {fileState === null ? null : unservable ? (
+            <div role="alert" style={{ fontSize: 13, color: 'var(--danger)', padding: 20, maxWidth: 520 }}>{fileState}</div>
+          ) : isImage ? (
             <img
               src={fileUrl}
               alt={doc.filename}
