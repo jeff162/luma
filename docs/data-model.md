@@ -1780,15 +1780,16 @@ nothing later reports, while every other mistake is visible on the file's card. 
 - the source's map has an `account_new` entry for a value in the file
 - the source has no account column and no `account_id`, or would create its single account
 - the source's `header_fingerprint` differs from the file's
-- the source has no completed batch yet, so every source proves its mapping on one hand import
+- the source has no completed batch yet, so every CSV source proves its mapping on one hand import
 
 The interactive flow's fallback to an exact name match is not used here, since nobody is present to
 approve it. A blank account cell is not an unmapped account; the import refuses that row and records it.
 
 **A marketplace source** (`source_kind = 'marketplace:amazon'`) watches a folder the same way, and
 parks on the same principle with its own list: the file is not an Amazon export, the source names no
-Amazon account or one that no longer exists, the source has no completed batch yet, or any paying card
-in the file has no funding account mapped. The last is the counterpart of an unmapped account value —
+Amazon account or one that no longer exists, or any paying card in the file has no funding account
+mapped. It does not wait for a hand import: it has no mapping to prove, and the rest is checked on every
+file. The last is the counterpart of an unmapped account value —
 resolving it wrong moves a charge into the wrong account quietly.
 
 **The PayPal source's statement PDFs** park when the PDF is not a PayPal statement or cannot be read as
@@ -1863,6 +1864,9 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   order" count is derived from the ledger (`unmatched_parked_order_count`).
 - **An order funded only by points or gift-card balance** is recorded in the excluded category, since
   the export gives no cash figure. An order whose card is not tracked counts as the sole record.
+- **A blank `payments` field is not points.** The exporter leaves it blank when it could not read the
+  payment, so an order with a positive `total` is cash for that total (already net of gift-card balance)
+  with no card to search by. Its charge must look like Amazon, as for any order with no instrument.
 - **Ingestion is keyed on the order id.** A re-imported order that has a link is `already_applied`; an
   items file for an order that already carries item detail is `already_enriched`.
 - **Orders and charges converge in either order.** Every CSV import and sync runs
@@ -1872,15 +1876,28 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
 - **Unlinking is remembered.** `unlink_order_charges` records `declined_charge_ids` on the link, and no
   automatic pass offers those charges to that order again; linking one by hand clears it.
 - **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import
-  replace restore each linked charge's prior and delete the link before deleting the batch's rows.
+  replace restore each linked charge's prior and delete the link before deleting the batch's rows. The
+  link belongs to the order's import: undoing a card that brought only a linked charge (a sync card)
+  detaches that charge and keeps the link.
+- **A charge can be added to a matched order** (`add_order_charge`): the part paid with card rewards,
+  which the export leaves out of the total and the card records as a charge of its own, paid back by an
+  equal credit. It joins as an ordinary `charge`, listed in `metadata_json.added_charge_ids`, and the order's
+  amount becomes `order_base_amount` (its amount before the first addition) plus the added charges still
+  linked. The credit stays income, so totals do not change; the purchase reads at what it cost.
+  `refresh_order_amount` re-derives the stored amount after every change to the link's charges: adding,
+  removing, unlinking, undo, and a hard delete. A split order is refused a hand change; a forced one
+  clears the split, since its parts must sum to the amount. The reconciliation offers it per
+  unaccounted charge (`order_candidates`), and suggests an order when an equal credit on the card shows the
+  charge was paid with rewards and exactly one candidate order was placed that day.
 - The batch has `source_kind = 'marketplace:amazon'`. `config_snapshot` holds the `import_summary`,
   `amazon_file_hashes` and `amazon_account_id` — the Amazon account the card imported into, which the
   import history groups a vendor's cards by. It is recorded rather than derived from the card's rows,
   since an items-only card has none; cards predating it were backfilled from their rows (migration v80),
   and one with no rows to read stays unattributed. An upload whose hash matches a **completed** batch's
   file is skipped; an undone batch's files, and files with discarded rows, are not remembered.
-- **A card may name a saved Amazon source** (`profile_id`), which holds the account, the categorize
-  toggle, a filename pattern and a watched folder. The source is a `csv_import_profile` row marked
+- **A card imported from a watched folder names its saved Amazon source** (`profile_id`), which holds the
+  account, the categorize toggle, a filename pattern and the folder. A hand import names none: the form
+  asks for the account and toggle itself. The source is a `csv_import_profile` row marked
   `marketplace:amazon`; deleting it leaves its cards, which are the provenance of rows still in the
   ledger.
 

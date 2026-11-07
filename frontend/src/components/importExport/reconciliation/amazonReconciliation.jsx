@@ -7,8 +7,8 @@ import { useState } from 'react'
 import { api } from '../../../lib/api.js'
 import { Button, Tooltip } from '../../ui.jsx'
 import SplitEditorDialog from '../../SplitEditorDialog.jsx'
-import { formatTransactionAmount } from '../../../lib/moneyDisplay.js'
-import { safeExternalUrl } from '../../../lib/utils.js'
+import { formatMoneyMagnitude, formatTransactionAmount } from '../../../lib/moneyDisplay.js'
+import { formatDate, safeExternalUrl } from '../../../lib/utils.js'
 import { AMAZON_RECONCILIATION_COLUMNS_PREF_KEY } from '../../../lib/importExport/constants.js'
 import { TxnCell, TxnStack } from './reconciliationCells.jsx'
 
@@ -23,7 +23,8 @@ import { TxnCell, TxnStack } from './reconciliationCells.jsx'
 //   • amazon_unmatched   — a cash order with no candidate charge at all (link charges by hand, or Mark
 //                          reviewed to acknowledge an untracked card so it leaves the attention count)
 //   • payment_unmatched  — Amazon-looking ledger charges no order accounts for (heuristic reverse scan);
-//                          Trash a stray, or Mark reviewed to acknowledge one so it leaves the attention count
+//                          Add to order… (the part of an order paid with card rewards), Trash a stray, or
+//                          Mark reviewed to acknowledge one so it leaves the attention count
 // It is one vendor of the shared reconciliation shell (ReconciliationReportDialog), which renders these
 // buckets flattened into one kind-grouped list.
 
@@ -75,7 +76,7 @@ const KINDS = {
   unaccounted_duplicate: { rank: 4, label: 'Unaccounted · duplicate', stripe: '#f472b6', review: true,
     help: "Unaccounted charges that look like copies of each other — same account and amount, days apart — with no order accounting for either: the double import the general dedupe can't catch. Check each copy's origin (hover), then Discard a copy, Merge → keep one (the survivor keeps the richest detail and returns to the unaccounted list), or Not duplicates. Merge works per row or in bulk on selected rows; a merged-away copy is restorable from Settings → Trash." },
   reverse: { rank: 5, label: 'Unaccounted charge', stripe: '#94a3b8', warn: true,
-    help: "Charges in your ledger that look like Amazon, on the cards Amazon uses, in this import's date range, that no imported order accounts for. Possibly purchases the export didn't cover. These count toward the needs-attention total so a stray one (e.g. an unpaired duplicate) gets a look; Trash sends one to Trash (for a duplicate the report failed to pair), or Mark reviewed acknowledges a legitimately-uncovered charge so it drops out of the count without trashing it (Undo puts it back)." },
+    help: "Charges in your ledger that look like Amazon, on the cards Amazon uses, in this import's date range, that no imported order accounts for. Possibly purchases the export didn't cover. These count toward the needs-attention total so a stray one (e.g. an unpaired duplicate) gets a look; Add to order… adds one to the order it was part of (the part paid with card rewards, which the card records as a charge of its own), Trash sends one to Trash (for a duplicate the report failed to pair), or Mark reviewed acknowledges a legitimately-uncovered charge so it drops out of the count without trashing it (Undo puts it back)." },
   matched: { rank: 6, label: 'Matched', stripe: 'var(--success, #22c55e)',
     help: 'Each order was linked to the card charge(s) it paid, and those are excluded from totals.' },
 }
@@ -96,6 +97,29 @@ function DuplicateCharges({ charges, disabled, onDiscard }) {
             <span title="Currently linked to this order" style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>linked</span>
           ) : null}
           <Button variant="secondary" disabled={disabled} onClick={() => onDiscard(c)} size="compact" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} title="Discard this copy — sends it to Trash and keeps the other">Discard</Button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// A matched order's charges, with any charge added to the order marked and removable on its own — the
+// order's own charge is detached with the row's Unlink instead.
+function MatchedCharges({ charges, disabled, onRemove }) {
+  if (!charges.some(c => c.added)) return <TxnStack charges={charges} />
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {charges.map(c => (
+        <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TxnCell txn={c} />
+          </div>
+          {c.added ? (
+            <>
+              <span title="Added to this order, usually the part paid with card rewards" style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>added</span>
+              <Button variant="secondary" disabled={disabled} onClick={() => onRemove(c)} size="compact" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} title="Take this charge off the order: its category is restored and the order's amount drops by it">Remove</Button>
+            </>
+          ) : null}
         </div>
       ))}
     </div>
@@ -258,6 +282,26 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
     failMessage: 'Could not link the charges',
   })
 
+  // Add an unaccounted charge to an order: the part a card's rewards paid for, which the card records as a
+  // charge of its own. The order picked takes the charge and grows by its amount. A suggested order (a
+  // rewards credit on the card and one order placed that day) starts selected.
+  const openAddToOrder = (entry) => openPicker({
+    title: 'Add this charge to an order',
+    description: `The order's amount grows by ${formatMoneyMagnitude(entry.charge.amount)} and the charge is excluded, as the order's own charge is.`,
+    target: null,
+    targetDate: entry.charge.date,
+    candidates: (entry.charge.order_candidates || []).map(o => ({ ...o, id: o.link_id })),
+    initialSelected: entry.charge.suggested_link_id ? [entry.charge.suggested_link_id] : [],
+    multiple: false,
+    emptyMessage: 'No matched order on this card near this date.',
+    confirmLabel: () => 'Add to order',
+    onConfirm: ([linkId]) => api.addAmazonOrderCharge({ link_id: linkId, charge_txn_id: entry.charge.id }),
+    failMessage: 'Could not add the charge to the order',
+  })
+  const removeAddedCharge = (charge, entry) => run(
+    () => api.removeAmazonOrderCharge({ link_id: entry.linkId, charge_txn_id: charge.id }),
+    'Could not remove the charge from the order')
+
   const columns = [
     { key: 'order', label: 'Amazon order', width: 330, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
     { key: 'charge', label: 'Card charge', width: 320, render: (entry) => {
@@ -276,7 +320,10 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
           </div>
         )
       }
-      if (entry.kind === 'matched' || entry.kind === 'matched_review') {
+      if (entry.kind === 'matched') {
+        return <MatchedCharges charges={entry.charges} disabled={busy} onRemove={(c) => removeAddedCharge(c, entry)} />
+      }
+      if (entry.kind === 'matched_review') {
         return (
           <div>
             <TxnStack charges={entry.charges} />
@@ -286,6 +333,21 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
                 {entry.spansDays > 7 ? <span style={{ color: 'var(--warning)', fontWeight: 600 }}> · {entry.spansDays} days apart</span> : null}
                 {/* Single-charge suggestions look like a match that "should have just worked" — say why it didn't. */}
                 {entry.reason ? <div style={{ marginTop: 2, fontStyle: 'italic' }}>{entry.reason}</div> : null}
+              </div>
+            ) : null}
+          </div>
+        )
+      }
+      if (entry.kind === 'reverse') {
+        const { rewards_credit: credit, suggested_link_id: suggestedId, order_candidates: orders } = entry.charge
+        const suggested = suggestedId ? (orders || []).find(o => o.link_id === suggestedId) : null
+        return (
+          <div>
+            <TxnCell txn={entry.charge} />
+            {credit ? (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                Paid with card rewards: a {formatMoneyMagnitude(credit.amount)} credit on {formatDate(credit.date)}.
+                {suggested ? <div style={{ marginTop: 2 }}>Likely part of the order of {formatDate(suggested.date)}: {suggested.name}</div> : null}
               </div>
             ) : null}
           </div>
@@ -316,6 +378,11 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
         // attention count.
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <Tooltip describeTrigger content={entry.charge.order_candidates?.length ? 'Add this charge to the order it was part of, such as the part paid with card rewards' : 'No matched order on this card near this date'}>
+              <Button variant="secondary" disabled={busy || !entry.charge.order_candidates?.length} onClick={() => openAddToOrder(entry)}>
+                Add to order…
+              </Button>
+            </Tooltip>
             <Button variant="secondary" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
               title="Send this charge to Trash — for a duplicate copy the report failed to pair up (recoverable from Settings → Trash)">
               Trash

@@ -40,7 +40,8 @@ from backend.services.amount_text import DECIMAL_POINT, parse_amount_text
 # and the export never carries the dollar figure for them (see doc — same class as the points question).
 _NON_CASH_MARKERS = ("rewards point", "gift card")
 
-_LAST4_RE = re.compile(r"ending in (\d{3,4})")
+# Two spellings of a card's last digits: "Visa ending in 1234" and the newer masked "Visa••••1234".
+_LAST4_RE = re.compile(r"(?:ending in\s*|[•*]{2,}\s*)(\d{3,4})")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _AMOUNT_RE = re.compile(r"\$\s*([\d,]+\.\d{2}|[\d,]+)")
 
@@ -255,8 +256,21 @@ def classify_order(order: AmazonOrder) -> OrderDisposition:
     export never discloses their dollar figure), or if its cash legs sum to $0.00 (a free/promo order —
     no cash moved, so there is no charge to find). A non-cash disposition still carries any bare card
     mention (``bare_card_*``) so the importer's ledger probe can settle the undisclosed split. A refund
-    reduces the net cash."""
-    cash_legs = [leg for leg in order.payment_legs if leg.amount is not None and not leg.is_non_cash]
+    reduces the net cash.
+
+    A blank payments string is not evidence of points: the exporter leaves it blank when it could not read
+    the payment (old orders, a changed order page). An order with a positive ``total`` and no payment legs
+    is cash for that total, which is already net of any gift-card balance, with no instrument to search
+    by; a blank total stays non-cash, since there is no figure to record."""
+    if not order.payment_legs and order.total and order.total > 0:
+        return OrderDisposition(
+            kind="cash",
+            net_cash=round(max(0.0, order.total - (order.refund or 0.0)), 2),
+            charge_amount=round(order.total, 2),
+            match_last4=None,
+            match_date=order.order_date,
+        )
+    cash_legs =[leg for leg in order.payment_legs if leg.amount is not None and not leg.is_non_cash]
     # Round the summed legs to cents: summing floats manufactures sub-cent drift (0.1 + 0.2 =
     # 0.30000000000000004) that would otherwise fail the cent-level match against the cleanly-parsed
     # ledger charge. This — not the source data, which is 2-decimal — is why the amount is rounded.

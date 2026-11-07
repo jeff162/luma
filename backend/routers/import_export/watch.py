@@ -14,9 +14,11 @@ account is parked rather than imported. Everything else an unattended import get
 reversible on the card; an invented account quietly splits a ledger. A parked file raises a Task, and
 the answer to it is always the same — open this one by hand.
 
-Parking is also how the source's setup gets proven before anything runs alone: a source imports
+Parking is also how the source's setup gets proven before anything runs alone: a CSV source imports
 unattended only once it owns a completed batch, and a file whose header does not match the source's
-fingerprint is parked rather than read through a column map built for a different layout. That one is
+fingerprint is parked rather than read through a column map built for a different layout. A marketplace
+source has no column map to prove, and its account and paying cards are checked on every file, so it
+runs from its first file. That one is
 recoverable without touching the source's settings — an import by hand updates the stored fingerprint
 (`core.run_import_parsed`), so the folder resumes once a person has seen the new columns.
 
@@ -634,9 +636,6 @@ def _import_ready_amazon_file(profile: dict, candidate: dict, text: str) -> dict
 
     account_id = str(profile.get("account_id") or "").strip()
     with get_db() as conn:
-        if not _source_has_completed_batch(conn, profile["id"]):
-            return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
-                    "reason": "Import one file from this source by hand first, so its setup is proven."}
         if not account_id:
             return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
                     "reason": "This source has no Amazon account set."}

@@ -25,6 +25,7 @@ from backend.db.database import (
 from backend.routers.import_export.amazon import (
     BATCH_SOURCE_KIND,
     LINK_KIND,
+    add_order_charge,
     amazon_reconciliation,
     apply_amazon_order,
     dismiss_split_suggestion,
@@ -39,6 +40,7 @@ from backend.routers.import_export.amazon import (
     merge_duplicate_charges,
     merge_unaccounted_charges,
     reconciliation_attention_count,
+    remove_order_charge,
     reverse_amazon_order,
     reverse_batch_amazon_links,
     run_amazon_import,
@@ -1002,6 +1004,85 @@ class AmazonOrdersTests(unittest.TestCase):
             recon = amazon_reconciliation(conn, batch_id)
             self.assertEqual(len(recon["amazon_unmatched"]), 1)
             self.assertFalse(recon["amazon_unmatched"][0]["reviewed"], "linking cleared the stale acknowledgment")
+
+    # ---- a charge added to an order (the part paid with card rewards) -----------------------------
+
+    def _order_with_rewards_charge(self, *, credit=True):
+        """A matched order, plus the second charge and same-day credit a card records for the part of the
+        order its rewards paid for."""
+        self._add_card_charge(37.32)
+        rewards = self._add_card_charge(5.81)
+        if credit:
+            self._add_card_charge(-5.81, name="Rewards redemption credit")
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=False)
+            link_id = txn_links.find_link(conn, LINK_KIND, _cash_order().order_id)["id"]
+        return link_id, rewards
+
+    def _order_amount(self):
+        return round(self._amazon_orders()[0]["amount"], 2)
+
+    def test_a_rewards_charge_is_suggested_and_adding_it_raises_the_order(self):
+        link_id, rewards = self._order_with_rewards_charge()
+        with self._use_db_path(), get_db() as conn:
+            [entry] = amazon_reconciliation(conn, self.batch_id)["payment_unmatched"]
+            self.assertEqual(entry["id"], rewards)
+            self.assertEqual(entry["suggested_link_id"], link_id)
+            self.assertIsNotNone(entry["rewards_credit"])
+            add_order_charge(conn, link_id, rewards)
+            funding_id = find_or_create_funding_category(conn)
+            [matched] = amazon_reconciliation(conn, self.batch_id)["matched"]
+        self.assertEqual(self._order_amount(), 43.13)
+        self.assertEqual(self._txn(rewards)["category_id"], funding_id)
+        self.assertEqual(sorted((c["amount"], c["added"]) for c in matched["charges"]), [(5.81, True), (37.32, False)])
+
+        with self._use_db_path(), get_db() as conn:
+            remove_order_charge(conn, link_id, rewards)
+            meta = txn_links.get_link(conn, link_id)["metadata"]
+        self.assertEqual(self._order_amount(), 37.32)
+        self.assertIsNone(self._txn(rewards)["category_id"])
+        self.assertNotIn("added_charge_ids", meta)
+        self.assertNotIn("order_base_amount", meta)
+
+    def test_without_a_rewards_credit_the_order_is_offered_but_not_suggested(self):
+        link_id, _rewards = self._order_with_rewards_charge(credit=False)
+        with self._use_db_path(), get_db() as conn:
+            [entry] = amazon_reconciliation(conn, self.batch_id)["payment_unmatched"]
+        self.assertIsNone(entry["suggested_link_id"])
+        self.assertEqual([o["link_id"] for o in entry["order_candidates"]], [link_id])
+
+    def test_undoing_the_card_that_brought_the_charges_keeps_the_order_and_its_link(self):
+        from backend.routers.import_export.core import undo_batches
+        link_id, rewards = self._order_with_rewards_charge()
+        with self._use_db_path(), get_db() as conn:
+            add_order_charge(conn, link_id, rewards)
+            conn.execute("INSERT INTO import_batch (id, filename) VALUES ('sync-card', 'card sync')")
+            conn.execute("UPDATE txn SET import_batch_id = 'sync-card' WHERE account_id = 'card'")
+            undo_batches(conn, ["sync-card"])
+            link = txn_links.get_link(conn, link_id)
+        self.assertIsNotNone(link, "the order's link belongs to the order's import, not the charge's")
+        self.assertEqual([m["role"] for m in link["members"]], ["order"])
+        self.assertEqual(self._order_amount(), 37.32)
+
+    def test_deleting_an_added_charge_returns_the_order_to_its_imported_amount(self):
+        from backend.services.import_batch_totals import delete_transactions
+        link_id, rewards = self._order_with_rewards_charge()
+        with self._use_db_path(), get_db() as conn:
+            add_order_charge(conn, link_id, rewards)
+            delete_transactions(conn, "id = ?", (rewards,))
+        self.assertEqual(self._order_amount(), 37.32)
+
+    def test_a_split_order_takes_no_added_charge_until_its_split_is_cleared(self):
+        from backend.services.txn_splits import save_split
+        link_id, rewards = self._order_with_rewards_charge()
+        order_id = self._amazon_orders()[0]["id"]
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO category (id, name, category_type) VALUES ('grp', 'Shopping', 'expense')")
+            conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES ('leaf', 'grp', 'Gadgets', 'expense')")
+            save_split(conn, order_id, [{"category_id": "leaf", "amount": 30.00}, {"category_id": "leaf", "amount": 7.32}])
+            with self.assertRaisesRegex(ValueError, "split"):
+                add_order_charge(conn, link_id, rewards)
+        self.assertEqual(self._order_amount(), 37.32)
 
     def test_order_rows_follow_their_owners_review_flagging(self):
         with self._use_db_path(), get_db() as conn:

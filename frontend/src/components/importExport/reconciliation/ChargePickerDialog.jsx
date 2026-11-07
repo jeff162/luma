@@ -11,7 +11,8 @@ import { vh } from '../../../lib/displaySize.js'
 // matcher could not pair on its own. Candidates are sorted by date proximity to the record, and a running
 // sum of the selection is compared with the record's amount — a mismatch warns but never blocks, because a
 // real pairing does not always reconcile to the penny. `multiple` is per vendor: a record paid by several
-// charges takes checkboxes, one paid by a single row takes one choice.
+// charges takes checkboxes, one paid by a single row takes one choice. With no `target` there is nothing
+// to add up to, so the running sum is left out; `initialSelected` starts the window on a suggested row.
 export function ChargePickerDialog({
   title,
   description,
@@ -19,6 +20,7 @@ export function ChargePickerDialog({
   target,
   targetDate,
   candidates,
+  initialSelected = [],
   multiple = true,
   mismatchNote,
   emptyMessage,
@@ -28,7 +30,7 @@ export function ChargePickerDialog({
   onConfirm,
 }) {
   const targetAmount = Math.abs(Number(target) || 0)
-  const [selected, setSelected] = useState(() => new Set())
+  const [selected, setSelected] = useState(() => new Set(initialSelected))
   const sorted = useMemo(() => {
     const diff = (d) => (targetDate && d ? Math.abs((new Date(d) - new Date(targetDate)) / 86400000) : 9e9)
     return [...candidates].sort((a, b) => diff(a.date) - diff(b.date))
@@ -57,16 +59,20 @@ export function ChargePickerDialog({
         </>
       )}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-        padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
-        <span style={{ color: 'var(--muted)' }}>{targetLabel} <strong style={{ color: 'var(--text)' }}>{formatTransactionAmount(targetAmount)}</strong></span>
-        <span style={{ color: matches ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
-          Selected {formatTransactionAmount(sum)} {matches ? '✓' : `· ${formatTransactionAmount(sum - targetAmount)} off`}
-        </span>
-      </div>
-      {!matches && selected.size > 0 ? (
-        <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>{mismatchNote}</div>
-      ) : null}
+      {target == null ? null : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+            padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
+            <span style={{ color: 'var(--muted)' }}>{targetLabel} <strong style={{ color: 'var(--text)' }}>{formatTransactionAmount(targetAmount)}</strong></span>
+            <span style={{ color: matches ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+              Selected {formatTransactionAmount(sum)} {matches ? '✓' : `· ${formatTransactionAmount(sum - targetAmount)} off`}
+            </span>
+          </div>
+          {!matches && selected.size > 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>{mismatchNote}</div>
+          ) : null}
+        </>
+      )}
       <div style={{ marginTop: 12, maxHeight: vh(46), overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
         {sorted.length === 0 ? (
           <div style={{ padding: 16, color: 'var(--muted)', fontSize: 13 }}>{emptyMessage}</div>

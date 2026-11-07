@@ -651,15 +651,6 @@ class AmazonWatchedFolderTests(unittest.TestCase):
             amazon_funding.upsert_funding_source(
                 conn, last4="4321", network="Test Card", funding_account_id="acc-card")
 
-    def _prove_source(self):
-        """The one hand import an Amazon source needs before it may run on its own — here, a card of its
-        own so `_source_has_completed_batch` is satisfied without re-deriving the import."""
-        with get_db(str(self.db_path)) as conn:
-            conn.execute(
-                """INSERT INTO import_batch (id, filename, status, source_kind, profile_id)
-                   VALUES ('b-proof', 'proof.csv', 'completed', 'marketplace:amazon', 'amz-1')"""
-            )
-
     def _drop(self, name, body=None):
         path = self.watched / name
         path.write_text(body if body is not None else self.ORDERS_CSV)
@@ -680,7 +671,7 @@ class AmazonWatchedFolderTests(unittest.TestCase):
         return (row["state"], row["reason"]) if row else (None, None)
 
     def test_an_orders_export_in_the_folder_is_imported_onto_a_card_of_its_source(self):
-        self._prove_source()
+        # With nothing imported by hand first: a marketplace source has no column map to prove.
         self._map_card()
         self._drop("2024-orders.csv")
         self._scan_twice()
@@ -692,8 +683,22 @@ class AmazonWatchedFolderTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual((row["profile_id"], row["row_count"]), ("amz-1", 1))
 
+    def test_deleting_the_source_keeps_the_cards_it_imported(self):
+        # The card is the provenance of transactions still in the ledger, so it outlives the setting.
+        import asyncio
+        from backend.routers.import_export.amazon import delete_amazon_profile_endpoint
+        self._map_card()
+        self._drop("2024-orders.csv")
+        self._scan_twice()
+        with self._use_db_path():
+            asyncio.run(delete_amazon_profile_endpoint("amz-1"))
+        with get_db(str(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT profile_id, row_count FROM import_batch WHERE source_kind = 'marketplace:amazon'"
+            ).fetchall()
+        self.assertEqual([(r["profile_id"], r["row_count"]) for r in rows], [(None, 1)])
+
     def test_a_file_whose_paying_card_is_unmapped_is_parked_rather_than_guessed_at(self):
-        self._prove_source()
         self._drop("2024-orders.csv")
         self._scan_twice()
         state, reason = self._file_state("2024-orders.csv")
@@ -706,7 +711,6 @@ class AmazonWatchedFolderTests(unittest.TestCase):
     def test_parking_clears_itself_once_the_card_is_mapped(self):
         """A parked file is retried every pass because its refusal is about the ledger, which is fixed
         somewhere else — mapping the card in the import form is what lets the folder resume."""
-        self._prove_source()
         self._drop("2024-orders.csv")
         self._scan_twice()
         self.assertEqual(self._file_state("2024-orders.csv")[0], watch.WATCH_STATE_PARKED)
@@ -715,16 +719,7 @@ class AmazonWatchedFolderTests(unittest.TestCase):
             watch.scan_watched_sources()
         self.assertEqual(self._file_state("2024-orders.csv")[0], watch.WATCH_STATE_IMPORTED)
 
-    def test_a_source_with_nothing_imported_by_hand_takes_nothing_on_its_own(self):
-        self._map_card()
-        self._drop("2024-orders.csv")
-        self._scan_twice()
-        state, reason = self._file_state("2024-orders.csv")
-        self.assertEqual(state, watch.WATCH_STATE_PARKED)
-        self.assertIn("by hand", reason)
-
     def test_a_csv_that_is_not_an_amazon_export_is_parked_not_read_through_some_other_mapping(self):
-        self._prove_source()
         self._map_card()
         self._drop("bank.csv", "Date,Description,Amount\n2026-02-03,Corner Market,12.50\n")
         self._scan_twice()
@@ -733,7 +728,6 @@ class AmazonWatchedFolderTests(unittest.TestCase):
         self.assertIn("not an Amazon", reason)
 
     def test_a_file_already_imported_is_recognized_by_content_not_re_imported(self):
-        self._prove_source()
         self._map_card()
         self._drop("2024-orders.csv")
         self._scan_twice()
@@ -743,7 +737,7 @@ class AmazonWatchedFolderTests(unittest.TestCase):
         with get_db(str(self.db_path)) as conn:
             self.assertEqual(conn.execute(
                 """SELECT COUNT(*) AS n FROM import_batch
-                   WHERE source_kind = 'marketplace:amazon' AND id != 'b-proof'""").fetchone()["n"], 1)
+                   WHERE source_kind = 'marketplace:amazon'""").fetchone()["n"], 1)
 
 
 class PaypalStatementWatchedFolderTests(unittest.TestCase):

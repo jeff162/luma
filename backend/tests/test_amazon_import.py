@@ -71,6 +71,10 @@ class ParsePaymentsTests(unittest.TestCase):
         self.assertEqual(len(legs), 1)
         self.assertEqual((legs[0].method, legs[0].last4, legs[0].date, legs[0].amount), (None, None, "2024-01-06", 39.83))
 
+    def test_masked_card_digits(self):
+        legs = parse_payments("Test Card••••4321: 2024-01-01: $20.60; ")
+        self.assertEqual((legs[0].method, legs[0].last4, legs[0].amount), ("Test Card", "4321", 20.6))
+
     def test_empty(self):
         self.assertEqual(parse_payments(""), [])
         self.assertEqual(parse_payments(None), [])
@@ -183,9 +187,9 @@ class SourceSniffTests(unittest.TestCase):
 
 
 class ClassifyOrderTests(unittest.TestCase):
-    def _order(self, payments, refund=None):
+    def _order(self, payments, refund=None, total=None):
         legs = parse_payments(payments)
-        return AmazonOrder(order_id="O", order_date="2024-01-01", total=None, refund=refund, payment_legs=legs)
+        return AmazonOrder(order_id="O", order_date="2024-01-01", total=total, refund=refund, payment_legs=legs)
 
     def test_card_charge_is_cash(self):
         d = classify_order(self._order("Test Card ending in 4321: 2024-01-01: $37.32;"))
@@ -236,6 +240,19 @@ class ClassifyOrderTests(unittest.TestCase):
         self.assertEqual(d.kind, "cash")
         self.assertEqual(d.charge_amount, 39.83)
         self.assertIsNone(d.match_last4)
+
+    def test_blank_payments_with_a_total_is_cash_for_the_total(self):
+        # The exporter could not read the payment; that is not evidence of points or gift card.
+        d = classify_order(self._order("", total=25.49, refund=5.0))
+        self.assertEqual(d.kind, "cash")
+        self.assertEqual(d.charge_amount, 25.49)
+        self.assertEqual(d.net_cash, 20.49)
+        self.assertIsNone(d.match_last4)
+        self.assertEqual(d.match_date, "2024-01-01")
+
+    def test_blank_payments_without_a_total_stays_non_cash(self):
+        self.assertEqual(classify_order(self._order("", total=None)).kind, "non_cash")
+        self.assertEqual(classify_order(self._order("", total=0.0)).kind, "non_cash")
 
 
 if __name__ == "__main__":

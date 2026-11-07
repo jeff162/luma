@@ -68,9 +68,10 @@ class AmazonSourceTests(unittest.TestCase):
     """Saved Amazon sources. They are `csv_import_profile` rows marked `marketplace:amazon`, which is
     what makes the watched-folder machinery theirs for free — so what is pinned here is that they stay
     out of the CSV side's listing (its editor has no mapping to show for one) and that the one setting
-    an unattended import cannot ask about, the Amazon account, is checked where it is set."""
+    an unattended import cannot ask about, the Amazon account, is checked where it is set. A source's
+    cards come from its watched folder (`test_import_watch.AmazonWatchedFolderTests`)."""
 
-    def test_a_source_names_an_amazon_account_and_stamps_the_cards_it_imports(self):
+    def test_a_source_names_an_amazon_account(self):
         with api_client() as (client, _):
             amazon = client.post("/api/accounts", json={"name": "Amazon", "type": "amazon"}).json()
             created = client.post("/api/import-export/amazon/profiles", json={
@@ -79,19 +80,6 @@ class AmazonSourceTests(unittest.TestCase):
             self.assertEqual(created.status_code, 200, created.text)
             profile = created.json()["profile"]
             self.assertEqual((profile["name"], profile["account_name"]), ("Amazon household", "Amazon"))
-
-            resp = client.post(
-                "/api/import-export/amazon/import",
-                files=[("files", ("orders.csv", ORDERS_CSV, "text/csv"))],
-                data={"account_id": amazon["id"], "profile_id": profile["id"]},
-            )
-            self.assertEqual(resp.status_code, 200, resp.text)
-            batch = next(b for b in client.get("/api/import-export/batches").json()
-                         if b["source_kind"] == "marketplace:amazon")
-            # The card belongs to the source, and carries the account the history groups it under.
-            self.assertEqual(batch["profile_id"], profile["id"])
-            self.assertEqual(batch["amazon_account_id"], amazon["id"])
-            self.assertEqual(batch["amazon_account_name"], "Amazon")
 
     def test_a_source_is_refused_an_account_that_is_not_an_amazon_account(self):
         with api_client() as (client, _):
@@ -112,25 +100,6 @@ class AmazonSourceTests(unittest.TestCase):
             self.assertEqual([p["name"] for p in
                               client.get("/api/import-export/amazon/profiles").json()["profiles"]],
                              ["Amazon household"])
-
-    def test_deleting_a_source_keeps_the_cards_it_imported(self):
-        with api_client() as (client, _):
-            amazon = client.post("/api/accounts", json={"name": "Amazon", "type": "amazon"}).json()
-            profile = client.post("/api/import-export/amazon/profiles",
-                                  json={"name": "Amazon household", "account_id": amazon["id"]}).json()["profile"]
-            client.post(
-                "/api/import-export/amazon/import",
-                files=[("files", ("orders.csv", ORDERS_CSV, "text/csv"))],
-                data={"account_id": amazon["id"], "profile_id": profile["id"]},
-            )
-            self.assertEqual(
-                client.delete(f"/api/import-export/amazon/profiles/{profile['id']}").status_code, 200)
-            batches = [b for b in client.get("/api/import-export/batches").json()
-                       if b["source_kind"] == "marketplace:amazon"]
-            # The card is the provenance of transactions still in the ledger, so it outlives the setting.
-            self.assertEqual(len(batches), 1)
-            self.assertIsNone(batches[0]["profile_id"])
-            self.assertEqual(batches[0]["amazon_account_id"], amazon["id"])
 
 
 if __name__ == "__main__":

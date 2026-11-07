@@ -614,8 +614,9 @@ import-batch and undo contracts as a CSV. Matching rules, report buckets and lin
   Amazon account its files import into, the categorize toggle, a filename pattern and the `watch_*`
   block. Two people's exports are two sources, each with its own account and folder. The CSV-only
   columns stay unused — an AZAD export is recognized by its header — and `GET /profiles` leaves these
-  rows out, because the CSV mapping editor has nothing to show for one. A card stamped with a source
-  still belongs to the vendor's history row, not to a data-source row (`dataSourceRows.js`).
+  rows out, because the CSV mapping editor has nothing to show for one. Only a watched-folder import
+  stamps its card with the source; the import form takes no source. A stamped card still belongs to the
+  vendor's history row, not to a data-source row (`dataSourceRows.js`).
 - The reconciliation and import-detail dialogs are App-level detached viewers on
   `useDetachedReportViewer`.
 
@@ -631,8 +632,8 @@ Which files a source takes, and how each is read, identified and imported, is on
 (`_FILE_KINDS_BY_SOURCE`, keyed on `source_kind` and then extension); the scan, the purge's re-check,
 the folder picker and the hand-back of a parked file all look a file up there. A **marketplace source**
 watches a folder the same way, its CSVs going to `run_amazon_import` instead. The refusal rule is the same — park anything the saved source does not
-answer — but the questions differ: there is no header fingerprint to check (an AZAD export is
-recognized by `read_export`), and what must be answered instead is the Amazon account and the funding
+answer — but the questions differ: there is no header fingerprint to check and no hand import to wait
+for (an AZAD export is recognized by `read_export`, so there is no mapping to prove), and what must be answered instead is the Amazon account and the funding
 account of every paying card the file names. An unmapped card parks the file, because the interactive
 form refuses to import until each one is mapped and an unattended path may not take the looser option.
 

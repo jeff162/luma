@@ -47,7 +47,6 @@ const CARD_BADGE_WIDTH = 120
 // offset that puts it on its own field's first line rather than floating beside the middle of a box.
 const FORM_LABEL_WIDTH = 160
 const ACCOUNT_FIELD_ID = 'amazon-import-account'
-const PROFILE_FIELD_ID = 'amazon-import-profile'
 // Each control is sized to what it holds, not to the column: the label column is what lines the fields
 // up, and stretching a control past its content only moves its own affordance away from the value. This
 // is what the account select's longest option needs; the category picker takes its content's width.
@@ -151,7 +150,7 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
 // and Import / Cancel. The card mappings + category are global and prefill on the next import; Import
 // is gated until the account is chosen and every discovered card has a decision. A finished import is
 // handed to the host as `onImported(summary)`, which shows it on its cards in the import history.
-export function AmazonImportDialog({ files: droppedFiles, onClose, onImported }) {
+export function AmazonImportDialog({ files: droppedFiles, sourceId = null, onClose, onImported }) {
   // The backend refuses the import while demo data is loaded, so the tab says so up front rather than after
   // the form is filled in.
   const { demoLoaded } = useAppSession()
@@ -161,11 +160,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   const [files, setFiles] = useState(droppedFiles)
   const [scan, setScan] = useState(null)            // { instruments, unrecognized_files, ... } | null
   const [skippedFilesAlert, setSkippedFilesAlert] = useState(null)   // skipped-file entries awaiting an OK
-  // The saved Amazon sources. Picking one fills in the account and the categorize toggle; the import is
-  // stamped with it, which is what groups its card under that source. A drop may name none, which is the
-  // form as it always was.
-  const [profiles, setProfiles] = useState([])
-  const [profileId, setProfileId] = useState('')
   const [scanning, setScanning] = useState(false)
   const [categories, setCategories] = useState([])
   const [fundingCategory, setFundingCategory] = useState(null)
@@ -179,41 +173,21 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
     () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => { }),
     [],
   )
-  // Selecting a source *fills the form in*; it does not lock it. The settings are the source's defaults
-  // for this drop, and a one-off override here is an answer about this import, not a change to the
-  // source — which is edited on the File Sources tab.
-  const applyProfile = useCallback((id) => {
-    setProfileId(id)
-    const profile = profiles.find(p => p.id === id)
-    if (!profile) return
-    if (profile.account_id) setAccountId(profile.account_id)
-    setApplyCategorization(!!profile.apply_categorization)
-  }, [profiles, setAccountId])
   useEffect(() => {
     loadAccounts()
     api.getCategories().then(setCategories).catch(() => { })
     api.getAmazonFundingCategory().then(setFundingCategory).catch(() => { })
-    api.getAmazonProfiles().then(r => setProfiles(r?.profiles || [])).catch(() => { })
   }, [loadAccounts])
-
-  // Preselect the source whose filename pattern the dropped files match — the one case where the answer
-  // is in the drop itself, and the reason the pattern is worth setting. Only an unambiguous match counts
-  // (every matched file agreeing on one source); anything else leaves the choice to the user. It runs
-  // once per set of files, so a deliberate change of source is not undone on the next scan.
-  const autoPickedFor = useRef('')
+  // A file handed back from a watched folder starts from its source's account and rules setting.
   useEffect(() => {
-    const key = files.map(f => f.name).join('\u0000')
-    if (!profiles.length || !files.length || autoPickedFor.current === key) return
-    autoPickedFor.current = key
-    const matched = new Set()
-    for (const file of files) {
-      for (const profile of profiles) {
-        const pattern = (profile.filename_pattern || '').trim().toLowerCase()
-        if (pattern && file.name.toLowerCase().includes(pattern)) matched.add(profile.id)
-      }
-    }
-    if (matched.size === 1) applyProfile([...matched][0])
-  }, [files, profiles, applyProfile])
+    if (!sourceId) return
+    api.getAmazonProfiles().then(r => {
+      const source = (r?.profiles || []).find(p => p.id === sourceId)
+      if (!source) return
+      if (source.account_id) setAccountId(source.account_id)
+      setApplyCategorization(!!source.apply_categorization)
+    }).catch(() => { })
+  }, [sourceId, setAccountId])
 
   // Drop a remembered account that no longer exists (deleted, or no longer an Amazon account) once the
   // account list has loaded, so the selector doesn't sit on a stale value.
@@ -282,7 +256,7 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   const run = async () => {
     setError(''); setLoading(true)
     try {
-      onImported(await api.importAmazon(files, accountId, applyCategorization, profileId || null))
+      onImported(await api.importAmazon(files, accountId, applyCategorization))
     } catch (e) {
       setError(e?.message || 'Import failed')
     } finally {
@@ -293,12 +267,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
   // The account picker lists Amazon-type accounts only; the funding picker lists the user's non-marketplace
   // accounts (a card charge never lands on an Amazon account), plus Untracked and + New.
   const amazonAccounts = accounts.filter(a => (a.type || '').toLowerCase() === 'amazon')
-  // Shown only when there is a source to pick: with none saved, the row would be a control whose only
-  // option is the state the form is already in.
-  const profileOptions = [
-    { value: '', label: 'None — set the options below' },
-    ...profiles.map(p => ({ value: p.id, label: p.account_name ? `${p.name} → ${p.account_name}` : p.name })),
-  ]
   const fundingAccountOptions = [
     { value: '', label: '— Select —' },
     ...accounts.filter(a => !isMarketplaceAccountType(a.type)).map(a => ({ value: a.id, label: a.display_name || a.name })),
@@ -379,21 +347,6 @@ export function AmazonImportDialog({ files: droppedFiles, onClose, onImported })
             </div>
           ) : null}
         </div>
-
-        {profiles.length ? (
-          <>
-            <FieldLabel htmlFor={PROFILE_FIELD_ID}>Source</FieldLabel>
-            <div>
-              <Select
-                id={PROFILE_FIELD_ID}
-                value={profileId}
-                onChange={applyProfile}
-                options={profileOptions}
-                style={{ width: '100%', maxWidth: ACCOUNT_SELECT_WIDTH }}
-              />
-            </div>
-          </>
-        ) : null}
 
         <FieldLabel htmlFor={ACCOUNT_FIELD_ID}>Import into account</FieldLabel>
         {/* The dialog body stretches its own children; inside a form cell the select has to be told. */}

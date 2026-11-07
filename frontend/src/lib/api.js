@@ -1011,12 +1011,11 @@ export const api = {
       return res.json()
     })
   },
-  importAmazon: (files, accountId, applyCategorization = true, profileId = null) => {
+  importAmazon: (files, accountId, applyCategorization = true) => {
     const fd = new FormData()
     for (const f of files) fd.append('files', f)
     fd.append('account_id', accountId)
     fd.append('apply_categorization', applyCategorization ? 'true' : 'false')
-    if (profileId) fd.append('profile_id', profileId)
     return trackedFetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -1069,6 +1068,8 @@ export const api = {
   mergeUnaccountedAmazonCharges: (body) => request('/import-export/amazon/merge-unaccounted-charges', { method: 'POST', body: JSON.stringify(body) }),
   markAmazonChargesNotDuplicates: (body) => request('/import-export/amazon/charges-not-duplicates', { method: 'POST', body: JSON.stringify(body) }),
   unlinkAmazonOrderCharges: (body) => request('/import-export/amazon/unlink-charges', { method: 'POST', body: JSON.stringify(body) }),
+  addAmazonOrderCharge:     (body) => request('/import-export/amazon/add-order-charge', { method: 'POST', body: JSON.stringify(body) }),
+  removeAmazonOrderCharge:  (body) => request('/import-export/amazon/remove-order-charge', { method: 'POST', body: JSON.stringify(body) }),
   // The PayPal reconciliation (docs/data-model.md → PayPal funding pairs): the whole ledger, or one import's rows.
   getPaypalFundingReport:     (batchId) => request(`/import-export/paypal-funding/report${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ''}`),
   getPaypalFundingCandidates: (paypalTxnId) => request(`/import-export/paypal-funding/candidates/${paypalTxnId}`),

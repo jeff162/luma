@@ -2774,7 +2774,8 @@ export const HELP_TOPICS = [
           A data source imports on its own only after one of its files has been imported by hand. The
           mapping screen is where a source learns which account each value in the file belongs to, so
           until one file has been through it there is nothing for an unattended import to apply. Set the
-          source up, import one export the usual way, then point it at the folder.
+          source up, import one export the usual way, then point it at the folder. An Amazon source has
+          no mapping to learn, so it starts with the first file in its folder.
         </p>
         <h4>Files left for review</h4>
         <p>
@@ -3028,26 +3029,24 @@ export const HELP_TOPICS = [
           of the Orders export. Re-export the missing one and drop both again.
         </p>
         <p><strong>Saved Amazon sources:</strong></p>
+        <p>*needs review*</p>
         <p>
-          A saved source records which Amazon account a set of files imports into, so the import form
-          arrives filled in rather than being answered each time. Sources are added on
-          the <strong>File Sources</strong> tab, under <strong>Amazon</strong>. Each one holds an
-          account, whether rules are applied on import, and optionally a <strong>filename
-            pattern</strong> &mdash; text the filename contains, which selects the source automatically
-          when a matching file is dropped.
+          A saved source imports Amazon exports saved into a <strong>folder to watch</strong> on the
+          machine running {APP_NAME}, without the import form being opened. Sources are added on
+          the <strong>File Sources</strong> tab, under <strong>Amazon</strong>, and <strong>Folder</strong> on
+          a source&apos;s row sets its folder. Each one holds the Amazon account its files import into,
+          whether rules are applied, and optionally a <strong>filename pattern</strong> &mdash; text the
+          filename contains, which lets several sources share one folder.
         </p>
         <p>
           Several sources are the point where more than one person&apos;s order history is tracked:
-          one source per Amazon account, each with its own name and pattern, keeps the imports apart.
+          one source per Amazon account, each with its own folder or pattern, keeps the imports apart.
           The import history then lists each account&apos;s files under its own heading.
         </p>
         <p>
-          A source can also name a <strong>folder to watch</strong> on the machine running {APP_NAME},
-          through <strong>Folder</strong> on its row. Amazon exports saved into that folder are imported
-          without the form being opened. A file is only taken once the source has imported one file by
-          hand, and a file naming a payment card that has no mapping is held rather than guessed at
-          &mdash; it appears in <strong>Tasks</strong>, and importing it by hand once maps the card and
-          lets the folder carry on by itself.
+          A source takes files from the first one saved into its folder. A file naming a payment card
+          that has no mapping is held rather than guessed at &mdash; it appears in <strong>Tasks</strong>,
+          and importing it by hand once maps the card and lets the folder carry on by itself.
         </p>
       </>
     ),
@@ -3151,7 +3150,8 @@ export const HELP_TOPICS = [
             <strong>Unaccounted charge</strong> &mdash; a charge that looks like Amazon, in the import's
             date range, that no order explains. Usually a purchase the export didn't cover, which{' '}
             <strong>Mark reviewed</strong> acknowledges. <strong>Trash</strong> removes one that is a
-            duplicate.
+            duplicate. <strong>Add to order&hellip;</strong> adds it to an order it was part of &mdash; see
+            the part paid with card rewards, below.
           </li>
         </ul>
         <p>
@@ -3163,6 +3163,18 @@ export const HELP_TOPICS = [
           When a pairing is wrong, <strong>Unlink</strong> detaches the charge. The charge gets its
           category back, and the order returns to <strong>No charge found</strong>. That charge is not
           matched to the order automatically again.
+        </p>
+        <h4>The part paid with card rewards</h4>
+        <p>*needs review*</p>
+        <p>
+          Paying part of an order with card rewards leaves that part out of the export&apos;s total. The
+          card records it as a second Amazon charge, paid back by a credit of the same amount, so the
+          charge shows as unaccounted. When the credit is on the card, the row says the charge was paid
+          with rewards, and an order placed that day is named as the likely one.{' '}
+          <strong>Add to order&hellip;</strong> adds the charge to that order or another: the order&apos;s
+          amount grows by the charge, so it reads at what the purchase cost, the charge is excluded like
+          the order&apos;s own, and the credit stays income. <strong>Remove</strong> beside the added
+          charge takes it off again. A split order takes no added charge until its split is cleared.
         </p>
         <p>
           <strong>Split&hellip;</strong> on a Matched or No charge found row divides the order across

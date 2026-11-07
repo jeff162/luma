@@ -242,7 +242,9 @@ Three more questions are specific to this shape, and none is answered elsewhere 
 - **What funds an order that moved no cash.** Points and gift-card balances are redeemed at spend time
   with nothing leaving an account, and the export routinely gives no dollar figure for them. Such an
   order is recorded **excluded** rather than as spending — counting it invents money the ledger never
-  saw, and dropping it makes reconciliation report an order whose charge was not found.
+  saw, and dropping it makes reconciliation report an order whose charge was not found. A missing
+  payment field is not evidence of points: an exporter that could not read the payment leaves it blank
+  too, and reading that as non-cash records real spending at `$0`.
 - **What joins the vendor's files, and whether it survives a re-export.** A vendor typically exports
   orders and items separately, joined on an order id. That id is a *within-vendor* key, not a ledger
   identity — see [Transaction ids](#transaction-ids-must-be-globally-unique) for why it is not one. The

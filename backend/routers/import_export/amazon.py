@@ -44,6 +44,9 @@ from backend.app_logging import log_error
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.json_utils import safe_json_dict
 from backend.services import amazon_funding, txn_links
+from backend.services.amazon_order_amount import (
+    ADDED_CHARGES_KEY, BASE_AMOUNT_KEY, added_charge_ids, refresh_order_amount,
+)
 from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
@@ -1336,6 +1339,54 @@ def _split_charge_suggestion(order: dict, meta: dict, pool: list, matcher_candid
     }
 
 
+def _added_charge_hint(conn: sqlite3.Connection, charge: dict) -> dict:
+    """For an unaccounted charge: the orders it could be added to, and whether it looks paid with card
+    rewards.
+
+    ``order_candidates`` are the cash orders with a charge on the same card within the reverse-scan window,
+    nearest first. ``rewards_credit`` is a credit of the same amount on that card within the match window —
+    how a card records the part of an order its rewards paid for. With that credit present and exactly one
+    candidate placed on the charge's own date, that order is ``suggested_link_id``; the user confirms it,
+    since a guess at the order should not move money on its own."""
+    root = effective_account_id(conn, charge["account_id"])
+    day = charge["date"]
+    rows = conn.execute(
+        f"""SELECT DISTINCT l.id AS link_id, o.id AS order_id, o.date
+            FROM   txn_link l
+            JOIN   txn_link_member om ON om.link_id = l.id AND om.role = 'order'
+            JOIN   txn o ON o.id = om.txn_id AND o.trashed_at IS NULL
+            JOIN   txn_link_member cm ON cm.link_id = l.id AND cm.role = 'charge'
+            JOIN   txn c ON c.id = cm.txn_id
+            JOIN   account ca ON ca.id = c.account_id
+            WHERE  l.kind = ?
+              AND  json_extract(l.metadata_json, '$.disposition') = 'cash'
+              AND  COALESCE(ca.parent_account_id, ca.id) = ?
+              AND  ABS(julianday(o.date) - julianday(?)) <= {int(_REVERSE_SCAN_WINDOW_DAYS)}
+            ORDER  BY ABS(julianday(o.date) - julianday(?)), o.date""",
+        (LINK_KIND, root, day, day),
+    ).fetchall()
+    summaries = txn_summaries(conn, [r["order_id"] for r in rows])
+    candidates = [dict(summaries[r["order_id"]], link_id=r["link_id"]) for r in rows if r["order_id"] in summaries]
+    credit = conn.execute(
+        f"""SELECT t.id
+            FROM   txn t JOIN account a ON a.id = t.account_id
+            WHERE  COALESCE(a.parent_account_id, a.id) = ?
+              AND  ROUND(t.amount, 2) = ?
+              AND  t.trashed_at IS NULL
+              AND  ABS(julianday(t.date) - julianday(?)) <= {int(_CHARGE_DATE_WINDOW_DAYS)}
+            ORDER  BY ABS(julianday(t.date) - julianday(?))
+            LIMIT  1""",
+        (root, -round(charge["amount"], 2), day, day),
+    ).fetchone()
+    same_day = [c for c in candidates if c["date"] == day]
+    suggested = same_day[0]["link_id"] if credit and len(same_day) == 1 else None
+    return {
+        "order_candidates": candidates,
+        "rewards_credit": _txn_summary(conn, credit["id"]) if credit else None,
+        "suggested_link_id": suggested,
+    }
+
+
 def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
     """Reconcile the Amazon orders imported in a batch against the ledger's card charges, for the
     reconciliation report. Buckets:
@@ -1443,9 +1494,12 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
             if group.copies:
                 duplicate.append(_duplicate_row(link_id, meta, order, group.copies, matched_id=charge_ids[0]))
             else:
-                # A matched order carries every charge it links — usually one, several for an accepted split.
+                # A matched order carries every charge it links — usually one, several for an accepted split —
+                # each flagged when it was added to the order (a part paid with card rewards).
+                added = set(added_charge_ids(meta))
                 matched.append({"link_id": link_id, "order": order,
-                                "charges": [_txn_summary(conn, cid) for cid in charge_ids]})
+                                "charges": [dict(c, added=c["id"] in added)
+                                            for c in (_txn_summary(conn, cid) for cid in charge_ids) if c]})
         elif meta.get("disposition") == "cash":
             group = _duplicate_group(conn, candidates, eff_cache=eff_cache)
             if group.copies:
@@ -1500,6 +1554,7 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
     reviewed_ids = _reviewed_charge_ids(conn, [c["id"] for c in unaccounted])
     for c in unaccounted:
         c["reviewed"] = c["id"] in reviewed_ids
+        c.update(_added_charge_hint(conn, c))
     return {
         "matched": matched,
         "matched_review": matched_review,
@@ -1731,6 +1786,94 @@ async def amazon_link_charges_endpoint(body: LinkChargesRequest):
             raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _refuse_if_split(conn: sqlite3.Connection, link_id: str) -> None:
+    """A split order's parts must sum to its amount, so a hand action that changes the amount waits for the
+    split to be cleared rather than clearing it out from under the user."""
+    for order_id in txn_links.member_txn_ids(conn, link_id, role="order"):
+        if conn.execute("SELECT 1 FROM txn WHERE id = ? AND is_split = 1", (order_id,)).fetchone():
+            raise ValueError("This order is split. Clear its split first, then change its charges.")
+
+
+def add_order_charge(conn: sqlite3.Connection, link_id: str, charge_txn_id: str) -> dict:
+    """Add a further charge to a matched order: the part paid with card rewards, which the card records as
+    a charge of its own and the export leaves out of the order's total. The charge is excluded like the
+    order's own charge, and the order's amount grows by it (see ``services/amazon_order_amount.py``)."""
+    link = txn_links.get_link(conn, link_id)
+    if not link or link.get("kind") != LINK_KIND:
+        raise ValueError("Unknown Amazon order link")
+    meta = link.get("metadata") or {}
+    if meta.get("disposition") != "cash":
+        raise ValueError("This order was paid without cash, so a charge cannot be added to it.")
+    if not txn_links.member_txn_ids(conn, link_id, role="charge"):
+        raise ValueError("Link this order's own charge first.")
+    _refuse_if_split(conn, link_id)
+    order_ids = txn_links.member_txn_ids(conn, link_id, role="order")
+    order = conn.execute(
+        "SELECT amount, account_id FROM txn WHERE id = ? AND trashed_at IS NULL", (order_ids[0],)
+    ).fetchone() if order_ids else None
+    if not order:
+        raise ValueError("This order's transaction is no longer in the ledger.")
+    charge = conn.execute(
+        "SELECT account_id, amount, is_pending FROM txn WHERE id = ? AND trashed_at IS NULL", (charge_txn_id,)
+    ).fetchone()
+    if not charge:
+        raise ValueError("Unknown charge")
+    if charge["is_pending"] or not charge["amount"] or charge["amount"] <= 0:
+        raise ValueError("Only a posted charge can be added to an order.")
+    if effective_account_id(conn, charge["account_id"]) == effective_account_id(conn, order["account_id"]):
+        raise ValueError("That row is on the Amazon account itself, not a card.")
+    if conn.execute(
+        """SELECT 1 FROM txn_link_member m JOIN txn_link l ON l.id = m.link_id
+           WHERE m.txn_id = ? AND l.kind = ?""",
+        (charge_txn_id, LINK_KIND),
+    ).fetchone():
+        raise ValueError("That charge is already linked to an Amazon order")
+
+    meta.setdefault(BASE_AMOUNT_KEY, round(order["amount"], 2))
+    priors = meta.get("charge_priors") if isinstance(meta.get("charge_priors"), dict) else {}
+    priors[charge_txn_id] = _exclude_charge(conn, charge_txn_id)
+    meta["charge_priors"] = priors
+    meta[ADDED_CHARGES_KEY] = [*added_charge_ids(meta), charge_txn_id]
+    txn_links.add_member(conn, link_id, charge_txn_id, "charge")
+    conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (charge_txn_id,))
+    txn_links.set_metadata(conn, link_id, meta)
+    refresh_order_amount(conn, link_id)
+    return {"status": "added"}
+
+
+def remove_order_charge(conn: sqlite3.Connection, link_id: str, charge_txn_id: str) -> dict:
+    """Take an added charge back off its order: the charge's category is restored and the order's amount
+    returns to what it was without it."""
+    link = txn_links.get_link(conn, link_id)
+    if not link or link.get("kind") != LINK_KIND:
+        raise ValueError("Unknown Amazon order link")
+    if charge_txn_id not in added_charge_ids(link.get("metadata") or {}):
+        raise ValueError("That charge was not added to this order")
+    _refuse_if_split(conn, link_id)
+    _detach_charge(conn, link_id, charge_txn_id)
+    return {"status": "removed"}
+
+
+@router.post("/amazon/add-order-charge")
+async def amazon_add_order_charge_endpoint(body: ManualLinkRequest):
+    """Add a charge paid with card rewards to a matched order (the reconciliation's Add to order…)."""
+    with get_db() as conn:
+        try:
+            return add_order_charge(conn, body.link_id, body.charge_txn_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/amazon/remove-order-charge")
+async def amazon_remove_order_charge_endpoint(body: ManualLinkRequest):
+    """Take an added charge back off its order."""
+    with get_db() as conn:
+        try:
+            return remove_order_charge(conn, body.link_id, body.charge_txn_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
 def dismiss_split_suggestion(conn: sqlite3.Connection, link_id: str) -> dict:
     """Mark an order's split-charge (Matched·review) suggestion dismissed so the reconciliation report stops
     surfacing it. Persisted in the link metadata; naturally cleared if the order is later linked."""
@@ -1822,6 +1965,7 @@ def _detach_charge(conn: sqlite3.Connection, link_id: str, charge_id: str) -> No
     meta.pop("charge_prior", None)
     meta.pop("charge_linked_manually", None)
     txn_links.set_metadata(conn, link_id, meta)
+    refresh_order_amount(conn, link_id)
 
 
 def _unmatched_cash_orders(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
@@ -2077,6 +2221,8 @@ def unlink_order_charges(conn: sqlite3.Connection, order_link_id: str) -> dict:
     charge_ids = txn_links.member_txn_ids(conn, order_link_id, role="charge")
     if not charge_ids:
         raise ValueError("This order has no linked charge")
+    if added_charge_ids(link.get("metadata") or {}):
+        _refuse_if_split(conn, order_link_id)
     for charge_id in charge_ids:
         _detach_charge(conn, order_link_id, charge_id)
     # Remembered so the after-ingest match never pairs the two again: it would, the next time a sync brings
@@ -2452,7 +2598,8 @@ def unmatched_parked_order_count(conn: sqlite3.Connection, import_summary: Optio
 
 def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
     """Undo the Amazon links a batch created, restoring each matched charge's prior category from the
-    link metadata and deleting the link. Mirrors `reverse_batch_enrichments`: it must run *before* the
+    link metadata and deleting the link. A batch that brought only a link's charges, not its order,
+    detaches those charges and leaves the order's link in place. Mirrors `reverse_batch_enrichments`: it must run *before* the
     batch's own transactions are deleted, because the charge it restores lives *outside* the batch and
     would otherwise be left silently reclassified. The batch's item rows are deleted by the caller's
     normal `DELETE FROM txn WHERE import_batch_id = ?`."""
@@ -2468,6 +2615,17 @@ def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
         ).fetchall()
     ]
     for link_id in link_ids:
+        in_batch = {r["id"] for r in conn.execute(
+            """SELECT t.id FROM txn_link_member m JOIN txn t ON t.id = m.txn_id
+               WHERE m.link_id = ? AND t.import_batch_id = ?""", (link_id, batch_id))}
+        order_ids = txn_links.member_txn_ids(conn, link_id, role="order")
+        if not in_batch & set(order_ids):
+            # The batch brought only charges (a sync card holding a matched charge): the order stays, and
+            # so does its link; the charges leave it as an unlink would take them.
+            for charge_id in txn_links.member_txn_ids(conn, link_id, role="charge"):
+                if charge_id in in_batch:
+                    _detach_charge(conn, link_id, charge_id)
+            continue
         link = txn_links.get_link(conn, link_id)
         meta = (link.get("metadata") or {}) if link else {}
         for charge_id in txn_links.member_txn_ids(conn, link_id, role="charge"):
@@ -2677,7 +2835,6 @@ async def amazon_import_endpoint(
     files: list[UploadFile] = File(...),
     account_id: str = Form(...),
     apply_categorization: bool = Form(True),
-    profile_id: Optional[str] = Form(None),
 ):
     """Import one or both AZAD exports (orders + items) into the chosen Amazon account. Files are
     sniffed by header, so upload order doesn't matter and either file alone is accepted (degrading as
@@ -2712,7 +2869,6 @@ async def amazon_import_endpoint(
         summary = run_amazon_import(
             conn, merged, account_id=account_id, filename=", ".join(names) or "amazon",
             apply_categorization=apply_categorization, file_hashes=file_hashes,
-            profile_id=_valid_amazon_profile_id(conn, profile_id),
         )
     summary["unrecognized_files"] = unrecognized
     summary["skipped_uploads"] = skipped
@@ -2905,19 +3061,6 @@ def _list_amazon_profiles(conn: sqlite3.Connection) -> list[dict]:
         (BATCH_SOURCE_KIND,),
     ).fetchall()
     return [_amazon_profile_row(conn, r) for r in rows]
-
-
-def _valid_amazon_profile_id(conn: sqlite3.Connection, profile_id: Optional[str]) -> Optional[str]:
-    """The profile id to stamp on a card, or None. A dropped-by-hand import may name no profile, and one
-    naming a profile that has since been deleted is still a perfectly good import — the card simply has
-    no source to group under, exactly as every Amazon card did before profiles existed."""
-    pid = (profile_id or "").strip()
-    if not pid:
-        return None
-    row = conn.execute(
-        "SELECT 1 FROM csv_import_profile WHERE id = ? AND source_kind = ?", (pid, BATCH_SOURCE_KIND)
-    ).fetchone()
-    return pid if row else None
 
 
 def _assert_amazon_account(conn: sqlite3.Connection, account_id: Optional[str]) -> Optional[str]:

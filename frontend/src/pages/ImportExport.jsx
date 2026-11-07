@@ -196,6 +196,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [paypalStatementFiles, setPaypalStatementFiles] = useState(null)
   // AZAD Amazon exports dropped on the importer, for the Amazon import form they open.
   const [amazonFiles, setAmazonFiles] = useState(null)
+  const [amazonSourceId, setAmazonSourceId] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -1671,6 +1672,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     const head = await file.slice(0, 16384).text().catch(() => '')
     if (sniffAmazonExportKind(head.split(/\r?\n/, 1)[0])) {
       setAmazonFiles([file])
+      // A file handed back from a watched folder names its source, whose settings the form starts from.
+      setAmazonSourceId(options.sourceIdOverride || null)
       return
     }
     const explicitSource = options.sourceIdOverride ?? selectedUploadSource
@@ -1734,7 +1737,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       if (sniffAmazonExportKind(head.split(/\r?\n/, 1)[0])) amazon.push(file)
       else csvFiles.push(file)
     }
-    if (amazon.length) setAmazonFiles(amazon)
+    if (amazon.length) { setAmazonFiles(amazon); setAmazonSourceId(null) }
     if (!csvFiles.length) return
     // One file: preserve the existing single-file behavior (saved drafts, source-match chooser) exactly.
     if (csvFiles.length === 1) { handleFile(csvFiles[0]); return }
@@ -2978,6 +2981,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       {amazonFiles ? (
         <AmazonImportDialog
           files={amazonFiles}
+          sourceId={amazonSourceId}
           onClose={() => setAmazonFiles(null)}
           onImported={landOnAmazonImport}
         />
