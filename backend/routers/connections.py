@@ -33,6 +33,7 @@ from backend.services.connection_mapping import (
     unmapped_count,
 )
 from backend.services.providers import UnknownProviderError, get_adapter
+from backend.services.providers.config import forget_synced_state
 
 router = APIRouter()
 
@@ -267,10 +268,7 @@ def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
         if card_ids:
             placeholders = ",".join("?" * len(card_ids))
             conn.execute(f"DELETE FROM import_batch WHERE id IN ({placeholders})", card_ids)
-        conn.execute(
-            "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0 WHERE id = ?",
-            (connection_id,),
-        )
+        forget_synced_state(conn, [connection_id])
         conn.execute(
             """
             UPDATE connection_account

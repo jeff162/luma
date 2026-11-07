@@ -517,6 +517,14 @@ pause — keep what arrived, report `resume_later`, and suppress `has_more` so t
 straight back into another refusal. Note that this is a different shape from running out of the daily
 allowance, which blocks one account while its siblings carry on; a rate limit blocks the whole client.
 
+**The local count may be wrong now and then; what a provider penalizes is overrunning repeatedly.** The
+budget belongs to the credential, not the machine, so the data backup carries it with the time the sync
+layer wrote it (`provider_request_budget_at`), and a restore keeps whichever copy is newer without
+looking inside it. That is right except when two systems use one credential in the same window. An
+occasional refused request is acceptable, provided the adapter treats it as the pause above, so that the
+allowance can refill and the user is told after the sync. Syncs run only when asked, so repeating a refusal
+takes a user retrying against that notice.
+
 **Report the two pauses under different names, and report the level, not just the effect.** `resume_later`
 says a pull stopped; it cannot say which limit stopped it, and the two are opposite findings. Declining to
 ask because the local bucket is empty means the accounting worked; being refused a request means the

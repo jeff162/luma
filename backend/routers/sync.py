@@ -214,6 +214,16 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _write_request_budget(conn, connection_id: str, request_budget: dict) -> None:
+    """Store a metered adapter's spend record with the time it was written. The record is opaque to
+    everything but its adapter, so the time beside it is what lets a restore tell which of two copies is
+    current (`provider_request_budget_at`)."""
+    conn.execute(
+        "UPDATE connection SET provider_request_budget = ?, provider_request_budget_at = ? WHERE id = ?",
+        (json.dumps(request_budget) if request_budget else None, _utcnow_iso(), connection_id),
+    )
+
+
 # Nested counters for one sync call: `{subject: Counter(bucket -> n)}`. The subject is the **provider's**
 # account id for the per-account tally — rather than the local one, because the account that most needs
 # counting is the one with no local account at all, and any tally keyed on what the rows landed in can
@@ -1378,10 +1388,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 limit whose penalty may be the provider cutting the connection off. Recording first can
                 only forfeit an allowance nothing used — and this provider's refills, so that heals itself.
                 """
-                conn.execute(
-                    "UPDATE connection SET provider_request_budget = ? WHERE id = ?",
-                    (json.dumps(request_budget) if request_budget else None, connection["id"]),
-                )
+                _write_request_budget(conn, connection["id"], request_budget)
                 conn.commit()
             final_status = None
             backfill_complete = True
@@ -1742,10 +1749,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # believing it has spent nothing — and the connection a user retries most is exactly the one
                 # that would overrun. `finally` rather than a line in each handler so a failure mode added
                 # later cannot silently opt out.
-                conn.execute(
-                    "UPDATE connection SET provider_request_budget = ? WHERE id = ?",
-                    (json.dumps(request_budget) if request_budget else None, connection["id"]),
-                )
+                _write_request_budget(conn, connection["id"], request_budget)
 
             # Flip the connection out of "initial" once its history has actually been fetched to the end —
             # subsequent syncs then accrete onto monthly cards instead of the one backfill card. This reads

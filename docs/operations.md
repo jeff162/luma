@@ -407,6 +407,13 @@ within it, which keeps the ones here while someone restored can still open them.
 signs everyone out, and a file that turns sign-in on is restored only with the password of an
 administrator in it, so the operator keeps a way in: the administrator they then sign in as.
 
+**Restoring the data and the credentials together leaves exactly the backup's data connections.** One this
+install had and the backup does not is removed, and the result names it with a hint to revoke its access
+at the provider, since removing it here does not end access granted there. A restore that leaves the
+credentials out keeps every connection, because those credentials sit on the same rows
+(`data-model.md` → *A connection is split across the two parts*). A data restore is refused while a sync
+is running.
+
 **A restore makes a new system.** Restoring the financial data gives the install a new backup identifier,
 so every backup made before it, the restored file included, reads afterwards as another system's and
 needs the different-system confirmation (`data-model.md` → *The compatibility guard*). The backup to rely

@@ -31,7 +31,7 @@ from backend.services.providers import (
     set_provider_config,
     supported_providers,
 )
-from backend.services.providers.config import list_connections
+from backend.services.providers.config import list_connections, remove_connection
 
 router = APIRouter()
 
@@ -441,15 +441,8 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
         credential, revoked = _revoke_for_disconnect(request, provider, row, user)
         reason = None if revoked else "no_credential" if credential is None else "provider_cannot_revoke"
     with get_db() as conn:
-        conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
-        # The disconnect is the one row a removed connection keeps: when it went, and whether access ended at
-        # the provider or only here. Everything else about a connection that no longer exists is history
-        # nobody reads, and would otherwise sit in the log under a pill for something that is gone.
-        connection_log.delete_for_connection(conn, row["id"])
-        connection_log.write_event(
-            conn, event=connection_log.DISCONNECT, provider=provider, connection_id=row["id"],
-            institution=row["institution"], detail={"revoked": revoked, "reason": reason},
-        )
+        remove_connection(conn, {"id": row["id"], "provider": provider, "institution": row["institution"]},
+                          revoked=revoked, reason=reason)
     return {"ok": True, "revoked": revoked}
 
 

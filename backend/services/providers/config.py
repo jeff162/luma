@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.db.database import get_db
 from backend.time_utils import utcnow_iso
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 
 # Plaid retired its `development` environment; the dashboard now issues one sandbox and one production
 # key and nothing else, so there is no third mode left to offer. Accepting it was not merely dead — the
@@ -129,6 +129,37 @@ def sync_marker_is_live(started_at: str | None) -> bool:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) - started < _SYNC_MARKER_STALE_AFTER
+
+
+def forget_synced_state(conn, connection_ids: list[str]) -> None:
+    """Return connections to their never-synced state once the rows they synced are gone.
+
+    Every operation that removes a connection's synced rows wholesale (*Remove synced transactions*, a
+    ledger restore that wipes a connection the backup does not hold) owes this in the same transaction.
+    The resume point would otherwise leave every removed row beyond the reach of a later sync, and the
+    last-sync record would keep naming rows and cards that no longer exist."""
+    if not connection_ids:
+        return
+    conn.execute(
+        "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0, "
+        "last_sync_outcome = NULL, last_sync_summary = NULL "
+        f"WHERE id IN ({', '.join('?' * len(connection_ids))})",
+        connection_ids,
+    )
+
+
+def remove_connection(conn, row, *, revoked: bool, reason: str | None) -> None:
+    """Delete a connection here, keeping one log row that says it went and whether access ended at the
+    provider. `row` carries the connection's `id`, `provider` and `institution`.
+
+    The disconnect row is the one a removed connection keeps. The rest of its log is history about
+    something that no longer exists, and the log has no foreign key to remove it."""
+    conn.execute("DELETE FROM connection WHERE id = ?", (row["id"],))
+    connection_log.delete_for_connection(conn, row["id"])
+    connection_log.write_event(
+        conn, event=connection_log.DISCONNECT, provider=row["provider"], connection_id=row["id"],
+        institution=row["institution"], detail={"revoked": revoked, "reason": reason},
+    )
 
 
 # What the last sync *did*, as one word, derived here so the connection card and the sync log can never

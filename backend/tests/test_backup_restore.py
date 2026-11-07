@@ -110,10 +110,8 @@ EXCLUDED_TABLES |= {"rule_conflict"}
 # and the column-coverage test below is what forces someone to make it.
 EXCLUDED_COLUMNS: dict[str, set[str]] = {
     # The credential is the credentials backup's half of the row. `sync_started_at`/`sync_progress` describe
-    # a sync running in the process that wrote them, which no other process can be continuing. The request
-    # budget records what the provider really received, so the target's figure stays true after a restore
-    # and the backup's would understate it.
-    "connection": {"credential", "credential_enc", "sync_started_at", "sync_progress", "provider_request_budget"},
+    # a sync running in the process that wrote them, which no other process can be continuing.
+    "connection": {"credential", "credential_enc", "sync_started_at", "sync_progress"},
 }
 
 # Every other data-DB table maps to a backup payload section. A new table with no entry here fails
@@ -209,11 +207,11 @@ class BackupFixtureTestCase(unittest.TestCase):
                 # Merge a1 (the lower rowid) under a2 → the backup dumps a child before its parent.
                 conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (a2, a1))
 
-                # A connection + its account mapping. The connection itself rides the *credentials*
-                # backup (it holds the secret) and is never wiped by a data restore, so it is seeded
-                # here only as the FK parent; connection_account rides this data backup, carrying the
-                # mapping and the connection's coverage claim. Both target columns are populated so the
-                # restore-side reconciliation is exercised on a real value rather than a NULL.
+                # A connection + its account mapping. The connection's credential rides the accounts part
+                # and the rest of the row rides this data backup, which a ledger-only restore reconciles
+                # rather than wipes; connection_account carries the mapping and the connection's coverage
+                # claim. Both target columns are populated so the restore-side reconciliation is exercised
+                # on a real value rather than a NULL.
                 # Every piece of its state is set away from its default, so a round trip that lost one fails.
                 conn.execute(
                     """
@@ -221,11 +219,12 @@ class BackupFixtureTestCase(unittest.TestCase):
                         (id, provider, external_id, credential, credential_enc, institution, captured_fields,
                          transactions_cursor, initial_sync_complete, last_synced_at, last_sync_error,
                          last_sync_error_at, consecutive_sync_failures, last_sync_warnings, reauth_required,
-                         last_sync_outcome, last_sync_summary, provider_request_budget)
+                         last_sync_outcome, last_sync_summary, provider_request_budget,
+                         provider_request_budget_at)
                     VALUES ('fixture-conn', 'plaid', 'item-fixture', '', 'sealed-token', 'Fixture Bank',
                             '["counterparty"]', 'cursor-at-backup', 1, '2026-04-15T08:00:00Z', 'timed out',
                             '2026-04-14T08:00:00Z', 1, '["one bank needs attention"]', 0, 'ok',
-                            '{"added": 2}', '{"spent": 10}')
+                            '{"added": 2}', '{"spent": 10}', '2026-04-15T08:00:00.000000Z')
                     """
                 )
                 conn.execute(
@@ -589,7 +588,7 @@ class BackupRestoreTests(BackupFixtureTestCase):
         # connection. `insert_rows` would otherwise silently drop the unknown v7 keys.
         with self._use_db_path():
             with get_db() as conn:
-                # connection is credential data — not wiped by restore, not carried in the data payload.
+                # A v7 payload names no connections, so a ledger-only restore keeps this one.
                 conn.execute(
                     "INSERT INTO connection (id, provider, external_id, credential) VALUES ('c1', 'plaid', 'item-9', '')"
                 )
@@ -1046,7 +1045,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 """UPDATE connection
                    SET transactions_cursor = 'cursor-after-backup', initial_sync_complete = 0,
                        last_synced_at = '2026-08-20T10:00:00Z', last_sync_outcome = 'failed',
-                       provider_request_budget = '{"spent": 41}', sync_progress = '{"pages": 3}'"""
+                       sync_progress = '{"pages": 3}'"""
             )
 
         self._restore_archive(archive)
@@ -1057,31 +1056,61 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self.assertEqual(row["last_synced_at"], "2026-04-15T08:00:00Z")
         self.assertEqual(row["last_sync_outcome"], "ok")
         self.assertEqual(row["captured_fields"], '["counterparty"]')
-        # What stays with the target: the credential, the spending the provider really saw, and the marker
-        # of a sync belonging to this process.
+        # What stays with the target: the credential, and the marker of a sync belonging to this process.
         self.assertEqual(row["credential_enc"], "sealed-token")
-        self.assertEqual(row["provider_request_budget"], '{"spent": 41}')
         self.assertEqual(row["sync_progress"], '{"pages": 3}')
 
-    def test_a_connection_the_backup_never_knew_loses_only_its_resume_point(self):
+    def test_the_request_budget_kept_is_the_copy_written_last(self):
+        # The spending belongs to the credential, so the current copy is on whichever system used it most
+        # recently: this one after it synced since the backup, the backup's when it came from a system that
+        # was syncing while this one sat idle.
+        self._seed_complete()
+        archive = self._write_archive()
+        for local_at, expected in (("2026-08-20T10:00:00.000000Z", '{"spent": 41}'),
+                                   ("2026-01-01T00:00:00.000000Z", '{"spent": 10}'),
+                                   (None, '{"spent": 10}')):
+            with self.subTest(local_at=local_at):
+                with self._use_db_path(), get_db() as conn:
+                    conn.execute("UPDATE connection SET provider_request_budget = '{\"spent\": 41}', "
+                                 "provider_request_budget_at = ?", (local_at,))
+                self._restore_archive(archive, force=True)
+                self.assertEqual(self._connection()["provider_request_budget"], expected)
+
+    def test_a_connection_the_backup_never_knew_returns_to_its_never_synced_state(self):
         # Its synced rows went with the rest of the ledger, so a resume point past them would leave every one
-        # behind it for good. Its credential and history are nothing the restore has a view on.
+        # behind it for good, and its last-sync record would name rows and cards that are gone. Its
+        # credential and spending are not the data restore's to change.
         self._seed_complete()
         archive = self._write_archive()
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential_enc, transactions_cursor, "
-                "initial_sync_complete, last_synced_at) VALUES ('later-conn', 'plaid', 'item-later', "
-                "'later-token', 'later-cursor', 1, '2026-08-20T10:00:00Z')"
+                "initial_sync_complete, last_synced_at, last_sync_outcome, last_sync_summary, "
+                "provider_request_budget) VALUES ('later-conn', 'plaid', 'item-later', 'later-token', "
+                "'later-cursor', 1, '2026-08-20T10:00:00Z', 'ok', '{\"row_ids\": [\"gone\"]}', '{\"spent\": 3}')"
             )
 
-        self._restore_archive(archive)
+        result = self._restore_archive(archive)
 
         row = self._connection("later-conn")
         self.assertIsNone(row["transactions_cursor"])
         self.assertEqual(row["initial_sync_complete"], 0)
+        self.assertIsNone(row["last_sync_outcome"])
+        self.assertIsNone(row["last_sync_summary"])
         self.assertEqual(row["credential_enc"], "later-token")
-        self.assertEqual(row["last_synced_at"], "2026-08-20T10:00:00Z")
+        self.assertEqual(row["provider_request_budget"], '{"spent": 3}')
+        self.assertEqual(result["removed_connections"], [], "a ledger-only restore removes no connection")
+
+    def test_a_ledger_restore_waits_for_a_running_sync(self):
+        self._seed_complete()
+        archive = self._write_archive()
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE connection SET sync_started_at = ?, transactions_cursor = 'cursor-mid-sync'",
+                         (utcnow_iso(),))
+        with self.assertRaises(HTTPException) as ctx:
+            self._restore_archive(archive)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(self._connection()["transactions_cursor"], "cursor-mid-sync", "nothing was touched")
 
     def test_a_resume_point_older_than_the_provider_honours_is_not_handed_back(self):
         self._seed_complete()

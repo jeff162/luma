@@ -1428,9 +1428,10 @@ the batch, so it follows a file whose batch is assigned to another source. The m
 
 - **`transactions_cursor`** is an opaque resume token. A provider with no change feed stores its own
   checkpoint there (SimpleFIN keeps a JSON walk position).
-- **`provider_request_budget`** holds what a metered provider has spent. It is separate because the two
-  persist under opposite rules: a resume token rolls back with a failed pull, and spending cannot. It is
-  passed to the adapter as a mutable record and written back in a `finally`. A "N per day, replenished"
+- **`provider_request_budget`** holds what a metered provider has spent, and `provider_request_budget_at`
+  when the sync layer last wrote it. It is kept apart from the resume token because the two persist under
+  opposite rules: a resume token rolls back with a failed pull, and spending cannot. It is passed to the
+  adapter as a mutable record and written back in a `finally`. A "N per day, replenished"
   limit is a refilling bucket, and separate allowances per request shape are metered separately.
 - **Each page is applied and committed before the next is fetched**, so no write transaction is held
   across a provider call. **Removals accumulate and are applied after the drain**, because a
@@ -1459,7 +1460,8 @@ the batch, so it follows a file whose batch is assigned to another source. The m
   they landed on. Past `_SCOPED_SYNC_ROW_CAP` the list is dropped whole, since a partial list would
   misstate its extent. `list_connections` publishes a count (`scoped_rows`) and not the ids, because
   that endpoint is polled during a sync. The transactions filter `sync_connection_id` expands the list
-  in SQL. A missing summary, list or connection yields zero rows. The set is replaced every pull.
+  in SQL. A missing summary, list or connection yields zero rows. The set is replaced every pull, and
+  cleared with the outcome by anything that removes the connection's synced rows (`forget_synced_state`).
 
 ### Three stores describe a sync
 
@@ -2187,24 +2189,37 @@ the signal that documents are becoming the bulk of a backup
 ### A connection is split across the two parts
 
 The credential (`credential` / `credential_enc`) rides the accounts part. The data part's
-`connections` section carries the rest: that the connection exists, its sync-health fields, and
-`transactions_cursor` with `initial_sync_complete`. The resume point belongs with the data because it
-is a claim about data held, written with the rows it describes.
+`connections` section carries the rest: that the connection exists, its sync-health fields,
+`transactions_cursor` with `initial_sync_complete`, and the request budget. The resume point belongs with
+the data because it is a claim about data held, written with the rows it describes.
 
-`connection` is never wiped, so a data restore (`_restore_connections`) reconciles:
+**A restore of both the data and the credentials replaces the connections** (`_restore_connections`
+with `replace`). Both halves of every row are then the backup's, so the table is emptied and the backup's
+connections go in for the credentials to be written onto. A connection the backup does not name is removed
+as a disconnect without revoking removes it (`remove_connection`, logged with reason `restored`), and
+the restore result names it (`removed_connections`) with a hint to revoke its access at the provider.
+Whether that matters is the user's call; the app only says it was removed.
+
+**Otherwise `connection` is not wiped**, because the half the restore leaves alone sits on the same
+row. A data restore without the credentials reconciles:
 
 - **A connection in both** (same id, or the same provider handle under another id) takes the backup's
   state and keeps its credential.
 - **One only in the backup** is created without a credential, so its accounts, mappings and cards have
   a parent. A later restore of the accounts part fills it in.
-- **One only on the install** keeps its credential and loses its resume point and its account list,
-  since its synced rows and `connection_account` rows went with the old ledger. *Refresh accounts*
-  rebuilds the list; Tasks reports the state (`connections_without_accounts`).
+- **One only on the install** keeps its credential and returns to its never-synced state
+  (`forget_synced_state`): its synced rows and `connection_account` rows went with the old ledger, so its
+  resume point and last-sync record would describe rows that are gone. *Refresh accounts* rebuilds the
+  account list; Tasks reports the state (`connections_without_accounts`).
 
 The backup's resume point is reset, not restored, when the backup is older than
 `RESTORED_CURSOR_MAX_AGE_DAYS` or undated, or when the live row's handle has changed.
-`provider_request_budget`, `sync_started_at` and `sync_progress` stay with the target: spending cannot
-be un-made, and the other two describe a running process.
+`sync_started_at` and `sync_progress` stay with the target, since they describe a running process, and a
+data restore is refused while a sync is running. **The request budget kept is whichever copy was written
+last** (`provider_request_budget_at`), because the spending belongs to the credential and the current
+copy is on whichever system used it most recently. Two systems syncing one credential in the same few hours
+would together have spent more than either copy says; that costs at most a refused request, which a
+metered adapter recovers from (`building-a-connector.md` → *Request budgets and pausing*).
 
 **Restoring credentials writes them onto the rows; it does not replace rows**
 (`accounts_backup.write_credentials`). It matches by id, then by provider handle, writes the credential

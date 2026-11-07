@@ -422,16 +422,39 @@ class AccountsBackupTests(unittest.TestCase):
             self.assertEqual(cdb.export_identities(), identities)
             self.assertIsNone(cdb.get_user_by_id(newcomer["id"]))
             self.assertEqual(client.get("/api/auth/me").status_code, 401, "everyone is signed out")
+            # Data and credentials both came back, so the connections are the backup's and no others. The one
+            # linked since is gone and named, since access granted to it may still be live at the provider.
+            self.assertEqual(r.json()["removed_connections"], ["plaid"])
             with get_db() as conn:
-                later = conn.execute("SELECT * FROM connection WHERE id = 'conn-2'").fetchone()
-            # The row stays, since a data restore never removes a connection, but its credential was sealed
-            # under nothing the restored vault holds.
-            self.assertIsNone(later["credential_enc"])
-            self.assertEqual(later["reauth_required"], 1)
+                self.assertIsNone(conn.execute("SELECT 1 FROM connection WHERE id = 'conn-2'").fetchone())
+                self.assertEqual(
+                    [json.loads(row["detail"]) for row in conn.execute(
+                        "SELECT detail FROM connection_sync_log WHERE connection_id = 'conn-2'")],
+                    [{"revoked": False, "reason": "restored"}],
+                )
+                self.assertEqual(conn.execute("SELECT institution FROM connection WHERE id = 'conn-1'").fetchone()[0],
+                                 "Northgate Bank")
 
             client.post("/api/auth/select-identity", json={"user_id": user_id})
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
             self.assertEqual(self._stored_token(client, user_id), TOKEN)
+
+    def test_without_the_credentials_a_restore_keeps_the_connections_it_does_not_name(self):
+        # The credentials left here are the half of each row this restore does not replace, so the rows
+        # they sit on stay.
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            content = self._export(client)
+            with get_db() as conn:
+                conn.execute("INSERT INTO connection (id, provider, external_id, credential_enc)"
+                             " VALUES ('conn-2', 'plaid', 'ext-2', 'kept-token')")
+
+            r = self._restore(client, content, include_accounts=True, include_credentials=False)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["removed_connections"], [])
+            with get_db() as conn:
+                self.assertEqual(conn.execute("SELECT credential_enc FROM connection WHERE id = 'conn-2'")
+                                 .fetchone()[0], "kept-token")
 
     def test_a_credential_linked_after_the_backup_is_cleared_for_reconnection(self):
         with api_client(base_url=SITE) as (client, _):

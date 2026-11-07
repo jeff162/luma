@@ -98,6 +98,7 @@ from backend.services.documents import (
     missing_document_ids,
     sweep_unreferenced_files,
 )
+from backend.services.providers.config import forget_synced_state, remove_connection, sync_marker_is_live
 from backend.services.restore_state import (
     RESTORE_PHASE_DOCUMENTS,
     RESTORE_PHASE_STAGING,
@@ -577,13 +578,16 @@ BACKUP_SECTIONS = (
     # belong to, whichever backup is restored first), what its last sync did, and how far it had read. The
     # resume point belongs here for the same reason: written in the same export as the rows, it describes
     # exactly them. It is an opaque position in the provider's feed, not a way in — nothing can be fetched
-    # with it without the credential. Left behind on the target, and listed in the coverage test:
-    # `credential`/`credential_enc` (secrets), `sync_started_at`/`sync_progress` (a sync running in the
-    # process that wrote them), and `provider_request_budget` (see `_restore_connections`).
+    # with it without the credential. So does what the connection has spent against a metered provider's
+    # limits, with when that was written: the spending belongs to the credential, and the restore keeps
+    # whichever copy is newer (`_restore_connections`). Left behind on the target, and listed in the
+    # coverage test: `credential`/`credential_enc` (secrets) and `sync_started_at`/`sync_progress` (a sync
+    # running in the process that wrote them).
     ("connections", "connection",
      "SELECT id, provider, external_id, institution, created_at, captured_fields, transactions_cursor, "
      "initial_sync_complete, last_synced_at, last_sync_error, last_sync_error_at, consecutive_sync_failures, "
-     "last_sync_warnings, reauth_required, last_sync_outcome, last_sync_summary FROM connection ORDER BY rowid"),
+     "last_sync_warnings, reauth_required, last_sync_outcome, last_sync_summary, provider_request_budget, "
+     "provider_request_budget_at FROM connection ORDER BY rowid"),
     # Curated column list rather than SELECT *: these two tables carry columns that must not travel
     # (and have survived renames), so the payload names exactly what it means to include.
     ("accounts", "account",
@@ -1386,7 +1390,7 @@ def _wipe_user_data_tables(conn):
 
 
 # What a data restore writes onto a connection row: everything the backup knows about it except its
-# identity, its resume point (decided separately) and the columns the target keeps (see BACKUP_SECTIONS).
+# identity, and its resume point and request budget, which are each decided separately.
 _RESTORED_CONNECTION_STATE = (
     "captured_fields", "last_synced_at", "last_sync_error", "last_sync_error_at",
     "consecutive_sync_failures", "last_sync_warnings", "reauth_required", "last_sync_outcome",
@@ -1408,24 +1412,40 @@ def _backup_age_days(header: dict) -> Optional[float]:
     return (datetime.now(timezone.utc) - exported) / timedelta(days=1)
 
 
-def _restore_connections(conn, rows, header: dict) -> dict[str, str]:
-    """Return every connection the backup names to the state the backup recorded, and say which local row
-    each backup id became.
+def _newer_request_budget(local: Optional[tuple], restored: tuple) -> tuple:
+    """Which of two `(provider_request_budget, provider_request_budget_at)` copies to keep: the one written
+    last. The spending belongs to the credential, so the current copy is on whichever system used it most
+    recently, and an older copy has refilled since anyway. An unstamped copy loses to a stamped one."""
+    if local is None:
+        return restored
+    if restored[1] and (not local[1] or restored[1] > local[1]):
+        return restored
+    return local
 
-    `connection` is never wiped — its credentials belong to the other backup — so this reconciles rather
-    than reloads:
+
+def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> tuple[dict[str, str], list[str]]:
+    """Return every connection the backup names to the state the backup recorded. Answers which local row
+    each backup id became, and the names of the connections removed.
+
+    **`replace`** is for a restore that also brings back the credentials, the other half of each row.
+    Nothing here then needs keeping, so the table is emptied and the backup's connections go in as
+    recorded, for the credentials to be written onto. A connection the backup does not name is removed as a
+    disconnect without revoking would remove it, and named in the result: access it was granted may still
+    be live at the provider, and that is for the user to deal with.
+
+    Otherwise `connection` is not wiped, because its credentials belong to the other half of the backup, and
+    this reconciles:
 
     - **Known here** (same id, or the same provider handle under a different id): its recorded state is
-      written over the live row. The credential stays, and so does `provider_request_budget`, because
-      spending is a record of requests the provider really received, which no restore can un-make.
+      written over the live row, and the credential stays.
     - **Unknown here** (a fresh install, or credentials not restored yet): the row is created with no
       credential — the state a vault reset leaves, "waiting to be re-linked" — so the accounts, mappings and
       import cards that belong to it survive instead of being dropped for want of a parent. A credentials
       restore later fills the credential in on this same row.
-    - **Here but not in the backup**: its synced rows were just wiped with the rest of the ledger, so its
-      resume point goes too, exactly as `Remove synced transactions` resets it. Nothing else about it
-      changes. A backup older than this section names no connections, so every local one takes this path,
-      which is the whole of what a restore used to do.
+    - **Here but not in the backup**: its synced rows were just wiped with the rest of the ledger, so it
+      returns to its never-synced state (`forget_synced_state`), as *Remove synced transactions* leaves it.
+      Its credential and spending stay. A backup older than this section names no connections, so every
+      local one takes this path.
 
     **The resume point is the backup's own**, which is what makes this a return to the backed-up state
     rather than a fresh start: it was written in the same export as the rows, so it claims exactly the data
@@ -1433,22 +1453,53 @@ def _restore_connections(conn, rows, header: dict) -> dict[str, str]:
     rows added after the backup. Two cases cannot vouch for it and reset instead: a backup older than
     `RESTORED_CURSOR_MAX_AGE_DAYS` (or with no date), and a live row whose handle has changed since, which
     names a different feed.
+
+    **The request budget is whichever copy was written last** (`_newer_request_budget`), in both modes.
     """
     age = _backup_age_days(header)
     cursor_trusted = age is not None and age <= RESTORED_CURSOR_MAX_AGE_DAYS
     live_cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)").fetchall()}
     state_columns = [c for c in _RESTORED_CONNECTION_STATE if c in live_cols]
+    # Bounded by the number of connections, and read twice in replace mode.
+    rows = [row for row in rows if row.get("id") and row.get("provider")]
     id_map: dict[str, str] = {}
+    removed: list[str] = []
+    replaced_budgets: dict = {}
+    if replace:
+        named_ids = {row["id"] for row in rows}
+        named_handles = {(row["provider"], row["external_id"]): row["id"] for row in rows if row.get("external_id")}
+        for local in conn.execute(
+                "SELECT id, provider, external_id, institution, provider_request_budget, "
+                "provider_request_budget_at FROM connection").fetchall():
+            handle = (local["provider"], local["external_id"])
+            if local["id"] in named_ids or handle in named_handles:
+                budget = (local["provider_request_budget"], local["provider_request_budget_at"])
+                replaced_budgets[local["id"]] = replaced_budgets[handle] = budget
+                conn.execute("DELETE FROM connection WHERE id = ?", (local["id"],))
+                if local["id"] not in named_ids:
+                    # The same connection under the backup's id: its log follows it.
+                    conn.execute("UPDATE connection_sync_log SET connection_id = ? WHERE connection_id = ?",
+                                 (named_handles[handle], local["id"]))
+            else:
+                remove_connection(conn, local, revoked=False, reason="restored")
+                removed.append(local["institution"] or local["provider"])
     for row in rows:
-        backup_id, provider, external_id = row.get("id"), row.get("provider"), row.get("external_id")
-        if not backup_id or not provider:
-            continue
-        local = conn.execute("SELECT id, external_id FROM connection WHERE id = ?", (backup_id,)).fetchone()
+        backup_id, provider, external_id = row["id"], row["provider"], row.get("external_id")
+        local = conn.execute(
+            "SELECT id, external_id, provider_request_budget, provider_request_budget_at FROM connection "
+            "WHERE id = ?", (backup_id,)).fetchone()
         if local is None and external_id is not None:
             local = conn.execute(
-                "SELECT id, external_id FROM connection WHERE provider = ? AND external_id = ?",
+                "SELECT id, external_id, provider_request_budget, provider_request_budget_at FROM connection "
+                "WHERE provider = ? AND external_id = ?",
                 (provider, external_id),
             ).fetchone()
+        if local is not None:
+            local_budget = (local["provider_request_budget"], local["provider_request_budget_at"])
+        else:
+            local_budget = replaced_budgets.get(backup_id) or replaced_budgets.get((provider, external_id))
+        budget, budget_at = _newer_request_budget(
+            local_budget, (row.get("provider_request_budget"), row.get("provider_request_budget_at")))
         keep_cursor = cursor_trusted and (local is None or local["external_id"] == external_id)
         values = {column: row.get(column) for column in state_columns}
         for column in ("consecutive_sync_failures", "reauth_required"):
@@ -1456,6 +1507,7 @@ def _restore_connections(conn, rows, header: dict) -> dict[str, str]:
                 values[column] = int(values[column] or 0)
         values["transactions_cursor"] = row.get("transactions_cursor") if keep_cursor else None
         values["initial_sync_complete"] = int(row.get("initial_sync_complete") or 0) if keep_cursor else 0
+        values["provider_request_budget"], values["provider_request_budget_at"] = budget, budget_at
         if row.get("institution") is not None:
             values["institution"] = row["institution"]
         if local is None:
@@ -1478,21 +1530,21 @@ def _restore_connections(conn, rows, header: dict) -> dict[str, str]:
             id_map[backup_id] = local["id"]
 
     restored = sorted(set(id_map.values()))
-    conn.execute(
-        "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0"
+    unnamed = conn.execute(
+        "SELECT id FROM connection"
         + (f" WHERE id NOT IN ({', '.join('?' * len(restored))})" if restored else ""),
         restored,
-    )
-    return id_map
+    ).fetchall()
+    forget_synced_state(conn, [r["id"] for r in unnamed])
+    return id_map, removed
 
 
 def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts):
     """Reconcile restored `connection_account` rows against the live `connection` table.
 
-    The mapping straddles the two backups by nature: it points at `account` (restored from this
-    payload) and at `connection` (credential data, never wiped and not in this payload). So a
-    cross-system restore — or one taken before a bank was disconnected — can carry mappings for
-    connections that do not exist here. Those rows are **dropped** rather than inserted with a
+    The mapping points at `account` (restored from this payload) and at `connection`, as
+    `_restore_connections` left it. A backup older than the connections section names no connection,
+    so it can carry mappings for connections that do not exist here. Those rows are **dropped** rather than inserted with a
     dangling FK.
 
     Account ids survive a restore as-is (the payload carries them), so the FKs only need validating,
@@ -1513,8 +1565,8 @@ def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
 
 
 def _reconcile_restored_account_links(conn, accounts, backup_version):
-    """Reconcile each restored account's connection link against the live `connection` table (which is
-    credential data — never wiped or carried in the payload). Two jobs:
+    """Reconcile each restored account's connection link against the live `connection` table, as
+    `_restore_connections` left it. Two jobs:
 
     - **v7 → 6b-3 translation.** A v7 backup carries the pre-6b-3 columns `plaid_account_id` and
       `plaid_item_id`; the current schema has `external_account_id` / `connection_id` / `provider`.
@@ -1836,6 +1888,14 @@ def _restore_preflight(header: dict, force: bool, *, restores_data: bool = True,
                 "message": "Clear the demo data before restoring a backup.",
             })
         require_no_pending_restore(conn, "restoring another backup")
+        # A sync writes each page against the connection and the ledger a data restore is about to replace,
+        # so the two cannot overlap.
+        if restores_data and any(sync_marker_is_live(row["sync_started_at"])
+                                 for row in conn.execute("SELECT sync_started_at FROM connection")):
+            raise HTTPException(status_code=409, detail={
+                "code": "sync_running",
+                "message": "A data connection is syncing. Wait for it to finish before restoring.",
+            })
 
     # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently replace a
     # *different* system's existing data, or load across access modes, unless the user has explicitly
@@ -1873,12 +1933,14 @@ def _restore_preflight(header: dict, force: bool, *, restores_data: bool = True,
 
 
 def _restore_sections(conn, header: dict, section_rows, backup_version, source: Optional[dict] = None, *,
-                      preference_owners: set[str]) -> dict:
-    """Wipe and rebuild every data table from `section_rows`, inside one transaction.
+                      preference_owners: set[str], replaces_connections: bool = False) -> tuple[dict, list[str]]:
+    """Wipe and rebuild every data table from `section_rows`, inside one transaction. Answers the count of
+    each section that landed, and the names of the connections removed.
 
     `source` describes the uploaded file, for the history row a restore from another system writes for
     it (`_restore_backup_history`). `preference_owners` are the users who exist once the restore is done
-    (`_restore_preferences`).
+    (`_restore_preferences`). `replaces_connections` is true when the credentials are restored as well, so
+    the connections are replaced rather than reconciled (`_restore_connections`).
 
     All-or-nothing on purpose. The restore has many cross-table and self-referential foreign keys, and a
     single correct insert order would be brittle, so the whole wipe+reload runs with foreign-key checks
@@ -1910,7 +1972,8 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
 
     # Before anything that references a connection: accounts, their mappings and the sync cards all name
     # one, and each is kept only if that connection exists here once this has run.
-    connection_ids = _restore_connections(conn, section_rows("connections"), header)
+    connection_ids, removed_connections = _restore_connections(
+        conn, section_rows("connections"), header, replace=replaces_connections)
 
     def _local_connection(row):
         if row.get("connection_id") in connection_ids:
@@ -1925,8 +1988,8 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     _reconcile_restored_account_links(conn, accounts, backup_version)
     _insert_section(conn, "account", accounts)
 
-    # connection_account references both `account` (restored just above) and the live `connection` table
-    # (never wiped): rows whose connection is absent locally are dropped rather than inserted dangling.
+    # connection_account references both `account` (restored just above) and `connection` (reconciled or
+    # replaced above): rows whose connection is absent locally are dropped rather than inserted dangling.
     connection_accounts = _reconcile_restored_connection_accounts(
         conn, [_local_connection(dict(row)) for row in section_rows("connection_accounts")], accounts
     )
@@ -1989,7 +2052,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     return {
         section: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for section, table, _query in BACKUP_SECTIONS
-    }
+    }, removed_connections
 
 
 def _restore_backup_history(conn, same_system: bool, rows, header: dict, source: Optional[dict]) -> None:
@@ -2172,8 +2235,8 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
     _begin_restore(payload, None)
     try:
         with get_db() as conn:
-            counts = _restore_sections(conn, payload, section_rows, backup_version, source,
-                                       preference_owners=_current_user_ids())
+            counts, _removed = _restore_sections(conn, payload, section_rows, backup_version, source,
+                                                 preference_owners=_current_user_ids())
     finally:
         _abandon_restore_if_staging()
     documents = _restore_documents(None)
@@ -2200,7 +2263,9 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     does not hold is not applied whatever is asked. `include_credentials` false restores the accounts part
     as a file without credentials restores (`accounts_backup.apply`). Everything that can refuse — the digests, the
     compatibility guard and the restoring administrator's password — runs before anything is touched.
-    The financial data then commits and the accounts part follows (`accounts_backup.apply`).
+    The financial data then commits and the accounts part follows (`accounts_backup.apply`). With both the
+    data and the credentials restored, the connections are replaced outright rather than reconciled, and
+    `removed_connections` names those this install had and the backup does not.
 
     A restore rewrites the tables inside the existing files rather than replacing them, so a file that was
     damaged before can still be damaged after. Both databases are checked once it is done, and the result
@@ -2239,15 +2304,21 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         _begin_restore(meta, artifact_path)
         try:
             with get_db() as conn:
-                counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section),
-                                           backup_version, {**(source or {}), **archive_sizes(zf)},
-                                           preference_owners=owners)
+                counts, removed_connections = _restore_sections(
+                    conn, meta, lambda section: read_archive_section(zf, section),
+                    backup_version, {**(source or {}), **archive_sizes(zf)},
+                    preference_owners=owners,
+                    # With the credentials coming back too, both halves of every connection row are the
+                    # backup's, so nothing on this install's rows is left to keep.
+                    replaces_connections=accounts_part is not None and accounts_part["credentials"] is not None,
+                )
         finally:
             # Clears the slot only if the ledger never committed. A successful restore has already moved
             # the marker to `documents_pending` inside its own transaction, and that one has to survive.
             _abandon_restore_if_staging()
         result["documents"] = _restore_documents(zf)
         result["restored_counts"] = counts
+        result["removed_connections"] = removed_connections
         compact_if_worthwhile(reason="restored a backup")
     if accounts_part is not None:
         result["accounts"] = accounts_backup.apply(accounts_part)

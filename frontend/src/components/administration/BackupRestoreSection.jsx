@@ -484,6 +484,9 @@ export default function BackupRestoreSection() {
       if (result.credentials_withheld) {
         sentences.push('The data provider credentials were not restored, because the vault key they were sealed under was replaced or reset after an exposure.')
       }
+      for (const name of result.removed_connections || []) {
+        sentences.push(`${name} removed — consider revoking its access at the provider.`)
+      }
       setRestoreMsg(null)
       setAdminPassword('')
       setRestoreGaveNewIdentifier(!!result.restored_counts)

@@ -352,13 +352,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # v86 adds `csv_import_profile.decimal_separator`, how a source's files write a number.
 # v87 adds `backup_history.database_check`, whether the databases passed their check as a backup was made.
 # v88 gives every user their own copy of the shared saved tag reports and saved filters, which became
-# per-user preferences.
+# per-user preferences. v89 adds `connection.provider_request_budget_at`, when the request budget was last
+# written, which a restore compares.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 88
+CURRENT_VERSION = 89
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2698,6 +2699,14 @@ def _move_shared_views_to_users(conn):
     _copy_shared_views_to_users(conn)
 
 
+@migration(89)
+def _add_connection_request_budget_at(conn):
+    # See the baseline CREATE. NULL on every existing row: the next sync of each connection stamps it.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if columns and "provider_request_budget_at" not in columns:
+        conn.execute("ALTER TABLE connection ADD COLUMN provider_request_budget_at TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2964,7 +2973,12 @@ def init_db(db_path: str | None = None):
                 -- zero-count success. Distinct from `last_sync_error`, which says the connection is broken
                 -- *right now* and outranks the stored word when the card renders.
                 last_sync_outcome         TEXT,
-                last_sync_summary         TEXT
+                last_sync_summary         TEXT,
+                -- When `provider_request_budget` was last written. The budget belongs to the credential,
+                -- not to the machine, so after a restore the copy that matters is whichever was written
+                -- last, here or on the system the backup came from; its contents are the adapter's, so
+                -- this is what the restore compares. NULL means unknown and loses to any stamped copy.
+                provider_request_budget_at TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);

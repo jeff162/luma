@@ -3,8 +3,8 @@ Connection-level "Remove synced transactions" — DELETE /connections/{id}/synce
 
 A sync's rows are not undoable per card: the cursor has advanced past them, so deleting them without
 resetting it would put them beyond the reach of any later sync. Removal is therefore connection-level
-and resets the whole chain that describes what has been pulled — cursor, initial_sync_complete, and the
-connection's coverage claim — so a later sync re-backfills cleanly. These tests drive real syncs through
+and resets the whole chain that describes what has been pulled — cursor, initial_sync_complete, the
+last-sync record and the connection's coverage claim — so a later sync re-backfills cleanly. These tests drive real syncs through
 the provider seam first, so what gets removed is real card/coverage/dedupe state rather than a hand-built
 approximation of it, and then pin: what the removal deletes, what it resets, what it restores, the
 manual-edit guard, and that a re-sync afterwards backfills onto a fresh initial card.
@@ -136,7 +136,8 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
     def _connection(self):
         with self._use_db_path(), get_db() as conn:
             return dict(conn.execute(
-                "SELECT transactions_cursor, initial_sync_complete FROM connection WHERE id = ?",
+                "SELECT transactions_cursor, initial_sync_complete, last_sync_outcome, last_sync_summary "
+                "FROM connection WHERE id = ?",
                 (self.connection_id,),
             ).fetchone())
 
@@ -168,15 +169,19 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
         # status — a tombstone would be silently reused by the re-backfill.
         self.assertEqual(self._cards(), [])
 
-    def test_removal_resets_the_cursor_and_the_backfill_marker(self):
+    def test_removal_resets_the_cursor_the_backfill_marker_and_the_last_sync_record(self):
         self._seed_history()
         before = self._connection()
         self.assertIsNotNone(before["transactions_cursor"], "fixture must have advanced the cursor")
         self.assertEqual(before["initial_sync_complete"], 1)
+        self.assertIsNotNone(before["last_sync_summary"], "fixture must have recorded its last sync")
         self._remove()
         after = self._connection()
         self.assertIsNone(after["transactions_cursor"])
         self.assertEqual(after["initial_sync_complete"], 0)
+        # It named rows and cards that are gone; the connection card would offer a report of nothing.
+        self.assertIsNone(after["last_sync_outcome"])
+        self.assertIsNone(after["last_sync_summary"])
 
     def test_removal_clears_the_connections_coverage_claim(self):
         # The invariant this action is the first writer of: coverage outliving the rows that backed it

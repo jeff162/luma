@@ -4181,7 +4181,12 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          Restoring the ledger matches the data connections up:
+          Restoring the ledger together with the data provider credentials leaves exactly the backup's
+          data connections. One that is only on this installation is removed and named in the result.
+          The next sync of each connection fetches what has arrived since the backup.
+        </p>
+        <p>
+          Restoring the ledger without the credentials matches the data connections up:
         </p>
         <ul>
           <li>
@@ -4192,10 +4197,13 @@ export const HELP_TOPICS = [
             A connection only in the backup has to be reconnected.
           </li>
           <li>
-            A connection only on this installation loses its list of accounts.{' '}
-            <strong>Refresh accounts</strong> in the connection's menu fetches it again.
+            A connection only on this installation loses its list of accounts and its synced
+            transactions. <strong>Refresh accounts</strong> in the connection's menu fetches the list again.
           </li>
         </ul>
+        <p>
+          A ledger restore is refused while a data connection is syncing.
+        </p>
         <p>
           <strong>Older backups:</strong>
         </p>
