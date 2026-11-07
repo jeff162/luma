@@ -170,6 +170,51 @@ onward, timed against the bar's mousedown, with the chooser and the date chip as
 
 ---
 
+## 4. Compaction test sees the database's size change when nothing was compacted
+
+**Status: fixed in the test (2026-11-06). Sunset: 2027-01-05.** Seen once, so how often it fired is
+unknown, and the sunset is set long for that reason. If it has not fired by then, delete this entry and the
+comment in the test that cites it, and add the lesson to `agent-profile.md` → *Writing a test*:
+`with sqlite3.connect(...) as conn:` commits but does not close, so a connection a test means to be gone
+needs `closing()`.
+
+**Last seen: 2026-11-06.**
+
+### Symptom
+
+`backend/tests/test_database_compaction.py` →
+`CompactIfWorthwhileTests::test_slack_below_the_threshold_is_left_for_sqlite_to_reuse` fails at its last
+assertion: `compact_if_worthwhile` correctly returned 0, but the database file plus its write-ahead log
+measured a different size afterwards than before. Once in a full backend run; it passed in three runs of
+the file alone straight after.
+
+### Diagnosis
+
+`setUp` built the fixture inside `with sqlite3.connect(...) as conn:`, which commits on exit and leaves
+the connection open. A `sqlite3.Connection` holds a reference cycle through its statement cache, so it is
+not freed when it goes out of scope but whenever the garbage collector next runs. SQLite folds the
+write-ahead log into the database and deletes it when the **last** connection to the database closes:
+
+- With the setUp connection still open, the deletion's connection was not the last, so the log survived
+  and was counted in the "before" size.
+- If the collector closed the setUp connection between the two measurements, the connection
+  `compact_if_worthwhile` opens to read the free-page count became the last one, and closing it removed
+  the log, so the "after" size differed.
+
+When the collector runs depends on every allocation before it, which fits a failure that needs the full
+suite. Confirmed in a standalone script with the collector disabled: the log survived the deletion while
+the setUp-style connection stayed open, and was gone after a collection and one more open and close. Not
+reproduced in the test itself, since the collector's timing cannot be forced there.
+
+### Fix
+
+`setUp` closes its connection explicitly (`closing(...)`), so no connection outlives it and the log's
+lifetime no longer depends on the collector. The same script with the fix shows no log left after the
+deletion. If it fires again, the leading theory is wrong: check for another connection held open across
+the measurement, starting with any test-local `sqlite3.connect` not closed.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

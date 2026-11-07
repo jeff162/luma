@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -20,7 +21,9 @@ class CompactIfWorthwhileTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.db_path = Path(tmp.name) / "ledger.db"
-        with sqlite3.connect(self.db_path) as conn:
+        # Closed here, not left to the garbage collector: a connection still open when the test measures
+        # keeps the write-ahead log alive, and its closing mid-test removes it (transient-failures.md #4).
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("CREATE TABLE row (body TEXT)")
             conn.executemany("INSERT INTO row VALUES (?)", [("x" * 1000,) for _ in range(2000)])
