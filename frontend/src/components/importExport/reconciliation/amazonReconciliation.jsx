@@ -3,10 +3,14 @@
 
 /* eslint-disable react-refresh/only-export-components -- a vendor module exports its config; the cells it renders are private to it */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../../../lib/api.js'
 import { Button, Tooltip } from '../../ui.jsx'
 import SplitEditorDialog from '../../SplitEditorDialog.jsx'
+import RuleSuggestionToast from '../../RuleSuggestionToast.jsx'
+import { CategoryCell } from '../../TransactionRow.jsx'
+import { txnMutations } from '../../../lib/txnMutations.js'
 import { formatMoneyMagnitude, formatTransactionAmount } from '../../../lib/moneyDisplay.js'
 import { formatDate, safeExternalUrl } from '../../../lib/utils.js'
 import { AMAZON_RECONCILIATION_COLUMNS_PREF_KEY } from '../../../lib/importExport/constants.js'
@@ -220,23 +224,32 @@ const BULK_ACTIONS = [
 function useColumns({ data, busy, run, reload, openPicker, reportError }) {
   const unaccounted = data?.payment_unmatched || []
 
-  // Splitting an order is offered *here* because this is where orders are actually reviewed — the
-  // alternative is finding the row again in the ledger, which is the same work twice. The categories
-  // the editor's pickers need are fetched on first use rather than with the report: most sessions
-  // never split anything, and the report is already several queries deep.
+  // Categorizing and splitting an order are offered *here* because this is where orders are reviewed —
+  // the alternative is finding the row again in the ledger, which is the same work twice. The order is
+  // the row that counts (its paired charge is excluded), so an uncategorized order is spending with no
+  // category. The categories load with the report, since every order row shows its category.
+  const [categories, setCategories] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    api.getCategories()
+      .then(list => { if (!cancelled) setCategories(list) })
+      .catch(e => { if (!cancelled) reportError(e?.message || 'Could not load categories') })
+    return () => { cancelled = true }
+  }, [reportError])
+  const addCategory = cat => setCategories(prev => (
+    prev?.some(existing => existing.id === cat.id) ? prev : [...(prev || []), cat]
+  ))
   const [splitTarget, setSplitTarget] = useState(null)
-  const [splitCategories, setSplitCategories] = useState(null)
-  const openSplit = async (order) => {
-    if (!splitCategories) {
-      try {
-        setSplitCategories(await api.getCategories())
-      } catch (e) {
-        reportError(e?.message || 'Could not load categories')
-        return
-      }
-    }
-    setSplitTarget(order)
-  }
+  const openSplit = (order) => { if (categories) setSplitTarget(order) }
+
+  // Setting an order's category offers a rule for it, as the Transactions list does, so one BritBox
+  // order categorized by hand covers the others and the ones still to come.
+  const [rulePrompt, setRulePrompt] = useState(null)
+  const saveOrderCategory = (txnId, categoryId) => run(
+    () => txnMutations.setCategory(txnId, categoryId),
+    'Could not change the category')
+  // The cell reads the category's name off the row, which a report row does not carry.
+  const categoryNames = new Map((categories || []).map(c => [c.id, c.name]))
 
   const discardCharge = (charge, entry) => run(() => api.trashAmazonDuplicateCharge({
     charge_txn_id: charge.id,
@@ -303,8 +316,20 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
     'Could not remove the charge from the order')
 
   const columns = [
-    { key: 'order', label: 'Amazon order', width: 330, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
-    { key: 'charge', label: 'Card charge', width: 320, render: (entry) => {
+    { key: 'order', label: 'Amazon order', width: 290, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
+    { key: 'category', label: 'Order category', width: 160, sortable: false, render: (entry) => (
+      entry.order && categories ? (
+        <CategoryCell
+          txn={{ ...entry.order, category_name: categoryNames.get(entry.order.category_id) || null }}
+          categories={categories}
+          onSave={busy ? undefined : saveOrderCategory}
+          onAddCategory={addCategory}
+          onRulePrompt={setRulePrompt}
+          onOpenSplit={() => openSplit(entry.order)}
+        />
+      ) : null
+    ) },
+    { key: 'charge', label: 'Card charge', width: 290, render: (entry) => {
       if (entry.kind === 'duplicate' || entry.kind === 'duplicate_review' || entry.kind === 'unaccounted_duplicate') {
         const note = entry.kind === 'duplicate_review'
           ? 'Outside the ±3-day auto-match window — check each copy’s origin before resolving.'
@@ -450,13 +475,11 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
     } },
   ]
 
-  const overlay = splitTarget && splitCategories ? (
+  const splitEditor = splitTarget && categories ? (
     <SplitEditorDialog
       txn={splitTarget}
-      categories={splitCategories}
-      onAddCategory={cat => setSplitCategories(prev => (
-        prev?.some(existing => existing.id === cat.id) ? prev : [...(prev || []), cat]
-      ))}
+      categories={categories}
+      onAddCategory={addCategory}
       onClose={() => setSplitTarget(null)}
       // Reloads the report, as every other row action here does. The rows are rebuilt from the
       // reconciliation payload rather than held locally, so patching the open row would leave the
@@ -465,6 +488,18 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       onSaved={() => reload?.()}
     />
   ) : null
+  // Portaled because the report is a floating panel, and a fixed toast inside a transformed ancestor is
+  // placed relative to it. A rule applied to existing orders recategorizes rows on screen, so the report
+  // reloads to show them.
+  const ruleToast = rulePrompt ? createPortal(
+    <RuleSuggestionToast
+      prompt={rulePrompt}
+      onSaved={({ applyToExisting }) => { if (applyToExisting) reload?.() }}
+      onDismiss={() => setRulePrompt(null)}
+    />,
+    document.body,
+  ) : null
+  const overlay = <>{splitEditor}{ruleToast}</>
 
   return { columns, overlay }
 }
@@ -481,6 +516,24 @@ export const amazonReconciliation = {
   isAcknowledged: (entry) => !!entry.reviewed && (entry.kind === 'unmatched' || entry.kind === 'reverse'),
   rowActions,
   bulkActions: BULK_ACTIONS,
+  // An uncategorized order is spending with no category; its paired charge is excluded, so the order is
+  // where the category has to go.
+  // The names the charges reached the card under, collapsed to families on the server (Prime Video,
+  // Audible, Kindle, Amazon …), so the orders paid through one service can be found and categorized
+  // together. A row with no charge has nothing to offer here.
+  facets: [{
+    key: 'charge',
+    label: 'Charge',
+    title: 'The name each card charge carries, grouped: a service Amazon bills under its own name, or Amazon',
+    values: (entry) => [...(entry.charges || []), ...(entry.charge ? [entry.charge] : [])]
+      .map(c => c.payee_family).filter(Boolean),
+  }],
+  rowFilters: [{
+    key: 'uncategorized',
+    label: 'Uncategorized orders',
+    title: 'Orders with no category. Each counts as uncategorized spending; set a category on the row to offer a rule for the rest.',
+    test: (entry) => !!entry.order && !entry.order.category_id && !entry.order.is_split,
+  }],
   actionCall,
   useColumns,
 }

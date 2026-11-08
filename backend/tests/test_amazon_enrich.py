@@ -49,6 +49,7 @@ from backend.routers.import_export.amazon import (
 from backend.routers.import_export.amazon import (
     _group_unaccounted_duplicates,
     _pair_equal_amount_clusters,
+    payee_family,
     _txn_summary,
 )
 from backend.services.amazon_import import AmazonItem, AmazonOrder, PaymentLeg, merge
@@ -270,6 +271,44 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(len(orders), 1)
         self.assertAlmostEqual(orders[0]["amount"], 37.32, places=2)
         self.assertIsNone(orders[0]["category_id"])
+
+    def test_a_digital_order_matches_a_charge_billed_under_an_amazon_service_name(self):
+        # A digital order names no card, so its charge must read as Amazon; Amazon's own services bill
+        # under their brand names, and a lookalike name that is not one of them still does not match.
+        digital = AmazonOrder(order_id="D01-0000000-0000001", order_date="2024-11-19", total=8.99,
+                              items_summary="Streaming Channel;",
+                              payment_legs=[PaymentLeg(method=None, last4=None, date="2024-11-19", amount=8.99)],
+                              has_order_detail=True)
+        self._add_card_charge(8.99, name="Prime Motor Group")
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, digital, account_id="amazon", batch_id=self.batch_id, flag_for_review=False)
+        self.assertFalse(result["charge_linked"])
+
+        service = self._add_card_charge(8.99, date="2024-12-19", name="Prime Video")
+        later = AmazonOrder(order_id="D01-0000000-0000002", order_date="2024-12-19", total=8.99,
+                            items_summary="Streaming Channel;",
+                            payment_legs=[PaymentLeg(method=None, last4=None, date="2024-12-19", amount=8.99)],
+                            has_order_detail=True)
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, later, account_id="amazon", batch_id=self.batch_id, flag_for_review=False)
+            link = txn_links.find_link(conn, LINK_KIND, later.order_id)
+            charges = txn_links.member_txn_ids(conn, link["id"], role="charge")
+        self.assertTrue(result["charge_linked"])
+        self.assertEqual(charges, [service])
+
+    def test_a_charge_is_labelled_with_its_payee_family_service_first(self):
+        # A service is named before the generic Amazon match would take it ("Amazon Music" says Amazon).
+        family = lambda name: payee_family({"merchant_name": name, "raw_name": name})
+        self.assertEqual(family("AMAZON MARKETPLACE NAMZN.COM BILL WA"), "Amazon")
+        self.assertEqual(family("AMZN DIGITAL WA"), "Amazon")
+        self.assertEqual(family("Amazon Music"), "Amazon Music")
+        self.assertEqual(family("Prime Video"), "Prime Video")
+        self.assertEqual(family("Corner Market"), "Other")
+        charge = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=False)
+            [matched] = amazon_reconciliation(conn, self.batch_id)["matched"]
+        self.assertEqual([(c["id"], c["payee_family"]) for c in matched["charges"]], [(charge, "Amazon")])
 
     def test_ambiguous_charge_is_left_unmatched(self):
         # Two identical candidate charges → ambiguous → no auto-link (left for manual).

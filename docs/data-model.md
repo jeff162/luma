@@ -1866,7 +1866,11 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   the export gives no cash figure. An order whose card is not tracked counts as the sole record.
 - **A blank `payments` field is not points.** The exporter leaves it blank when it could not read the
   payment, so an order with a positive `total` is cash for that total (already net of gift-card balance)
-  with no card to search by. Its charge must look like Amazon, as for any order with no instrument.
+  with no card to search by. Its charge must look like Amazon, as for any order with no instrument:
+  `AMZN` or `AMAZON` in the payee, or a name Amazon bills its own services under (`Prime Video`,
+  `Kindle`, `Audible`), since those charges never say Amazon. The names are one ordered list of families
+  (`AMAZON_PAYEE_FAMILIES`), which also labels each charge on the reconciliation report
+  (`payee_family`), a service before the generic Amazon match.
 - **Ingestion is keyed on the order id.** A re-imported order that has a link is `already_applied`; an
   items file for an order that already carries item detail is `already_enriched`.
 - **Orders and charges converge in either order.** Every CSV import and sync runs

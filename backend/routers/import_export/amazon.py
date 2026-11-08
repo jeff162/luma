@@ -1102,9 +1102,36 @@ def _merge_enrichment_summary(orders_snap: dict, items_summary: dict) -> None:
 
 
 _REVERSE_SCAN_WINDOW_DAYS = 7
-# Ledger charge whose payee looks like Amazon (the reverse scan is heuristic by design — see doc).
-_AMAZON_NAME_LIKE = "(UPPER(t.merchant_name) LIKE '%AMZN%' OR UPPER(t.merchant_name) LIKE '%AMAZON%' " \
-                    "OR UPPER(t.raw_name) LIKE '%AMZN%' OR UPPER(t.raw_name) LIKE '%AMAZON%')"
+# The names an Amazon charge reaches the card under, as families: each one's payee substrings, checked in
+# order so a service is named before the generic Amazon match takes it. Amazon bills its own digital
+# services under their brand names, so a Prime Video channel, a Kindle subscription or an Audible membership
+# reaches the card as "Prime Video", "Kindle" or "Audible" while its order sits in the order history like
+# any other. "Prime" alone is not enough: unrelated businesses carry it. The same list decides which charges
+# look like Amazon (`_AMAZON_NAME_LIKE`) and labels each charge on the reconciliation report
+# (`payee_family`), so a new name is added once.
+AMAZON_PAYEE_FAMILIES = (
+    ("Prime Video", ("PRIME VIDEO",)),
+    ("Audible", ("AUDIBLE",)),
+    ("Kindle", ("KINDLE",)),
+    ("Amazon Music", ("AMAZON MUSIC",)),
+    ("Amazon", ("AMZN", "AMAZON")),
+)
+OTHER_PAYEE_FAMILY = "Other"
+_AMAZON_PAYEE_PATTERNS = tuple(dict.fromkeys(p for _, patterns in AMAZON_PAYEE_FAMILIES for p in patterns))
+
+
+def payee_family(charge: dict) -> str:
+    """The family a charge's payee belongs to, read from the same fields the Amazon-name test reads."""
+    text = f"{charge.get('merchant_name') or ''} {charge.get('raw_name') or ''}".upper()
+    for family, patterns in AMAZON_PAYEE_FAMILIES:
+        if any(pattern in text for pattern in patterns):
+            return family
+    return OTHER_PAYEE_FAMILY
+
+
+_AMAZON_NAME_LIKE = "(" + " OR ".join(
+    f"UPPER({column}) LIKE '%{pattern}%'"
+    for pattern in _AMAZON_PAYEE_PATTERNS for column in ("t.merchant_name", "t.raw_name")) + ")"
 
 # Split-charge suggestion (Matched·review): Amazon often bills one order as several shipment charges, so no
 # single charge equals the order total. We look for a *unique* set of unaccounted charges — at most this many
@@ -1555,7 +1582,7 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
     for c in unaccounted:
         c["reviewed"] = c["id"] in reviewed_ids
         c.update(_added_charge_hint(conn, c))
-    return {
+    result = {
         "matched": matched,
         "matched_review": matched_review,
         "duplicate": duplicate,
@@ -1564,6 +1591,14 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
         "payment_unmatched": unaccounted,
         "unaccounted_duplicate": unaccounted_duplicate,
     }
+    # Every charge on the report carries its payee family, which the report filters by.
+    for bucket in ("matched", "matched_review", "duplicate", "duplicate_review", "unaccounted_duplicate"):
+        for row in result[bucket]:
+            for charge in row.get("charges") or []:
+                charge["payee_family"] = payee_family(charge)
+    for charge in unaccounted:
+        charge["payee_family"] = payee_family(charge)
+    return result
 
 
 def _compute_reconciliation_attention(conn: sqlite3.Connection, batch_id: str) -> int:

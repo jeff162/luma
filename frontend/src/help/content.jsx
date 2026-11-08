@@ -3158,6 +3158,22 @@ export const HELP_TOPICS = [
           Merged and discarded copies can be restored from Settings &rarr; Trash.
         </p>
 
+        <h4>Order categories</h4>
+        <p>*needs review*</p>
+        <p>
+          The order is the row that counts; its paired charge is excluded. <strong>Order category</strong>{' '}
+          shows each order&apos;s category and changes it in place, and setting one offers a rule for the
+          orders like it, as on the Transactions page. <strong>Uncategorized orders</strong> narrows the list
+          to the orders still without a category.
+        </p>
+        <p>
+          When the charges carry more than one name, a <strong>Charge</strong> line groups them: a service
+          Amazon bills under its own name (<em>Prime Video</em>, <em>Audible</em>, <em>Kindle</em>,{' '}
+          <em>Amazon Music</em>) or plain <em>Amazon</em>. Picking one with <strong>Uncategorized
+            orders</strong> leaves, say, the channel orders paid through Prime Video, ready to categorize
+          together.
+        </p>
+
         <h4>Matched orders</h4>
         <p>
           When a pairing is wrong, <strong>Unlink</strong> detaches the charge. The charge gets its
@@ -3197,7 +3213,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           An order that names no card, such as a digital order, only matches a charge that reads as Amazon
-          (<em>AMZN</em> or <em>AMAZON</em>). One paid through PayPal lands in <strong>No charge
+          (<em>AMZN</em> or <em>AMAZON</em>, or the names Amazon bills its own services under: <em>Prime
+            Video</em>, <em>Kindle</em> and <em>Audible</em>). One paid through PayPal lands in <strong>No charge
             found</strong> and is linked by hand.
         </p>
 

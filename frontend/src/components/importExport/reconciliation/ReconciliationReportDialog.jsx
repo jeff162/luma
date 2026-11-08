@@ -22,6 +22,12 @@ import { RECONCILIATION_VENDORS } from './reconciliationVendors.js'
 //   bulkActions    [{ key, label, title }] in bar order
 //   actionCall     (action, entry) → the promise behind an action, shared by a row's button and the bulk bar
 //   useColumns     (ctx) → { columns, overlay } — a hook, so a vendor keeps its own row-level state
+//   rowFilters     optional [{ key, label, title, test(entry) }] — pills after the kind pills that narrow
+//                  the rows by something other than their kind; one is on at a time, alongside the kind
+//   facets         optional [{ key, label, title, values(entry) → string[] }] — a labelled line of pills
+//                  per facet, one per value present (an entry may carry several). Shown only when it has
+//                  two or more values to choose between, since one pill narrows nothing. One value per
+//                  facet is on at a time; facets, kind and row filter all apply together
 // ctx carries `busy`, `run(call, failMessage)` (one action: clear the error, await, reload), `reload`,
 // `openPicker` (the manual pairing window) and `reportError`. The dialog is keyed by vendor where it is
 // mounted, since a vendor's hook must not change under a mounted dialog.
@@ -42,6 +48,8 @@ export function ReconciliationReportDialog({
   const vendor = RECONCILIATION_VENDORS[vendorKey]
   const report = RECONCILIATION_REPORTS[vendorKey]
   const [activeKind, setActiveKind] = useState(null)   // null = All; otherwise a vendor kind
+  const [activeFilter, setActiveFilter] = useState(null) // null = none; otherwise a vendor rowFilters key
+  const [activeFacets, setActiveFacets] = useState({})   // facet key → the selected value
   const [actionError, setActionError] = useState('')
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [rowBusy, setRowBusy] = useState(false)
@@ -52,7 +60,7 @@ export function ReconciliationReportDialog({
   // Floating, draggable, resizable panel chrome — non-modal so the user can go inspect a transaction
   // while the report stays open; geometry persists across opens, per vendor.
   const { initialPosition, initialSize, onGestureEnd } = useRestorablePanelGeometry(
-    vendor.panelPrefKey, { fallbackWidth: 1040, fallbackHeight: 680 })
+    vendor.panelPrefKey, { fallbackWidth: 1180, fallbackHeight: 680 })
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, {
     forceFloating: true, stackIndex, initialPosition, initialSize, onGestureEnd,
   })
@@ -98,9 +106,22 @@ export function ReconciliationReportDialog({
       || String(vendor.entryDate(a)).localeCompare(String(vendor.entryDate(b))))
   }, [vendor, data])
 
-  const visibleEntries = useMemo(
-    () => (activeKind ? entries.filter(e => e.kind === activeKind) : entries),
-    [entries, activeKind])
+  const rowFilters = useMemo(() => vendor.rowFilters || [], [vendor])
+  // Each facet's values with how many rows carry them, most common first. Counted over every row, as the
+  // kind pills are, so a pill's number does not move as the other filters change.
+  const facetLines = useMemo(() => (vendor.facets || []).map(facet => {
+    const counts = new Map()
+    for (const e of entries) for (const value of new Set(facet.values(e))) counts.set(value, (counts.get(value) || 0) + 1)
+    const values = [...counts].map(([value, count]) => ({ value, count }))
+      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    return { facet, values }
+  }), [vendor, entries])
+  const visibleEntries = useMemo(() => {
+    const filter = rowFilters.find(f => f.key === activeFilter)
+    const facets = (vendor.facets || []).filter(f => activeFacets[f.key] != null)
+    return entries.filter(e => (!activeKind || e.kind === activeKind) && (!filter || filter.test(e))
+      && facets.every(f => f.values(e).includes(activeFacets[f.key])))
+  }, [entries, activeKind, activeFilter, rowFilters, vendor, activeFacets])
 
   const allVisibleSelected = visibleEntries.length > 0 && visibleEntries.every(e => selectedIds.has(e.id))
   const someVisibleSelected = !allVisibleSelected && visibleEntries.some(e => selectedIds.has(e.id))
@@ -243,7 +264,44 @@ export function ReconciliationReportDialog({
               </FilterChip>
             )
           })}
+          {rowFilters.map(filter => {
+            const count = entries.filter(filter.test).length
+            if (!count && activeFilter !== filter.key) return null
+            const active = activeFilter === filter.key
+            return (
+              <FilterChip
+                key={filter.key}
+                title={filter.title}
+                selected={active}
+                count={count}
+                onClick={() => setActiveFilter(active ? null : filter.key)}
+                style={{ flexShrink: 0, marginLeft: 8 }}
+              >
+                {filter.label}
+              </FilterChip>
+            )
+          })}
         </div>
+        {facetLines.map(({ facet, values }) => {
+          const selected = activeFacets[facet.key]
+          // A selected value stays offered even if it has gone from the rows, so it can be cleared.
+          if (values.length < 2 && selected == null) return null
+          const toggle = value => setActiveFacets(prev => ({ ...prev, [facet.key]: prev[facet.key] === value ? null : value }))
+          return (
+            <div key={facet.key} style={{
+              display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+              padding: '6px 16px', borderBottom: '1px solid var(--border)',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }} title={facet.title}>{facet.label}:</span>
+              {values.map(({ value, count }) => (
+                <FilterChip key={value} selected={selected === value} count={count}
+                  onClick={() => toggle(value)} style={{ flexShrink: 0 }}>
+                  {value}
+                </FilterChip>
+              ))}
+            </div>
+          )
+        })}
         {selectionSummary.total > 0 ? (
           <div style={{
             display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',

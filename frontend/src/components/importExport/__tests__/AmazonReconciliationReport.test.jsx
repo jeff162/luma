@@ -87,6 +87,7 @@ const rowFor = (text) => screen.getAllByTestId('row').find(r => within(r).queryB
 
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset().mockResolvedValue({})
+  api.getCategories.mockResolvedValue([])
 })
 afterEach(() => cleanup())
 
@@ -115,6 +116,42 @@ describe('Amazon reconciliation report — rows', () => {
     expect(screen.getAllByTestId('row').map(r => r.dataset.kind)).toEqual(['unmatched', 'unmatched'])
     await userEvent.click(screen.getByRole('button', { name: 'All (9)' }))
     expect(screen.getAllByTestId('row')).toHaveLength(9)
+  })
+
+  it('shows each order\'s category and narrows to uncategorized orders alongside the kind', async () => {
+    api.getCategories.mockResolvedValue([{ id: 'cat-gadgets', name: 'Gadgets', parent_id: 'grp' }])
+    const matched = [{ ...PAYLOAD.matched[0], order: { ...PAYLOAD.matched[0].order, category_id: 'cat-gadgets' } }]
+    renderReport({ data: { ...PAYLOAD, matched } })
+    expect(await within(rowFor('Order Matched')).findByText('Gadgets')).toBeTruthy()
+    expect(within(rowFor('Order Unmatched')).getByText('Uncategorized')).toBeTruthy()
+    // Every order but the categorized one and the split one; a charge-only row has no order to categorize.
+    await userEvent.click(screen.getByRole('button', { name: 'Uncategorized orders (5)' }))
+    expect(screen.getAllByTestId('row')).toHaveLength(5)
+    await userEvent.click(screen.getByRole('button', { name: 'No charge found (2)' }))
+    expect(screen.getAllByTestId('row').map(r => within(r).queryByText('Order Unmatched') != null)).toEqual([true])
+  })
+
+  it('offers a Charge line of payee families only when there are two to choose between', async () => {
+    const withFamily = (row, family) => ({ ...row, charges: row.charges.map(c => ({ ...c, payee_family: family })) })
+    const oneFamily = { ...PAYLOAD, matched: [withFamily(PAYLOAD.matched[0], 'Amazon')] }
+    const { unmount } = render(<ReconciliationReportDialog vendor="amazon" data={oneFamily} onClose={() => {}} onReload={() => {}} />)
+    expect(screen.queryByText('Charge:')).toBeNull()
+    unmount()
+
+    const twoFamilies = {
+      ...PAYLOAD,
+      matched: [withFamily(PAYLOAD.matched[0], 'Prime Video')],
+      duplicate: PAYLOAD.duplicate.map(row => withFamily(row, 'Amazon')),
+    }
+    renderReport({ data: twoFamilies })
+    expect(screen.getByText('Charge:')).toBeTruthy()
+    // Most common first; a row counts once however many of its charges share the family.
+    expect(screen.getByRole('button', { name: 'Amazon (2)' }).compareDocumentPosition(screen.getByRole('button', { name: 'Prime Video (1)' })))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    await userEvent.click(screen.getByRole('button', { name: 'Prime Video (1)' }))
+    expect(screen.getAllByTestId('row').map(r => within(r).queryByText('Order Matched') != null)).toEqual([true])
+    await userEvent.click(screen.getByRole('button', { name: 'Prime Video (1)' }))
+    expect(screen.getAllByTestId('row').length).toBeGreaterThan(1)
   })
 
   it('marks an acknowledged row reviewed and offers to undo it', () => {
