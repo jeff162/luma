@@ -403,6 +403,71 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(report["matched"], [])
         self.assertEqual(len(report["duplicate"]), 1)
 
+    def _digital_order(self, order_id, date, amount, name):
+        # Names no card, as a digital order does, so every Amazon-looking charge of its amount is a candidate.
+        return AmazonOrder(order_id=order_id, order_date=date, total=amount, items_summary=name,
+                           payment_legs=[PaymentLeg(method=None, last4=None, date=date, amount=amount)],
+                           has_order_detail=True)
+
+    def test_a_balanced_pair_pairs_despite_a_surplus_of_that_amount_months_away(self):
+        # Balance is judged per group of orders competing for the same charges: a surplus charge in
+        # September is that month's duplicate question, and must not block July's two-orders-two-charges.
+        self._add_card_charge(11.99, date="2026-07-28")
+        self._add_card_charge(11.99, date="2026-07-28")
+        self._add_card_charge(11.99, date="2026-09-06")
+        self._add_card_charge(11.99, date="2026-09-07")
+        orders = [self._digital_order("J-1", "2026-07-27", 11.99, "Capri Leggings;"),
+                  self._digital_order("J-2", "2026-07-27", 11.99, "Capri Leggings;"),
+                  self._digital_order("S-1", "2026-09-06", 11.99, "Garden Hose;")]
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, orders, account_id="amazon", apply_categorization=False)
+            batch = conn.execute("SELECT id FROM import_batch ORDER BY rowid DESC LIMIT 1").fetchone()["id"]
+            report = amazon_reconciliation(conn, batch)
+        self.assertEqual(sorted(m["order"]["date"] for m in report["matched"]), ["2026-07-27", "2026-07-27"])
+        self.assertEqual([d["order"]["date"] for d in report["duplicate"]], ["2026-09-06"])
+
+    def _carded_order(self, order_id, date, amount=33.97):
+        return AmazonOrder(order_id=order_id, order_date=date, total=amount, items_summary="Espresso Cans;",
+                           payment_legs=[PaymentLeg(method="Test Card", last4="4321", date=date, amount=amount)],
+                           has_order_detail=True)
+
+    def _import_and_reconcile(self, orders):
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, orders, account_id="amazon", apply_categorization=False)
+            return amazon_reconciliation(conn, summary["batch_id"])
+
+    def test_orders_held_to_ship_together_pair_with_their_later_charges(self):
+        # Amazon charges on shipment: three same-amount orders placed over two days, billed together four
+        # and five days later. Three orders, three charges, so they are distinct purchases, not duplicates.
+        charges = {self._add_card_charge(33.97, date="2026-06-17") for _ in range(3)}
+        report = self._import_and_reconcile([self._carded_order("S-1", "2026-06-12"),
+                                             self._carded_order("S-2", "2026-06-13"),
+                                             self._carded_order("S-3", "2026-06-13")])
+        self.assertEqual(report["duplicate_review"], [])
+        self.assertEqual({c["id"] for m in report["matched"] for c in m["charges"]}, charges)
+
+    def test_a_surplus_charge_outside_the_match_window_still_needs_review(self):
+        # One charge more than orders is a duplicate somewhere in the group, so nothing is paired.
+        for _ in range(4):
+            self._add_card_charge(33.97, date="2026-06-17")
+        report = self._import_and_reconcile([self._carded_order("S-1", "2026-06-12"),
+                                             self._carded_order("S-2", "2026-06-13"),
+                                             self._carded_order("S-3", "2026-06-13")])
+        self.assertEqual(report["matched"], [])
+        self.assertEqual(len(report["duplicate_review"]), 3)
+
+    def test_equal_count_pairing_prefers_the_charge_its_order_names(self):
+        # Both pairings are possible; the one where the order names the charge's service is taken.
+        kindle = self._add_card_charge(11.99, date="2026-08-05", name="Kindle")
+        music = self._add_card_charge(11.99, date="2026-08-06", name="Amazon Music")
+        orders = [self._digital_order("K-1", "2026-08-06", 11.99, "Kindle+;"),
+                  self._digital_order("M-1", "2026-08-06", 11.99, "Amazon Music Unlimited;")]
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, orders, account_id="amazon", apply_categorization=False)
+            paired = {ref: txn_links.member_txn_ids(conn, txn_links.find_link(conn, LINK_KIND, ref)["id"], role="charge")
+                      for ref in ("K-1", "M-1")}
+        self.assertEqual(paired, {"K-1": [kindle], "M-1": [music]})
+
     def test_merge_keeps_richest_and_trashes_the_rest(self):
         # Same purchase imported twice, the later sync richer. Merge keeps that copy and trashes the plainer
         # one, then links the survivor to the order.
@@ -1707,20 +1772,18 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertIn(result["survivor_id"],
                       [c["id"] for m in recon2["matched"] for c in m["charges"]])
 
-    def test_duplicate_review_discard_leaves_a_reviewable_lone_charge(self):
-        # Per-copy Discard trashes one copy, but the out-of-window survivor is deliberately NOT
-        # auto-linked (auto-pairing stays ±3) — the order comes back as Matched·review with the
-        # date-window note, one Accept away.
+    def test_duplicate_review_discard_pairs_the_surviving_later_charge(self):
+        # Discarding the extra copy leaves one order and one charge five days after it, which is how Amazon
+        # bills an order that shipped later, so the survivor links without an Accept.
         batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
         link_id = recon["duplicate_review"][0]["link_id"]
         with self._use_db_path(), get_db() as conn:
             result = trash_duplicate_charge(conn, ids[1], link_id)
             recon2 = amazon_reconciliation(conn, batch_id)
-        self.assertFalse(result["matched"])
+        self.assertTrue(result["matched"])
         self.assertEqual(recon2["duplicate_review"], [])
-        self.assertEqual(len(recon2["matched_review"]), 1)
-        self.assertEqual([c["id"] for c in recon2["matched_review"][0]["charges"]], [ids[0]])
-        self.assertIn("±3-day window", recon2["matched_review"][0]["reason"])
+        self.assertEqual(recon2["matched_review"], [])
+        self.assertIn(ids[0], [c["id"] for m in recon2["matched"] for c in m["charges"]])
 
     def test_split_order_surfaces_as_matched_review(self):
         # No single charge equals the $40 order, but two unaccounted charges sum to it → a Matched·review
@@ -1734,15 +1797,20 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(review["spans_days"], 1)
         self.assertIsNone(review["reason"])   # a genuine split — the charge count is the story
 
-    def test_lone_charge_outside_match_window_carries_a_reason(self):
-        # A single $40 charge 9 days after the order: exact amount, but outside the auto-matcher's ±3-day
-        # window — suggested for review with a note saying exactly that.
-        _batch, _link, recon, ids = self._split_batch([(40.00, "2024-11-28")])
+    def test_lone_charge_before_the_order_is_suggested_with_a_reason(self):
+        # A single $40 charge 5 days before the order: exact amount, but Amazon bills on shipment, so only
+        # the ±3-day matcher may reach back and this one is only suggested, with a note saying why.
+        _batch, _link, recon, ids = self._split_batch([(40.00, "2024-11-14")])
         self.assertEqual(len(recon["matched_review"]), 1)
         review = recon["matched_review"][0]
         self.assertEqual([c["id"] for c in review["charges"]], ids)
         self.assertEqual(review["reason"],
-                         "The charge is 9 days after the order — outside the automatic match's ±3-day window.")
+                         "The charge is 5 days before the order — outside the automatic match's ±3-day window.")
+
+    def test_lone_charge_days_after_the_order_pairs(self):
+        _batch, _link, recon, ids = self._split_batch([(40.00, "2024-11-28")])
+        self.assertEqual(recon["matched_review"], [])
+        self.assertIn(ids[0], [c["id"] for m in recon["matched"] for c in m["charges"]])
 
     def test_lone_charge_a_cent_off_carries_a_reason(self):
         # A single charge within the 2¢ suggestion tolerance but not exactly equal — the auto-matcher

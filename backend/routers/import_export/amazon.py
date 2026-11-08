@@ -150,7 +150,7 @@ def find_matching_charge(
 
 def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4,
                           exclude_account_id=None, restrict_account_id=None,
-                          window_days: int = _CHARGE_DATE_WINDOW_DAYS) -> list[str]:
+                          window_days: int = _CHARGE_DATE_WINDOW_DAYS, forward_only: bool = False) -> list[str]:
     """Every card charge eligible to be *this* order's charge — the matcher's candidate set: a positive
     amount equal to the gross charge, unlinked, within the date window, on an account permitted by the
     funding map (``restrict_account_id``) or, absent a map, the card's last-4 (a carded account whose mask
@@ -165,7 +165,10 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
     account signal left, the payee is the only one there is, so the charge must at least *look* like Amazon
     (``_AMAZON_NAME_LIKE``, the same predicate the reverse scan uses). The deliberate trade: an off-card
     order whose real charge carries a non-Amazon descriptor now shows as "No charge found" (a miss, fixable
-    with Link charges…) instead of silently excluding an unrelated charge from the user's totals."""
+    with Link charges…) instead of silently excluding an unrelated charge from the user's totals.
+
+    ``forward_only`` takes charges dated on or after ``match_date`` only, for a window too wide for a charge
+    before the order to be anything but someone else's purchase: Amazon bills when an order ships."""
     if amount is None or amount <= 0:
         return []
     clauses = [
@@ -182,7 +185,10 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
         clauses.append("COALESCE(a.parent_account_id, a.id) != ?")
         params.append(effective_account_id(conn, exclude_account_id))
     if match_date:
-        clauses.append("ABS(julianday(t.date) - julianday(?)) <= ?")
+        if forward_only:
+            clauses.append("julianday(t.date) - julianday(?) BETWEEN 0 AND ?")
+        else:
+            clauses.append("ABS(julianday(t.date) - julianday(?)) <= ?")
         params += [match_date, window_days]
     if restrict_account_id:
         clauses.append("COALESCE(a.parent_account_id, a.id) = ?")
@@ -206,14 +212,14 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
 
 
 def _order_charge_candidates(conn: sqlite3.Connection, meta: dict, order: dict,
-                             window_days: int = _CHARGE_DATE_WINDOW_DAYS) -> list[str]:
+                             window_days: int = _CHARGE_DATE_WINDOW_DAYS, forward_only: bool = False) -> list[str]:
     """The eligible card charges for an already-imported order, reconstructed post-hoc from the link metadata
     (charge amount + the paying instrument) so the reconciliation report and the equal-count pass see exactly
     what the matcher saw. Resolves the funding map from the stored instrument: untracked → none expected;
     mapped → constrained to that account; otherwise the last-4 fallback. Empty for a non-cash / amount-less
     order or an untracked card. ``window_days`` widens the date window for the review-flavored consumers
-    (the Duplicate·review bucket and its merge), which must see the same set; auto-actions keep the ±3
-    default."""
+    (the Duplicate·review bucket and its merge), which must see the same set, and, forward only, for the
+    equal-count pass; every other auto-action keeps the ±3 default."""
     amount = meta.get("charge_amount")
     if amount is None or not order:
         return []
@@ -226,7 +232,7 @@ def _order_charge_candidates(conn: sqlite3.Connection, meta: dict, order: dict,
     return _charge_candidate_ids(
         conn, amount=amount, match_date=order["date"], last4=last4,
         exclude_account_id=order["account_id"], restrict_account_id=restrict,
-        window_days=window_days)
+        window_days=window_days, forward_only=forward_only)
 
 
 def _effective_account_map(conn: sqlite3.Connection, txn_ids, cache: Optional[dict] = None) -> dict:
@@ -2053,64 +2059,143 @@ def _perfect_matching(order_candidates: list[list[str]]) -> Optional[dict[int, s
     return {order_index: charge_id for charge_id, order_index in charge_to_order.items()}
 
 
-def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
-    """Second pass over a batch's still-unmatched cash orders: when a set of same-amount orders is exactly
-    balanced by the same number of unlinked Amazon charges (in the matcher's window), they're *distinct*
-    purchases the matcher only left unmatched because their equal amounts made *which* order pairs with
-    *which* charge ambiguous — and that assignment is immaterial (each charge is excluded either way). Pair
-    them 1:1 so they resolve to matched instead of showing as false 'duplicate detected'. Each order is
-    linked only to a charge in *its own* candidate set (respecting the funding map / last-4), via a perfect
-    bipartite matching — so same-amount orders paid on different cards can't be cross-linked to each other's
-    charge. A *surplus* of charges (more distinct charges than orders) is a real duplicate and is
-    deliberately left alone. Returns the number of orders newly paired."""
-    clusters: dict = {}
-    for o in _unmatched_cash_orders(conn, batch_id):
-        clusters.setdefault(round(o["amount"], 2), []).append(o)
+def _competing_groups(orders: list[dict], candidates: dict[str, list[str]]) -> list[list[dict]]:
+    """Split same-amount orders into the groups that compete for the same charges: two orders are in one
+    group when they share a candidate charge, directly or through other orders. A card's history can hold
+    many orders of one amount months apart, and judging them as one pool lets a surplus in one month block
+    a clean pairing in another."""
+    parent = {o["link_id"]: o["link_id"] for o in orders}
 
-    paired = 0
+    def root(link_id: str) -> str:
+        while parent[link_id] != link_id:
+            parent[link_id] = parent[parent[link_id]]
+            link_id = parent[link_id]
+        return link_id
+
+    holder: dict[str, str] = {}
+    for o in orders:
+        for charge_id in candidates[o["link_id"]]:
+            if charge_id in holder:
+                parent[root(o["link_id"])] = root(holder[charge_id])
+            else:
+                holder[charge_id] = o["link_id"]
+    groups: dict[str, list[dict]] = {}
+    for o in orders:
+        groups.setdefault(root(o["link_id"]), []).append(o)
+    return list(groups.values())
+
+
+def _names_family(order: dict, family: str) -> bool:
+    """Whether an order's name names a charge's payee family ("Kindle+;" and a Kindle charge). Plain Amazon
+    and Other name nothing, since every order is Amazon's."""
+    return family not in ("Amazon", OTHER_PAYEE_FAMILY) and family.lower() in (order.get("name") or "").lower()
+
+
+def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
+    """Second pass over a batch's still-unmatched cash orders, after its import and after a Discard:
+    :func:`_pair_balanced_orders` over them. Returns the number of orders newly paired."""
+    return _pair_balanced_orders(conn, _unmatched_cash_orders(conn, batch_id))
+
+
+def _pair_balanced_orders(conn: sqlite3.Connection, orders: list[dict]) -> int:
+    """Pair unmatched cash orders (the shape :func:`_unmatched_cash_orders` returns) with charges: when a group
+    of same-amount orders that compete for the same charges is exactly balanced by that many unlinked
+    charges, they're *distinct* purchases — and which order pairs with which charge does not change the
+    totals (each charge is excluded either way). Pair them 1:1 so they resolve to matched instead of showing
+    as false 'duplicate detected'. A lone order with its one charge is a group of one.
+
+    - **Two windows, strict first.** A group is judged in the matcher's ±3-day window, then what is left in
+      the 14 days *after* each order: Amazon bills on shipment, and an order it holds to ship with others
+      is charged days or weeks after it was placed, never before. The wide window looks forward only, as a
+      charge before the order is someone else's purchase, while the strict one keeps its slack both ways for
+      dates a time zone moved. Strict first, because the wider window can pull a neighbour's surplus
+      charge into a group that balances on its own at ±3.
+
+    - **Balanced per competing group** (:func:`_competing_groups`), not per amount across the batch, so a
+      surplus among one month's orders does not block another month's clean pair.
+    - **Each order only to a charge in its own candidate set** (respecting the funding map / last-4), via a
+      perfect bipartite matching, so same-amount orders paid on different cards can't take each other's
+      charge.
+    - **A surplus of charges** (more distinct charges than orders) is a real duplicate and is left alone.
+    - **Names are preferred where they agree**: an order whose name names a charge's payee family ("Kindle+;"
+      and a Kindle charge) tries that charge first, so the report does not pair a Kindle order with an
+      Amazon Music charge when both pairings are possible. A preference, not a constraint: a channel billed
+      as Prime Video names nothing, and still pairs.
+    - **A pending charge competes but is never linked**, so a group holding one waits for it to post: the
+      provider may drop it and send the posted row under another id, which would leave the order linked to
+      a trashed row.
+
+    Returns the number of orders newly paired."""
+    paired = _pair_balanced_groups(conn, orders, _CHARGE_DATE_WINDOW_DAYS, forward_only=False)
+    rest = [o for o in orders if o["link_id"] not in paired]
+    return len(paired) + len(_pair_balanced_groups(conn, rest, _SPLIT_SUGGESTION_WINDOW_DAYS, forward_only=True))
+
+
+def _pair_balanced_groups(conn: sqlite3.Connection, orders: list[dict], window_days: int, *,
+                          forward_only: bool) -> set[str]:
+    """One pass of :func:`_pair_balanced_orders` with candidates drawn from ``window_days``. Returns the
+    link ids paired."""
+    clusters: dict = {}
+    for o in orders:
+        clusters.setdefault(round(o["amount"], 2), []).append(o)
+    paired: set[str] = set()
     for group in clusters.values():
-        pairable_orders: list[dict] = []   # only orders that actually have an eligible charge count toward balance
-        order_candidates: list[list[str]] = []
-        candidate_ids: list[str] = []
-        seen: set = set()
+        candidates: dict[str, list[str]] = {}
+        pairable: list[dict] = []   # only orders that actually have an eligible charge count toward balance
         for o in group:
-            cands = _eligible_charges(conn, o["meta"], o["order"])
-            if not cands:
-                continue   # untracked / last-4 mismatch: this order can't take any of these charges
-            pairable_orders.append(o)
-            order_candidates.append(cands)
-            for cid in cands:
-                if cid not in seen:
-                    seen.add(cid)
-                    candidate_ids.append(cid)
-        # Only the exactly-balanced case (distinct charges == orders) is an ambiguity to resolve; a surplus
-        # is a real duplicate left for the report. Even then, apply only a *perfect* matching that assigns
-        # each order to one of its own candidates — never a blind zip that could cross cards.
-        if not candidate_ids or len(candidate_ids) != len(pairable_orders):
-            continue
-        matching = _perfect_matching(order_candidates)
-        if matching is None:
-            continue
-        for order_index, charge_id in matching.items():
-            link_amazon_charges(conn, pairable_orders[order_index]["link_id"], [charge_id], manually=False)
-            paired += 1
+            cands = _eligible_charges(conn, o["meta"], o["order"], window_days, forward_only)
+            if cands:   # untracked / last-4 mismatch: an order with none can't take any of these charges
+                candidates[o["link_id"]] = cands
+                pairable.append(o)
+        all_charges = list(dict.fromkeys(c for cs in candidates.values() for c in cs))
+        families = {cid: payee_family(summary) for cid, summary in txn_summaries(conn, all_charges).items()}
+        pending = _pending_ids(conn, all_charges)
+        for competing in _competing_groups(pairable, candidates):
+            charge_ids = {cid for o in competing for cid in candidates[o["link_id"]]}
+            if len(charge_ids) != len(competing) or charge_ids & pending:
+                continue
+            # The matcher takes each order's candidates in order, and orders in order, so a name that agrees
+            # goes first in both.
+            preferred = {o["link_id"]: sorted(candidates[o["link_id"]],
+                                              key=lambda cid, o=o: not _names_family(o["order"], families.get(cid, "")))
+                         for o in competing}
+            competing = sorted(competing, key=lambda o: not any(
+                _names_family(o["order"], families.get(cid, "")) for cid in candidates[o["link_id"]]))
+            matching = _perfect_matching([preferred[o["link_id"]] for o in competing])
+            if matching is None:
+                continue
+            for order_index, charge_id in matching.items():
+                link_amazon_charges(conn, competing[order_index]["link_id"], [charge_id], manually=False)
+                paired.add(competing[order_index]["link_id"])
     return paired
 
 
-def _eligible_charges(conn: sqlite3.Connection, meta: dict, order: dict) -> list[str]:
+def _pending_ids(conn: sqlite3.Connection, txn_ids: list[str]) -> set[str]:
+    pending: set[str] = set()
+    for start in range(0, len(txn_ids), 500):
+        chunk = txn_ids[start:start + 500]
+        pending |= {r["id"] for r in conn.execute(
+            f"SELECT id FROM txn WHERE is_pending = 1 AND id IN ({','.join('?' * len(chunk))})", chunk)}
+    return pending
+
+
+def _eligible_charges(conn: sqlite3.Connection, meta: dict, order: dict,
+                      window_days: int = _CHARGE_DATE_WINDOW_DAYS, forward_only: bool = False) -> list[str]:
     """The matcher's candidates for an already-imported order, less any the user unlinked from it — what an
     *automatic* pass may offer it."""
     declined = set(meta.get(DECLINED_CHARGES_KEY) or [])
-    return [cid for cid in _order_charge_candidates(conn, meta, order) if cid not in declined]
+    return [cid for cid in _order_charge_candidates(conn, meta, order, window_days, forward_only)
+            if cid not in declined]
 
 
 def _unmatched_orders_for_amounts(conn: sqlite3.Connection, amounts: set) -> list[dict]:
     """Every cash order in the ledger that still has no charge and expects one of ``amounts`` — the orders a
-    newly arrived charge of that amount could belong to."""
+    newly arrived charge of that amount could belong to — in the shape :func:`_unmatched_cash_orders`
+    returns."""
     if not amounts:
         return []
     rows = conn.execute(
-        f"""SELECT l.id AS link_id, l.metadata_json, o.id, o.date, o.account_id
+        f"""SELECT l.id AS link_id, l.metadata_json, o.id AS order_id
             FROM   txn_link l
             JOIN   txn_link_member m ON m.link_id = l.id AND m.role = 'order'
             JOIN   txn o ON o.id = m.txn_id AND o.trashed_at IS NULL
@@ -2120,26 +2205,26 @@ def _unmatched_orders_for_amounts(conn: sqlite3.Connection, amounts: set) -> lis
               AND  NOT EXISTS (SELECT 1 FROM txn_link_member mc WHERE mc.link_id = l.id AND mc.role = 'charge')""",
         (LINK_KIND, *sorted(amounts)),
     ).fetchall()
-    return [
-        {"link_id": r["link_id"], "meta": json.loads(r["metadata_json"] or "{}"),
-         "order": {"id": r["id"], "date": r["date"], "account_id": r["account_id"]}}
-        for r in rows
-    ]
+    orders = txn_summaries(conn, [r["order_id"] for r in rows])
+    out = []
+    for r in rows:
+        meta = json.loads(r["metadata_json"] or "{}")
+        if r["order_id"] in orders:
+            out.append({"link_id": r["link_id"], "amount": meta["charge_amount"], "order": orders[r["order_id"]],
+                        "meta": meta})
+    return out
 
 
 def link_orders_to_new_charges(conn: sqlite3.Connection, txn_ids) -> int:
     """Link already-imported orders to card charges that arrived after them — by a later sync or import —
-    under the same rule the import applies to a new order: the charge must be the order's **only** candidate
-    (the matcher's own candidate set: exact amount, ±3 days, the funding map or last-4). One rule more,
-    because the import saw one order at a time and this pass sees them all at once: no *other* unmatched
-    order may also want that charge, since which of two same-amount orders it paid is not deducible. Every
-    other case stays a suggestion in the reconciliation report, exactly as before.
+    under the rule the import's own pairing pass applies (:func:`_pair_balanced_orders`): same-amount orders
+    competing for the same charges are paired when exactly that many charges balance them, a lone order with
+    its one charge included. Every other case stays a suggestion in the reconciliation report.
 
     Only orders expecting the amount of one of ``txn_ids`` are looked at, so a sync's cost follows what it
-    brought rather than the size of the order history. A pending charge still competes but is never linked
-    until it posts — the provider may drop it and send the posted row under another id, which would leave the
-    order linked to a trashed row — and a charge the user unlinked from an order is never offered to that
-    order again. Returns the number linked."""
+    brought rather than the size of the order history. All of them are, not only those dated near an
+    arrival: an order that wants an older charge of the same amount competes for it all the same, and
+    balance has to see every order that wants a charge. Returns the number linked."""
     ids = [txn_id for txn_id in dict.fromkeys(txn_ids or []) if txn_id]
     amounts: set = set()
     for start in range(0, len(ids), 500):
@@ -2150,26 +2235,7 @@ def link_orders_to_new_charges(conn: sqlite3.Connection, txn_ids) -> int:
                   AND  trashed_at IS NULL AND is_pending = 0 AND amount > 0""",
             chunk,
         )}
-
-    # Every unmatched order of those amounts, not only those dated near an arrival: an order that wants an
-    # older charge of the same amount is competing for it all the same, and the uniqueness test has to see
-    # every order that wants a charge before giving it to one.
-    wanted = {entry["link_id"]: _eligible_charges(conn, entry["meta"], entry["order"])
-              for entry in _unmatched_orders_for_amounts(conn, amounts)}
-    demand = Counter(cid for candidates in wanted.values() for cid in candidates)
-    pending = set()
-    contested = list(demand)
-    for start in range(0, len(contested), 500):
-        chunk = contested[start:start + 500]
-        pending |= {r["id"] for r in conn.execute(
-            f"SELECT id FROM txn WHERE is_pending = 1 AND id IN ({','.join('?' * len(chunk))})", chunk)}
-
-    linked = 0
-    for link_id, candidates in wanted.items():
-        if len(candidates) == 1 and demand[candidates[0]] == 1 and candidates[0] not in pending:
-            link_amazon_charges(conn, link_id, candidates, manually=False)
-            linked += 1
-    return linked
+    return _pair_balanced_orders(conn, _unmatched_orders_for_amounts(conn, amounts))
 
 
 def match_orders_after_ingest(connection, *, txn_ids=None, batch_id: Optional[str] = None) -> None:

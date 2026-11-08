@@ -1877,6 +1877,15 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   `match_orders_after_ingest` over the rows it brought. It links an order only when the charge is its
   sole candidate and no other unmatched order wants that charge. A pending charge is not linked until
   it posts. It runs before PayPal pairing.
+- **Same-amount orders balanced by as many charges pair up** (`_pair_equal_amount_clusters`, after each
+  import). They are distinct purchases the matcher could not tell apart, and which charge pairs with which
+  order does not change the totals. Balance is judged per group of orders that compete for the same charges,
+  not per amount across the card, so a surplus months away does not block a clean pair; a surplus inside
+  the group is a duplicate and is left for the report. A lone order with one charge is a group of one.
+  Groups are judged in the matcher's ±3-day window, then what is left in the 14 days after each order:
+  Amazon charges on shipment, so an order held to ship with others is billed days or weeks after it was
+  placed, never before. Where both pairings are possible, an order whose name names a charge's payee family
+  (`Kindle+;` and a Kindle charge) takes that charge.
 - **Unlinking is remembered.** `unlink_order_charges` records `declined_charge_ids` on the link, and no
   automatic pass offers those charges to that order again; linking one by hand clears it.
 - **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import

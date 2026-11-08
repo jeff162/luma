@@ -2,7 +2,7 @@
 
 ## What it is
 
-Five independent improvements around Amazon order import, PayPal, and adding detail from one import to
+Six independent improvements around Amazon order import, PayPal, and adding detail from one import to
 transactions already in the ledger:
 
 - **Paste Amazon orders instead of saving a file**: copy the order table from the AZAD browser extension
@@ -13,6 +13,7 @@ transactions already in the ledger:
 - **Add newly chosen detail columns to old rows** without re-importing the file.
 - **A simpler column-mapping screen**: one row per column in the file, each with a dropdown for what it
   means.
+- **Find out why many orders have no charge of their amount**, in a ledger whose cards are imported.
 
 **Where it stands:** none started; all are polish, and each can be done on its own.
 
@@ -67,3 +68,21 @@ on the screen's shape. Questions to settle:
 - Amount still needs an explicit pick among the numeric columns (PayPal has four: `Amount`, `Total`,
   `Fees`, `Balance`), so a column-first list still special-cases the required fields.
 - How two-column debit/credit and the account column fit a column-first layout.
+
+## Orders with no charge of their amount
+
+Investigate before building anything. In a household ledger whose cards are all imported, a large share
+of one person's Amazon orders stay in *No charge found* because no charge of the order's amount exists
+within the matcher's window on any account — not because a charge is ambiguous or named oddly (the
+service names Amazon bills under are handled by `AMAZON_PAYEE_FAMILIES`). Candidate causes, none checked
+yet:
+
+- the order was paid on a card that is not in the ledger, or through a gift card the export does not show;
+- Amazon combined several orders into one charge, which a one-order match cannot see (the split
+  suggestion covers one order billed as several charges, not the reverse);
+- the order's `total` differs from what was charged (tax or a promotion settled later).
+
+How to look: open that person's card in the reconciliation report, filter to *No charge found*, and compare
+a sample of orders with the card statements around their dates. Which cause dominates decides the fix: a
+card mapping, a many-orders-to-one-charge suggestion, or an amount tolerance.
+
