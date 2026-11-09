@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
-import { AppDialog, Button } from './ui.jsx'
+import { Button } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { vh } from '../lib/displaySize.js'
 
 /*
@@ -108,17 +108,14 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
     }
   }
 
-  // **Portalled to the body, and that is load-bearing rather than tidy.** `AppDialog` renders where it
-  // is mounted, which is fine for every caller that opens one from a page-level component — but this one
-  // is also opened from a *ledger row*, and a `position: fixed` overlay inside a table is positioned and
-  // stacked against whatever ancestor established a containing block, not the viewport. Opened that way
-  // it surfaced underneath the page header with its own title bar cut off. A modal has no business being
-  // clipped by whatever happened to render it, so it escapes to the body wherever it is opened from.
-  return createPortal(
-    <AppDialog
+  // Floating, so a receipt can be read beside the transaction it belongs to. It is also opened from a
+  // ledger row, which is why it matters that FloatingDialog portals itself to the body.
+  return (
+    <FloatingDialog
+      panelKey="ui.documentViewer.panel"
       onClose={onClose}
       title={doc.filename}
-      width="min(920px, 100%)"
+      width={920}
       actions={editing ? (
         <>
           <Button variant="secondary" onClick={cancelEditing}>Cancel</Button>
@@ -192,7 +189,6 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
           )}
         </div>
       )}
-    </AppDialog>,
-    document.body,
+    </FloatingDialog>
   )
 }

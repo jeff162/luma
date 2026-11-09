@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * The create / edit-matching-rule modal launched from a transaction's right-click menu. It is
+ * The create / edit-matching-rule editor launched from a transaction's right-click menu. It is
  * shared so every transaction surface (the Transactions ledger and every report list built on
  * TransactionListTable) opens the same rule editor rather than re-implementing the conflict /
- * merge handling. `state` is { mode: 'create', txnId, categoryId, keywordSource, transactionData }
+ * merge handling. Floating, so it can be moved off the transactions it is written for. `state` is { mode: 'create', txnId, categoryId, keywordSource, transactionData }
  * or { mode: 'edit', ruleId, txnId }; `onSaved` lets the host reconcile after a save/apply.
  */
 
@@ -14,8 +14,8 @@ import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.j
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
-import { vh, vw } from '../lib/displaySize.js'
+import { Button } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
   const [categories, setCategories] = useState([])
@@ -142,17 +142,16 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
   if ((loading || !initialValues) && !loadSlow) return null
 
   return (
-    <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">
-      <FloatingPanel style={{ width: 640, maxWidth: vw(94), maxHeight: vh(90) }}>
-        <FloatingPanelHeader style={{ padding: '14px 20px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>
-            {state.mode === 'edit'
-              ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
-              : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')}
-          </div>
-          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
-        </FloatingPanelHeader>
-        <div style={{ maxHeight: `calc(${vh(90)} - 56px)`, overflowY: 'auto' }}>
+    <FloatingDialog
+      panelKey="ui.ruleAction.panel"
+      title={state.mode === 'edit'
+        ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
+        : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')}
+      onClose={onClose}
+      width={640}
+      bodyPadding={0}
+      bodyStyle={{ gap: 0 }}
+    >
           {loading || !initialValues ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
               {state.mode === 'edit' ? 'Loading rule…' : 'Loading…'}
@@ -195,8 +194,6 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
               />
             </>
           )}
-        </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
+    </FloatingDialog>
   )
 }

@@ -19,7 +19,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, Button, RefreshButton, FilterChip, LinkButton } from '../ui.jsx'
+import { Button, RefreshButton, FilterChip, LinkButton } from '../ui.jsx'
+import FloatingDialog from '../FloatingDialog.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
   cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
@@ -461,11 +462,12 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
   }
 
   return (
-    <AppDialog
+    <FloatingDialog
+      panelKey="ui.connectionSyncLog.panel"
       title="Connection sync log"
       description="Every sync, connect, reconnect and disconnect of a data connection — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider reported along the way."
       onClose={onClose}
-      width="min(860px, 100%)"
+      width={860}
       actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
       // A filter pill reloads the list too, and that load reaches the icon only through `useBusyIndicator`
       // — a quick one leaves it still, where the old relabelling button twitched on every pill click.
@@ -573,7 +575,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
           </div>
         ) : null}
       </div>
-    </AppDialog>
+    </FloatingDialog>
   )
 }
 
@@ -586,7 +588,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
 // home in Settings was wrong, just in the other direction: a diagnostic nobody needs most of the time
 // should not occupy a screenful of a page people visit to import files. It is read on the specific
 // occasion that a sync brought in less than expected — so it is behind a button, and it opens as a
-// report the way the app's other read-only reports do (`AppDialog`, per `ReimbursementsReportDialog`).
+// report the way the app's other read-only reports do (`FloatingDialog`, per `ReimbursementsReportDialog`).
 //
 // **Not one of the detached, minimize-to-nav viewers.** Those exist for reports a user keeps open while
 // working elsewhere — a duplicate review, a reconciliation. This one is opened, read, and dismissed;

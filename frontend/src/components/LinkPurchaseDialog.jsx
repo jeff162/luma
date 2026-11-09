@@ -12,7 +12,8 @@ import {
   suggestPurchaseLabel,
 } from '../lib/purchaseLinks.js'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
-import { AppDialog, Button, Input } from './ui.jsx'
+import { Button, Input } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { formatDate } from '../lib/utils.js'
 
 /*
@@ -68,8 +69,10 @@ export default function LinkPurchaseDialog({ rows, onClose, onLinked }) {
   }
 
   const adding = plan.mode === 'add'
+  // Floating, so the selected payments in the ledger stay in view while the purchase is named.
   return (
-    <AppDialog
+    <FloatingDialog
+      panelKey="ui.linkPurchase.panel"
       title={adding ? `Add to ${purchaseDisplayLabel(plan.purchase)}` : 'Link as one purchase'}
       description={
         plan.mode === 'blocked'
@@ -79,7 +82,7 @@ export default function LinkPurchaseDialog({ rows, onClose, onLinked }) {
             : 'Several payments for one thing — a deposit and a balance, or an instalment plan. Nothing about the transactions changes; they just count toward one purchase.'
       }
       onClose={onClose}
-      width="min(560px, 100%)"
+      width={560}
       actions={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -159,6 +162,6 @@ export default function LinkPurchaseDialog({ rows, onClose, onLinked }) {
           {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
         </div>
       )}
-    </AppDialog>
+    </FloatingDialog>
   )
 }

@@ -9,10 +9,9 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 import { SUGGESTED_PASSPHRASE_WORDS, SUGGESTED_PASSWORD_WORDS, suggestPassphrase } from '../lib/passphraseGenerator.js'
-import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { useVisibleViewport, visibleHeightCss, visibleLayerBox } from '../lib/visibleViewport.js'
-import { cssPoint, cssRect, cssViewport, toCssPx } from '../lib/displaySize.js'
+import { cssRect, toCssPx } from '../lib/displaySize.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -581,53 +580,17 @@ export function AppDialog({
   bodyStyle,
   footerAlign = 'end',
   dismissOnBackdrop = false,
-  // Opt-in: the header becomes a drag handle and the backdrop turns transparent + click-through, so the
-  // dialog floats over live content the user can still see and interact with (e.g. drag the bulk-edit
-  // form aside to read the transactions behind it). Position is session-only — re-centers on reopen.
-  draggable = false,
   // A `RefreshButton`, attached to the title like a page's (see `PageHeader`).
   refresh = null,
   // A `FeatureExplainer`, placed before the title like a page's (see `PageHeader`).
   help = null,
 }) {
-  const [drag, setDrag] = useState({ x: 0, y: 0 })
-  const panelRef = useRef(null)
   const area = useVisibleViewport()
-
-  function startDrag(event) {
-    if (!draggable || event.button !== 0) return
-    preventPressDefaults(event)
-    const panel = panelRef.current
-    const rect = panel ? cssRect(panel) : null
-    const start = cssPoint(event)
-    const view = cssViewport()
-    const origin = drag
-    // Clamp against the panel's untranslated base position so a margin always stays grabbable on-screen.
-    const margin = 56
-    const baseLeft = rect ? rect.left - origin.x : 0
-    const baseTop = rect ? rect.top - origin.y : 0
-    const minX = rect ? margin - rect.width - baseLeft : -Infinity
-    const maxX = rect ? view.width - margin - baseLeft : Infinity
-    const minY = rect ? -baseTop : -Infinity
-    const maxY = rect ? view.height - margin - baseTop : Infinity
-    const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi)
-    trackPointer(event, {
-      onMove: moveEvent => {
-        const point = cssPoint(moveEvent)
-        setDrag({
-          x: clamp(origin.x + point.x - start.x, minX, maxX),
-          y: clamp(origin.y + point.y - start.y, minY, maxY),
-        })
-      },
-    })
-  }
 
   return (
     <OverlayBackdrop
       zIndex={zIndex}
-      tint={draggable ? 'transparent' : tint}
-      blur={draggable ? 0 : 2}
-      pointerEvents={draggable ? 'none' : 'auto'}
+      tint={tint}
       onClick={dismissOnBackdrop ? onClose : undefined}
     >
       {/* The panel is bounded by the viewport and scrolls its BODY, never the page. Three things made a
@@ -639,7 +602,6 @@ export function AppDialog({
           a dialog whose Continue button scrolls out of reach is the same bug wearing a scrollbar.
           The 48 is `OverlayBackdrop`'s default 24px padding, top and bottom. */}
       <FloatingPanel
-        ref={panelRef}
         onClick={event => event.stopPropagation()}
         style={{
           width,
@@ -647,22 +609,17 @@ export function AppDialog({
           maxHeight: `calc(${visibleHeightCss(area)} - 48px)`,
           display: 'flex',
           flexDirection: 'column',
-          ...(draggable ? { pointerEvents: 'auto', transform: `translate(${drag.x}px, ${drag.y}px)` } : null),
           ...panelStyle,
         }}
       >
         {(title || description) ? (
-          <FloatingPanelHeader
-            onPointerDown={draggable ? startDrag : undefined}
-            style={{ padding: headerPadding, flexShrink: 0, ...(draggable ? { cursor: 'move', userSelect: 'none', touchAction: 'none' } : null) }}
-          >
+          <FloatingPanelHeader style={{ padding: headerPadding, flexShrink: 0 }}>
             <div>
               {title ? (
                 <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {help ? <span onPointerDown={event => event.stopPropagation()} style={{ display: 'inline-flex', fontWeight: 400 }}>{help}</span> : null}
+                  {help ? <span style={{ display: 'inline-flex', fontWeight: 400 }}>{help}</span> : null}
                   {title}
-                  {/* Kept out of the drag: a press on it must not also pick the dialog up. */}
-                  {refresh ? <span onPointerDown={event => event.stopPropagation()} style={{ display: 'inline-flex' }}>{refresh}</span> : null}
+                  {refresh ? <span style={{ display: 'inline-flex' }}>{refresh}</span> : null}
                 </div>
               ) : null}
               {description ? (

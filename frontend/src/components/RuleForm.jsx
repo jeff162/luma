@@ -3,15 +3,12 @@
 
 /* eslint-disable react-refresh/only-export-components -- RuleForm + amountConditionSummary helper used to describe a rule's amount clause in the rules list */
 
-import { forwardRef, useCallback, useMemo, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef, useId } from 'react'
+import { forwardRef, useCallback, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef, useId } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import {
   Button,
   DialogActions,
-  FloatingPanel,
-  FloatingPanelHeader,
-  OverlayBackdrop,
   SectionEyebrow,
   getFormControlStyle, FilterChip, IconButton, LinkButton, SegmentedToggle
 } from './ui.jsx'
@@ -20,10 +17,8 @@ import TransientTextInput from './TransientTextInput.jsx'
 import { ESCAPE_BEHAVIOR } from '../lib/uiInteractions.js'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useTags } from '../lib/useTags.js'
-import PillGridTable from './PillGridTable.jsx'
-import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
-import { formatDate } from '../lib/utils.js'
-import { useDeviceLayoutPreference, useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import RulePreviewDialog from './RulePreviewDialog.jsx'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { OriginFieldList } from './OriginFields.jsx'
 import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -31,42 +26,6 @@ import { formatRuleMatcher, ruleMatcherLists, ruleMatcherTerms } from '../lib/ru
 import { RULE_PRIORITY_NORMAL } from '../lib/rulePriority.js'
 import RulePrioritySelect from './RulePrioritySelect.jsx'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
-import { vh } from '../lib/displaySize.js'
-
-const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
-
-const RULE_PREVIEW_DEFAULT_COLUMNS = [
-  { key: 'date', label: 'Date', width: 96, minWidth: 82 },
-  { key: 'merchant', label: 'Merchant', width: 260, minWidth: 150 },
-  { key: 'category', label: 'Category', width: 150, minWidth: 110 },
-  { key: 'account', label: 'Account', width: 140, minWidth: 110 },
-  { key: 'amount', label: 'Amount', width: 108, minWidth: 88, align: 'end' },
-]
-
-function normalizeRulePreviewColumnConfig(savedColumns, defaultColumns) {
-  const defaultByKey = new Map(defaultColumns.map(column => [column.key, column]))
-  const seen = new Set()
-  const merged = []
-  if (Array.isArray(savedColumns)) {
-    for (const savedColumn of savedColumns) {
-      const key = savedColumn?.key
-      if (!defaultByKey.has(key) || seen.has(key)) continue
-      const defaultColumn = defaultByKey.get(key)
-      const requestedWidth = Number(savedColumn?.width)
-      const minWidth = Number(defaultColumn.minWidth || 44)
-      merged.push({
-        ...defaultColumn,
-        width: Number.isFinite(requestedWidth) ? Math.max(minWidth, Math.min(640, requestedWidth)) : defaultColumn.width,
-      })
-      seen.add(key)
-    }
-  }
-  for (const defaultColumn of defaultColumns) {
-    if (seen.has(defaultColumn.key)) continue
-    merged.push({ ...defaultColumn })
-  }
-  return merged
-}
 
 const sectionHeadStyle = {
   fontSize: 11, fontWeight: 700, color: 'var(--accent2)',
@@ -289,143 +248,6 @@ function ConditionChip({ label, summary, active, expanded = true, onActivate, on
   )
 }
 
-/*
- * Scroll model mirrors the duplicate-rows dialog: a single outer scroll container owns both axes and the
- * pill header stays visible via position:sticky. A nested vertical scroll on the table body would consume
- * width from the grid's last column and clip the Amount cell when the scrollbar appears, so new column
- * previews or similar modals should keep this shape rather than wrapping a fillHeight table.
- */
-export function RulePreviewDetail({
-  transactions,
-  categories,
-  onClose,
-  title = 'Transactions Affected by This Rule',
-  subtitle,
-}) {
-  const [savedColumns, setSavedColumns] = useDeviceLayoutPreference(RULE_PREVIEW_COLUMNS_PREF_KEY, [])
-  const [columns, setColumns] = useState(() => normalizeRulePreviewColumnConfig(savedColumns, RULE_PREVIEW_DEFAULT_COLUMNS))
-
-  useEffect(() => {
-    setColumns(normalizeRulePreviewColumnConfig(savedColumns, RULE_PREVIEW_DEFAULT_COLUMNS))
-  }, [savedColumns])
-
-  function handleColumnsChange(nextColumns) {
-    setColumns(nextColumns)
-    setSavedColumns(nextColumns.map(col => ({ key: col.key, width: col.width }))).catch(() => { })
-  }
-
-  function renderCell(columnKey, txn) {
-    switch (columnKey) {
-      case 'date':
-        return <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(txn.date)}</span>
-      case 'merchant':
-        return <MerchantCell txn={txn} />
-      case 'category':
-        return <CategoryCell txn={txn} categories={categories} />
-      case 'account':
-        return (
-          <span
-            title={`${txn.account_name}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`}
-            style={{
-              color: 'var(--muted)',
-              fontSize: 12,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {txn.account_name}{txn.account_mask ? ` ···${txn.account_mask}` : ''}
-          </span>
-        )
-      case 'amount':
-        return <TransactionAmountCell txn={txn} />
-      default:
-        return null
-    }
-  }
-
-  const pillColumns = useMemo(
-    () => columns.map(col => ({
-      ...col,
-      draggable: true,
-      resizable: true,
-      title: `Drag middle to move ${col.label}`,
-    })),
-    [columns],
-  )
-
-  return (
-    <OverlayBackdrop zIndex={1400} tint="rgba(15, 23, 42, 0.42)">
-      <FloatingPanel style={{ width: 'min(960px, 100%)', maxHeight: vh(80), display: 'flex', flexDirection: 'column' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-              {subtitle ?? `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} where applying this rule would make a change`}
-            </div>
-          </div>
-          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
-        </FloatingPanelHeader>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {transactions.length === 0 ? (
-            <div style={{ margin: 18, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)' }}>
-              No transactions would be affected.
-            </div>
-          ) : (
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-              <div style={{ padding: '0 18px 18px' }}>
-                <PillGridTable
-                  columns={pillColumns}
-                  onColumnsChange={handleColumnsChange}
-                  headerStyle={{
-                    padding: '6px 0',
-                    background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
-                    position: 'sticky',
-                    top: 0,
-                    zIndex: 2,
-                  }}
-                  renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-                    <div style={{ fontSize: 13 }}>
-                      {transactions.map(txn => (
-                        <div
-                          key={txn.id}
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns,
-                            padding: '10px 0',
-                            alignItems: 'center',
-                            borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)',
-                          }}
-                        >
-                          {activeColumns.map(col => (
-                            <div
-                              key={col.key}
-                              style={{
-                                minWidth: 0,
-                                padding: '0 9px',
-                                ...(col.key === 'amount' ? {} : { overflow: 'hidden' }),
-                              }}
-                            >
-                              {renderCell(col.key, txn)}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-        <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', justifyContent: 'flex-end' }}>
-          <Button variant="secondary" onClick={onClose}>Close</Button>
-        </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
-  )
-}
-
 // One text box in the merchant matcher, with the joiner that ties it to the box above and, for any row
 // after the first, a remove button.
 function MatcherTextRow({ joiner, id, name, ariaLabel, autoFocus, value, placeholder, onFocus, onChange, onEscape, onRemove }) {
@@ -612,6 +434,9 @@ const RuleForm = forwardRef(function RuleForm({
   const [changeCount, setChangeCount] = useState(0)
   const [changeTransactions, setChangeTransactions] = useState([])
   const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
+  // Bumped by the preview report after a row is edited there, so the count and list are re-derived (a row
+  // trashed, or given the rule's own category, no longer changes).
+  const [previewNonce, setPreviewNonce] = useState(0)
   const changeDebounceRef = useRef(null)
 
   const [saving, setSaving] = useState(false)
@@ -701,7 +526,7 @@ const RuleForm = forwardRef(function RuleForm({
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clausesKey, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
+  }, [clausesKey, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly, previewNonce])
 
   const buildDraftPayload = useCallback(() => ({
     ...matcherPayload,
@@ -1234,10 +1059,12 @@ const RuleForm = forwardRef(function RuleForm({
         </div>
       )}
       {previewDetailOpen && changeTransactions.length > 0 && (
-        <RulePreviewDetail
+        <RulePreviewDialog
           transactions={changeTransactions}
           categories={categories}
           onClose={() => setPreviewDetailOpen(false)}
+          onChanged={() => setPreviewNonce(n => n + 1)}
+          offerRules={false}
         />
       )}
     </div>

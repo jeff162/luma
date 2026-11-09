@@ -15,6 +15,13 @@ import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import RecurringAmountMatchDialog from '../RecurringAmountMatchDialog.jsx'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 afterEach(cleanup)
 
 const SERIES = {

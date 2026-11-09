@@ -65,7 +65,8 @@ test('a stored document is named, attached from its transaction, moved back, and
   await name.fill('Tire quote.txt')
   await name.press('Enter')
   await expect(page.getByRole('button', { name: 'Tire quote.txt', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  // The footer's Close, by its text: the panel's × is labelled Close too.
+  await page.getByText('Close', { exact: true }).click()
   await expect(page.getByRole('button', { name: 'Stored documents (1)' })).toBeVisible()
 
   // Attach it from a transaction.

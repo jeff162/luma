@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { formatTimestamp } from '../lib/utils.js'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
-import { AppDialog, Button } from './ui.jsx'
+import { Button } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 
 /*
  * Choosing a stored document to attach to a transaction.
@@ -37,13 +37,14 @@ export default function StoredDocumentPicker({ documents, onAttach, onClose }) {
     }
   }
 
-  return createPortal(
+  // Floating, as the viewer it opens is: a modal here would cover the viewer, which floats beneath it.
+  return (
     <>
-      <AppDialog
+      <FloatingDialog
+        panelKey="ui.storedDocumentPicker.panel"
         title="Attach a stored document"
         onClose={onClose}
-        dismissOnBackdrop
-        width="min(560px, 100%)"
+        width={560}
         actions={<Button variant="secondary" onClick={onClose}>Cancel</Button>}
       >
         {error ? <div style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}
@@ -75,9 +76,8 @@ export default function StoredDocumentPicker({ documents, onAttach, onClose }) {
             </div>
           ))}
         </div>
-      </AppDialog>
+      </FloatingDialog>
       {viewing ? <DocumentViewerDialog document={viewing} onClose={() => setViewing(null)} /> : null}
-    </>,
-    document.body,
+    </>
   )
 }

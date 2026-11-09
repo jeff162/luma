@@ -22,7 +22,8 @@ import OwnerChip, { ownerChipLabels } from './OwnerChip.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import { UndoToast } from './CategoryTreePrimitives.jsx'
-import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
+import { Button, EmptyState, Spinner } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 
 /*
@@ -252,12 +253,16 @@ export default function ReimbursementsReportDialog({
     }
   }
 
+  // A report, so it floats like the others: it can be moved aside while the ledger behind is checked.
+  // What it opens sits beside it rather than inside, so each takes its own place in the stack.
   return createPortal(
-    <AppDialog
+    <>
+    <FloatingDialog
+      panelKey="ui.reimbursementsReport.panel"
       title="Reimbursements"
       description="Money that left as an expense and is expected back. Completed ones drop off this list."
       onClose={onClose}
-      width="min(700px, 100%)"
+      width={700}
       bodyStyle={{ display: 'flex', flexDirection: 'column' }}
       actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
@@ -429,10 +434,11 @@ export default function ReimbursementsReportDialog({
         </div>
       ) : null}
 
+    </FloatingDialog>
       {looseTxn ? (
         // Centered rather than floating, the same choice the rule-suggestion review makes when it hosts
-        // this panel from inside a dialog: a floating panel measures and snaps on open, which reads as a
-        // stutter on top of an overlay that is already placed.
+        // this panel: a floating panel measures and snaps on open, which reads as a stutter on top of a
+        // surface that is already placed.
         <div style={{ position: 'fixed', inset: 0, zIndex: 960 }}>
           <TransactionDetail
             txn={looseTxn}
@@ -448,8 +454,7 @@ export default function ReimbursementsReportDialog({
       ) : null}
 
       {undo ? (
-        // Above the dialog that raised it: the shared toast's default sits below an AppDialog, where it
-        // would be hidden behind this surface.
+        // Above every dialog, as the toast for an action taken in one has to be.
         <UndoToast
           title={undo.title}
           description={undo.description}
@@ -470,7 +475,7 @@ export default function ReimbursementsReportDialog({
           onSaved={afterChange}
         />
       ) : null}
-    </AppDialog>,
+    </>,
     document.body,
   )
 }

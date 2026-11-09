@@ -53,7 +53,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. A form panel passes its Save and Cancel as `footer`, which stays pinned under the scrolling body. | `components/detailShared.jsx` |
+| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. A dialog-shaped one is a `FloatingDialog`; use these directly for a panel with its own layout, such as a detail panel or a minimizable report. A form panel passes its Save and Cancel as `footer`, which stays pinned under the scrolling body. | `components/detailShared.jsx` |
 | `useRestorablePanelGeometry` | Remembering where the user left a floating panel. | `components/detailShared.jsx` |
 | `usePanelReveal` | A panel whose size settles after its content loads. | `components/detailShared.jsx` |
 | `DetailRangeControl` + `computeDetailRange` | The Month / Year / All-time selector of a drill list. | `components/detailShared.jsx` |
@@ -85,6 +85,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `ui.jsx` primitives | `Card`, `Button`, `Select`, `Input`, `Badge`, `Spinner`, `EmptyState`, `Tooltip`, `PageHeader`, `Toggle`, `SelectAllCheckbox`, `CategoryMarker`, and the style helpers `getFormControlStyle` / `getFloatingPanelSurfaceStyle` / `getTooltipSurfaceStyle` / `VISUALLY_HIDDEN_STYLE`. | `components/ui.jsx` |
 | `SectionListPage` (+ `useSectionParam`, `Subsection`) | A page of many sections that are each visited occasionally. | `components/SectionListPage.jsx` |
 | `SegmentedToggle` | Switching between peer views of one subject; `size="compact"` for a choice that adjusts a list or a form (a sort order, a scope). | `components/ui.jsx` |
+| `FloatingDialog` | A dialog the user works in while looking at the page: an editor, a picker, a report. It takes `AppDialog`'s props plus a `panelKey`, moves, resizes, reopens where it was left, and portals itself to `<body>`. | `components/FloatingDialog.jsx` |
 | `AppDialog` / `AppConfirmDialog` / `AppNoticeDialog` / `AppTextEntryDialog` | A dialog that is opened, answered and closed. The body scrolls with the header and actions pinned, so a caller does not cap its own content height. Opened from inside a row or a list, portal it to `<body>`, because it renders where it is mounted. | `components/ui.jsx` |
 | `Button` | Every labelled action. `size="compact"` for one repeated on every row or card, `pressed` for a toggle. | `components/ui.jsx` |
 | `Button`'s `progress` | A long action reporting progress on the button that started it. | `components/ui.jsx` |

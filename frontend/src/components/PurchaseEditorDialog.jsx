@@ -10,7 +10,8 @@ import {
   purchaseDisplayLabel,
   signedExpectedTotal,
 } from '../lib/purchaseLinks.js'
-import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
+import { AppConfirmDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { formatDate } from '../lib/utils.js'
 
 /*
@@ -22,11 +23,11 @@ import { formatDate } from '../lib/utils.js'
  * has nowhere to inline an editor, and two implementations of one editor is the drift this repo keeps
  * finding in its own history.
  *
- * **It portals to the body, and that is load-bearing rather than tidy.** `AppDialog` renders where it
- * is mounted, and one of the two hosts is a *ledger row* — a `position: fixed` overlay inside a table
- * is positioned and stacked against whatever ancestor established a containing block, not the
- * viewport. `DocumentViewerDialog` records the symptom that taught this: opened from a row it surfaced
- * underneath the page header with its title bar cut off.
+ * **It floats, and its confirmations portal to the body beside it.** Floating, so the ledger can be read
+ * while payments are added; one of its hosts is a *ledger row*, and a `position: fixed` overlay inside a
+ * table is positioned and stacked against whatever ancestor established a containing block, not the
+ * viewport (`FloatingDialog` portals itself for that reason). The confirmations sit beside the dialog
+ * rather than inside it, so they stack above it like any other modal.
  *
  * **Fields are explicit-submit; the payment actions are immediate.** Three fields are a form, so a
  * click-away must not persist a half-typed invoice total. Removing a payment and ungrouping act at
@@ -129,7 +130,9 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
     : Math.round((previewExpected - purchase.linked_total) * 100) / 100
 
   return createPortal(
-    <AppDialog
+    <>
+    <FloatingDialog
+      panelKey="ui.purchaseEditor.panel"
       title={purchase ? purchaseDisplayLabel(purchase) : 'Purchase'}
       description={
         purchase
@@ -137,7 +140,7 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
           : undefined
       }
       onClose={onClose}
-      width="min(560px, 100%)"
+      width={560}
       actions={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>{purchase ? 'Cancel' : 'Close'}</Button>
@@ -217,6 +220,7 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
         </div>
       ) : null}
 
+    </FloatingDialog>
       {pendingRemoval ? (
         <AppConfirmDialog
           title="Remove this payment from the purchase?"
@@ -240,7 +244,7 @@ export default function PurchaseEditorDialog({ txnId, onClose, onSaved }) {
           onCancel={() => setUngrouping(false)}
         />
       ) : null}
-    </AppDialog>,
+    </>,
     document.body,
   )
 }

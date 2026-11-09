@@ -17,6 +17,13 @@ import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 import { BUSY_INDICATOR_DELAY_MS, PAINT_GATE_DELAY_MS } from '../../lib/useBusyIndicator.js'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/txnMutations.js', async importOriginal => ({
   ...await importOriginal(),
   txnMutations: { saveSplit: vi.fn(), deleteSplit: vi.fn() },

@@ -160,6 +160,9 @@ export default function TransactionListTable({
   // there is nothing for the marker to reconcile against there.
   markExcludedFromTotals = false,
   emptyMessage = 'No transactions found.',
+  // Off where a rule is already being written: the rule editor's own preview of what it would change,
+  // where a second "create a rule?" would compete with the one on screen.
+  offerRuleSuggestions = true,
   scrollRef = null,
   // A host paging its rows by position (usePagedTransactions) passes its `paging`: the table then draws
   // `paging.slots`, the whole result with placeholders where pages have not arrived, and reports the rows
@@ -283,7 +286,7 @@ export default function TransactionListTable({
               : undefined}
             onAddCategory={onAddCategory}
             onOpenSplit={rowActions.openSplitFromMenu}
-            onRulePrompt={setRulePrompt}
+            onRulePrompt={offerRuleSuggestions ? setRulePrompt : undefined}
           />
         )
       case 'account': {

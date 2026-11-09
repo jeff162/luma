@@ -10,7 +10,8 @@ import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, Empt
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
-import RuleForm, { amountConditionSummary, RulePreviewDetail, ruleFormInitialValues } from '../components/RuleForm.jsx'
+import RuleForm, { amountConditionSummary, ruleFormInitialValues } from '../components/RuleForm.jsx'
+import RulePreviewDialog from '../components/RulePreviewDialog.jsx'
 import { isLowPriority } from '../lib/rulePriority.js'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
@@ -20,7 +21,7 @@ import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
 import RuleFindingsDialog from '../components/RuleFindingsDialog.jsx'
 import { RuleMatcherText } from '../components/RuleSummary.jsx'
-import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../components/detailShared.jsx'
+import FloatingDialog from '../components/FloatingDialog.jsx'
 import { formatRuleMatcher } from '../lib/ruleMatcher.js'
 import { formatDate, localIsoDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
@@ -273,11 +274,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
   // choice made about an edit the user then abandoned.
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteReconcile, setDeleteReconcile] = useState(false)
-  // A floating panel that moves and resizes, so it can sit beside the rule checkup that opened it.
-  const geometry = useRestorablePanelGeometry('ui.rules.editorPanel', { fallbackWidth: 760, fallbackHeight: 900 })
-  // Until it has a remembered place, it opens one step down and right of center, so a checkup opened
-  // behind it keeps its header in view.
-  const chrome = useDetailPanelChrome(onCancel, { forceFloating: true, stackIndex: geometry.initialPosition ? 0 : 1, ...geometry })
 
   if (!rule) return null
 
@@ -303,12 +299,19 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
     setDeleteReconcile(false)
   }
 
+  // Floating, so it can sit beside the rule checkup that opened it. Until it has a remembered place it
+  // opens one step down and right of center, so a checkup opened behind it keeps its header in view.
   return (
-    <DetailPanelShell
-      {...chrome}
+    <FloatingDialog
+      panelKey="ui.rules.editorPanel"
+      width={760}
+      height={900}
+      stackIndex={1}
       onClose={onCancel}
       bodyPadding={0}
-      footer={(
+      bodyStyle={{ gap: 0 }}
+      footerAlign="between"
+      actions={(
         <>
           <label
             title="Re-evaluate the transactions this rule previously categorized: rows this edit no longer covers revert (to another matching rule or uncategorized) instead of keeping this rule's old category. Off leaves existing categorizations as they are."
@@ -396,7 +399,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
         </AppConfirmDialog>,
         document.body,
       ) : null}
-    </DetailPanelShell>
+    </FloatingDialog>
   )
 }
 
@@ -1082,7 +1085,7 @@ export default function Rules() {
       ) : null}
 
       {matchReport ? (
-        <RulePreviewDetail
+        <RulePreviewDialog
           transactions={matchReport.data.transactions}
           categories={categories}
           title={`Transactions matching “${formatRuleMatcher(matchReport.rule)}”`}

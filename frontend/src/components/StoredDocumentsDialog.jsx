@@ -6,7 +6,8 @@ import { api } from '../lib/api.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import DocumentAttachTarget from './DocumentAttachTarget.jsx'
 import DocumentList from './DocumentList.jsx'
-import { AppDialog, Button } from './ui.jsx'
+import { Button } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 
 /*
  * The stored documents: paperwork kept before the transaction it belongs to has arrived.
@@ -25,16 +26,14 @@ export default function StoredDocumentsDialog({ documents, reload, onClose }) {
   const [renameId, setRenameId] = useState(null)
 
   return (
-    <AppDialog
-      title={(
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          Stored documents
-          <FeatureExplainer topic="transaction-documents" placement="bottom-left" />
-        </span>
-      )}
+    // Floating, so a document can be compared with the ledger while it waits for its transaction.
+    <FloatingDialog
+      panelKey="ui.storedDocuments.panel"
+      title="Stored documents"
+      help={<FeatureExplainer topic="transaction-documents" placement="bottom-left" />}
       description="Receipts and invoices kept until their transaction arrives. Attach one from that transaction's Documents section."
       onClose={onClose}
-      width="min(640px, 100%)"
+      width={640}
       actions={<Button onClick={onClose}>Close</Button>}
     >
       <DocumentList documents={documents || []} onChange={reload} renameId={renameId} />
@@ -50,6 +49,6 @@ export default function StoredDocumentsDialog({ documents, reload, onClose }) {
           await reload()
         }}
       />
-    </AppDialog>
+    </FloatingDialog>
   )
 }

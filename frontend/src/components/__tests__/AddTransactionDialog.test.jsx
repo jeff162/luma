@@ -16,6 +16,13 @@ import AddTransactionDialog from '../AddTransactionDialog.jsx'
 import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/txnMutations.js', async importOriginal => ({
   ...await importOriginal(),
   txnMutations: { createTransaction: vi.fn(), saveSplit: vi.fn() },

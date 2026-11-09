@@ -37,7 +37,8 @@ import { round2 } from '../lib/manualTransaction.js'
 import { distributeRemainder } from '../lib/splitDistribution.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
-import { AppDialog, Button, Input, Tooltip, IconButton } from './ui.jsx'
+import { Button, Input, Tooltip, IconButton } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { parseAmountInput, formatAmountInput } from '../lib/displayFormat.js'
 
 // Money reconciles at the cent, and amounts arrive as text the user is mid-way through typing, so the
@@ -287,11 +288,13 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     }
   }
 
+  // Floating, so the transaction and its items stay readable beside it.
   return (
-    <AppDialog
+    <FloatingDialog
+      panelKey="ui.splitEditor.panel"
       title="Split across categories"
       description={txn?.display_name || txn?.merchant_name || undefined}
-      width="min(600px, 100%)"
+      width={600}
       onClose={onClose}
       actions={(
         <>
@@ -426,9 +429,6 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       // on click, so the picker's trigger cannot be relied on to report one.
                       onChange={id => { setSelectedKey(row.key); update(row.key, { category_id: id }) }}
                       onAddCategory={onAddCategory}
-                      // The picker portals its dropdown to <body> at 1100 by default, which is *behind*
-                      // an AppDialog (1200) — it has to be raised to be visible from inside one.
-                      panelZIndex={1300}
                     />
                   </div>
                   <Input
@@ -548,6 +548,6 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
           {error ? <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div> : null}
         </div>
       )}
-    </AppDialog>
+    </FloatingDialog>
   )
 }

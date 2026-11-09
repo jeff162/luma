@@ -29,14 +29,13 @@
  */
 
 import { useState } from 'react'
-import { createPortal } from 'react-dom'
-import { AppDialog, Button, Input, Toggle } from './ui.jsx'
+import { Button, Input, Toggle } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { formatCurrency } from '../lib/utils.js'
 import { parseAmountInput, formatAmountInput } from '../lib/displayFormat.js'
 
-// The dialog is opened from a card in a long list, so it portals to the body: a fixed overlay is
-// positioned and stacked against whatever ancestor established a containing block, not the viewport.
-// See the comment on `AppDialog` in `ui.jsx`.
+// Floating, so the series' charges can be read while the range is set. It is opened from a card in a
+// long list, which FloatingDialog's portal to the body is for.
 export default function RecurringAmountMatchDialog({ series, suggested = null, onClose, onSave }) {
   const observedLow = Math.min(Math.abs(series.amount_min ?? 0), Math.abs(series.amount_max ?? 0))
   const observedHigh = Math.max(Math.abs(series.amount_min ?? 0), Math.abs(series.amount_max ?? 0))
@@ -89,12 +88,13 @@ export default function RecurringAmountMatchDialog({ series, suggested = null, o
     }
   }
 
-  return createPortal(
-    <AppDialog
+  return (
+    <FloatingDialog
+      panelKey="ui.recurringAmountMatch.panel"
       title="Amount matching"
       description={series.display_name}
       onClose={onClose}
-      width="min(460px, 100%)"
+      width={460}
       actions={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -162,7 +162,6 @@ export default function RecurringAmountMatchDialog({ series, suggested = null, o
       {error ? (
         <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--danger)' }}>{error}</div>
       ) : null}
-    </AppDialog>,
-    document.body,
+    </FloatingDialog>
   )
 }

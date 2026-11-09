@@ -25,7 +25,7 @@ vi.mock('../../../lib/api.js', () => ({ api }))
 const txnMutations = vi.hoisted(() => ({ bulkUpdate: vi.fn(), setCategory: vi.fn() }))
 vi.mock('../../../lib/txnMutations.js', () => ({ txnMutations }))
 vi.mock('../../detailShared.jsx', () => ({
-  DetailPanelShell: ({ header, children }) => <div>{header}{children}</div>,
+  DetailPanelShell: ({ header, children, footer }) => <div>{header}{children}{footer}</div>,
   useDetailPanelChrome: () => ({ pos: {}, size: {}, panelRef: { current: null }, onDragStart: () => {}, onResizeStart: () => {} }),
   useRestorablePanelGeometry: () => ({}),
 }))

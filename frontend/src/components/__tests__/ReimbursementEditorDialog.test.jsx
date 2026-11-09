@@ -17,6 +17,13 @@ import ReimbursementEditorDialog from '../ReimbursementEditorDialog.jsx'
 import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/txnMutations.js', async importOriginal => ({
   ...await importOriginal(),
   txnMutations: { completeReimbursement: vi.fn(), reopenReimbursement: vi.fn() },
@@ -387,7 +394,7 @@ describe('the footer of a completed reimbursement', () => {
 
   it('offers one Close while nothing has been typed', async () => {
     open(completed())
-    expect(await screen.findByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(await screen.findByText('Close', { selector: 'button' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
@@ -397,7 +404,7 @@ describe('the footer of a completed reimbursement', () => {
     await userEvent.type(await screen.findByLabelText('Name'), '!')
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(screen.queryByText('Close', { selector: 'button' })).toBeNull()
   })
 
   it('settles back to Close when the edit is undone', async () => {
@@ -408,7 +415,7 @@ describe('the footer of a completed reimbursement', () => {
     await userEvent.type(field, '!')
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
     await userEvent.type(field, '{backspace}')
-    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(screen.getByText('Close', { selector: 'button' })).toBeTruthy()
   })
 
   it('leaves an open record with its full action row', async () => {
@@ -417,7 +424,7 @@ describe('the footer of a completed reimbursement', () => {
     // linking, removing and completing have all already acted, so Cancel would promise an undo of
     // something it cannot undo.
     open(record())
-    expect(await screen.findByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(await screen.findByText('Close', { selector: 'button' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Mark complete' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
@@ -427,7 +434,7 @@ describe('the footer of a completed reimbursement', () => {
     open(record())
     await userEvent.type(await screen.findByLabelText('Name'), '!')
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(screen.queryByText('Close', { selector: 'button' })).toBeNull()
   })
 })
 
@@ -508,7 +515,7 @@ describe('a draft from an untracked expense', () => {
     const onClose = vi.fn()
     openDraft({ onClose })
     expect(await screen.findByText('Hardware Store')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await userEvent.click(screen.getByText('Close', { selector: 'button' }))
     expect(onClose).toHaveBeenCalled()
     expect(api.createReimbursement).not.toHaveBeenCalled()
     expect(api.getReimbursement).not.toHaveBeenCalled()

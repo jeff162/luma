@@ -30,6 +30,7 @@ import {
 import { localIsoDate, formatDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppConfirmDialog, AppDialog, Button, Input, Spinner, IconButton } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 
 /*
  * The reimbursement editor: what is owed, what came back, and the one decision only the user can make.
@@ -343,8 +344,12 @@ export default function ReimbursementEditorDialog({
   const completeReady = nothingToMove
     || (!!completeCategory && (!needsTargetChoice(reimbursement) || !!completeTarget))
 
+  // Floating, so the ledger can be searched for the repayment while this is open. Its confirmations and
+  // the link picker sit beside it rather than inside, so they stack above it like any other modal.
   return createPortal(
-    <AppDialog
+    <>
+    <FloatingDialog
+      panelKey="ui.reimbursementEditor.panel"
       // Reads the *form*, not the saved record, so the heading follows the name as it is typed — which
       // is what says that field is the title.
       title={form ? reimbursementDisplayLabel({ counterparty: form.counterparty })
@@ -357,7 +362,7 @@ export default function ReimbursementEditorDialog({
             : undefined
       }
       onClose={onClose}
-      width="min(620px, 100%)"
+      width={620}
       footerAlign="between"
       actions={
         <>
@@ -516,9 +521,6 @@ export default function ReimbursementEditorDialog({
                     showSelectedBadge
                     onChange={setCompleteCategory}
                     onAddCategory={handleAddCategory}
-                    // The picker portals its dropdown to <body> at 1100, which is behind an AppDialog
-                    // (1200) — it has to be raised to be visible from inside one.
-                    panelZIndex={1300}
                   />
                 </div>
               )}
@@ -535,6 +537,7 @@ export default function ReimbursementEditorDialog({
         </div>
       ) : null}
 
+    </FloatingDialog>
       {pendingRemoval ? (
         <AppConfirmDialog
           title="Remove this transaction from the reimbursement?"
@@ -646,7 +649,7 @@ export default function ReimbursementEditorDialog({
           onCancel={() => setMoving(null)}
         />
       ) : null}
-    </AppDialog>,
+    </>,
     document.body,
   )
 }

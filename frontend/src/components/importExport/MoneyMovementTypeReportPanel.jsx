@@ -3,9 +3,9 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { Spinner, FloatingPanel, FloatingPanelHeader, IconButton, OverlayBackdrop } from '../ui.jsx'
+import { Spinner } from '../ui.jsx'
+import FloatingDialog from '../FloatingDialog.jsx'
 import TransactionListTable from '../TransactionListTable.jsx'
-import { vh } from '../../lib/displaySize.js'
 
 /*
  * Drill-down for one PayPal money-movement `Type`, opened from the review's per-type arrow. It fetches
@@ -23,8 +23,8 @@ import { vh } from '../../lib/displaySize.js'
  *     Money movement. A trusted import's category is not protected: a matching rule takes it. Each row
  *     shows that category, and opening it reveals its Origin/source.
  *
- * Stacked above the review dialog (a second FloatingPanel), matching the drill-down affordance used
- * elsewhere rather than turning the count into a link.
+ * Opened above the review as a second floating dialog, matching the drill-down affordance used
+ * elsewhere rather than turning the count into a link; a first opening steps aside from the review.
  */
 export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accountIds = [], categories = [], onClose }) {
   const [rows, setRows] = useState(null)   // null = loading
@@ -46,17 +46,16 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
   const notAffected = (rows || []).filter(r => r.category_overridden)
 
   return (
-    <OverlayBackdrop zIndex={1300} tint="rgba(15, 23, 42, 0.30)" onClick={onClose}>
-      <FloatingPanel style={{ width: 'min(860px, 100%)', maxHeight: `calc(${vh(100)} - 120px)`, display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
-        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{type}</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>Transactions on this source carrying this PayPal type</div>
-          </div>
-          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
-        </FloatingPanelHeader>
-
-        <div style={{ padding: '8px 16px 16px', overflowY: 'auto' }}>
+    <FloatingDialog
+      panelKey="ui.moneyMovementTypeReport.panel"
+      title={type}
+      description="Transactions on this source carrying this PayPal type"
+      onClose={onClose}
+      width={860}
+      stackIndex={1}
+      bodyPadding="8px 16px 16px"
+    >
+        <div>
           {rows === null ? (
             <Spinner />
           ) : rows.length === 0 ? (
@@ -108,7 +107,6 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
             </>
           )}
         </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
+    </FloatingDialog>
   )
 }

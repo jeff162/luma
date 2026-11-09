@@ -25,7 +25,6 @@ vi.mock('../../components/RuleForm.jsx', () => ({
     return <div data-testid="rule-form" />
   }),
   amountConditionSummary: () => null,
-  RulePreviewDetail: () => null,
   ruleFormInitialValues: () => ({}),
 }))
 

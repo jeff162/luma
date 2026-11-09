@@ -14,7 +14,8 @@ import {
 import { localIsoDate } from '../lib/utils.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
-import { AppDialog, Button, Input, SegmentedToggle, Spinner, Tooltip } from './ui.jsx'
+import { Button, Input, SegmentedToggle, Spinner, Tooltip } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 
 /*
  * Recording a transaction by hand: cash, a cheque, a charge on an account nothing syncs.
@@ -109,13 +110,16 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
     }
   }
 
+  // Floating, so a statement or receipt elsewhere in the app can be read while it is filled in. It must
+  // not be modal in any case: the split editor it opens floats, and would open beneath a modal.
   return createPortal(
     <>
-      <AppDialog
+      <FloatingDialog
+        panelKey="ui.addTransaction.panel"
         title="Add a transaction"
         description="For anything the app cannot see for itself — cash, a cheque, an account that is not connected."
         onClose={onClose}
-        width="min(560px, 100%)"
+        width={560}
         actions={
           <>
             <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -212,8 +216,6 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
                       clearable
                       onChange={id => update({ categoryId: id })}
                       onAddCategory={onAddCategory}
-                      // The picker portals its dropdown to <body> at 1100, which is behind an AppDialog (1200).
-                      panelZIndex={1300}
                     />
                   </div>
                 )}
@@ -244,10 +246,9 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
             {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
           </div>
         )}
-      </AppDialog>
-      {/* A sibling of the dialog rather than a child of its body: an overlay nested inside a scrolling
-          panel is placed against that panel, and both dialogs share a stacking level, so the one
-          mounted later is the one on top. */}
+      </FloatingDialog>
+      {/* A sibling of the dialog rather than a child of its body, so each takes its own place in the
+          panel stack and the one opened later is on top. */}
       {splitOpen ? (
         <SplitEditorDialog
           // No id: a draft, so the editor neither reads nor writes anything — it hands its items back

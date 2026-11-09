@@ -5,9 +5,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Badge, Button, DialogActions, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, IconButton } from './ui.jsx'
+import { Badge, Button } from './ui.jsx'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
-import { vh, vw } from '../lib/displaySize.js'
+import FloatingDialog from './FloatingDialog.jsx'
 
 const TIMEOUT_MS = 8000
 
@@ -144,19 +144,29 @@ function RuleModal({ prompt, onSave, onCancel }) {
   // the worse failure.
   if (loading && !loadSlow) return null
 
+  // Floating, as the Rules page's editor is, so it can be moved off the transactions it is being written
+  // for while the page behind stays live to check them.
   return (
-    <OverlayBackdrop zIndex={900} tint="rgba(0,0,0,0.5)" blur={0}>
-      <FloatingPanel style={{ width: 540, maxWidth: vw(94), maxHeight: vh(90), display: 'flex', flexDirection: 'column' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px', flexShrink: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>⚙️ Create categorization rule</div>
-          <IconButton size="large" aria-label="Close" onClick={onCancel}>×</IconButton>
-        </FloatingPanelHeader>
-
-        {loading ? (
-          <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
-        ) : (
-          <>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+    <FloatingDialog
+      panelKey="ui.ruleSuggestion.panel"
+      title="⚙️ Create categorization rule"
+      onClose={onCancel}
+      width={560}
+      bodyPadding={0}
+      bodyStyle={{ gap: 0 }}
+      actions={loading ? null : (
+        <>
+          <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !draftState.canSave}>
+            {saving ? 'Saving…' : (existingRule ? 'Save changes' : 'Save rule')}
+          </Button>
+        </>
+      )}
+    >
+      {loading ? (
+        <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
+      ) : (
+        <>
           {error ? (
             <div style={{
               margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
@@ -205,17 +215,9 @@ function RuleModal({ prompt, onSave, onCancel }) {
             onDraftChange={setDraftState}
             transactionData={prompt.transactionData}
           />
-          </div>
-          <DialogActions style={{ flexShrink: 0 }}>
-            <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
-            <Button onClick={submit} disabled={saving || !draftState.canSave}>
-              {saving ? 'Saving…' : (existingRule ? 'Save changes' : 'Save rule')}
-            </Button>
-          </DialogActions>
-          </>
-        )}
-      </FloatingPanel>
-    </OverlayBackdrop>
+        </>
+      )}
+    </FloatingDialog>
   )
 }
 
@@ -278,7 +280,10 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
 
   return (
     <>
+      {/* Hidden while its editor is open, which is non-modal: a second Create rule or a Dismiss would
+          act on a suggestion the editor is already answering. */}
       <div style={{
+        display: showModal ? 'none' : undefined,
         position: 'fixed', bottom: 28, right: 28, zIndex: 800,
         background: 'var(--surface)', border: '1px solid var(--border)',
         borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.35)',

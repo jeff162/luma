@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../../../lib/api.js', () => ({ api }))
 vi.mock('../../detailShared.jsx', () => ({
-  DetailPanelShell: ({ header, children }) => <div>{header}{children}</div>,
+  DetailPanelShell: ({ header, children, footer }) => <div>{header}{children}{footer}</div>,
   useDetailPanelChrome: () => ({ pos: {}, size: {}, panelRef: { current: null }, onDragStart: () => {}, onResizeStart: () => {} }),
   useRestorablePanelGeometry: () => ({}),
 }))

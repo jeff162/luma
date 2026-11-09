@@ -76,13 +76,16 @@ function readViewport() {
 
 // The size a panel may actually occupy in a given viewport. Takes the viewport rather than reading the
 // window, so a render can re-derive it from state and a live gesture can pass the current one.
+// A size without a height fits its content (capped to the viewport by the shell) until a resize gives it one.
 function clampPanelSize(next, view) {
   if (!next) return null
   const maxWidth = Math.max(DETAIL_PANEL_MIN_WIDTH, view.width - DETAIL_FLOATING_EDGE_GUTTER * 2)
   const maxHeight = Math.max(DETAIL_PANEL_MIN_HEIGHT, view.height - DETAIL_FLOATING_TOP_GUTTER - DETAIL_FLOATING_EDGE_GUTTER)
   return {
     width: Math.max(DETAIL_PANEL_MIN_WIDTH, Math.min(maxWidth, next.width)),
-    height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.min(maxHeight, next.height)),
+    height: typeof next.height === 'number'
+      ? Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.min(maxHeight, next.height))
+      : undefined,
   }
 }
 
@@ -355,14 +358,15 @@ export function useDetailPanelChrome(onClose, options = {}) {
 // proportionally (a panel saved bottom-right on 1920×1080 stays bottom-right on 1280×720, just smaller);
 // min sizes are re-enforced after scaling so an aggressive shrink can't produce an unusable panel, and
 // the chrome hook's own clamp pass is the final safety net. Shared by every detached report dialog.
+// `fallbackHeight: null` opens the panel at its content's height until the user resizes it.
 export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fallbackHeight = 720, edgeGutter = 48, topGutter = 160 } = {}) {
   const [savedPanel, setSavedPanel] = useUserPreference(prefKey, null)
   const { initialPosition, initialSize } = useMemo(() => {
     const hasWindow = typeof window !== 'undefined'
-    const view = hasWindow ? readViewport() : { width: fallbackWidth, height: fallbackHeight }
+    const view = hasWindow ? readViewport() : { width: fallbackWidth, height: fallbackHeight ?? 720 }
     const fallbackSize = {
       width:  Math.min(fallbackWidth,  view.width  - edgeGutter),
-      height: Math.min(fallbackHeight, view.height - topGutter),
+      height: fallbackHeight == null ? undefined : Math.min(fallbackHeight, view.height - topGutter),
     }
     if (!savedPanel || !hasWindow) return { initialPosition: null, initialSize: fallbackSize }
     const savedViewport = savedPanel.viewport
@@ -374,7 +378,9 @@ export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fall
     const scaleY = view.height / savedViewport.height
     const scaledSize = savedPanel.size ? {
       width:  Math.max(DETAIL_PANEL_MIN_WIDTH,  Math.round(savedPanel.size.width  * scaleX)),
-      height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.round(savedPanel.size.height * scaleY)),
+      height: typeof savedPanel.size.height === 'number'
+        ? Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.round(savedPanel.size.height * scaleY))
+        : undefined,
     } : fallbackSize
     const scaledPos = savedPanel.pos ? {
       x: Math.round(savedPanel.pos.x * scaleX),
@@ -851,6 +857,7 @@ export function DetailPanelShell({
   bodyPadding = '20px 24px',
   // Actions pinned under the body, so a long form keeps its Save and Cancel in reach.
   footer = null,
+  footerAlign = 'between',
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
@@ -880,6 +887,8 @@ export function DetailPanelShell({
     radius: 12,
   })
   const explicitSized = Boolean(size)
+  // A size with no height fits its content, held to the same cap as an unsized panel.
+  const explicitHeight = explicitSized && typeof size.height === 'number'
   // While an on-screen keyboard is open, a floating panel is kept inside the visible area above it,
   // moving only as far as it must, and its height is capped to what is left (see visibleViewport.js).
   const area = useVisibleViewport()
@@ -924,8 +933,8 @@ export function DetailPanelShell({
           maxWidth: explicitSized ? undefined : DETAIL_PANEL_WIDTH,
           // A filling panel takes its cap as its height, so the two stay one number: whatever the
           // viewport allows is both the most it may be and exactly what it is.
-          height: explicitSized ? size.height : (fillHeight ? availableHeight : undefined),
-          maxHeight: explicitSized ? (keyboardCap ?? undefined) : availableHeight,
+          height: explicitHeight ? size.height : (fillHeight ? availableHeight : undefined),
+          maxHeight: explicitHeight ? (keyboardCap ?? undefined) : availableHeight,
           display: 'flex',
           flexDirection: 'column',
           // 'auto' re-enables interaction inside the pointer-transparent floating backdrop; while the
@@ -951,7 +960,8 @@ export function DetailPanelShell({
           }}
         >
           <div style={{ flex: 1 }}>{header}</div>
-          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
+          {/* No onClose, no way to close: for a panel whose only exit is an action of its own. */}
+          {onClose ? <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton> : null}
         </div>
 
         {/* overflow:auto so panels whose total content (header rows + trend chart + selected
@@ -963,7 +973,7 @@ export function DetailPanelShell({
           {children}
         </div>
         {footer ? (
-          <DialogActions align="between" style={{ flexShrink: 0, borderRadius: '0 0 11px 11px' }}>
+          <DialogActions align={footerAlign} style={{ flexShrink: 0, borderRadius: '0 0 11px 11px' }}>
             {footer}
           </DialogActions>
         ) : null}

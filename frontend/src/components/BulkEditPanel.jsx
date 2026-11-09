@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { AppDialog, Button, FilterChip, SegmentedToggle, getFormControlStyle } from './ui.jsx'
+import { Button, FilterChip, SegmentedToggle, getFormControlStyle } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { useTags } from '../lib/useTags.js'
@@ -92,12 +93,12 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
   const canApply = actions.length > 0 && !applying
 
   return (
-    <AppDialog
+    <FloatingDialog
+      panelKey="ui.bulkEdit.panel"
       title={`Edit ${count} transaction${count === 1 ? '' : 's'}`}
       description="Only the fields you enable are changed. Drag the header to move this aside and see the transactions."
       onClose={onCancel}
-      width="min(560px, 100%)"
-      draggable
+      width={560}
       actions={(
         <>
           <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -113,7 +114,6 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
           categories={categories}
           placeholder="Choose a category…"
           showSelectedBadge
-          panelZIndex={1300}
           onChange={value => setCategoryId(value)}
         />
       </FieldRow>
@@ -180,6 +180,6 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
           ]}
         />
       </FieldRow>
-    </AppDialog>
+    </FloatingDialog>
   )
 }

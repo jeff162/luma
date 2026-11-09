@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo, useState } from 'react'
-import { AppDialog, Button } from '../../ui.jsx'
+import { Button } from '../../ui.jsx'
+import FloatingDialog from '../../FloatingDialog.jsx'
 import { formatTransactionAmount } from '../../../lib/moneyDisplay.js'
 import { formatDate } from '../../../lib/utils.js'
 import { vh } from '../../../lib/displaySize.js'
@@ -45,10 +46,12 @@ export function ChargePickerDialog({
     return next
   })
   return (
-    <AppDialog
+    // Floating, so the report row it is picking for stays in view beside it.
+    <FloatingDialog
+      panelKey="ui.chargePicker.panel"
       title={title}
       description={description}
-      width="min(640px, 100%)"
+      width={640}
       onClose={onCancel}
       actions={(
         <>
@@ -88,6 +91,6 @@ export function ChargePickerDialog({
           </label>
         ))}
       </div>
-    </AppDialog>
+    </FloatingDialog>
   )
 }

@@ -15,6 +15,13 @@ import { MemoryRouter } from 'react-router-dom'
 import { TransactionMarkersCell } from '../TransactionRow.jsx'
 import { api } from '../../lib/api.js'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/api.js', () => ({
   api: {
     getTags: vi.fn().mockResolvedValue([]),

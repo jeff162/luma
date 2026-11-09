@@ -3,9 +3,8 @@
 
 // The floating readout for a running sync. Deliberately **not** modal: the backend stopped holding its
 // write transaction across provider calls, so there is nothing to protect the user from while a sync runs
-// and blocking the app would cost usability for no safety. `AppDialog`'s `draggable` mode gives exactly
-// that — a panel with a click-through backdrop — rather than the heavier draggable/resizable
-// `DetailPanelShell`, which is for reports the user works *inside* rather than glances at.
+// and blocking the app would cost usability for no safety, so it is a `FloatingDialog`: the page stays
+// live and the panel moves aside.
 //
 // What it shows is chosen for the question a waiting user actually has, which is not "what percent":
 // there is no total to be a percent of, because a walk discovers where history ends by walking into it.
@@ -22,7 +21,8 @@
 // arithmetic behind it live in `SyncStatusContext` and `lib/syncRoster.js`.
 
 import { useNavigate } from 'react-router-dom'
-import { AppDialog, Button } from './ui.jsx'
+import { Button } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import { providerLabel } from '../lib/importSourceFields.js'
 import { rosterAdded, rosterCardIds, rosterRequests } from '../lib/syncRoster.js'
 
@@ -124,14 +124,15 @@ export function SyncStatusPanel({ connections = [], syncState = {}, runProviders
   const cardIds = rosterCardIds(connections)
   const navigate = useNavigate()
   return (
-    <AppDialog
-      draggable
+    <FloatingDialog
+      panelKey="ui.syncStatus.panel"
       title={active ? 'Syncing data connections' : 'Sync finished'}
       description={active
         ? 'This runs in the background — carry on using the app, or stash this to the sidebar and check back.'
         : undefined}
-      width="min(460px, 100%)"
-      onClose={onClose}
+      width={460}
+      // While a sync runs Minimize is the only way out (see the actions), so there is no close button.
+      onClose={active ? undefined : onClose}
       actions={(
         <>
           {/* Exactly one way out of each state, because the two are not interchangeable.
@@ -188,6 +189,6 @@ export function SyncStatusPanel({ connections = [], syncState = {}, runProviders
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>No sync is running.</div>
         ) : null}
       </div>
-    </AppDialog>
+    </FloatingDialog>
   )
 }

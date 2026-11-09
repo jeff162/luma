@@ -11,10 +11,10 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner, IconButton } from './ui.jsx'
+import { Button, Spinner } from './ui.jsx'
+import FloatingDialog from './FloatingDialog.jsx'
 import RuleSummary from './RuleSummary.jsx'
 import { formatDate } from '../lib/utils.js'
-import { vh } from '../lib/displaySize.js'
 
 export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone }) {
   const [candidates, setCandidates] = useState(null)
@@ -54,24 +54,43 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
 
   const total = candidates?.length ?? 0
 
+  // Floating, so the rules list behind can be checked while choosing which to keep.
   return (
-    <OverlayBackdrop zIndex={1400} tint="rgba(15, 23, 42, 0.42)">
-      <FloatingPanel style={{ width: 'min(720px, 100%)', maxHeight: vh(82), display: 'flex', flexDirection: 'column' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>Clean up unused rules</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-              {candidates == null
-                ? 'Finding rules…'
-                : total === 0
-                  ? `No rules have gone unused for ${windowLabel}.`
-                  : `${total} rule${total !== 1 ? 's' : ''} haven’t categorized anything in ${windowLabel}. Uncheck any you want to keep.`}
-            </div>
+    <FloatingDialog
+      panelKey="ui.ruleCleanup.panel"
+      title="Clean up unused rules"
+      description={candidates == null
+        ? 'Finding rules…'
+        : total === 0
+          ? `No rules have gone unused for ${windowLabel}.`
+          : `${total} rule${total !== 1 ? 's' : ''} haven’t categorized anything in ${windowLabel}. Uncheck any you want to keep.`}
+      onClose={onClose}
+      width={720}
+      bodyPadding="4px 8px"
+      bodyStyle={{ gap: 0 }}
+      footerAlign="between"
+      actions={(
+        <>
+          {total > 0 ? (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+              Also revert their categorizations (otherwise history is left as-is)
+            </label>
+          ) : <span />}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            {total > 0 ? (
+              <Button
+                onClick={run}
+                disabled={working || selected.size === 0}
+              >
+                {working ? 'Trashing…' : `Trash ${selected.size} rule${selected.size !== 1 ? 's' : ''}`}
+              </Button>
+            ) : null}
           </div>
-          <IconButton size="large" aria-label="Close" onClick={onClose}>×</IconButton>
-        </FloatingPanelHeader>
-
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 8px' }}>
+        </>
+      )}
+    >
           {candidates == null ? (
             <div style={{ padding: 24 }}><Spinner /></div>
           ) : total === 0 ? null : (
@@ -100,28 +119,6 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
               )
             })
           )}
-        </div>
-
-        <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          {total > 0 ? (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
-              Also revert their categorizations (otherwise history is left as-is)
-            </label>
-          ) : null}
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            {total > 0 ? (
-              <Button
-                onClick={run}
-                disabled={working || selected.size === 0}
-              >
-                {working ? 'Trashing…' : `Trash ${selected.size} rule${selected.size !== 1 ? 's' : ''}`}
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
+    </FloatingDialog>
   )
 }

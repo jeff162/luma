@@ -12,6 +12,13 @@ import { MemoryRouter } from 'react-router-dom'
 import { TransactionMarkersCell } from '../TransactionRow.jsx'
 import { api } from '../../lib/api.js'
 
+// A floating dialog remembers where it was left, a saved preference; local state stands in for the
+// app's provider.
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/api.js', () => ({
   api: {
     getTags: vi.fn().mockResolvedValue([]),
@@ -49,7 +56,7 @@ describe('the ledger document marker', () => {
     // Straight to the viewer: one document has nothing to choose between, so a chooser would be a
     // pointless click in the common case.
     expect(screen.getByLabelText('repair-invoice.pdf')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(screen.getByText('Close', { selector: 'button' })).toBeTruthy()
   })
 
   it('offers a choice when there are several', async () => {
@@ -60,7 +67,7 @@ describe('the ledger document marker', () => {
     // A repair arrives as an estimate and then a final invoice; the row cannot guess which is wanted.
     await user.click(screen.getByRole('button', { name: 'estimate.pdf' }))
 
-    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(screen.getByText('Close', { selector: 'button' })).toBeTruthy()
   })
 
   it('says the row matched inside a document, and offers to open it', async () => {
@@ -108,7 +115,7 @@ describe('the ledger document marker', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByLabelText(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file'))
 
-    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByText('Close', { selector: 'button' }))
     await user.click(screen.getByLabelText('Open the attached document'))
     expect(screen.getByLabelText(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file')
   })

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackdrop } from '../ui.jsx'
+import { Button } from '../ui.jsx'
+import FloatingDialog from '../FloatingDialog.jsx'
 import { StatusPill } from '../connections/ConnectionStatus.jsx'
 import { vh } from '../../lib/displaySize.js'
 
@@ -42,21 +43,32 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
   const remove = [...ruled].filter(type => !checked.has(type))
   const changeCount = add.length + remove.length
 
+  // Floating, so its per-type reports and the ledger can be checked beside it.
   return (
-    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.38)">
-      <FloatingPanel style={{ width: 'min(600px, 100%)' }}>
-        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>PayPal transfer classifications</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-              Classify which PayPal transaction types are transfers — deposits, withdrawals, currency
-              conversions, holds — so they go into the excluded <strong>Money movement</strong> category and
-              stay out of spending and income totals. These rules cover all your PayPal accounts and also
-              apply to matching transactions already in your ledger; unchecking a type removes its rule.
-            </div>
-          </div>
-        </FloatingPanelHeader>
-        <div style={{ padding: 12, display: 'grid', gap: 2, maxHeight: vh(55), overflowY: 'auto' }}>
+    <FloatingDialog
+      panelKey="ui.moneyMovementReview.panel"
+      title="PayPal transfer classifications"
+      description={(
+        <>
+          Classify which PayPal transaction types are transfers — deposits, withdrawals, currency
+          conversions, holds — so they go into the excluded <strong>Money movement</strong> category and
+          stay out of spending and income totals. These rules cover all your PayPal accounts and also
+          apply to matching transactions already in your ledger; unchecking a type removes its rule.
+        </>
+      )}
+      onClose={onClose}
+      width={600}
+      bodyPadding={12}
+      actions={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={applying}>{editing ? 'Cancel' : 'Not now'}</Button>
+          <Button onClick={() => onApply?.({ add, remove })} disabled={applying || changeCount === 0}>
+            {applying ? 'Applying…' : (changeCount === 0 ? 'No changes' : `Apply (${changeCount} change${changeCount === 1 ? '' : 's'})`)}
+          </Button>
+        </>
+      )}
+    >
+        <div style={{ display: 'grid', gap: 2, maxHeight: vh(55), overflowY: 'auto' }}>
           {proposals.map(proposal => (
             <div
               key={proposal.type}
@@ -97,13 +109,6 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
             </div>
           ))}
         </div>
-        <DialogActions>
-          <Button variant="secondary" onClick={onClose} disabled={applying}>{editing ? 'Cancel' : 'Not now'}</Button>
-          <Button onClick={() => onApply?.({ add, remove })} disabled={applying || changeCount === 0}>
-            {applying ? 'Applying…' : (changeCount === 0 ? 'No changes' : `Apply (${changeCount} change${changeCount === 1 ? '' : 's'})`)}
-          </Button>
-        </DialogActions>
-      </FloatingPanel>
-    </OverlayBackdrop>
+    </FloatingDialog>
   )
 }

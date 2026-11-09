@@ -351,6 +351,13 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **One shell.** Detail panels and worked-through reports use `DetailPanelShell` with
   `useDetailPanelChrome`: drag, resize from any edge, and viewport clamping. `AppDialog` is for a dialog
   that is opened, answered and closed.
+- **A dialog the user works in while looking at the page floats** (`FloatingDialog`): an editor, a
+  picker, a report. A confirmation or a short question stays a centered modal, since there is nothing
+  behind it to look at.
+- **A floating dialog is never opened from a modal.** Panels stack below modals, so it would open
+  underneath one. A modal that opens a floating dialog floats too.
+- **A modal opened from inside a floating dialog sits beside it, portalled to `<body>`**, so it stacks
+  above the panels rather than within the one that opened it.
 - **Stacking** is managed by `PanelStackContext`. Clicking a panel brings it to the front, and
   re-opening the same target focuses the existing panel.
 - **A panel may open a child panel**, which closes with its parent.
