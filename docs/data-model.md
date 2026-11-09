@@ -2412,7 +2412,9 @@ table's order and widths are saved under `<key>@<device>`, where the device is t
 the screen size, shorter side first, plus the orientation on a touch screen (`@mouse-1080x1920`,
 `@touch-810x1080-portrait`). It is the screen and not the window, so resizing a window keeps its layout.
 Each save also writes the plain `<key>`, the latest layout from any device, which a screen with no layout
-of its own starts from (`useDeviceLayoutPreference`). Every other preference is shared across devices.
+of its own starts from (`useDeviceLayoutPreference`). Every other preference is shared across devices,
+and a page left open picks up another device's change on its next catch-up (`architecture.md` → *A change
+made elsewhere reaches an open page through the ledger epoch*).
 
 **A restore keeps preferences only for the users who exist once it is done**: the backup's users when its
 accounts part is restored, this install's users when only the data is. Preferences are keyed by user id

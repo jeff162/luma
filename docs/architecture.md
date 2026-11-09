@@ -175,6 +175,13 @@ server-computed counts refresh. The page's own writes are absorbed by re-reading
 `recon_epoch`, which watches fewer tables because each of its moves recomputes the reconciliation
 reports.
 
+**Preferences are re-read on the same catch-up**, except on mount, where they were just loaded
+(`refreshPreferences` in `lib/UserPreferencesContext.jsx`). They are not part of the epoch: the read is
+small, and a preference change has no page to re-query. A key this page is still saving, or wrote while the
+read was out, keeps its local value, because the server's copy may predate that write. Without the re-read
+a page left open would also save its stale copy of a list preference (saved filters) over another device's
+edit.
+
 ## Major subsystems
 
 ### Transactions and summaries

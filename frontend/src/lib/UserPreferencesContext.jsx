@@ -21,6 +21,10 @@
  *    things like `prev.field` against it; without the symmetry, the first ever write for a
  *    key would hand `undefined` to the updater and crash.
  *
+ * 3. Another device's change arrives through `refreshPreferences`, which the background catch-up calls on
+ *    each return to the page. It takes the server's value for every key except one this page is saving or
+ *    has written since the read began, since the server copy of that key may predate the local write.
+ *
  * Preferences are gated behind `preferencesReady`: until the initial load resolves, the
  * provider shows a tiny loading state rather than render children with stale defaults that
  * would flash to the real values a moment later.
@@ -48,6 +52,11 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
   const [preferencesReady, setPreferencesReady] = useState(() => initialPreferences !== null)
   const mountedRef = useRef(true)
   const preferencesRef = useRef({})
+  // Local writes, for `refreshPreferences`: a running count, the count at each key's latest write, and
+  // how many saves of each key are still awaiting the server.
+  const writeCountRef = useRef(0)
+  const lastWriteRef = useRef(new Map())
+  const savingRef = useRef(new Map())
 
   useEffect(() => {
     preferencesRef.current = preferences
@@ -122,7 +131,17 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
     preferencesRef.current = optimisticPreferences
     setPreferences(optimisticPreferences)
 
+    writeCountRef.current += 1
+    lastWriteRef.current.set(key, writeCountRef.current)
+    savingRef.current.set(key, (savingRef.current.get(key) ?? 0) + 1)
+    const saveSettled = () => {
+      const left = savingRef.current.get(key) - 1
+      if (left > 0) savingRef.current.set(key, left)
+      else savingRef.current.delete(key)
+    }
+
     return api.saveUserPreference(key, resolvedNextValue)
+      .finally(saveSettled)
       .then(() => true)
       .catch(() => {
         if (mountedRef.current) {
@@ -159,13 +178,52 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
       })
   }, [])
 
+  // Re-reads the stored preferences so a change saved from another device shows here. A value whose content
+  // did not change keeps its identity, so consumers that depend on it do not re-run. A failed read leaves
+  // everything as it was.
+  const refreshPreferences = useCallback(async () => {
+    const countAtStart = writeCountRef.current
+    const savingAtStart = new Set(savingRef.current.keys())
+    let response
+    try {
+      response = await api.getUserPreferences()
+    } catch {
+      return
+    }
+    if (!mountedRef.current) return
+    const stored = normalizePreferences(response?.preferences)
+    const local = preferencesRef.current
+    const keepLocal = key => savingAtStart.has(key)
+      || savingRef.current.has(key)
+      || (lastWriteRef.current.get(key) ?? 0) > countAtStart
+    const has = (map, key) => Object.prototype.hasOwnProperty.call(map, key)
+    const next = {}
+    let changed = false
+    for (const key of new Set([...Object.keys(local), ...Object.keys(stored)])) {
+      if (keepLocal(key)) {
+        if (has(local, key)) next[key] = local[key]
+      } else if (!has(stored, key)) {
+        changed = true
+      } else if (has(local, key) && JSON.stringify(local[key]) === JSON.stringify(stored[key])) {
+        next[key] = local[key]
+      } else {
+        next[key] = stored[key]
+        changed = true
+      }
+    }
+    if (!changed) return
+    preferencesRef.current = next
+    setPreferences(next)
+  }, [])
+
   const value = useMemo(() => ({
     preferences,
     preferencesReady,
     setPreference,
+    refreshPreferences,
     getPreference: (key, defaultValue) => getPreferenceValue(preferences, key, defaultValue),
     hasPreference: key => Object.prototype.hasOwnProperty.call(preferences, key),
-  }), [preferences, preferencesReady, setPreference])
+  }), [preferences, preferencesReady, setPreference, refreshPreferences])
 
   if (!preferencesReady) {
     return (

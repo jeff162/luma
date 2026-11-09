@@ -30,7 +30,7 @@ import { safeStartupRoute } from './lib/startupRoute.js'
 import AppRoutes, { RouteLoadingFallback } from './AppRoutes.jsx'
 import { ROUTE_PREFETCHERS } from './lib/routeChunks.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
-import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
+import { UserPreferencesProvider, useUserPreference, useUserPreferences } from './lib/UserPreferencesContext.jsx'
 import DataLocationLine from './components/DataLocationLine.jsx'
 import { useShownDataLocation } from './lib/dataLocation.js'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileAppearanceCacheForDb } from './lib/theme.js'
@@ -1137,19 +1137,23 @@ const IDLE_CATCH_UP_MS = 2 * 60 * 1000
 function BackgroundCatchUp() {
   const { noteLedgerChanged } = useSyncStatus()
   const tracker = useLedgerEpochTracker(noteLedgerChanged)
+  const { refreshPreferences } = useUserPreferences()
   const runningRef = useRef(null)
   const lastInputRef = useRef(Date.now())
 
   const catchUp = useCallback((learnFirst = false) => {
     if (runningRef.current) return runningRef.current
     runningRef.current = (async () => {
+      // Preferences are read once at load, so a change saved from another device shows only after this.
+      // On mount they were just read.
       if (learnFirst) await tracker.absorb()
+      else await refreshPreferences()
       await requestDueBackgroundWork()
       await tracker.check()
       signalDataMutated()
     })().finally(() => { runningRef.current = null })
     return runningRef.current
-  }, [tracker])
+  }, [tracker, refreshPreferences])
 
   useEffect(() => { catchUp(true) }, [catchUp])
 
