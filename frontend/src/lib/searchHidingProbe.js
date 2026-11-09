@@ -65,14 +65,16 @@ export function planHidingProbes(params = {}) {
   return probes
 }
 
+// States what the probe found, not which filter is to blame: the include filters that the probe keeps
+// narrow the list as much as the dropped constraint does.
 export function hidingNoteText(cause) {
   switch (cause) {
     case 'date':
-      return 'The date filter is hiding transactions that match'
+      return 'There are matches outside this date range'
     case 'exclude':
-      return 'An exclusion filter (≠) is hiding transactions that match'
+      return 'Some matches are excluded by a ≠ filter'
     case 'filters':
-      return 'Your active filters are hiding transactions that match'
+      return 'There are matches outside the date range and exclusions'
     default:
       return null
   }

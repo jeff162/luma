@@ -1534,8 +1534,8 @@ export function EmptyState({ message }) {
 }
 
 // A quiet, inline note for warning that the active filter conflicts with what a surface is showing —
-// e.g. an exclude chip removing a slice the Dashboard report breaks down, or a search whose matches
-// the date filter is hiding. Informational only (the filter still applies); muted and accent-tinted so
+// e.g. an exclude chip removing a slice the Dashboard report breaks down, or an empty ledger with
+// matches outside the date range. Informational only (the filter still applies); muted and accent-tinted so
 // it reads as an aside, not an error. `children` is the message; an optional action renders as a link.
 export function FilterConflictNote({ children, actionLabel, onAction, style }) {
   return (

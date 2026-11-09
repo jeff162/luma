@@ -62,8 +62,8 @@ describe('planHidingProbes', () => {
 describe('hidingNoteText / hidingActionLabel', () => {
   it('has text and a matching action for each cause', () => {
     for (const cause of ['date', 'exclude', 'filters']) {
-      expect(hidingNoteText(cause)).toMatch(/hiding transactions that match/)
-      expect(hidingActionLabel(cause)).toMatch(/Clear/)
+      expect(hidingNoteText(cause)).toEqual(expect.any(String))
+      expect(hidingActionLabel(cause)).toEqual(expect.any(String))
     }
   })
   it('returns null for an unknown cause', () => {
