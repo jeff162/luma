@@ -18,7 +18,7 @@ import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
-import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
+import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, monthLabel, lastNMonths, formatDateRange } from '../lib/utils.js'
 import {
   shiftMonth, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
@@ -2593,7 +2593,7 @@ export default function Dashboard() {
     window.addEventListener('luma:transactions-changed', refreshTotalsInPlace)
     return () => window.removeEventListener('luma:transactions-changed', refreshTotalsInPlace)
   }, [refreshTotalsInPlace])
-  useAfterLedgerSync(refreshTotalsInPlace)
+  useAfterLedgerChange(refreshTotalsInPlace)
 
   useEffect(() => {
     api.getCategories().then(setCategories)

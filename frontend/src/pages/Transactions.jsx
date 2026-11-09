@@ -25,7 +25,7 @@ import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
-import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
+import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CornerTab from '../components/CornerTab.jsx'
@@ -308,9 +308,10 @@ export default function Transactions() {
     load({ fromTop: true })
   }, [load])
 
-  // A sync lands rows on the server, where no mutation signal on this page can see them. The same in-place
-  // re-query as the refresh button, so edited rows left in place for correction drop out here as they do there.
-  useAfterLedgerSync(reload)
+  // A sync, or another device, writes on the server, where no mutation signal on this page can see it. The
+  // same in-place re-query as the refresh button, so edited rows left in place for correction drop out here
+  // as they do there.
+  useAfterLedgerChange(reload)
 
   const bulk = useBulkTransactionEditing({
     rows: shownRows,

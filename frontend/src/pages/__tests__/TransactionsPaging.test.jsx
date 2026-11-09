@@ -31,7 +31,7 @@ const filterContext = {
   getRawDate: () => null,
 }
 vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => filterContext }))
-vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
+vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerChange: () => {} }))
 // Stable per call, as the real hook is.
 const preference = [null, () => {}]
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => preference, useDeviceLayoutPreference: () => preference }))

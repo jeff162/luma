@@ -39,7 +39,7 @@ vi.mock('../../lib/UserPreferencesContext.jsx', async () => {
   return { useUserPreference: (_key, fallback) => useState(fallback) }
 })
 vi.mock('../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
-vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
+vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerChange: () => {} }))
 vi.mock('../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 
 const SERIES = {

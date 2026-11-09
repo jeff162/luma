@@ -37,7 +37,7 @@ vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: (_key, fallback) => [fallback, vi.fn()],
 }))
 vi.mock('../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
-vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
+vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerChange: () => {} }))
 
 const MOVEMENT = {
   id: 'mv1', payee_key: 'transfer:a1:a2', display_name: 'Card Payment',

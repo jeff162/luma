@@ -38,7 +38,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
-import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
+import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { sessionStore } from '../lib/browserStorage.js'
@@ -1126,7 +1126,7 @@ export default function Recurring() {
   }, [load, loadSignals, loadTransferReview, refreshReport])
   // A sync rescans the payees it touched before it returns, so the series, findings and pairings it brought
   // in are already on the server by the time this fires.
-  useAfterLedgerSync(() => { refreshAll().catch(() => {}) })
+  useAfterLedgerChange(() => { refreshAll().catch(() => {}) })
 
   // Accepting a price change is deliberately *not* a one-click apply, the way widening a rule's bound is
   // on the Rules page. A bound has one right answer — take in this charge — while a series' band has two

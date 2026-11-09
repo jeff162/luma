@@ -30,11 +30,11 @@ function deferred() {
 }
 
 function Probe() {
-  const { runsFinished, ledgerRunsFinished, runSync } = useSyncStatus()
+  const { runsFinished, ledgerChanges, runSync } = useSyncStatus()
   return (
     <>
       <span data-testid="finished">{runsFinished}</span>
-      <span data-testid="ledger">{ledgerRunsFinished}</span>
+      <span data-testid="ledger">{ledgerChanges}</span>
       <button type="button" onClick={() => runSync('plaid', { days: 0 }).catch(() => {})}>sync</button>
     </>
   )
@@ -83,7 +83,7 @@ describe('runsFinished', () => {
 })
 
 // The pages showing transactions reload on this one, so a sync that brought nothing in must leave them be.
-describe('ledgerRunsFinished', () => {
+describe('ledgerChanges', () => {
   it('moves only for a run that brought something in', async () => {
     api.getProviders.mockResolvedValue(PROVIDERS)
     const answer = added => ({
@@ -105,14 +105,14 @@ describe('ledgerRunsFinished', () => {
 
 describe('returning to the foreground', () => {
   // A tablet keeps a backgrounded page alive for days, so a sync run elsewhere has to reach this page when
-  // it comes back into view: the freshness it shows, and the pages holding their own copy of the ledger.
+  // it comes back into view: the freshness it shows, and the import cards holding their own copy of it.
   function ForegroundProbe() {
-    const { providers, runsFinished, ledgerRunsFinished } = useSyncStatus()
+    const { providers, runsFinished, ledgerChanges } = useSyncStatus()
     return (
       <>
         <span data-testid="synced">{providers?.[0]?.connections?.[0]?.last_synced_at || 'none'}</span>
         <span data-testid="finished">{runsFinished}</span>
-        <span data-testid="ledger">{ledgerRunsFinished}</span>
+        <span data-testid="ledger">{ledgerChanges}</span>
       </>
     )
   }
@@ -120,6 +120,7 @@ describe('returning to the foreground', () => {
   const synced = () => screen.getByTestId('synced').textContent
   const comeBack = () => document.dispatchEvent(new Event('visibilitychange'))
 
+  // Not as a ledger change: whether the sync wrote anything is the ledger epoch's to say.
   it('counts a sync that finished elsewhere as a run ending', async () => {
     api.getProviders.mockResolvedValueOnce(listing('2026-09-03T07:40:00Z'))
     render(<SyncStatusProvider><ForegroundProbe /></SyncStatusProvider>)
@@ -130,7 +131,7 @@ describe('returning to the foreground', () => {
     comeBack()
     await waitFor(() => expect(synced()).toBe('2026-09-05T07:40:00Z'))
     expect(finished()).toBe('1')
-    expect(ledger()).toBe('1')
+    expect(ledger()).toBe('0')
   })
 
   it('leaves the counters alone when nothing synced while away', async () => {

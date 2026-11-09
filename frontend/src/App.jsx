@@ -3,13 +3,14 @@
 
 /* eslint-disable react-refresh/only-export-components -- App component + notifyAccountsChanged broadcast helper live together as the app-level shell */
 
-import { useState, useEffect, useRef, Component, useMemo } from 'react'
+import { useState, useEffect, useRef, Component, useMemo, useCallback } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api, SESSION_LOST_EVENT, signalDataMutated } from './lib/api.js'
 import { useOnForeground } from './lib/useOnForeground.js'
+import { useLedgerEpochTracker } from './lib/ledgerEpoch.js'
 import SoleVaultMemberWarning from './components/SoleVaultMemberWarning.jsx'
 import { useSoleVaultMember } from './lib/useSoleVaultMember.js'
 import {
@@ -54,6 +55,7 @@ import {
 import {
   SyncStatusProvider,
   SyncStatusRenderer,
+  useSyncStatus,
 } from './contexts/SyncStatusContext.jsx'
 import { VaultGateProvider, VaultGateRenderer } from './contexts/VaultGateContext.jsx'
 import { SyncNavItem } from './components/SyncNavItem.jsx'
@@ -1092,23 +1094,87 @@ function DisplayFormatScope({ children }) {
 }
 
 // The backend work that runs only when a client asks. Each call is gated on the server (a watermark, a
-// version or an interval), so asking when nothing is due is a cheap no-op.
+// version or an interval), so asking when nothing is due is a cheap no-op. The calls do not raise the
+// mutation signal themselves: what they wrote is something this page did not do, so it is reported by the
+// ledger check that follows them (see `BackgroundCatchUp`) rather than absorbed as this page's own write.
 function requestDueBackgroundWork() {
-  // Recurring detection: scan if never scanned (e.g. a database migrated from a pre-recurring schema) or
-  // stale since the last import or sync.
-  api.autoScanRecurring().catch(() => { })
-  // Watched import folders, same shape and same watermark: a folder nobody has looked at since the
-  // interval passed is checked, so a file dropped there yesterday is in the ledger by the time the user
-  // opens anything. The nav badge reads a persisted count and never scans, which is why this is the only
-  // client trigger.
-  api.autoScanWatchedFolders().catch(() => { })
-  // Re-examine stored rows when the duplicate matcher's rules have changed since this database was last
-  // scanned. Version-gated rather than time-gated, so it is a no-op on every call but the first after a
-  // rule change.
-  api.rescanDuplicates().catch(() => { })
-  // Whether a newer version has been released. The server makes a request only if the install has opted
-  // in and a day has passed since the last one.
-  api.autoCheckForUpdate().catch(() => { })
+  const quiet = { suppressMutationSignal: true }
+  return Promise.allSettled([
+    // Recurring detection: scan if never scanned (e.g. a database migrated from a pre-recurring schema)
+    // or stale since the last import or sync.
+    api.autoScanRecurring(quiet),
+    // Watched import folders, same shape and same watermark: a folder nobody has looked at since the
+    // interval passed is checked, so a file dropped there yesterday is in the ledger by the time the user
+    // opens anything. The nav badge reads a persisted count and never scans, which is why this is the
+    // only client trigger.
+    api.autoScanWatchedFolders(quiet),
+    // Re-examine stored rows when the duplicate matcher's rules have changed since this database was last
+    // scanned. Version-gated rather than time-gated, so it is a no-op on every call but the first after a
+    // rule change.
+    api.rescanDuplicates(quiet),
+    // Whether a newer version has been released. The server makes a request only if the install has
+    // opted in and a day has passed since the last one.
+    api.autoCheckForUpdate(quiet),
+  ])
+}
+
+// How long without a tap or keypress before the next one runs the catch-up, for a page that stays on
+// screen untouched — a laptop window behind another, a tablet set never to lock. A page hidden and shown
+// again runs it on its return whatever this says.
+const IDLE_CATCH_UP_MS = 2 * 60 * 1000
+
+// Bringing this page up to date with what happened while nobody was looking at it: once when the data
+// scope mounts (so once per load and per profile switch), on each return to the foreground, and on the
+// first input after an idle spell. A tablet keeps a backgrounded page alive for days, so without the last
+// two a page would never hear about another device's edits or a file dropped in a watched folder.
+//
+// **One sequence, in this order, from one place.** The background work first, so whatever it imports is
+// in the ledger before anyone looks. Then the ledger check (`lib/ledgerEpoch.js`), which reloads the
+// ledger pages if anything moved since this page last knew — another device's edits and the work just
+// done alike. Then the mutation signal, which refreshes the server-computed counts (the Tasks badge and
+// page, the reimbursement count, stored documents); it comes last because the tracker absorbs it as this
+// page's own write, and absorbed first it would hide the very change the check is there to find.
+function BackgroundCatchUp() {
+  const { noteLedgerChanged } = useSyncStatus()
+  const tracker = useLedgerEpochTracker(noteLedgerChanged)
+  const runningRef = useRef(null)
+  const lastInputRef = useRef(Date.now())
+
+  const catchUp = useCallback((learnFirst = false) => {
+    if (runningRef.current) return runningRef.current
+    runningRef.current = (async () => {
+      if (learnFirst) await tracker.absorb()
+      await requestDueBackgroundWork()
+      await tracker.check()
+      signalDataMutated()
+    })().finally(() => { runningRef.current = null })
+    return runningRef.current
+  }, [tracker])
+
+  useEffect(() => { catchUp(true) }, [catchUp])
+
+  useOnForeground(() => {
+    // The return is itself the catch-up, so the first tap after it does not run another.
+    lastInputRef.current = Date.now()
+    catchUp()
+  })
+
+  useEffect(() => {
+    const onInput = () => {
+      const now = Date.now()
+      const idle = now - lastInputRef.current >= IDLE_CATCH_UP_MS
+      lastInputRef.current = now
+      if (idle) catchUp()
+    }
+    document.addEventListener('pointerdown', onInput, true)
+    document.addEventListener('keydown', onInput, true)
+    return () => {
+      document.removeEventListener('pointerdown', onInput, true)
+      document.removeEventListener('keydown', onInput, true)
+    }
+  }, [catchUp])
+
+  return null
 }
 
 export default function App() {
@@ -1175,7 +1241,6 @@ export default function App() {
   const [startupRouteApplied, setStartupRouteApplied] = useState(false)
   const [bootPreferences, setBootPreferences] = useState(null)
   const [bootPreferenceSubjectId, setBootPreferenceSubjectId] = useState('')
-  const recurringAutoScanScopeRef = useRef(null)
   const savedStartupRouteRef = useRef('')
   const savedStartupRouteSubjectRef = useRef('')
   const preferenceSubjectId = authEnabled
@@ -1417,8 +1482,8 @@ export default function App() {
     // Two refresh triggers, by design:
     //   * `luma:data-mutated` — same-session immediacy: any successful mutation anywhere emits
     //     this from the api layer (see `signalDataMutated` in api.js), so the badge updates without
-    //     the user navigating, and no call site has to remember to refresh it. Returning to the
-    //     foreground emits it too (below), for what changed while the page was out of view.
+    //     the user navigating, and no call site has to remember to refresh it. `BackgroundCatchUp`
+    //     emits it too, for what changed while the page was out of view.
     //   * `location.pathname` in the deps — navigation backstop: re-fetch on every route change to
     //     pick up changes this session didn't make (another tab, a background sync). With the api
     //     emit covering local mutations, this is no longer compensating for a missed broadcast.
@@ -1426,26 +1491,6 @@ export default function App() {
     // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
     // even when /tasks itself is showing pending items.
   }, [authEnabled, currentUser, activeLocalProfile, location.pathname])
-
-  // Background catch-up: once the data scope is active, and again each time the app comes back to the
-  // foreground, ask the backend for the work that runs only when something asks for it. Keyed to the active
-  // scope, so it fires once per load and again after a profile switch; the foreground pass is for a page
-  // a tablet has kept open for days, which would otherwise never ask again.
-  useEffect(() => {
-    if (authEnabled && !currentUser) return
-    if (!authEnabled && !activeLocalProfile) return
-    if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
-    recurringAutoScanScopeRef.current = preferenceSubjectId
-    requestDueBackgroundWork()
-  }, [authEnabled, currentUser, activeLocalProfile, preferenceSubjectId])
-
-  // The server-computed counts (the Tasks badge and page, the reimbursement count, stored documents) listen
-  // for the mutation signal, and returning to the foreground is the other moment they may be out of date:
-  // another device or the catch-up above may have changed them while the page was out of view.
-  useOnForeground(() => {
-    requestDueBackgroundWork()
-    signalDataMutated()
-  }, { enabled: !!preferenceSubjectId })
 
   useEffect(() => {
     if (!startupRouteApplied) return
@@ -1899,6 +1944,7 @@ export default function App() {
                             <SyncStatusProvider>
                               <ThemeController />
                               <DisplaySizeController />
+                              <BackgroundCatchUp />
                               <UnifiedDuplicatesViewerRenderer />
                               <ReconciliationViewerRenderer />
                               <AmazonImportDetailViewerRenderer />

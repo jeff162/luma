@@ -4069,6 +4069,10 @@ def init_db(db_path: str | None = None):
         )
         _create_recon_epoch_triggers(conn)
         _bump_recon_epoch(conn)
+        _create_epoch_triggers(conn, "ledger_epoch", _LEDGER_EPOCH_SOURCE_TABLES)
+        # Once per start as well: a database swapped in from a backup can hold any value, including the
+        # one a client last saw, and the cost is one reload on each client's next return.
+        _bump_epoch(conn, "ledger_epoch")
         _create_purchase_link_prune_trigger(conn)
         _create_refund_follow_trigger(conn)
         _create_document_search_index(conn)
@@ -4111,21 +4115,33 @@ _RECON_EPOCH_SOURCE_TABLES = {
 }
 
 
+def _create_epoch_triggers(conn: sqlite3.Connection, key: str, tables: dict) -> None:
+    """Create (idempotently) the triggers that bump db_meta `key` on each listed write to each table."""
+    for table, events in tables.items():
+        for event in events:
+            conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS trg_{key}_{table}_{event.lower()}
+                AFTER {event} ON {table}
+                BEGIN
+                    INSERT INTO db_meta (key, value) VALUES ('{key}', 1)
+                    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+                END
+            """)
+
+
+def _bump_epoch(conn: sqlite3.Connection, key: str) -> None:
+    conn.execute(
+        f"""INSERT INTO db_meta (key, value) VALUES ('{key}', 1)
+           ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"""
+    )
+
+
 def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
     """Create (idempotently) the triggers that bump db_meta 'recon_epoch' on any write to a table a
     reconciliation report reads. Runs after run_migrations so every referenced table — including the ones a
     migration adds (amazon_funding_map, amazon_charge_distinct, amazon_charge_reviewed) — and db_meta exist
     on both fresh and migrated databases."""
-    for table, events in _RECON_EPOCH_SOURCE_TABLES.items():
-        for event in events:
-            conn.execute(f"""
-                CREATE TRIGGER IF NOT EXISTS trg_recon_epoch_{table}_{event.lower()}
-                AFTER {event} ON {table}
-                BEGIN
-                    INSERT INTO db_meta (key, value) VALUES ('recon_epoch', 1)
-                    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
-                END
-            """)
+    _create_epoch_triggers(conn, "recon_epoch", _RECON_EPOCH_SOURCE_TABLES)
 
 
 def _bump_recon_epoch(conn: sqlite3.Connection) -> None:
@@ -4134,10 +4150,38 @@ def _bump_recon_epoch(conn: sqlite3.Connection) -> None:
     version — in a shape or with a meaning that has since changed — would be served to the new code until
     the next data write. New code only runs after a start, so a cache can never outlive the code that
     wrote it; the cost is one recompute of each count on its next read."""
-    conn.execute(
-        """INSERT INTO db_meta (key, value) VALUES ('recon_epoch', 1)
-           ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"""
+    _bump_epoch(conn, "recon_epoch")
+
+
+# Whether the ledger a page shows may have changed since a client last looked: one more monotonic epoch in
+# db_meta ('ledger_epoch'), bumped by trigger on any write to a table the Transactions, Dashboard or
+# Recurring pages read. A client left in the background compares it on its return and reloads those pages
+# only when it moved, which is how an edit made on another device reaches a page already open. Triggers for
+# the reason the recon epoch gives: writes are scattered and one missed site would leave a page stale.
+#
+# Kept apart from 'recon_epoch' because the two invalidate different things. That epoch forces the
+# reconciliation reports to be recomputed, which is costly, so it watches only what they read; this one
+# costs a client one re-query, so it watches everything those pages display — tags, splits, category and
+# tag names, recurring series. Each bump is a row update inside the write that caused it, never a commit
+# of its own.
+_LEDGER_EPOCH_SOURCE_TABLES = {
+    table: ("INSERT", "UPDATE", "DELETE")
+    for table in (
+        "txn", "txn_tag", "txn_split", "txn_link", "txn_link_member",
+        "account", "account_tag", "category", "category_tag", "tag", "owner",
+        "recurring_series", "recurring_membership_override", "recurring_signal_dismissal",
+        "transfer_pair_decision",
     )
+}
+
+
+def ledger_epoch(conn: sqlite3.Connection) -> int:
+    """The current ledger epoch; absent is 0."""
+    row = conn.execute("SELECT value FROM db_meta WHERE key = 'ledger_epoch'").fetchone()
+    try:
+        return int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 # A `txn_link` row has no foreign key to `txn` — deliberately, since a link may outlive the rows it

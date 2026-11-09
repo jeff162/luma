@@ -124,7 +124,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `UndoToast` | The timed Undo offered after a reversible action. Raised from a dialog, pass `zIndex`, because the default sits below `AppDialog`. | `components/CategoryTreePrimitives.jsx` |
 | `summarizeBulkOutcome` | Reporting a bulk of independent requests settled with `Promise.allSettled`. | `lib/bulkRequestOutcome.js` |
 | `useRelativeTimestamp` | A standing "how long ago" label, because one computed at render goes stale. | `lib/useRelativeTimestamp.js` |
-| `useAfterLedgerSync` | Reloading a page's own copy of transaction-derived data after a sync, because a sync writes on the server and sends no in-app change event. A sync finished on another device counts once the app returns to the foreground. | `contexts/SyncStatusContext.jsx` |
+| `useAfterLedgerChange` | Reloading a page's own copy of transaction-derived data after a change this page did not make — a sync, or another device's edit noticed on return from the background or idle — because the server sends no in-app change event. | `contexts/SyncStatusContext.jsx` |
 | `useOnForeground` | Re-reading something when the app comes back into view, for data another device may have changed meanwhile. | `lib/useOnForeground.js` |
 
 ## Pickers and chips

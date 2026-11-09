@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from backend import transport
 from backend.authorization import is_admin_or_local, require_admin_or_local
 from backend.db.control_database import auth_required
-from backend.db.database import get_db
+from backend.db.database import get_db, ledger_epoch
 from backend.routers.tasks import security_tasks
 from backend.runtime_config import (
     APP_VERSION, build_stamp, bundled_license_path, checkout_commit, distribution_form, runs_in_container,
@@ -226,6 +226,14 @@ def run_update_check():
 def auto_update_check():
     update_check.maybe_check()
     return update_check.status()
+
+
+# Read by a client returning to the foreground, which reloads its ledger pages only if this moved while it
+# was away (`ledger_epoch` in db/database.py).
+@router.get("/ledger-epoch")
+def get_ledger_epoch():
+    with get_db() as conn:
+        return {"epoch": ledger_epoch(conn)}
 
 
 @router.get("/storage-summary")

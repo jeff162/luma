@@ -163,6 +163,18 @@ For many inline edits the UI updates first and the API call is fire-and-forget. 
 durable source of truth and concurrent editing is rare, so responsiveness is preferred over confirming
 each write.
 
+**A change made elsewhere reaches an open page through the ledger epoch.** A tablet keeps a backgrounded
+page alive for days, and nothing pushes the server's writes to it. `db_meta.ledger_epoch` is moved by a
+trigger on every table the Transactions, Dashboard and Recurring pages read (`_LEDGER_EPOCH_SOURCE_TABLES`
+in `db/database.py`), and `GET /api/app/ledger-epoch` reports it. `BackgroundCatchUp` (`App.jsx`) runs on
+mount, on each return to the foreground and on the first input after two idle minutes: it asks for the
+request-driven background work, then compares the epoch with the last value the page knew and, if it
+moved, has those pages re-query in place (`useAfterLedgerChange`), then raises the mutation signal so the
+server-computed counts refresh. The page's own writes are absorbed by re-reading the epoch after each one
+(`lib/ledgerEpoch.js`), so it never reloads to show its own edit. The epoch is separate from
+`recon_epoch`, which watches fewer tables because each of its moves recomputes the reconciliation
+reports.
+
 ## Major subsystems
 
 ### Transactions and summaries
@@ -379,9 +391,10 @@ preferences. `lib/savedFilters.js` holds the rules:
     does not stamp the watermark, since it cannot see cross-payee effects; bulk edits owe once per batch.
     Every scan settles what is owed within its scope, so a failed settle is retried by the next one
     (`data-model.md` → *When a scan runs*).
-  - **Full catch-up** (`POST /recurring/auto-scan`): app load and a return to the foreground run a
+  - **Full catch-up** (`POST /recurring/auto-scan`): each background catch-up (*Data flow*) runs a
     global scan only when the `db_meta` watermark says one is due (never scanned, or older than the daily
-    interval), and settle any owed rescan that is overdue. It also hosts the payee-key re-derivation repair.
+    interval), and settles any owed rescan that is overdue. It also hosts the payee-key re-derivation
+    repair.
 
 - **A money movement between two tracked accounts is one series that owns both legs.** `scan_and_store`
   runs a transfer pass first: `transfer_pairs.pair_money_movements` pairs rows structurally (same amount
@@ -645,9 +658,9 @@ folder, although the upload expands one: an archive found on disk is one nobody 
 
 - **Scanning is request-driven; there is no scheduler.** The app has per-identity database paths, so a
   timer thread would have no tenant to run as. `POST /import-export/watch/auto-scan` scans only if one
-  is due (a `db_meta` watermark, `AUTO_SCAN_MIN_INTERVAL_MINUTES`) and is called when the data scope
-  activates, when the app returns to the foreground, and when `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the unconditional
-  *Check now*. The nav badge and Tasks read a persisted count (`attention_counts`) and never touch the
+  is due (a `db_meta` watermark, `AUTO_SCAN_MIN_INTERVAL_MINUTES`) and is called on each background
+  catch-up (*Data flow*) and when `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the
+  unconditional *Check now*. The nav badge and Tasks read a persisted count (`attention_counts`) and never touch the
   filesystem.
 - **A per-file watermark keeps a scan cheap.** `import_watch_file` holds `(size, mtime)` per entry, so
   only a new or changed entry is read, hashed and parsed, then matched against
@@ -1166,12 +1179,12 @@ the browser sends with the upload and by tenant, which the browser polls at `GET
 an `async def` body would hold the event loop and the poll could not be answered.
 
 **A request-driven catch-up claims itself before its long work** (`single_runner`,
-`backend/db/database.py`). App load, a return to the foreground, a second tab and a page mount can each
-ask for the same catch-up — the recurring auto-scan, the duplicate-detection rescan, a watched-folder
-scan — and each would read "due" before the other stamps it, so both would do the work, and two folder
-scans would import one file twice. A read-only due check answers the common case without the write lock. Only work that is due takes
-a claim, written in its own short immediate transaction, and a second caller is turned away while it
-stands. A claim left by a process that died lapses after its lease.
+`backend/db/database.py`). The background catch-up, a second tab and a page mount can each ask for the
+same work — the recurring auto-scan, the duplicate-detection rescan, a watched-folder scan — and each
+would read "due" before the other stamps it, so both would do the work, and two folder scans would import
+one file twice. A read-only due check answers the common case without the write lock. Only work that is
+due takes a claim, written in its own short immediate transaction, and a second caller is turned away
+while it stands. A claim left by a process that died lapses after its lease.
 
 **Every request shares one interpreter lock.** Python lets only one thread run Python code at a time;
 the lock that enforces this is the GIL. The `sqlite3` module lets go of it while SQLite works and has to

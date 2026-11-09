@@ -9,7 +9,7 @@
 //
 // StrictMode is the trigger here rather than a stand-in for one: it runs the mount effect twice in dev,
 // which is exactly how the browser suite met this. In production the same overlap comes from
-// `useAfterLedgerSync`, the refresh button and `bulk.onReload`, all of which re-load with the filters
+// `useAfterLedgerChange`, the refresh button and `bulk.onReload`, all of which re-load with the filters
 // unchanged.
 
 import { StrictMode } from 'react'
@@ -37,7 +37,7 @@ vi.mock('../../lib/FilterContext.jsx', () => ({
     getRawDate: () => null,
   }),
 }))
-vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerSync: () => {} }))
+vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerChange: () => {} }))
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({ useUserPreference: () => [null, vi.fn()], useDeviceLayoutPreference: () => [null, vi.fn()] }))
 vi.mock('../../lib/useStoredDocuments.js', () => ({ useStoredDocuments: () => ({ documents: [], refresh: vi.fn() }) }))
 vi.mock('../../lib/useReimbursementCount.js', () => ({ useReimbursementCount: () => ({ count: 0, reload: vi.fn() }) }))

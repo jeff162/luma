@@ -42,8 +42,8 @@ async function trackedFetch(input, init) {
 // those counts too (e.g. saving a UI preference); that refetch is cheap and idempotent, and paying
 // it is the price of never maintaining a list of "which endpoints affect which view."
 //
-// Exported for the one trigger that is not a request: the app returning to the foreground (App.jsx),
-// after which anything another device changed may be out of date here.
+// Exported for the one trigger that is not a request: `BackgroundCatchUp` (App.jsx), after which
+// anything another device or the server changed may be out of date here.
 let dataMutatedTimer = null
 export function signalDataMutated() {
   if (typeof window === 'undefined') return
@@ -343,7 +343,9 @@ export const api = {
   setUpdateCheckEnabled: (enabled) =>
     request('/app/update-check/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   checkForUpdateNow: () => request('/app/update-check/run', { method: 'POST' }),
-  autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
+  autoCheckForUpdate: (opts = {}) => request('/app/update-check/auto', { method: 'POST', ...opts }),
+  // The number every ledger write moves (`lib/ledgerEpoch.js`).
+  getLedgerEpoch: () => request('/app/ledger-epoch'),
   // Settings -> About -> Copy details: version, how it runs, platform. Nothing that identifies the machine.
   getInstallationDetails: () => request('/app/installation-details'),
   // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown, detail, link }.
@@ -854,8 +856,8 @@ export const api = {
   scanRecurring:      (windowMonths = 25) => request(`/recurring/scan?window_months=${windowMonths}`, { method: 'POST' }),
   // App-load catch-up: the backend scans only if one is due (never scanned / stale), so this is a cheap
   // no-op when a recent import or sync already refreshed detection. Safe to call once per session.
-  autoScanRecurring:  () => request('/recurring/auto-scan', { method: 'POST' }),
-  rescanDuplicates:   () => request('/accounts/duplicate-rescan', { method: 'POST' }),
+  autoScanRecurring:  (opts = {}) => request('/recurring/auto-scan', { method: 'POST', ...opts }),
+  rescanDuplicates:   (opts = {}) => request('/accounts/duplicate-rescan', { method: 'POST', ...opts }),
   forgetDuplicatePair: (a, b) => request(`/accounts/duplicate-pairs/${a}/${b}`, { method: 'DELETE' }),
   getDismissedDuplicatePairs: () => request('/accounts/duplicate-pairs'),
   reopenDuplicatePairs: (pairs) => request('/accounts/duplicate-pairs/reopen',
@@ -1249,7 +1251,7 @@ export const api = {
   getWatchStatus:       ()      => request('/import-export/watch/status'),
   scanWatchedFolders:   (profileId) =>
     request(`/import-export/watch/scan${profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ''}`, { method: 'POST' }),
-  autoScanWatchedFolders: ()    => request('/import-export/watch/auto-scan', { method: 'POST' }),
+  autoScanWatchedFolders: (opts = {}) => request('/import-export/watch/auto-scan', { method: 'POST', ...opts }),
   updateImportProfileWatch: (id, data) =>
     request(`/import-export/profiles/${id}/watch`, { method: 'PATCH', body: JSON.stringify(data) }),
   // The subdirectories of one folder on the *server*, for the folder picker. Read-only and admin-gated,

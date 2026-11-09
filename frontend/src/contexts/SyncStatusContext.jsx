@@ -66,21 +66,23 @@ export function useSyncStatus() {
   return ctx
 }
 
-// Runs `onSync` after each sync that may have changed transactions, wherever it was started — the navigation
-// pane, a connection card, another tab. For a page holding its own copy of transaction-derived data, which
-// no mutation signal reaches because a sync writes on the server. Keyed to the count seen at mount, so
-// arriving on a page after earlier syncs does not repeat the load the mount just did; `onSync` is read
-// through a ref, so a caller need not keep it stable.
-export function useAfterLedgerSync(onSync) {
-  const { ledgerRunsFinished } = useSyncStatus()
-  const handledRef = useRef(ledgerRunsFinished)
-  const onSyncRef = useRef(onSync)
-  onSyncRef.current = onSync
+// Runs `onChange` after each change to the ledger this page did not make itself: a sync that may have
+// changed transactions, wherever it was started (the navigation pane, a connection card, another tab), and
+// anything written elsewhere while the app was in the background or idle (`BackgroundCatchUp` in App.jsx).
+// For a page holding its own copy of transaction-derived data, which no mutation signal reaches because the
+// write happened on the server. Keyed to the count seen at mount, so arriving on a page after earlier
+// changes does not repeat the load the mount just did; `onChange` is read through a ref, so a caller need
+// not keep it stable.
+export function useAfterLedgerChange(onChange) {
+  const { ledgerChanges } = useSyncStatus()
+  const handledRef = useRef(ledgerChanges)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
   useEffect(() => {
-    if (ledgerRunsFinished === handledRef.current) return
-    handledRef.current = ledgerRunsFinished
-    onSyncRef.current()
-  }, [ledgerRunsFinished])
+    if (ledgerChanges === handledRef.current) return
+    handledRef.current = ledgerChanges
+    onChangeRef.current()
+  }, [ledgerChanges])
 }
 
 // The providers listing, which is this context's one source for "what connections exist and what are they
@@ -200,10 +202,12 @@ export function SyncStatusProvider({ children }) {
     return () => { alive = false; clearInterval(id) }
   }, [anyDriving, watching, readConnections, setViewer])
 
-  // `runsFinished` and `ledgerRunsFinished` — see the run-end effect below, and the foreground read here,
-  // which also counts a sync that finished elsewhere.
+  // `runsFinished` and `ledgerChanges` — see the run-end effect below. The foreground read here also
+  // counts a sync that finished elsewhere, and `noteLedgerChanged` lets the background catch-up report a
+  // ledger written elsewhere.
   const [runsFinished, setRunsFinished] = useState(0)
-  const [ledgerRunsFinished, setLedgerRunsFinished] = useState(0)
+  const [ledgerChanges, setLedgerChanges] = useState(0)
+  const noteLedgerChanged = useCallback(() => setLedgerChanges(n => n + 1), [])
   const providersRef = useRef(providers)
   providersRef.current = providers
 
@@ -213,10 +217,10 @@ export function SyncStatusProvider({ children }) {
   // happening. Returns `{ providers, running }`, or null when the read failed, so a caller can tell a
   // failed read from an install with no connections.
   //
-  // A sync that already *finished* elsewhere since the last read is counted as a run ending, so the pages
-  // holding their own copy of what it wrote reload just as they would after one seen here. It always counts
-  // as a ledger change: the connection records only its most recent call, and a run is several calls, so a
-  // last call that brought nothing in says nothing about the ones before it.
+  // A sync that already *finished* elsewhere since the last read is counted as a run ending, so the Import
+  // page's cards and the Connections tab reload just as they would after one seen here. It is not counted as
+  // a ledger change: whether it wrote anything is the ledger epoch's to say (`BackgroundCatchUp`), which
+  // knows, where the connection records only its most recent call.
   const refreshConnections = useCallback(async () => {
     let payload
     try {
@@ -237,7 +241,6 @@ export function SyncStatusProvider({ children }) {
       open({ adopted: true })
     } else if (!running && !busy && previous && syncedSince(previous, payload)) {
       setRunsFinished(n => n + 1)
-      setLedgerRunsFinished(n => n + 1)
     }
     return { providers: payload, running }
   }, [open])
@@ -264,16 +267,17 @@ export function SyncStatusProvider({ children }) {
   // the run was started (its own panel, the navigation pane, another tab — or another device, counted by
   // `refreshConnections` above). 0 means no run has ended.
   //
-  // `ledgerRunsFinished` counts only the endings that may have changed transactions, for the pages that
-  // show them (see `useAfterLedgerSync`). Those reload a list the user may be scrolled into or editing, so
-  // a sync that brought nothing in leaves them alone; `rosterMayHaveChangedLedger` says when that is known.
+  // `ledgerChanges` counts, among other ledger changes, the endings that may have changed transactions, for
+  // the pages that show them (see `useAfterLedgerChange`). Those reload a list the user may be scrolled into
+  // or editing, so a sync that brought nothing in leaves them alone; `rosterMayHaveChangedLedger` says when
+  // that is known.
   const wasBusyRef = useRef(false)
   useEffect(() => {
     const busy = anyDriving || watching
     if (wasBusyRef.current && !busy) {
       readConnections().catch(() => {})
       setRunsFinished(n => n + 1)
-      if (rosterMayHaveChangedLedger(runConnectionsRef.current)) setLedgerRunsFinished(n => n + 1)
+      if (rosterMayHaveChangedLedger(runConnectionsRef.current)) setLedgerChanges(n => n + 1)
     }
     wasBusyRef.current = busy
   }, [anyDriving, watching, readConnections])
@@ -394,9 +398,10 @@ export function SyncStatusProvider({ children }) {
 
   const value = useMemo(
     () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching, runsFinished,
-              ledgerRunsFinished, runSync, runSyncAll, refreshConnections, viewer, open, close, minimize, restore }),
-    [providers, syncState, runProviders, runConnections, watching, runsFinished, ledgerRunsFinished, runSync,
-      runSyncAll, refreshConnections, viewer, open, close, minimize, restore],
+              ledgerChanges, noteLedgerChanged, runSync, runSyncAll, refreshConnections, viewer, open, close,
+              minimize, restore }),
+    [providers, syncState, runProviders, runConnections, watching, runsFinished, ledgerChanges, noteLedgerChanged,
+      runSync, runSyncAll, refreshConnections, viewer, open, close, minimize, restore],
   )
   return <SyncStatusContext.Provider value={value}>{children}</SyncStatusContext.Provider>
 }
