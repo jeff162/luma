@@ -130,4 +130,23 @@ describe('ActionMenu', () => {
     expect(screen.getByRole('menuitemradio', { name: 'Recurring' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByRole('menuitemradio', { name: 'Split' }).getAttribute('aria-checked')).toBe('false')
   })
+
+  // An on/off item is one of several settings made in one visit, so choosing it must not close the menu.
+  it('runs an on/off item and stays open', async () => {
+    const user = userEvent.setup()
+    const onClick = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <ActionMenu anchorElement={ANCHOR} onClose={onClose} items={[
+        { label: 'Source', toggled: false, onClick },
+        { label: 'Account', toggled: true, onClick: () => {} },
+      ]} />,
+    )
+    const source = screen.getByRole('menuitemcheckbox', { name: 'Source' })
+    expect(source.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Account' }).getAttribute('aria-checked')).toBe('true')
+    await user.click(source)
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })

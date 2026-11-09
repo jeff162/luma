@@ -591,6 +591,13 @@ export const HELP_TOPICS = [
           marking reviewed, trashing. <strong>Bulk Edit</strong> is also how several payments get linked
           together into a single purchase.
         </p>
+        <p>*needs review*</p>
+        <p>
+          The &#9881; in the corner of the list picks which columns are shown. <strong>Source</strong> is the file a
+          transaction was imported from, and its &#8599; opens that import. Columns are reordered by
+          dragging a header and resized by dragging the edge between two headers. The choices are
+          remembered separately for each kind of screen.
+        </p>
         <p>
           The individual transaction rows support a right-click menu and &#128393; at the
           end of the row opens the transaction editor. The transaction editor also supports adding external documentation in the

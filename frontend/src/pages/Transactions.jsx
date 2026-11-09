@@ -28,6 +28,7 @@ import { ActionMenu } from '../components/ActionMenu.jsx'
 import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import CornerTab from '../components/CornerTab.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
@@ -40,25 +41,19 @@ import { useReimbursementCount } from '../lib/useReimbursementCount.js'
 import WindowedRows from '../components/WindowedRows.jsx'
 import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
+import {
+  getLedgerColumnDef, defaultLedgerColumns, normalizeLedgerColumns,
+  visibleLedgerColumns, mergeVisibleLedgerColumns, setLedgerColumnHidden,
+} from '../lib/ledgerColumns.js'
 
-const COLUMN_DEFS = [
-  { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
-  { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
-  { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 100 },
-  { key: 'account', label: 'Account', defaultWidth: 150, minWidth: 100 },
-  // Note/tag/status markers (see TransactionMarkersCell). Not sortable — no single meaningful order
-  // across a mix of tags, notes, and status flags.
-  { key: 'tags', label: 'Tags', defaultWidth: 90, minWidth: 44, sortable: false },
-  { key: 'amount', label: 'Amount', defaultWidth: 92, minWidth: 70 },
-]
-
-const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'tags', 'amount']
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
 const TRANSACTIONS_PAGE_SIZE = 500
 // Rows past the viewport, either way, that are fetched before they scroll into view.
 const TRANSACTIONS_PREFETCH_ROWS = 200
 const TRANSACTIONS_ROW_ESTIMATE = 38
+// The width of the column chooser's corner tab, kept clear at the end of the header.
+const CORNER_TAB_ROOM = 48
 
 // The ledger's attribute quick filter always carries a *choice*; what varies is whether it is applied.
 // Uncategorized is the seed because it is the most-reached-for of the set and the one the Tasks nudge
@@ -72,48 +67,22 @@ const DEFAULT_ATTRIBUTE_FILTER = { attribute: 'uncategorized', active: false }
 // because a browser restores a tab's sessionStorage along with the tab.
 let transactionsSessionState = null
 
-function defaultColumnConfig() {
-  return DEFAULT_ORDER.map(key => {
-    const def = COLUMN_DEFS.find(d => d.key === key)
-    return { key, width: def.defaultWidth }
-  })
-}
-
-function normalizeColumnConfig(cfg) {
-  if (!Array.isArray(cfg)) return null
-  const byKey = new Map(cfg.map(col => [col.key, col]))
-  // Reject a corrupt or foreign config (duplicate keys, or keys we no longer recognize) → defaults.
-  // A config that merely predates a newly-added column is NOT rejected: the missing column is spliced
-  // in below, so introducing a column (e.g. `tags`) doesn't wipe a user's customized order and widths.
-  if (byKey.size !== cfg.length) return null
-  if (![...byKey.keys()].every(key => DEFAULT_ORDER.includes(key))) return null
-  // Preserve the user's order for the columns they saved; every column (including category) reorders
-  // freely. Any column added since they last saved lands at its canonical position.
-  const result = cfg.map(col => ({ ...col }))
-  DEFAULT_ORDER.forEach((key, index) => {
-    if (byKey.has(key)) return
-    const def = COLUMN_DEFS.find(candidate => candidate.key === key)
-    result.splice(Math.min(index, result.length), 0, { key, width: def.defaultWidth })
-  })
-  return result
-}
-
-
 function getInitialSortDirection(columnKey) {
   return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
 }
 
-function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = false } = {}) {
+function formatTransactionClipboardCell(key, txn) {
   switch (key) {
     case 'date':
       return formatDate(txn.date)
     case 'merchant':
       return getTxnMerchantLabel(txn)
     case 'category':
-      if (showSourceInCategorySlot) return getTxnImportSourceLabel(txn)
       // A whole split names every category it touched: its own `category_name` is the pre-split one kept
       // for un-splitting, which the transaction is no longer in. A part row carries its own category.
       return splitCategoryNames(txn) || txn.category_name || 'Uncategorized'
+    case 'source':
+      return getTxnImportSourceLabel(txn)
     case 'account':
       return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
     case 'tags':
@@ -144,7 +113,7 @@ export default function Transactions() {
   const [detailPanels, setDetailPanels] = useState([])
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
   const [editId, setEditId] = useState(null)
-  const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
+  const [columnsMenuAnchor, setColumnsMenuAnchor] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [addingTransaction, setAddingTransaction] = useState(false)
   const [storedDocumentsOpen, setStoredDocumentsOpen] = useState(false)
@@ -189,13 +158,13 @@ export default function Transactions() {
   })
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
-  // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
-  // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
-  // load effect / localStorage — the setter persists straight through the context.
+  // Column layout is single-source-of-truth: the stored preference, normalized on read, falling back
+  // to defaults. No local mirror / load effect / localStorage — the setter persists straight through
+  // the context. `cols` holds hidden columns too (lib/ledgerColumns.js); the table gets `visibleCols`.
   const [storedCols, setStoredCols] = useDeviceLayoutPreference(TXN_COLUMNS_PREF_KEY, null)
-  const cols = useMemo(() => normalizeColumnConfig(storedCols) || defaultColumnConfig(), [storedCols])
+  const cols = useMemo(() => normalizeLedgerColumns(storedCols) || defaultLedgerColumns(), [storedCols])
+  const visibleCols = useMemo(() => visibleLedgerColumns(cols), [cols])
   const [sortState, setSortState] = useState(() => initialSessionStateRef.current?.sortState || DEFAULT_TRANSACTION_SORT)
-  const [showSourceInCategorySlot, setShowSourceInCategorySlot] = useState(false)
   const totalDetailPanelCount = detailPanels.length + batchDetailPanels.length
   const multiDetailMode = totalDetailPanelCount > 1
 
@@ -223,7 +192,7 @@ export default function Transactions() {
   function handleColUpdate(newCols) {
     // The injected bulk-select column is render-only; never persist it into the user's column config.
     const persistable = newCols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY)
-    setStoredCols(persistable)
+    setStoredCols(mergeVisibleLedgerColumns(cols, persistable))
   }
 
   // The ledger's single-select attribute quick filter, deep-linkable as `?only=<key>` so a Tasks nudge
@@ -469,9 +438,9 @@ export default function Transactions() {
   }
 
   const tableColumns = useMemo(
-    () => cols.map(col => {
-      const def = COLUMN_DEFS.find(candidate => candidate.key === col.key)
-      const headerLabel = col.key === 'category' && showSourceInCategorySlot ? 'Source' : (def?.label ?? col.key)
+    () => visibleCols.map(col => {
+      const def = getLedgerColumnDef(col.key)
+      const headerLabel = def?.label ?? col.key
       const align = col.key === 'amount' ? 'end' : 'start'
       const sortable = def?.sortable !== false
       return {
@@ -482,24 +451,12 @@ export default function Transactions() {
         minWidth: def?.minWidth ?? 60,
         leadingInset: col.key === 'date' ? 4 : undefined,
         trailingInset: col.key === 'amount' ? 4 : undefined,
-        title: col.key === 'category'
-          ? `${headerLabel} — right-click for options`
-          : sortable
-            ? `Click to sort. Drag middle to move ${headerLabel}`
-            : `Drag middle to move ${headerLabel}`,
-        onContextMenu: col.key === 'category'
-          ? event => {
-            event.preventDefault()
-            event.stopPropagation()
-            setCategoryHeaderMenu({
-              x: event.clientX,
-              y: event.clientY,
-            })
-          }
-          : undefined,
+        title: sortable
+          ? `Click to sort. Drag middle to move ${headerLabel}`
+          : `Drag middle to move ${headerLabel}`,
       }
     }),
-    [cols, showSourceInCategorySlot],
+    [visibleCols],
   )
 
   // In bulk mode prepend a render-only, non-interactive select column whose header is the select-all
@@ -585,7 +542,7 @@ export default function Transactions() {
 
       const selected = candidates.filter(txn => selection.isSelected(txn.id))
       const csvText = selected
-        .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn, { showSourceInCategorySlot }))).join(','))
+        .map(txn => visibleCols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn))).join(','))
         .join('\r\n')
 
       if (!csvText) {
@@ -602,7 +559,7 @@ export default function Transactions() {
     } finally {
       setCopying(false)
     }
-  }, [cols, shownRows, loadAllShownTransactions, selection, showSourceInCategorySlot])
+  }, [visibleCols, shownRows, loadAllShownTransactions, selection])
 
   // Clear the transient status so it doesn't linger next to a selection it no longer describes.
   useEffect(() => {
@@ -639,54 +596,54 @@ export default function Transactions() {
             onUpdateNote={updateNote}
           />
         )
-      case 'category': {
-        if (showSourceInCategorySlot) {
-          const sourceLabel = getTxnImportSourceLabel(txn)
-          return (
-            <span
-              title={sourceLabel}
-              style={{
-                color: 'var(--muted)',
-                fontSize: 12,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                maxWidth: '100%',
-                minWidth: 0,
-                verticalAlign: 'top',
-              }}
-            >
-              <span style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                display: 'inline-block',
-                minWidth: 0,
-                flex: '0 1 auto',
-              }}>
-                {sourceLabel}
-              </span>
-              {txn.import_batch_id ? (
-                <IconButton
-                  size="compact"
-                  tone="accent"
-                  onClick={event => {
-                    event.stopPropagation()
-                    openBatchDetail({
-                      id: txn.import_batch_id,
-                      filename: txn.import_batch_filename,
-                      imported_at: txn.import_batch_imported_at,
-                    })
-                  }}
-                  aria-label="Open import file report"
-                  style={{ flexShrink: 0 }}
-                >
-                  ↗
-                </IconButton>
-              ) : null}
+      case 'source': {
+        const sourceLabel = getTxnImportSourceLabel(txn)
+        return (
+          <span
+            title={sourceLabel}
+            style={{
+              color: 'var(--muted)',
+              fontSize: 12,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              maxWidth: '100%',
+              minWidth: 0,
+              verticalAlign: 'top',
+            }}
+          >
+            <span style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              display: 'inline-block',
+              minWidth: 0,
+              flex: '0 1 auto',
+            }}>
+              {sourceLabel}
             </span>
-          )
-        }
+            {txn.import_batch_id ? (
+              <IconButton
+                size="compact"
+                tone="accent"
+                onClick={event => {
+                  event.stopPropagation()
+                  openBatchDetail({
+                    id: txn.import_batch_id,
+                    filename: txn.import_batch_filename,
+                    imported_at: txn.import_batch_imported_at,
+                  })
+                }}
+                aria-label="Open import file report"
+                style={{ flexShrink: 0 }}
+              >
+                ↗
+              </IconButton>
+            ) : null}
+          </span>
+        )
+      }
+      case 'category':
         return (
           <CategoryCell
             txn={txn}
@@ -701,7 +658,6 @@ export default function Transactions() {
             }) : undefined}
           />
         )
-      }
       case 'account': {
         const accountStr = `${txn.account_name}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`
         return (
@@ -874,10 +830,11 @@ export default function Transactions() {
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
             so the sticky PillTableHeader inside pins to it, and the windowed rows measure
             the viewport from the same element. */}
-        <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Card style={{ position: 'relative', padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* Its own stacking context, so the sticky header stays under the column chooser's tab. */}
           <div
             ref={listScrollRef}
-            style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
+            style={{ position: 'relative', zIndex: 0, overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
           >
             <PillGridTable
               columns={renderColumns}
@@ -890,6 +847,9 @@ export default function Transactions() {
                 background: 'var(--surface)',
                 zIndex: 2,
               }}
+              // Room past the last column for the column chooser's corner tab, so a list scrolled sideways
+              // to its end does not put the Amount header under it. The 28 is the rows' side padding.
+              contentStyle={{ minWidth: renderColumns.reduce((sum, col) => sum + col.width, 0) + 28 + CORNER_TAB_ROOM }}
               renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
                 <div>
                   {initialLoading ? <Spinner /> : total === 0 ? (
@@ -954,21 +914,43 @@ export default function Transactions() {
               )}
             />
           </div>
+          {/* Rarely changed, so it is kept out of the toolbar: a corner of the table it adjusts. */}
+          <CornerTab
+            corner="top-right"
+            radius={12}
+            title="Choose columns"
+            aria-label="Choose columns"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(columnsMenuAnchor)}
+            onClick={event => {
+              const trigger = event.currentTarget
+              setColumnsMenuAnchor(current => (current ? null : trigger))
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>{'\u2699\uFE0E'}</span>
+          </CornerTab>
         </Card>
 
         <TransactionRowActionsChrome controller={rowActions} />
 
-        {categoryHeaderMenu ? (
+        {columnsMenuAnchor ? (
           <ActionMenu
-            anchorPoint={categoryHeaderMenu}
-            align="start"
-            minWidth={200}
-            label="Column options"
-            onClose={() => setCategoryHeaderMenu(null)}
-            items={[{
-              label: showSourceInCategorySlot ? 'Switch to category' : 'Switch to source',
-              onClick: () => setShowSourceInCategorySlot(value => !value),
-            }]}
+            anchorElement={columnsMenuAnchor}
+            minWidth={160}
+            label="Columns"
+            onClose={() => setColumnsMenuAnchor(null)}
+            items={cols.map(col => {
+              const shown = !col.hidden
+              const lastShown = shown && visibleCols.length === 1
+              return {
+                key: col.key,
+                label: getLedgerColumnDef(col.key).label,
+                toggled: shown,
+                disabled: lastShown,
+                disabledReason: lastShown ? 'At least one column stays shown' : undefined,
+                onClick: () => setStoredCols(setLedgerColumnHidden(cols, col.key, shown)),
+              }
+            })}
           />
         ) : null}
 

@@ -7,7 +7,8 @@
  * card rather than placed on it. The host card is `position: relative` and leaves room for the tab in its
  * padding.
  *
- * `CornerTab` draws the muted tab: a button when given `onClick`, a label otherwise. A host that needs a
+ * `CornerTab` draws the muted tab: a button when given `onClick`, a label otherwise. Other attributes
+ * (`aria-label`, `aria-expanded`) go to the button, so a glyph-only tab can be named. A host that needs a
  * different control in the corner takes the geometry alone from `cornerTabStyle` (`lib/cornerTab.js`).
  */
 
@@ -19,7 +20,7 @@ const SIZES = {
 }
 
 export default function CornerTab({
-  corner, radius = 10, borderColor = 'var(--border)', size = 'md', onClick, title, children,
+  corner, radius = 10, borderColor = 'var(--border)', size = 'md', onClick, title, children, ...buttonProps
 }) {
   const style = {
     ...cornerTabStyle({ corner, radius }),
@@ -32,7 +33,7 @@ export default function CornerTab({
   }
   if (!onClick) return <span style={{ ...style, display: 'inline-flex', alignItems: 'center' }} title={title}>{children}</span>
   return (
-    <button type="button" onClick={onClick} title={title} style={{ ...style, cursor: 'pointer' }}>
+    <button {...buttonProps} type="button" onClick={onClick} title={title} style={{ ...style, cursor: 'pointer' }}>
       {children}
     </button>
   )

@@ -21,6 +21,8 @@ import { IconButton, Tooltip } from './ui.jsx'
  * Items render in order; `separatorBefore` draws a rule above one to group them. An item is one of:
  * - a plain action (`label`, `onClick`, optional `title`), with an optional muted `description` line;
  * - a choice in a one-of-many menu (`checked` true or false), shown with a tick on the current one;
+ * - a setting among several that are each on or off (`toggled` true or false), shown with a checkbox.
+ *   Choosing one runs its action and leaves the menu open, so several can be set in one visit;
  * - `disabled`, whose `disabledReason` shows on hover and on focus in place of its `title`. It stays
  *   focusable (`aria-disabled`) so the keyboard reaches the reason too;
  * - `danger`, reserved for actions with no way back — a delete that leaves nothing to restore. An
@@ -163,7 +165,7 @@ export function ActionMenu({ anchorElement = null, anchorPoint = null, items = [
               onChoose={() => {
                 if (item.disabled) return
                 item.onClick?.()
-                close()
+                if (typeof item.toggled !== 'boolean') close()
               }}
             />
           </React.Fragment>
@@ -196,13 +198,14 @@ function openedByKeyboard(anchorElement) {
 function ActionMenuItem({ item, highlighted, buttonRef, onHover, onChoose }) {
   const descriptionId = useId()
   const isChoice = typeof item.checked === 'boolean'
+  const isToggle = typeof item.toggled === 'boolean'
   return (
     <Tooltip describeTrigger content={item.disabled ? item.disabledReason : ''} triggerStyle={{ display: 'flex' }}>
       <button
         ref={buttonRef}
         type="button"
-        role={isChoice ? 'menuitemradio' : 'menuitem'}
-        aria-checked={isChoice ? item.checked : undefined}
+        role={isToggle ? 'menuitemcheckbox' : isChoice ? 'menuitemradio' : 'menuitem'}
+        aria-checked={isToggle ? item.toggled : isChoice ? item.checked : undefined}
         aria-disabled={item.disabled || undefined}
         aria-describedby={item.description ? descriptionId : undefined}
         tabIndex={-1}
@@ -219,7 +222,8 @@ function ActionMenuItem({ item, highlighted, buttonRef, onHover, onChoose }) {
           color: item.danger ? 'var(--danger)' : 'var(--text)',
         }}
       >
-        <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ display: 'flex', alignItems: isToggle ? 'center' : 'baseline', justifyContent: isToggle ? 'flex-start' : 'space-between', gap: 8 }}>
+          {isToggle ? <ToggleBox on={item.toggled} /> : null}
           <span>{item.label}</span>
           {item.checked ? <span aria-hidden="true" style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span> : null}
         </span>
@@ -230,6 +234,24 @@ function ActionMenuItem({ item, highlighted, buttonRef, onHover, onChoose }) {
         ) : null}
       </button>
     </Tooltip>
+  )
+}
+
+// Drawn rather than a native checkbox, which may not sit inside the item's button.
+function ToggleBox({ on }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: 14, height: 14, flexShrink: 0, borderRadius: 3, boxSizing: 'border-box',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        border: `1px solid ${on ? 'var(--accent)' : 'var(--muted)'}`,
+        background: on ? 'var(--accent)' : 'transparent',
+        color: '#fff', fontSize: 10, lineHeight: 1, fontWeight: 700,
+      }}
+    >
+      {on ? '✓' : null}
+    </span>
   )
 }
 
