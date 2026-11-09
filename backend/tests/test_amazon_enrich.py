@@ -1564,6 +1564,17 @@ class AmazonOrdersTests(unittest.TestCase):
             self.assertEqual(link_orders_to_new_charges(conn, [charge]), 0)
         self.assertIsNone(self._txn(charge)["category_id"])
 
+    def test_charges_synced_days_after_orders_held_to_ship_together_pair(self):
+        # The shipped-together case arriving the other way round: orders first, their later charges by sync.
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [self._carded_order("S-1", "2026-06-12"),
+                                     self._carded_order("S-2", "2026-06-13"),
+                                     self._carded_order("S-3", "2026-06-13")],
+                              account_id="amazon", apply_categorization=False)
+        charges = [self._add_card_charge(33.97, date="2026-06-17") for _ in range(3)]
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(link_orders_to_new_charges(conn, charges), 3)
+
     def test_a_pending_charge_waits_until_it_posts(self):
         self._import_order_without_charge()
         charge = self._add_card_charge(37.32)
@@ -1648,6 +1659,38 @@ class AmazonOrdersTests(unittest.TestCase):
                    VALUES ('card2', 'p_card2', 'fixture', 'Other Card', 'Other Card', 'credit', ?)""",
                 (SHARED_OWNER_ID,),
             )
+
+    def test_charges_paying_two_different_orders_are_never_a_duplicate_pair(self):
+        # Two same-amount Amazon charges on two cards, days apart, read as one charge on two linked accounts
+        # until the orders arrive. Once each pays a different order they are two payments: the flag raised
+        # before the link clears, and neither sweep raises it again.
+        from backend.services.duplicate_detection import scan_scope_for_cross_account_duplicates
+        self._add_second_funding_account()
+        first = self._add_card_charge(9.55, date="2026-10-11", account_id="card2", name="Amazon")
+        second = self._add_card_charge(9.55, date="2026-10-14", account_id="card", name="Amazon")
+
+        def open_flags(conn):
+            return {frozenset((r["id"], r["suspect_duplicate_of"])) for r in conn.execute(
+                """SELECT id, suspect_duplicate_of FROM txn
+                   WHERE suspect_duplicate_of IS NOT NULL AND suspect_resolved_at IS NULL""")}
+
+        with self._use_db_path(), get_db() as conn:
+            scan_scope_for_cross_account_duplicates(conn, ["card", "card2"])
+            self.assertEqual(open_flags(conn), {frozenset((first, second))})
+            run_amazon_import(conn, [self._digital_order("C-1", "2026-10-10", 9.55, "Cuticle Oil Pen Set;"),
+                                     self._digital_order("E-1", "2026-10-11", 9.55, "Headset Ear Cushions;")],
+                              account_id="amazon", apply_categorization=False)
+            linked = {cid for ref in ("C-1", "E-1")
+                      for cid in txn_links.member_txn_ids(conn, txn_links.find_link(conn, LINK_KIND, ref)["id"], role="charge")}
+            self.assertEqual(linked, {first, second})
+            self.assertEqual(open_flags(conn), set())
+            scan_scope_for_cross_account_duplicates(conn, ["card", "card2"])
+            self.assertEqual(open_flags(conn), set())
+        # A charge no order explains is still checked against a linked one.
+        stray = self._add_card_charge(9.55, date="2026-10-13", account_id="card2", name="Amazon")
+        with self._use_db_path(), get_db() as conn:
+            scan_scope_for_cross_account_duplicates(conn, ["card", "card2"])
+            self.assertTrue(any(stray in pair for pair in open_flags(conn)))
 
     def test_same_amount_charges_on_different_accounts_are_not_duplicates(self):
         # An order whose payments string names no card (a D01 digital order → instrument null) has no

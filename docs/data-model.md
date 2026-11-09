@@ -1329,6 +1329,11 @@ never blocked.
     `depository` until it is typed and a savings account can arrive typed `depository`. `other` and a
     missing type match anything.
   - rows linked as a [PayPal funding pair](#paypal-funding-pairs).
+  - charges of two different [Amazon orders](#amazon-orders): two orders paid, so two payments, however
+    the orders were paired with them. Two charges of one order are still compared, since two copies of a
+    charge can add up to the order's total and be accepted as its split shipments. Linking a charge clears
+    a flag already raised against another order's charge (`clear_flags_between_amazon_orders`), because
+    the sweep runs before the order matching.
 - The window is wide because two sources date a charge on different bases; the text comparison is what
   rejects coincidences inside it.
 
@@ -1874,18 +1879,18 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
 - **Ingestion is keyed on the order id.** A re-imported order that has a link is `already_applied`; an
   items file for an order that already carries item detail is `already_enriched`.
 - **Orders and charges converge in either order.** Every CSV import and sync runs
-  `match_orders_after_ingest` over the rows it brought. It links an order only when the charge is its
-  sole candidate and no other unmatched order wants that charge. A pending charge is not linked until
-  it posts. It runs before PayPal pairing.
-- **Same-amount orders balanced by as many charges pair up** (`_pair_equal_amount_clusters`, after each
-  import). They are distinct purchases the matcher could not tell apart, and which charge pairs with which
+  `match_orders_after_ingest` over the rows it brought, pairing every unmatched order that expects one of
+  their amounts by the balance rule below. It runs before PayPal pairing.
+- **Same-amount orders balanced by as many charges pair up** (`_pair_balanced_orders`: after each import
+  and Discard over the batch's orders, after each ingest over the ledger's). They are distinct purchases the matcher could not tell apart, and which charge pairs with which
   order does not change the totals. Balance is judged per group of orders that compete for the same charges,
   not per amount across the card, so a surplus months away does not block a clean pair; a surplus inside
   the group is a duplicate and is left for the report. A lone order with one charge is a group of one.
   Groups are judged in the matcher's ±3-day window, then what is left in the 14 days after each order:
   Amazon charges on shipment, so an order held to ship with others is billed days or weeks after it was
   placed, never before. Where both pairings are possible, an order whose name names a charge's payee family
-  (`Kindle+;` and a Kindle charge) takes that charge.
+  (`Kindle+;` and a Kindle charge) takes that charge. A pending charge competes but is not linked until it
+  posts, so a group holding one waits.
 - **Unlinking is remembered.** `unlink_order_charges` records `declined_charge_ids` on the link, and no
   automatic pass offers those charges to that order again; linking one by hand clears it.
 - **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import

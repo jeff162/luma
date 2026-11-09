@@ -172,3 +172,31 @@ describe('MatchReport column geometry', () => {
     expect(root.style.getPropertyValue('--pgt-grid')).toMatch(/^\d+px$/)
   })
 })
+
+describe('MatchReport sort fields', () => {
+  const FIELD_COLUMNS = [
+    { key: 'order', label: 'Order', width: 260, sortFields: [{ key: 'date', label: 'Date' }, { key: 'name', label: 'Description' }],
+      render: entry => <span>{entry.name}</span> },
+  ]
+
+  it('names the field a column sorts by and picks another from the ▾, never by right-click', async () => {
+    const onSortField = vi.fn()
+    const onHeaderClick = vi.fn()
+    const { rerender } = renderReport({ columns: FIELD_COLUMNS, entries: makeEntries(3), onHeaderClick, onSortField })
+    // Unsorted, the pill names the field a click would use: the first.
+    await userEvent.click(screen.getByRole('button', { name: 'Order · Date' }))
+    expect(onHeaderClick).toHaveBeenCalledWith('order')
+    await userEvent.click(screen.getByRole('button', { name: 'Sort Order by…' }))
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Description/ }))
+    expect(onSortField).toHaveBeenCalledWith('order', 'name')
+
+    rerender(
+      <UserPreferencesProvider initialPreferences={{}}>
+        <MatchReport columnsPrefKey="test.matchReport.columns" columns={FIELD_COLUMNS} entries={makeEntries(3)}
+          getRowId={entry => entry.id} onHeaderClick={onHeaderClick} onSortField={onSortField}
+          sortState={{ key: 'order', field: 'name', dir: 'asc' }} />
+      </UserPreferencesProvider>,
+    )
+    expect(screen.getByRole('button', { name: /Order · ↑ Description/ })).toBeTruthy()
+  })
+})

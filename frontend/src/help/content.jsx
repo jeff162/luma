@@ -3173,6 +3173,12 @@ export const HELP_TOPICS = [
             orders</strong> leaves, say, the channel orders paid through Prime Video, ready to categorize
           together.
         </p>
+        <p>
+          <strong>Set category&hellip;</strong> in the bar above the selected rows gives them all one
+          category: the order on a row that has one, the charge itself on a row that doesn&apos;t. It sets
+          the category by hand, as a bulk edit on the Transactions page does, so rules leave those rows
+          alone. Split orders and rows a reimbursement claims keep their categories.
+        </p>
 
         <h4>Matched orders</h4>
         <p>

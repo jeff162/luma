@@ -42,7 +42,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `PillGridTable` / `PillTableHeader` | A table with sortable, reorderable or resizable columns. | `components/PillGridTable.jsx`, `components/PillTableHeader.jsx` |
+| `PillGridTable` / `PillTableHeader` | A table with sortable, reorderable or resizable columns, including a column that sorts by one of several fields (`sortFields`). | `components/PillGridTable.jsx`, `components/PillTableHeader.jsx` |
 | `moveDivider` / `dividerIsDraggable` | Resizing columns in a table that runs its own resize code instead of `PillGridTable`'s, as Accounts does. | `lib/columnDividers.js` |
 | `useColumnPreference` | Remembering column order and widths. | `lib/useColumnPreference.js` |
 | `useStableOrder` | A sorted list whose rows the user acts on, so a reload doesn't move the row they just clicked. | `lib/useStableOrder.js` |

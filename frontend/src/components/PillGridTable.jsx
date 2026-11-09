@@ -79,6 +79,7 @@ export default function PillGridTable({
   onColumnsChange,
   sortState = null,
   onSort,
+  onSortField,
   headerStyle,
   contentStyle,
   edgeWidth = 8,
@@ -357,6 +358,7 @@ export default function PillGridTable({
         gridTemplateColumns={GRID_TEMPLATE_VAR}
         sortState={sortState}
         onSort={onSort}
+        onSortField={onSortField}
         onStartReorder={typeof onColumnsChange === 'function' ? startReorder : undefined}
         onStartResize={typeof onColumnsChange === 'function' ? startResize : undefined}
         edgeWidth={edgeWidth}

@@ -3,18 +3,21 @@
 
 /* eslint-disable react-refresh/only-export-components -- a vendor module exports its config; the cells it renders are private to it */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../../lib/api.js'
 import { Button, Tooltip } from '../../ui.jsx'
 import SplitEditorDialog from '../../SplitEditorDialog.jsx'
 import RuleSuggestionToast from '../../RuleSuggestionToast.jsx'
 import { CategoryCell } from '../../TransactionRow.jsx'
+import CategoryPicker from '../../CategoryPicker.jsx'
+import { describeBulkOutcome } from '../../../lib/useBulkTransactionEditing.jsx'
 import { txnMutations } from '../../../lib/txnMutations.js'
 import { formatMoneyMagnitude, formatTransactionAmount } from '../../../lib/moneyDisplay.js'
 import { formatDate, safeExternalUrl } from '../../../lib/utils.js'
 import { AMAZON_RECONCILIATION_COLUMNS_PREF_KEY } from '../../../lib/importExport/constants.js'
 import { TxnCell, TxnStack } from './reconciliationCells.jsx'
+import { txnSortFields } from './reconciliationSort.js'
 
 // The Amazon reconciliation report for one import batch: how the imported orders line up with the card
 // charges in the ledger. Buckets (see routers/import_export/amazon.amazon_reconciliation):
@@ -210,6 +213,17 @@ function actionCall(action, entry) {
   return null
 }
 
+// What the order and charge headers sort by: each cell shows a date, a name and an amount. A stacked
+// cell sorts by its first charge.
+const ORDER_SORT_FIELDS = txnSortFields(entry => entry.order)
+const CHARGE_SORT_FIELDS = txnSortFields(entry => entry.charges?.[0] || entry.charge)
+
+// The transactions a row's category belongs on: the ones that count in totals. That is the order where the
+// row has one, since its paired charge is excluded; a row with no order is charges that count themselves.
+const countedTxnIds = (entry) => (
+  entry.order ? [entry.order.id] : [...(entry.charges || []), ...(entry.charge ? [entry.charge] : [])].map(c => c.id)
+)
+
 // Trash is destructive, so it's the last of the action buttons — set apart from the constructive run.
 const BULK_ACTIONS = [
   { key: 'merge', label: 'Merge → keep one', title: 'Merge each selected duplicate into one — keep the richest copy, trash the rest' },
@@ -249,7 +263,11 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
     () => txnMutations.setCategory(txnId, categoryId),
     'Could not change the category')
   // The cell reads the category's name off the row, which a report row does not carry.
-  const categoryNames = new Map((categories || []).map(c => [c.id, c.name]))
+  const categoryNames = useMemo(() => new Map((categories || []).map(c => [c.id, c.name])), [categories])
+  // An uncategorized order, and a row with no order, have no name to sort by and go last.
+  const categoryName = useCallback(entry => (
+    entry.order?.is_split ? 'Split' : (categoryNames.get(entry.order?.category_id) || '').toLowerCase()
+  ), [categoryNames])
 
   const discardCharge = (charge, entry) => run(() => api.trashAmazonDuplicateCharge({
     charge_txn_id: charge.id,
@@ -316,8 +334,8 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
     'Could not remove the charge from the order')
 
   const columns = [
-    { key: 'order', label: 'Amazon order', width: 290, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
-    { key: 'category', label: 'Order category', width: 160, sortable: false, render: (entry) => (
+    { key: 'order', label: 'Amazon order', width: 290, sortFields: ORDER_SORT_FIELDS, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
+    { key: 'category', label: 'Order category', width: 160, sortValue: categoryName, render: (entry) => (
       entry.order && categories ? (
         <CategoryCell
           txn={{ ...entry.order, category_name: categoryNames.get(entry.order.category_id) || null }}
@@ -329,7 +347,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
         />
       ) : null
     ) },
-    { key: 'charge', label: 'Card charge', width: 290, render: (entry) => {
+    { key: 'charge', label: 'Card charge', width: 290, sortFields: CHARGE_SORT_FIELDS, render: (entry) => {
       if (entry.kind === 'duplicate' || entry.kind === 'duplicate_review' || entry.kind === 'unaccounted_duplicate') {
         const note = entry.kind === 'duplicate_review'
           ? 'Outside the ±3-day auto-match window — check each copy’s origin before resolving.'
@@ -380,7 +398,7 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
       }
       return <TxnCell txn={entry.charge} />
     } },
-    { key: 'action', label: 'Actions', width: 240, sortable: false, render: (entry) => {
+    { key: 'action', label: 'Actions', width: 240, render: (entry) => {
       // The duplicate group's recommended one-click resolution: keep the richest copy, fold in the
       // others' detail, trash the rest. It lives here (the right-edge Actions column) rather than under
       // the stacked charges, so it reads as the row-level action and doesn't sit beneath the charge text.
@@ -501,13 +519,37 @@ function useColumns({ data, busy, run, reload, openPicker, reportError }) {
   ) : null
   const overlay = <>{splitEditor}{ruleToast}</>
 
-  return { columns, overlay }
+  // Set one category on every selected row, typically after narrowing to one charge name. A bulk set is a
+  // manual category, as it is in the ledger; split rows and rows a reimbursement claims are left alone by
+  // the server, and the outcome says how many.
+  const bulkControls = ({ selected, disabled, runSelected }) => {
+    if (!categories) return null
+    const ids = [...new Set(selected.flatMap(countedTxnIds))]
+    const label = `Set category… (${selected.length})`
+    if (disabled || !ids.length) return <Button variant="secondary" size="compact" disabled>{label}</Button>
+    return (
+      <CategoryPicker
+        value={null}
+        categories={categories}
+        compact
+        showSelectedBadge
+        emptyBadgeLabel={label}
+        style={{ flex: '0 0 auto' }}
+        onAddCategory={addCategory}
+        onChange={categoryId => runSelected(async () => describeBulkOutcome(await txnMutations.bulkUpdate(
+          { mode: 'ids', ids }, [{ type: 'set_category', category_id: categoryId }])))}
+      />
+    )
+  }
+
+  return { columns, overlay, bulkControls }
 }
 
 export const amazonReconciliation = {
   subtitle: "How this import's orders line up with the card charges in your ledger.",
   explainerTopic: 'amazon-reconciliation',
   panelPrefKey: 'ui.amazonReconciliation.panel',
+  sortPrefKey: 'ui.amazonReconciliation.sort',
   columnsPrefKey: AMAZON_RECONCILIATION_COLUMNS_PREF_KEY,
   emptyMessage: 'Nothing to reconcile for this import.',
   kinds: KINDS,

@@ -8,6 +8,7 @@ import { api } from '../../../lib/api.js'
 import { Button } from '../../ui.jsx'
 import { PAYPAL_FUNDING_COLUMNS_PREF_KEY } from '../../../lib/importExport/constants.js'
 import { TxnCell, TxnStack } from './reconciliationCells.jsx'
+import { txnSortFields } from './reconciliationSort.js'
 
 // The PayPal reconciliation: how a tracked PayPal account's rows match the bank and card rows on the
 // other side of the same movement (services/paypal_funding.py, which calls a match a pair). The matching
@@ -89,6 +90,11 @@ function buildChoiceEntries(choice) {
   }
   return [...entries, ...groups.values()]
 }
+
+// What the headers sort by: each cell shows a date, a name and an amount. A contested group sorts by its
+// earliest rival, a choice by its first candidate.
+const PAYPAL_SORT_FIELDS = txnSortFields(entry => entry.paypal || entry.rivals?.[0])
+const COUNTERPART_SORT_FIELDS = txnSortFields(entry => entry.counterpart || entry.candidates?.[0])
 
 function buildEntries(data) {
   return [
@@ -187,15 +193,15 @@ function useColumns({ busy, run, openPicker, reportError }) {
   ))
 
   const columns = [
-    { key: 'paypal', label: 'PayPal', width: 380, render: (entry) => (
+    { key: 'paypal', label: 'PayPal', width: 380, sortFields: PAYPAL_SORT_FIELDS, render: (entry) => (
       entry.kind === 'contested'
         ? <ContestedRivals rivals={entry.rivals} disabled={busy} onPick={(paypal) => pick(entry, paypal)} />
         : <TxnCell txn={entry.paypal} />
     ) },
-    { key: 'counterpart', label: 'Bank or card', width: 330, render: (entry) => (
+    { key: 'counterpart', label: 'Bank or card', width: 330, sortFields: COUNTERPART_SORT_FIELDS, render: (entry) => (
       entry.kind === 'choice' ? <TxnStack charges={entry.candidates} /> : <TxnCell txn={entry.counterpart} />
     ) },
-    { key: 'action', label: 'Actions', width: 240, sortable: false, render: (entry) => {
+    { key: 'action', label: 'Actions', width: 240, render: (entry) => {
       if (entry.kind === 'matched') {
         return (
           <Button variant="secondary" disabled={busy} onClick={() => act('unpair', entry, 'Could not unlink the transactions')}
@@ -237,6 +243,7 @@ export const paypalReconciliation = {
   subtitle: 'How PayPal transactions match the bank and card transactions on the other side, so the money counts once.',
   explainerTopic: 'paypal-reconciliation',
   panelPrefKey: 'ui.paypalFunding.panel',
+  sortPrefKey: 'ui.paypalFunding.sort',
   columnsPrefKey: PAYPAL_FUNDING_COLUMNS_PREF_KEY,
   emptyMessage: 'Nothing to reconcile.',
   kinds: KINDS,

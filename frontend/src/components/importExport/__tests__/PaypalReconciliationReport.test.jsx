@@ -22,6 +22,11 @@ vi.mock('../../detailShared.jsx', () => ({
   useDetailPanelChrome: () => ({ pos: {}, size: {}, panelRef: { current: null }, onDragStart: () => {}, onResizeStart: () => {} }),
   useRestorablePanelGeometry: () => ({}),
 }))
+// The header sort is a saved preference; local state stands in for the app's provider.
+vi.mock('../../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
 vi.mock('../../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../OriginFields.jsx', () => ({ MerchantOriginHoverCard: () => null }))
 // Rows sized from layout jsdom lacks; one stand-in row per entry, every column rendered.

@@ -6,7 +6,7 @@
 // what a second client of that shell must not be able to disturb.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const api = vi.hoisted(() => ({
@@ -22,19 +22,32 @@ const api = vi.hoisted(() => ({
   getCategories: vi.fn(),
 }))
 vi.mock('../../../lib/api.js', () => ({ api }))
+const txnMutations = vi.hoisted(() => ({ bulkUpdate: vi.fn(), setCategory: vi.fn() }))
+vi.mock('../../../lib/txnMutations.js', () => ({ txnMutations }))
 vi.mock('../../detailShared.jsx', () => ({
   DetailPanelShell: ({ header, children }) => <div>{header}{children}</div>,
   useDetailPanelChrome: () => ({ pos: {}, size: {}, panelRef: { current: null }, onDragStart: () => {}, onResizeStart: () => {} }),
   useRestorablePanelGeometry: () => ({}),
 }))
+// The header sort is a saved preference; local state stands in for the app's provider.
+vi.mock('../../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
 vi.mock('../../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../OriginFields.jsx', () => ({ MerchantOriginHoverCard: () => null }))
 vi.mock('../../SplitEditorDialog.jsx', () => ({ default: ({ txn }) => <div>Split editor for {txn.name}</div> }))
 // The shared table sizes its rows from layout jsdom does not have. It stands in as one row per entry, in the
 // order given, rendering every column and the row's checkbox — which is all the report decides.
 vi.mock('../MatchReport.jsx', () => ({
-  MatchReport: ({ entries, columns, getRowId, selectable, selectedIds, onToggleRow, onToggleAll, error, emptyMessage }) => (
+  MatchReport: ({ entries, columns, getRowId, selectable, selectedIds, onToggleRow, onToggleAll, onHeaderClick, onSortField, error, emptyMessage }) => (
     <div>
+      {columns.filter(col => col.sortable).map(col => (
+        <button key={col.key} type="button" onClick={() => onHeaderClick(col.key)}>sort by {col.label}</button>
+      ))}
+      {columns.flatMap(col => (col.sortFields || []).map(f => (
+        <button key={`${col.key}:${f.key}`} type="button" onClick={() => onSortField(col.key, f.key)}>sort {col.label} by {f.label}</button>
+      )))}
       {error ? <div>{error}</div> : null}
       {selectable ? <button type="button" onClick={onToggleAll}>select all visible</button> : null}
       {entries.length === 0 ? <div>{emptyMessage}</div> : entries.map(entry => (
@@ -86,7 +99,7 @@ function renderReport(props = {}) {
 const rowFor = (text) => screen.getAllByTestId('row').find(r => within(r).queryByText(text))
 
 beforeEach(() => {
-  for (const fn of Object.values(api)) fn.mockReset().mockResolvedValue({})
+  for (const fn of [...Object.values(api), ...Object.values(txnMutations)]) fn.mockReset().mockResolvedValue({})
   api.getCategories.mockResolvedValue([])
 })
 afterEach(() => cleanup())
@@ -106,6 +119,31 @@ describe('Amazon reconciliation report — rows', () => {
     // Within a kind, earliest first.
     const unmatched = screen.getAllByTestId('row').filter(r => r.dataset.kind === 'unmatched')
     expect(within(unmatched[0]).queryByText('Order Acknowledged')).toBeTruthy()
+  })
+
+  it('sorts by a column header both ways, keeping rows with nothing in that column last', async () => {
+    renderReport()
+    const kinds = () => screen.getAllByTestId('row').map(r => r.dataset.kind)
+    const orderless = ['unaccounted_duplicate', 'reverse', 'reverse']
+    await userEvent.click(screen.getByRole('button', { name: 'sort by Amazon order' }))
+    expect(kinds()).toEqual([
+      'unmatched', 'duplicate', 'duplicate', 'duplicate_review', 'matched_review', 'matched', 'unmatched', ...orderless])
+    await userEvent.click(screen.getByRole('button', { name: 'sort by Amazon order' }))
+    expect(kinds()).toEqual([
+      'unmatched', 'matched', 'matched_review', 'duplicate_review', 'duplicate', 'duplicate', 'unmatched', ...orderless])
+    expect(screen.queryByRole('button', { name: 'sort by Actions' })).toBeNull()
+  })
+
+  it('sorts a column by the field picked for it, ascending, and the header then flips that field', async () => {
+    renderReport()
+    const names = () => screen.getAllByTestId('row').map(r => r.dataset.kind)
+    await userEvent.click(screen.getByRole('button', { name: 'sort Amazon order by Description' }))
+    // Order Acknowledged, Order Dup, Order Dup Review, Order Dup Two, Order Matched, Order Split, Order Unmatched.
+    const byName = ['unmatched', 'duplicate', 'duplicate_review', 'duplicate', 'matched', 'matched_review', 'unmatched']
+    const orderless = ['unaccounted_duplicate', 'reverse', 'reverse']
+    expect(names()).toEqual([...byName, ...orderless])
+    await userEvent.click(screen.getByRole('button', { name: 'sort by Amazon order' }))
+    expect(names()).toEqual([...byName.reverse(), ...orderless])
   })
 
   it('offers a pill per non-empty kind that filters the list, and All brings it back', async () => {
@@ -259,6 +297,24 @@ describe('Amazon reconciliation report — bulk actions', () => {
     expect(api.unlinkAmazonOrderCharges).not.toHaveBeenCalled()
     expect(onReload).toHaveBeenCalled()
     expect(screen.queryByText(/selected:/)).toBeNull()
+  })
+
+  it('sets one category on the transaction each selected row counts: its order, or its own charges', async () => {
+    api.getCategories.mockResolvedValue([{ id: 'grp', name: 'Shopping' }, { id: 'cat-gadgets', name: 'Gadgets', parent_id: 'grp' }])
+    txnMutations.bulkUpdate.mockResolvedValue({ updated_count: 3, skipped_splits: 1 })
+    const { onReload } = renderReport()
+    await userEvent.click(screen.getByRole('checkbox', { name: 'select m:L-m' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'select p:p-near' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'select ud:c-u1' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Set category… (3)' }))
+    await userEvent.click(await screen.findByText('Gadgets'))
+    await waitFor(() => expect(txnMutations.bulkUpdate).toHaveBeenCalledTimes(1))
+    const [selection, actions] = txnMutations.bulkUpdate.mock.calls[0]
+    expect([...selection.ids].sort()).toEqual(['c-u1', 'c-u2', 'o-m', 'p-near'])
+    expect(actions).toEqual([{ type: 'set_category', category_id: 'cat-gadgets' }])
+    expect(onReload).toHaveBeenCalled()
+    // What the server left alone is said, since the count alone would overstate what changed.
+    expect(await screen.findByText(/1 split transaction kept its categories/)).toBeTruthy()
   })
 
   it('selects every visible row of the filtered kind', async () => {

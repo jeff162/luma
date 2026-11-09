@@ -133,6 +133,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 
 - **Pill headers.** Sortable, reorderable and resizable headers come from `PillTableHeader`, and a full
   table from `PillGridTable`. Each behavior is optional, so a quiet table reuses the same look.
+- **A column whose cell shows several things sorts by one of them, named in its pill** (`sortFields`).
+  The pill is split like a `SplitButton`: its body flips the direction, so each field is two clicks, and
+  a full-height caret segment at its end picks the field. The caret is on screen because a touch screen
+  cannot right-click, and a segment because a glyph inside the body is too small to aim at.
 - **Dragging a column divider moves only that divider** (`lib/columnDividers.js`): the two columns
   beside it trade width, so nothing further along is pushed out of view. The last column's two dividers
   change the table's width instead: the one before it slides the column along whole, since right-aligned

@@ -6,6 +6,7 @@ import { Button, RefreshButton, FilterChip } from '../../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../../detailShared.jsx'
 import FeatureExplainer from '../../../help/FeatureExplainer.jsx'
 import { RECONCILIATION_REPORTS } from '../../../lib/reconciliationReports.js'
+import { useUserPreference } from '../../../lib/UserPreferencesContext.jsx'
 import { MatchReport } from '../MatchReport.jsx'
 import { ChargePickerDialog } from './ChargePickerDialog.jsx'
 import { RECONCILIATION_VENDORS } from './reconciliationVendors.js'
@@ -21,7 +22,16 @@ import { RECONCILIATION_VENDORS } from './reconciliationVendors.js'
 //   rowActions     (entry) → { [action]: true } — the bulk-eligible actions a row offers
 //   bulkActions    [{ key, label, title }] in bar order
 //   actionCall     (action, entry) → the promise behind an action, shared by a row's button and the bulk bar
-//   useColumns     (ctx) → { columns, overlay } — a hook, so a vendor keeps its own row-level state
+//   sortPrefKey    where the header sort the user picked is remembered
+//   useColumns     (ctx) → { columns, overlay, bulkControls? } — a hook, so a vendor keeps its own row-level
+//                  state. `bulkControls({ selected, disabled, runSelected })` renders vendor controls in the
+//                  bulk bar for an action that needs more than a click (a category to set); `runSelected(call)`
+//                  runs it as the bar's own actions run, and a string `call` resolves to is shown as the outcome.
+//                  A column with `sortValue(entry)` (a string or number; '' or null when the row has none)
+//                  sorts by it from its header; one whose cell shows several things lists them instead as
+//                  `sortFields` [{ key, label, sortValue }], the first the default, and its header picks one.
+//                  A column with neither does not sort. Define the functions once, outside the hook, so the
+//                  sorted rows are not recomputed on every render
 //   rowFilters     optional [{ key, label, title, test(entry) }] — pills after the kind pills that narrow
 //                  the rows by something other than their kind; one is on at a time, alongside the kind
 //   facets         optional [{ key, label, title, values(entry) → string[] }] — a labelled line of pills
@@ -54,8 +64,11 @@ export function ReconciliationReportDialog({
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [rowBusy, setRowBusy] = useState(false)
   const [pendingBulk, setPendingBulk] = useState(false)
+  const [bulkNotice, setBulkNotice] = useState('')     // the last bulk action's outcome, when it has one to tell
   const [picker, setPicker] = useState(null)           // the open pairing window: { dialog, onConfirm, failMessage }
   const [picking, setPicking] = useState(false)
+  // null keeps the default order: problems first, then by date within a kind.
+  const [sortState, setSortState] = useUserPreference(vendor.sortPrefKey, null)
 
   // Floating, draggable, resizable panel chrome — non-modal so the user can go inspect a transaction
   // while the report stays open; geometry persists across opens, per vendor.
@@ -97,14 +110,57 @@ export function ReconciliationReportDialog({
     }
   }
 
-  const { columns, overlay } = vendor.useColumns({ data, busy, run, reload: onReload, openPicker, reportError: setActionError })
+  const { columns, overlay, bulkControls } = vendor.useColumns({ data, busy, run, reload: onReload, openPicker, reportError: setActionError })
 
+  // An acknowledged row no longer needs attention, so it drops the warn emphasis, reads muted, and carries
+  // its green ✓ Reviewed status here in the Kind cell; the Undo lives with the row's actions.
+  const kindRank = useCallback(entry => vendor.kinds[entry.kind].rank, [vendor])
+  const kindColumn = { key: 'kind', label: 'Kind', width: 150, sortValue: kindRank, render: (entry) => {
+    const meta = vendor.kinds[entry.kind]
+    const handled = vendor.isAcknowledged(entry)
+    const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        {/* The label wraps: a bucket named for the shape of its problem outgrows this column, and holding
+            it on one line printed it under the next cell rather than clipping it. */}
+        <span style={{ color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
+          {meta.label}
+        </span>
+        {handled ? (
+          <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
+        ) : null}
+      </div>
+    )
+  } }
+  const allColumns = [kindColumn, ...columns].map(col => ({ ...col, sortable: !!(col.sortValue || col.sortFields?.length) }))
+  const sortColumn = sortState ? allColumns.find(col => col.key === sortState.key && col.sortable) : null
+  const sortValue = sortColumn?.sortFields
+    ? (sortColumn.sortFields.find(f => f.key === sortState.field) || sortColumn.sortFields[0]).sortValue
+    : sortColumn?.sortValue
+
+  // The picked column decides; a row with nothing in it goes last either way, and ties keep the default
+  // order, so sorting by a date column still reads problems first within one day.
   const entries = useMemo(() => {
     const kinds = vendor.kinds
-    return vendor.buildEntries(data || {}).sort((a, b) =>
-      (kinds[a.kind].rank - kinds[b.kind].rank)
-      || String(vendor.entryDate(a)).localeCompare(String(vendor.entryDate(b))))
-  }, [vendor, data])
+    const byDefault = (a, b) => (kinds[a.kind].rank - kinds[b.kind].rank)
+      || String(vendor.entryDate(a)).localeCompare(String(vendor.entryDate(b)))
+    const built = vendor.buildEntries(data || {})
+    if (!sortValue) return built.sort(byDefault)
+    const dir = sortState.dir === 'desc' ? -1 : 1
+    const blank = value => value == null || value === ''
+    return built.sort((a, b) => {
+      const av = sortValue(a); const bv = sortValue(b)
+      if (blank(av) || blank(bv)) return (blank(av) - blank(bv)) || byDefault(a, b)
+      if (av < bv) return -dir
+      if (av > bv) return dir
+      return byDefault(a, b)
+    })
+  }, [vendor, data, sortValue, sortState?.dir])
+  // The pill flips the direction of what its column sorts by; the ▾ picks the field and starts it ascending.
+  const toggleSort = (key) => setSortState(current => (current?.key === key
+    ? { ...current, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: 'asc' }))
+  const pickSortField = (key, field) => setSortState({ key, field, dir: 'asc' })
 
   const rowFilters = useMemo(() => vendor.rowFilters || [], [vendor])
   // Each facet's values with how many rows carry them, most common first. Counted over every row, as the
@@ -150,22 +206,32 @@ export function ReconciliationReportDialog({
     return { total, counts }
   }, [vendor, visibleEntries, selectedIds])
 
-  // Apply one action to every selected row that offers it. A vendor offers a bulk action only where each
-  // row's call is independent of every other selected row's, so the calls can run in parallel.
-  const runBulk = async (action) => {
-    const selected = visibleEntries.filter(e => selectedIds.has(e.id) && vendor.rowActions(e)[action])
-    if (!selected.length) return
+  // One bulk action over the selection: on success the selection clears and the report reloads. `call`
+  // may resolve to a sentence about the outcome, shown until the next bulk action.
+  const runSelected = async (call) => {
     setPendingBulk(true)
     setActionError('')
+    setBulkNotice('')
     try {
-      await Promise.all(selected.map(entry => vendor.actionCall(action, entry)).filter(Boolean))
+      const notice = await call()
       setSelectedIds(new Set())
+      if (typeof notice === 'string') setBulkNotice(notice)
       await onReload?.()
     } catch (e) {
       setActionError(e?.message || 'Bulk action failed')
     } finally {
       setPendingBulk(false)
     }
+  }
+
+  // Apply one action to every selected row that offers it. A vendor offers a bulk action only where each
+  // row's call is independent of every other selected row's, so the calls can run in parallel.
+  const runBulk = (action) => {
+    const selected = visibleEntries.filter(e => selectedIds.has(e.id) && vendor.rowActions(e)[action])
+    if (!selected.length) return
+    return runSelected(async () => {
+      await Promise.all(selected.map(entry => vendor.actionCall(action, entry)).filter(Boolean))
+    })
   }
 
   // An "All" pill then one per non-empty kind, in rank order, colour-coded to its stripe.
@@ -177,26 +243,6 @@ export function ReconciliationReportDialog({
       .filter(kind => counts.get(kind) > 0)
       .map(kind => ({ kind, count: counts.get(kind) }))
   }, [vendor, entries])
-
-  // An acknowledged row no longer needs attention, so it drops the warn emphasis, reads muted, and carries
-  // its green ✓ Reviewed status here in the Kind cell; the Undo lives with the row's actions.
-  const kindColumn = { key: 'kind', label: 'Kind', width: 150, render: (entry) => {
-    const meta = vendor.kinds[entry.kind]
-    const handled = vendor.isAcknowledged(entry)
-    const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        {/* The label wraps: a bucket named for the shape of its problem outgrows this column, and holding
-            it on one line printed it under the next cell rather than clipping it. */}
-        <span style={{ color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
-          {meta.label}
-        </span>
-        {handled ? (
-          <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
-        ) : null}
-      </div>
-    )
-  } }
 
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
@@ -316,16 +362,32 @@ export function ReconciliationReportDialog({
                 {action.label} ({selectionSummary.counts[action.key]})
               </Button>
             ))}
+            {bulkControls?.({
+              selected: visibleEntries.filter(e => selectedIds.has(e.id)),
+              disabled: pendingBulk,
+              runSelected,
+            })}
             <span style={{ flex: 1 }} />
             <Button variant="secondary" size="compact" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
               Clear
             </Button>
           </div>
+        ) : bulkNotice ? (
+          <div style={{
+            display: 'flex', gap: 6, alignItems: 'center',
+            padding: '6px 16px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--muted)',
+          }}>
+            <span style={{ flex: 1 }}>{bulkNotice}</span>
+            <Button variant="secondary" size="compact" onClick={() => setBulkNotice('')}>Dismiss</Button>
+          </div>
         ) : null}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <MatchReport
             columnsPrefKey={vendor.columnsPrefKey}
-            columns={[kindColumn, ...columns]}
+            columns={allColumns}
+            sortState={sortColumn ? sortState : null}
+            onHeaderClick={toggleSort}
+            onSortField={pickSortField}
             entries={visibleEntries}
             getRowId={(entry) => entry.id}
             getRowStripe={(entry) => (vendor.isAcknowledged(entry)

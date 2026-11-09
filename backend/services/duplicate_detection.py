@@ -70,11 +70,13 @@ and so never pair within one account. A same-account exact match is auto-confirm
 `promote_in_group_suspects_to_confirmed` (they trivially share an effective root) under its own
 `AUTO_CROSS_SOURCE_RESOLVED_BY` marker, so the user is not asked about it.
 
-**Two kinds of pair are never duplicates, so neither sweep raises them** (`_never_duplicates`). Rows on
+**Three kinds of pair are never duplicates, so neither sweep raises them** (`_never_duplicates`). Rows on
 accounts whose types cannot name one real account (`account_types_can_match`) are two sides of one
 movement, such as a card payment or a PayPal funding leg. Rows already linked as a PayPal funding pair have
-been judged as one movement on two accounts. Pairing a funding pair clears any flag already raised between
-its rows (`clear_flag_between`), because the post-ingest sweep runs before the funding pass.
+been judged as one movement on two accounts. Charges of two different Amazon orders are two payments.
+Pairing a funding pair, or linking a charge to an order, clears any flag already raised between the rows
+(`clear_flag_between`, `clear_flags_between_amazon_orders`), because the post-ingest sweep runs before
+both passes.
 
 Check-number discriminator (`are_distinct_checks`): two genuinely different checks can share
 date+amount+description (often just "Check"), so they collide on the content hash AND on the
@@ -140,6 +142,7 @@ from functools import lru_cache
 from typing import Callable, Iterable, NamedTuple, Optional
 
 from backend.services.categorizer import source_match_text_from_json
+from backend.services.amazon_order_amount import LINK_KIND as AMAZON_ORDER_LINK_KIND
 from backend.services.connection_mapping import provider_account_label
 from backend.services.import_evidence import evidence_field_feeds_text_match
 from backend.services.txn_trash import restore_txns, trash_txns
@@ -2894,14 +2897,61 @@ def account_types_can_match(type_a: Optional[str], type_b: Optional[str]) -> boo
 
 def _never_duplicates(conn: sqlite3.Connection) -> Callable[[str, Optional[str], str, Optional[str]], bool]:
     """A test, for both sweeps, of whether two rows (each with its account's effective type) can never be
-    a duplicate pair: their account types cannot be one account, or the rows are a PayPal funding pair."""
+    a duplicate pair: their account types cannot be one account, the rows are a PayPal funding pair, or
+    they are the charges of two different Amazon orders."""
     # Imported here: `services.paypal_funding` imports this module.
     from backend.services.paypal_funding import funding_pairs
     paired = funding_pairs(conn)
+    order_of = amazon_order_of_charge(conn)
 
     def never(id_a: str, type_a: Optional[str], id_b: str, type_b: Optional[str]) -> bool:
-        return not account_types_can_match(type_a, type_b) or _sorted_pair(id_a, id_b) in paired
+        if not account_types_can_match(type_a, type_b) or _sorted_pair(id_a, id_b) in paired:
+            return True
+        order_a, order_b = order_of.get(id_a), order_of.get(id_b)
+        return order_a is not None and order_b is not None and order_a != order_b
     return never
+
+
+def amazon_order_of_charge(conn: sqlite3.Connection, txn_ids: Optional[Iterable[str]] = None) -> dict[str, str]:
+    """``charge txn id → Amazon order link id`` for every charge linked to an Amazon order, or for those
+    of ``txn_ids``. Two charges paying two different orders are two payments, so they are never one charge
+    imported twice. Two charges of *one* order are not covered: two copies of a charge can add up to an
+    order's total and be accepted as its split shipments."""
+    query = """SELECT m.txn_id, m.link_id
+               FROM   txn_link_member m JOIN txn_link l ON l.id = m.link_id
+               WHERE  l.kind = ? AND m.role = 'charge'"""
+    if txn_ids is None:
+        rows = conn.execute(query, (AMAZON_ORDER_LINK_KIND,)).fetchall()
+    else:
+        ids = list(dict.fromkeys(txn_ids))
+        rows = []
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            rows += conn.execute(f"{query} AND m.txn_id IN ({','.join('?' * len(chunk))})",
+                                 (AMAZON_ORDER_LINK_KIND, *chunk)).fetchall()
+    return {r["txn_id"]: r["link_id"] for r in rows}
+
+
+def clear_flags_between_amazon_orders(conn: sqlite3.Connection, charge_id: str) -> int:
+    """Once ``charge_id`` is linked to an Amazon order, clear any unresolved duplicate flag between it and a
+    charge of a different order (`_never_duplicates`). The post-ingest sweep runs before the order matching,
+    so the flag can predate the link that answers it. Returns the number of rows cleared."""
+    partners = [r["partner"] for r in conn.execute(
+        """SELECT suspect_duplicate_of AS partner FROM txn
+           WHERE  id = ? AND suspect_duplicate_of IS NOT NULL AND suspect_resolved_at IS NULL
+           UNION
+           SELECT id FROM txn
+           WHERE  suspect_duplicate_of = ? AND suspect_resolved_at IS NULL""",
+        (charge_id, charge_id),
+    )]
+    if not partners:
+        return 0
+    order_of = amazon_order_of_charge(conn, [charge_id, *partners])
+    mine = order_of.get(charge_id)
+    if mine is None:
+        return 0
+    return sum(clear_flag_between(conn, charge_id, partner) for partner in partners
+               if order_of.get(partner) not in (None, mine))
 
 
 def clear_flag_between(conn: sqlite3.Connection, txn_id_a: str, txn_id_b: str) -> int:
@@ -4300,7 +4350,7 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
 # them together would either force a migration for a threshold tweak or silently skip a re-scan whenever
 # a migration happened to land first. Bump it in the same commit as the rule change, the way
 # CURRENT_VERSION is bumped with a schema change.
-DUPLICATE_DETECTION_VERSION = 3
+DUPLICATE_DETECTION_VERSION = 4
 _DETECTION_VERSION_META_KEY = "duplicate_detection_version"
 
 # A pass only lets each row take one partner, so rows that lose a contest become available on the next

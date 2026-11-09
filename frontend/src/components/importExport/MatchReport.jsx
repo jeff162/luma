@@ -23,7 +23,7 @@ import { useColumnPreference } from '../../lib/useColumnPreference.js'
 //   - per-row actions, the bulk-action bar, filters, and the surrounding chrome (floating panel, account
 //     scoping) all stay in the report — per-row actions ride in a column's `render`.
 //
-// A `column` is { key, label, width?, minWidth?, align?, sortable?, render(entry) }.
+// A `column` is { key, label, width?, minWidth?, align?, sortable?, sortFields?, render(entry) }.
 // `getRowId(entry, index)` gets the index too, so a report whose entries have no natural id can key off
 // position without scanning the list for it (that scan is O(n) per row, which windowing calls per
 // mounted row — it was O(n²) on the entry count).
@@ -44,7 +44,7 @@ import { useColumnPreference } from '../../lib/useColumnPreference.js'
 // closures capture live state (pending flags, row action handlers). So we split them here: geometry is
 // memoized against a signature of just the persisted fields, and the renderers are zipped back on by key
 // each render. That keeps the consumer API a single `columns` array.
-const GEOMETRY_FIELDS = ['key', 'label', 'width', 'minWidth', 'align', 'sortable', 'draggable', 'resizable']
+const GEOMETRY_FIELDS = ['key', 'label', 'width', 'minWidth', 'align', 'sortable', 'sortFields', 'draggable', 'resizable']
 
 function geometrySignature(columns, selectable) {
   return JSON.stringify([selectable, columns.map(col => GEOMETRY_FIELDS.map(field => col[field] ?? null))])
@@ -60,6 +60,8 @@ export function MatchReport({
   getRowStripe,
   sortState = null,
   onHeaderClick,
+  // (columnKey, fieldKey) — picks what a column with `sortFields` sorts by (see PillTableHeader).
+  onSortField,
   selectable = false,
   selectedIds = null,
   onToggleRow,
@@ -89,6 +91,7 @@ export function MatchReport({
         minWidth: col.minWidth ?? 64,
         align: col.align === 'right' ? 'end' : col.align,
         sortable: col.sortable !== false,
+        sortFields: col.sortFields?.map(({ key, label }) => ({ key, label })),
       }))
       if (!selectable) return geometry
       return [
@@ -113,6 +116,7 @@ export function MatchReport({
   // the per-row ResizeObserver catches that; this covers the committed change, which does re-render.
   const gridSignature = cols.map(col => col.width).join(',')
 
+  const canSort = typeof onHeaderClick === 'function'
   const headerColumns = useMemo(
     () => cols.map(col => (
       col.key === SELECT_COLUMN_KEY
@@ -130,10 +134,11 @@ export function MatchReport({
         }
         : {
           ...col,
-          title: col.draggable === false ? col.label : `Click to sort. Drag to move ${col.label || 'column'}`,
+          title: col.draggable === false ? col.label
+            : `${col.sortable && canSort ? 'Click to sort. ' : ''}Drag to move ${col.label || 'column'}`,
         }
     )),
-    [cols, allVisibleSelected, someVisibleSelected, onToggleAll],
+    [cols, allVisibleSelected, someVisibleSelected, onToggleAll, canSort],
   )
 
   if (loading) return <div style={{ padding: '12px 16px' }}><Spinner /></div>
@@ -147,6 +152,7 @@ export function MatchReport({
         onColumnsChange={handleColumnsChange}
         sortState={sortState}
         onSort={onHeaderClick}
+        onSortField={onSortField}
         headerStyle={{
           padding: '6px 8px',
           background: 'var(--surface)',

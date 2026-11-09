@@ -5,14 +5,24 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { DRAG_SOURCE_STYLE } from '../lib/pointerDrag.js'
 import { TOUCH_GRIP_WIDTH, TouchResizeMark } from './ui.jsx'
+import { ActionMenu } from './ActionMenu.jsx'
 
 // Pill table headers keep sort, move, and resize on one shared surface. A column's `resizable` puts a
 // grip on its right edge; dragging it moves that one divider (`lib/columnDividers.js`).
+//
+// A column whose cell shows several things (a date, a name and an amount) lists them as `sortFields`
+// ([{ key, label }]). Its pill names the one it sorts by, `sortState.field` while it is the sorted column
+// and the first otherwise. Its pill is split, as a `SplitButton` is: the body flips the direction (so each
+// field stays two clicks) and moves the column, and a full-height caret segment at its end opens a menu
+// of the fields, picked through `onSortField(columnKey, fieldKey)`. The caret is a visible control rather
+// than a right-click, which a touch screen has no way to make, and it is a segment rather than a glyph
+// inside the body because a glyph is too small to aim at.
 export default function PillTableHeader({
   columns,
   gridTemplateColumns,
   sortState = null,
   onSort,
+  onSortField,
   onStartReorder,
   onStartResize,
   edgeWidth = 8,
@@ -21,6 +31,7 @@ export default function PillTableHeader({
 }) {
   const coarsePointer = useCoarsePointer()
   const headerRef = useRef(null)
+  const [fieldMenu, setFieldMenu] = useState(null)   // { col, anchor } while a column's ▾ menu is open
   // On a touch screen each grip straddles its divider, taking half its width from each neighbouring
   // column, and marks the divider where it meets the header's bottom border. Hosts set their own header
   // padding, so the mark measures how far below the grip that border sits.
@@ -113,6 +124,15 @@ export default function PillTableHeader({
         const isSorted = !!sortState && sortState.key === col.key
         const sortGlyph = isSorted ? (sortState.dir === 'asc' ? '↑' : '↓') : null
         const canSort = col.sortable !== false && typeof onSort === 'function'
+        const fields = canSort && typeof onSortField === 'function' && col.sortFields?.length ? col.sortFields : null
+        const field = fields
+          ? (fields.find(f => isSorted && f.key === sortState.field) || fields[0])
+          : null
+        const glyphNode = sortGlyph ? (
+          <span style={{ fontSize: 10, opacity: 0.95, color: 'var(--accent2)', flexShrink: 0 }}>
+            {sortGlyph}
+          </span>
+        ) : null
         const canResize = col.resizable !== false && typeof onStartResize === 'function'
         const canReorder = col.draggable !== false && typeof onStartReorder === 'function'
         const alignment = col.align === 'end'
@@ -149,9 +169,10 @@ export default function PillTableHeader({
               justifyContent: alignment,
               minWidth: 0,
             }}>
+              <span style={{ display: 'inline-flex', alignItems: 'stretch', minWidth: 0, maxWidth: maxPillWidth }}>
               <button
                 type="button"
-                onClick={() => { if (canSort) onSort(col.key) }}
+                onClick={() => { setFieldMenu(null); if (canSort) onSort(col.key) }}
                 onContextMenu={event => col.onContextMenu?.(event, col)}
                 onPointerDown={canReorder ? event => onStartReorder(event, col.key) : undefined}
                 title={col.title}
@@ -174,18 +195,19 @@ export default function PillTableHeader({
                   letterSpacing: 'inherit',
                   fontSize: col.fontSize ?? 11,
                   fontWeight: 600,
-                  borderRadius: 999,
+                  borderRadius: fields ? '999px 0 0 999px' : 999,
                   border: `1px solid ${pillBorder}`,
                   width: 'fit-content',
                 }}
               >
-                {col.align === 'end' ? (
+                {field ? (
+                  // A split pill's arrow goes before the field it applies to, clear of the caret segment.
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {col.label} · {glyphNode ? <>{glyphNode} </> : null}{field.label}
+                  </span>
+                ) : col.align === 'end' ? (
                   <>
-                    {sortGlyph ? (
-                      <span style={{ fontSize: 10, opacity: 0.95, color: 'var(--accent2)', flexShrink: 0 }}>
-                        {sortGlyph}
-                      </span>
-                    ) : null}
+                    {glyphNode}
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {col.label}
                     </span>
@@ -195,20 +217,71 @@ export default function PillTableHeader({
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {col.label}
                     </span>
-                    {sortGlyph ? (
-                      <span style={{ fontSize: 10, opacity: 0.95, color: 'var(--accent2)', flexShrink: 0 }}>
-                        {sortGlyph}
-                      </span>
-                    ) : null}
+                    {glyphNode}
                   </>
                 )}
               </button>
+              {fields ? (
+                <button
+                  type="button"
+                  aria-label={`Sort ${col.label} by…`}
+                  aria-haspopup="menu"
+                  aria-expanded={fieldMenu?.col.key === col.key}
+                  title={`Sort ${col.label} by…`}
+                  // Anchored under the whole split pill; a second press on the caret closes it.
+                  onClick={event => {
+                    const anchor = event.currentTarget.parentElement
+                    setFieldMenu(open => (open?.col.key === col.key ? null : { col, anchor }))
+                  }}
+                  // A press here is aimed at the menu, so it never starts a column move.
+                  onPointerDown={event => event.stopPropagation()}
+                  style={{
+                    flexShrink: 0,
+                    // The two segments share their middle border, so the caret steps back over the body's edge.
+                    marginLeft: -1,
+                    minWidth: coarsePointer ? 32 : 22,
+                    padding: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: `1px solid ${pillBorder}`,
+                    borderRadius: '0 999px 999px 0',
+                    background: isSorted
+                      ? 'color-mix(in srgb, var(--accent) 15%, var(--surface2))'
+                      : 'var(--surface2)',
+                    color: isSorted ? 'var(--accent)' : 'var(--muted)',
+                    font: 'inherit',
+                    fontSize: 10,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ▾
+                </button>
+              ) : null}
+              </span>
             </div>
             {canResize ? resizeHandle(col) : null}
           </div>
         )
       })}
       {overlay}
+      {fieldMenu ? (
+        <ActionMenu
+          anchorElement={fieldMenu.anchor}
+          align="start"
+          minWidth={140}
+          label={`Sort ${fieldMenu.col.label} by`}
+          items={fieldMenu.col.sortFields.map(f => ({
+            key: f.key,
+            label: f.label,
+            checked: !!sortState && sortState.key === fieldMenu.col.key
+              ? f.key === (sortState.field || fieldMenu.col.sortFields[0].key)
+              : false,
+            onClick: () => onSortField(fieldMenu.col.key, f.key),
+          }))}
+          onClose={() => setFieldMenu(null)}
+        />
+      ) : null}
     </div>
   )
 }

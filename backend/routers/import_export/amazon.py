@@ -44,6 +44,7 @@ from backend.app_logging import log_error
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.json_utils import safe_json_dict
 from backend.services import amazon_funding, txn_links
+from backend.services.duplicate_detection import clear_flags_between_amazon_orders
 from backend.services.amazon_order_amount import (
     ADDED_CHARGES_KEY, BASE_AMOUNT_KEY, added_charge_ids, refresh_order_amount,
 )
@@ -628,6 +629,8 @@ def apply_amazon_order(
             "instrument": _instrument_of(disposition),
         },
     )
+    if charge_id:
+        clear_flags_between_amazon_orders(conn, charge_id)
     return {
         "order_id": order.order_id,
         "status": "applied",
@@ -1774,6 +1777,7 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, 
     for cid in ids:
         priors[cid] = _exclude_charge(conn, cid)
         txn_links.add_member(conn, link_id, cid, "charge")
+        clear_flags_between_amazon_orders(conn, cid)
         # A charge being linked leaves the reverse-scan bucket, so drop any stale "reviewed" acknowledgment
         # it carried there — if it ever returns to unaccounted (unlinked), it deserves a fresh look.
         conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (cid,))
@@ -1876,6 +1880,7 @@ def add_order_charge(conn: sqlite3.Connection, link_id: str, charge_txn_id: str)
     meta["charge_priors"] = priors
     meta[ADDED_CHARGES_KEY] = [*added_charge_ids(meta), charge_txn_id]
     txn_links.add_member(conn, link_id, charge_txn_id, "charge")
+    clear_flags_between_amazon_orders(conn, charge_txn_id)
     conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (charge_txn_id,))
     txn_links.set_metadata(conn, link_id, meta)
     refresh_order_amount(conn, link_id)
