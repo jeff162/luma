@@ -11,7 +11,7 @@ connection_mapping.py`) *write* the role, and duplicate detection (`services/dup
 *reads* it — and duplicate_detection already imports connection_mapping, so the constants cannot live
 in either of them without a cycle.
 
-An `extra_text_fields` entry is one of two kinds, and text matching must treat them differently.
+An `extra_text_fields` entry is one of three kinds, and text matching must treat them differently.
 
   * **descriptive** — high-cardinality free text that *names* the transaction: a memo, an item title,
     a counterparty, the raw bank descriptor. An exact or near match between two rows is real evidence
@@ -22,6 +22,11 @@ An `extra_text_fields` entry is one of two kinds, and text matching must treat t
     check number, a provider's opaque merchant id). Two unrelated rows routinely carry the identical
     value in such a field, so feeding it to the matcher manufactures duplicates out of coincidence.
 
+  * **linked** — text copied from *another* row linked to this one, such as an Amazon order's charge
+    (`services/amazon_order_charges.py`). Rules and search read it, since the point of the copy is that
+    a rule on the linked row's text reaches this one; the matcher does not, because the source never
+    said it about this row, and it would pair the row with the very row it was copied from.
+
 The motivating failure for the structured half: `build_sync_evidence` records each synced row's
 second date as a captured field, and both provider adapters publish it as an ISO date string.
 The cross-account sweep's text set folded in every captured value, so any two synced rows on
@@ -31,7 +36,7 @@ merchants. Worse, the date is precisely the signal the sweep's SQL gate has alre
 window), so the text gate — the strong discriminator the wide window is *justified by* — was
 silently answering with the weak one.
 
-Only `categorical` is ever stamped. Descriptive fields stay unmarked to keep the stored shape lean,
+Only `categorical` and `linked` are ever stamped. Descriptive fields stay unmarked to keep the stored shape lean,
 which also means evidence written before roles existed reads as descriptive — exactly how it behaved
 then. `import_enrichment` preserves whatever role a field carries when folding it into another row.
 """
@@ -42,6 +47,7 @@ import json
 
 EVIDENCE_ROLE_DESCRIPTIVE = "descriptive"
 EVIDENCE_ROLE_CATEGORICAL = "categorical"
+EVIDENCE_ROLE_LINKED = "linked"
 
 
 def evidence_field_feeds_text_match(field_entry) -> bool:
@@ -54,7 +60,7 @@ def evidence_field_feeds_text_match(field_entry) -> bool:
     """
     if not isinstance(field_entry, dict):
         return False
-    return str(field_entry.get("role") or "").strip().lower() != EVIDENCE_ROLE_CATEGORICAL
+    return str(field_entry.get("role") or "").strip().lower() not in (EVIDENCE_ROLE_CATEGORICAL, EVIDENCE_ROLE_LINKED)
 
 
 def held_payload_evidence(payload) -> dict | None:

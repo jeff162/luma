@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 
 from backend.json_utils import safe_json_dict
-from backend.services.amazon_order_amount import links_with_added_charges, refresh_order_amount
+from backend.services.amazon_order_charges import links_with_charges, refresh_order_from_charges
 from backend.services.recurring_detection import owe_recurring_rescan
 from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 
@@ -168,14 +168,17 @@ def delete_transactions(conn, where_sql: str, params=(), *, drop_emptied_sync_ca
         params,
     ).fetchall()
     ids = [row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE {where_sql}", params)]
-    # An order that a deleted charge was added to loses that part of its amount.
-    order_links = links_with_added_charges(conn, ids)
+    # An order a deleted charge was linked to loses what it took from it: the amount of an added charge,
+    # and the charge's text.
+    order_links = links_with_charges(conn, ids)
     release_rule_suggestion_rows(conn, ids)
     # Owed while the rows still exist, since a payee is read off the row. The caller settles it.
     owe_recurring_rescan(conn, ids)
     removed = conn.execute(f"DELETE FROM txn WHERE {where_sql}", params).rowcount or 0
+    # A delete is not a categorization event: a category a rule set from the charge's text stays, as a
+    # rule pass that no longer matches leaves it.
     for link_id in order_links:
-        refresh_order_amount(conn, link_id)
+        refresh_order_from_charges(conn, link_id, recategorize=False)
     for row in released:
         conn.execute(
             "UPDATE import_batch_account SET row_count = MAX(row_count - ?, 0) WHERE batch_id = ? AND csv_value = ?",

@@ -1368,11 +1368,14 @@ because the scan only adds flags.
 ### Evidence field roles
 
 Each `import_evidence_json.extra_text_fields` entry is **descriptive** (free text that names the
-charge) or **categorical** (a small repeated vocabulary, or a structured datum such as a date, a check
-number or an opaque id). Only descriptive fields feed duplicate text matching, through
-`evidence_field_feeds_text_match` (`backend/services/import_evidence.py`).
+charge), **categorical** (a small repeated vocabulary, or a structured datum such as a date, a check
+number or an opaque id) or **linked** (text copied from another row linked to this one). Only
+descriptive fields feed duplicate text matching, through `evidence_field_feeds_text_match`
+(`backend/services/import_evidence.py`). Rules with `match_source_text` and the ledger search read all
+three.
 
-- Only `categorical` is stamped; an unmarked field is descriptive.
+- Only `categorical` and `linked` are stamped; an unmarked field is descriptive.
+- A linked field is not the row's own source text, so it never travels in a duplicate enrichment.
 - CSV import infers the role from the column's cardinality across the file.
 - `build_sync_evidence` stamps each field by declaration, which leaves `Counterparty` as the only
   sync-captured extra that takes part.
@@ -1891,6 +1894,14 @@ the order by an `amazon_order` link, whose `external_ref` is the order id.
   placed, never before. Where both pairings are possible, an order whose name names a charge's payee family
   (`Kindle+;` and a Kindle charge) takes that charge. A pending charge competes but is not linked until it
   posts, so a group holding one waits.
+- **The order carries its charges' text** (`services/amazon_order_charges.py`). Each linked charge's names
+  and descriptive evidence are copied onto the order as a `Card charge` extra field with the `linked`
+  role and the charge's id, so a `match_source_text` rule written for the charge (`Kindle Svcs`, `Prime
+  Video`) categorizes the order, which is the row that counts. `refresh_order_from_charges` rebuilds the
+  fields from the charges linked now, with the amount, after every change to a link's charges, and re-runs
+  the rules over the order when its text changed. An import's own links leave that to the import's
+  categorization option; a delete does not re-run them. Migration 90 copied the text onto orders linked
+  before it existed.
 - **Unlinking is remembered.** `unlink_order_charges` records `declined_charge_ids` on the link, and no
   automatic pass offers those charges to that order again; linking one by hand clears it.
 - **Undo restores the charge first.** The charge lives outside the batch, so batch undo and re-import

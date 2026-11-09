@@ -11,7 +11,9 @@ what it cost. The added charge joins the link as an ordinary ``charge`` member a
 link's ``added_charge_ids``; the imported amount is kept as ``order_base_amount``.
 
 The amount is stored on the order row, so it is re-derived here after any change to the link's charges:
-adding or removing one, unlinking, undoing the import that brought a charge, or deleting a charge.
+adding or removing one, unlinking, undoing the import that brought a charge, or deleting a charge. Callers
+reach it through `amazon_order_charges.refresh_order_from_charges`, which re-derives the order's copy of
+the charges' text in the same step.
 
 A split order's parts must sum to its amount. Adding or removing a charge by hand is refused on a split
 order; a change forced from outside (an undo, a delete) clears the split, since nothing else keeps that
@@ -21,7 +23,6 @@ invariant true.
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterable
 
 from backend.services import txn_links
 from backend.services.txn_splits import clear_split
@@ -66,22 +67,3 @@ def refresh_order_amount(conn: sqlite3.Connection, link_id: str) -> None:
         meta.pop(ADDED_CHARGES_KEY, None)
         meta.pop(BASE_AMOUNT_KEY, None)
     txn_links.set_metadata(conn, link_id, meta)
-
-
-def links_with_added_charges(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> list[str]:
-    """The order links that hold any of these transactions as an added charge — the links whose amount a
-    delete of those rows changes. Read before the delete, since the memberships cascade with the rows."""
-    ids = [i for i in dict.fromkeys(txn_ids) if i]
-    found: list[str] = []
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
-        for row in conn.execute(
-            f"""SELECT DISTINCT l.id
-                FROM   txn_link l JOIN txn_link_member m ON m.link_id = l.id
-                WHERE  l.kind = ? AND m.role = 'charge' AND m.txn_id IN ({",".join("?" * len(chunk))})""",
-            (LINK_KIND, *chunk),
-        ):
-            link = txn_links.get_link(conn, row["id"])
-            if link and set(added_charge_ids(link.get("metadata") or {})) & set(chunk):
-                found.append(row["id"])
-    return list(dict.fromkeys(found))

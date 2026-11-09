@@ -359,7 +359,7 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 89
+CURRENT_VERSION = 90
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2707,6 +2707,23 @@ def _add_connection_request_budget_at(conn):
         conn.execute("ALTER TABLE connection ADD COLUMN provider_request_budget_at TEXT")
 
 
+def _backfill_amazon_charge_text(conn):
+    """Copy each linked charge's text onto its Amazon order (`services/amazon_order_charges.py`), so a
+    `match_source_text` rule written for the charge reaches orders linked before the copy existed. Changes
+    no category: the user runs the rules when they choose. Registered in `POST_RESTORE_DATA_INIT`, so a
+    restored backup older than this gets the same text. A missing link table is the partial schema of an
+    older migration test."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'txn_link'").fetchone():
+        return
+    from backend.services.amazon_order_charges import backfill_charge_text
+    backfill_charge_text(conn)
+
+
+@migration(90)
+def _copy_amazon_charge_text(conn):
+    _backfill_amazon_charge_text(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2752,6 +2769,7 @@ POST_RESTORE_DATA_INIT = {
     77: _normalize_leaf_category_type,
     80: _backfill_amazon_batch_account,
     88: _copy_shared_views_to_users,
+    90: _backfill_amazon_charge_text,
 }
 
 

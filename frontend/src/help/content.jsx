@@ -3167,6 +3167,13 @@ export const HELP_TOPICS = [
           to the orders still without a category.
         </p>
         <p>
+          Each order also carries the text of the charge it is paired with, shown as <strong>Card
+            charge</strong> in its origin detail. A rule with <strong>Also match the original / source
+            statement text</strong> on, say for <em>Kindle Svcs</em>, therefore categorizes the orders paid
+          through that service, including ones whose charge is paired later. Unpairing a charge takes its
+          text off the order.
+        </p>
+        <p>
           When the charges carry more than one name, a <strong>Charge</strong> line groups them: a service
           Amazon bills under its own name (<em>Prime Video</em>, <em>Audible</em>, <em>Kindle</em>,{' '}
           <em>Amazon Music</em>) or plain <em>Amazon</em>. Picking one with <strong>Uncategorized

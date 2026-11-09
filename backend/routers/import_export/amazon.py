@@ -45,9 +45,8 @@ from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_wo
 from backend.json_utils import safe_json_dict
 from backend.services import amazon_funding, txn_links
 from backend.services.duplicate_detection import clear_flags_between_amazon_orders
-from backend.services.amazon_order_amount import (
-    ADDED_CHARGES_KEY, BASE_AMOUNT_KEY, added_charge_ids, refresh_order_amount,
-)
+from backend.services.amazon_order_amount import ADDED_CHARGES_KEY, BASE_AMOUNT_KEY, added_charge_ids
+from backend.services.amazon_order_charges import refresh_order_from_charges
 from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
@@ -631,6 +630,8 @@ def apply_amazon_order(
     )
     if charge_id:
         clear_flags_between_amazon_orders(conn, charge_id)
+        # The import's own categorization pass follows, so it is the one that applies the rules.
+        refresh_order_from_charges(conn, link_id, recategorize=False)
     return {
         "order_id": order.order_id,
         "status": "applied",
@@ -849,7 +850,7 @@ def _import_group_to_batch(
     # Equal-count pass: same-amount orders exactly balanced by same-amount charges are distinct purchases the
     # matcher only left unmatched on the which-pairs-with-which ambiguity — pair them so they don't surface as
     # false duplicates. (A surplus of charges is a real duplicate and is left for the reconciliation report.)
-    counts["charges_matched"] += _pair_equal_amount_clusters(conn, batch_id)
+    counts["charges_matched"] += _pair_equal_amount_clusters(conn, batch_id, recategorize=False)
 
     if apply_categorization:
         _categorize_batch_orders(conn, batch_id)
@@ -1743,7 +1744,8 @@ async def amazon_import_detail_endpoint(batch_id: str):
         return amazon_import_detail(conn, batch_id)
 
 
-def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, *, manually: bool = True) -> dict:
+def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, *, manually: bool = True,
+                        recategorize: bool = True) -> dict:
     """Hand-reconcile an unmatched order to one *or more* card charges — one for a plain manual link, several
     when a split order was paid as multiple shipment charges (see the reconciliation's Matched·review
     suggestion). For each charge: do exactly what the auto-matcher does — exclude it (recategorize into the
@@ -1752,7 +1754,9 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, 
 
     Guarded: the link must be an Amazon order that has no charge yet, and no charge may already belong to
     another Amazon link (so one action can't double-exclude or steal a linked charge). ``manually`` is False
-    for the automatic passes that reuse this (equal-amount pairing, the after-ingest match)."""
+    for the automatic passes that reuse this (equal-amount pairing, the after-ingest match). ``recategorize``
+    re-runs the rules over the order once its charge text is in (see `refresh_order_from_charges`); an
+    import's own pairing pass passes False, since the import's categorization follows."""
     link = txn_links.get_link(conn, link_id)
     if not link or link.get("kind") != LINK_KIND:
         raise ValueError("Unknown Amazon order link")
@@ -1793,6 +1797,7 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, 
     meta.pop("split_suggestion_dismissed", None)   # the order is reconciled now — clear any stale dismissal
     meta.pop("no_charge_reviewed", None)           # ...and any stale no-charge-found acknowledgment
     txn_links.set_metadata(conn, link_id, meta)
+    refresh_order_from_charges(conn, link_id, recategorize=recategorize)
     return {"status": "linked", "count": len(ids)}
 
 
@@ -1883,7 +1888,7 @@ def add_order_charge(conn: sqlite3.Connection, link_id: str, charge_txn_id: str)
     clear_flags_between_amazon_orders(conn, charge_txn_id)
     conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (charge_txn_id,))
     txn_links.set_metadata(conn, link_id, meta)
-    refresh_order_amount(conn, link_id)
+    refresh_order_from_charges(conn, link_id, recategorize=True)
     return {"status": "added"}
 
 
@@ -2011,7 +2016,7 @@ def _detach_charge(conn: sqlite3.Connection, link_id: str, charge_id: str) -> No
     meta.pop("charge_prior", None)
     meta.pop("charge_linked_manually", None)
     txn_links.set_metadata(conn, link_id, meta)
-    refresh_order_amount(conn, link_id)
+    refresh_order_from_charges(conn, link_id, recategorize=True)
 
 
 def _unmatched_cash_orders(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
@@ -2096,13 +2101,13 @@ def _names_family(order: dict, family: str) -> bool:
     return family not in ("Amazon", OTHER_PAYEE_FAMILY) and family.lower() in (order.get("name") or "").lower()
 
 
-def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
+def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str, *, recategorize: bool) -> int:
     """Second pass over a batch's still-unmatched cash orders, after its import and after a Discard:
     :func:`_pair_balanced_orders` over them. Returns the number of orders newly paired."""
-    return _pair_balanced_orders(conn, _unmatched_cash_orders(conn, batch_id))
+    return _pair_balanced_orders(conn, _unmatched_cash_orders(conn, batch_id), recategorize=recategorize)
 
 
-def _pair_balanced_orders(conn: sqlite3.Connection, orders: list[dict]) -> int:
+def _pair_balanced_orders(conn: sqlite3.Connection, orders: list[dict], *, recategorize: bool) -> int:
     """Pair unmatched cash orders (the shape :func:`_unmatched_cash_orders` returns) with charges: when a group
     of same-amount orders that compete for the same charges is exactly balanced by that many unlinked
     charges, they're *distinct* purchases — and which order pairs with which charge does not change the
@@ -2131,13 +2136,15 @@ def _pair_balanced_orders(conn: sqlite3.Connection, orders: list[dict]) -> int:
       a trashed row.
 
     Returns the number of orders newly paired."""
-    paired = _pair_balanced_groups(conn, orders, _CHARGE_DATE_WINDOW_DAYS, forward_only=False)
+    paired = _pair_balanced_groups(conn, orders, _CHARGE_DATE_WINDOW_DAYS, forward_only=False,
+                                   recategorize=recategorize)
     rest = [o for o in orders if o["link_id"] not in paired]
-    return len(paired) + len(_pair_balanced_groups(conn, rest, _SPLIT_SUGGESTION_WINDOW_DAYS, forward_only=True))
+    return len(paired) + len(_pair_balanced_groups(conn, rest, _SPLIT_SUGGESTION_WINDOW_DAYS, forward_only=True,
+                                                   recategorize=recategorize))
 
 
 def _pair_balanced_groups(conn: sqlite3.Connection, orders: list[dict], window_days: int, *,
-                          forward_only: bool) -> set[str]:
+                          forward_only: bool, recategorize: bool) -> set[str]:
     """One pass of :func:`_pair_balanced_orders` with candidates drawn from ``window_days``. Returns the
     link ids paired."""
     clusters: dict = {}
@@ -2170,7 +2177,8 @@ def _pair_balanced_groups(conn: sqlite3.Connection, orders: list[dict], window_d
             if matching is None:
                 continue
             for order_index, charge_id in matching.items():
-                link_amazon_charges(conn, competing[order_index]["link_id"], [charge_id], manually=False)
+                link_amazon_charges(conn, competing[order_index]["link_id"], [charge_id], manually=False,
+                                    recategorize=recategorize)
                 paired.add(competing[order_index]["link_id"])
     return paired
 
@@ -2240,7 +2248,7 @@ def link_orders_to_new_charges(conn: sqlite3.Connection, txn_ids) -> int:
                   AND  trashed_at IS NULL AND is_pending = 0 AND amount > 0""",
             chunk,
         )}
-    return _pair_balanced_orders(conn, _unmatched_orders_for_amounts(conn, amounts))
+    return _pair_balanced_orders(conn, _unmatched_orders_for_amounts(conn, amounts), recategorize=True)
 
 
 def match_orders_after_ingest(connection, *, txn_ids=None, batch_id: Optional[str] = None) -> None:
@@ -2310,7 +2318,7 @@ def trash_duplicate_charge(conn: sqlite3.Connection, charge_txn_id: str,
     if link:
         batch_id = _order_batch_id(conn, order_link_id)
         if batch_id:
-            _pair_equal_amount_clusters(conn, batch_id)
+            _pair_equal_amount_clusters(conn, batch_id, recategorize=True)
             matched = bool(txn_links.member_txn_ids(conn, order_link_id, role="charge"))
     return {"status": "trashed", "matched": matched}
 

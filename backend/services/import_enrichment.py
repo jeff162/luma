@@ -38,7 +38,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from backend.services.import_evidence import held_payload_evidence
+from backend.services.import_evidence import EVIDENCE_ROLE_LINKED, held_payload_evidence
 from backend.services.money_movement import (
     is_money_movement_type,
     is_refund_type,
@@ -95,6 +95,9 @@ def _incoming_detail_fields(incoming_evidence: dict) -> list[dict]:
         fields.append({"header": str(description.get("header") or "Description"), "value": str(description["value"])})
     for field in incoming_evidence.get("extra_text_fields") or []:
         if isinstance(field, dict) and str(field.get("value") or "").strip():
+            # Text copied from a linked row belongs to that link, not to the row, so it does not travel.
+            if str(field.get("role") or "").strip() == EVIDENCE_ROLE_LINKED:
+                continue
             # Preserve the role (if any) so an enriched categorical value stays out of the duplicate
             # text-matcher on the row it lands on, just as it would on the row it came from.
             transferred = {"header": str(field.get("header") or ""), "value": str(field["value"])}

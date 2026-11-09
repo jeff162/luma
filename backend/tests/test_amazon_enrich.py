@@ -1575,6 +1575,61 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             self.assertEqual(link_orders_to_new_charges(conn, charges), 3)
 
+    def _card_charge_fields(self, order_ref):
+        with self._use_db_path(), get_db() as conn:
+            link = txn_links.find_link(conn, LINK_KIND, order_ref)
+            order_id = txn_links.member_txn_ids(conn, link["id"], role="order")[0]
+            evidence = json.loads(conn.execute("SELECT import_evidence_json FROM txn WHERE id = ?",
+                                               (order_id,)).fetchone()[0] or "{}")
+        return [f for f in evidence.get("extra_text_fields") or [] if f.get("header") == "Card charge"]
+
+    def test_a_rule_on_the_charge_text_categorizes_the_order_once_the_charge_links(self):
+        # The order's own text is its items; the charge says what the purchase was. Once linked, the
+        # charge's text is on the order, so a source-text rule written for it categorizes the order, and
+        # unlinking takes the text away again.
+        order = self._digital_order("K-1", "2024-11-19", 11.99, "The Long Novel;")
+        self._import_order_without_charge(order)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO category (id, name, category_type) VALUES ('books', 'Books', 'expense')")
+            conn.execute("""INSERT INTO category_rule (id, keyword, category_id, match_source_text)
+                            VALUES ('r1', 'kindle svcs', 'books', 1)""")
+        charge = self._add_card_charge(11.99, name="Kindle Svcs*AB12")
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(link_orders_to_new_charges(conn, [charge]), 1)
+        fields = self._card_charge_fields("K-1")
+        self.assertEqual([(f["value"], f["role"], f["txn_id"]) for f in fields],
+                         [("Kindle Svcs*AB12", "linked", charge)])
+        order_row = next(o for o in self._amazon_orders() if o["merchant_name"] == "The Long Novel;")
+        self.assertEqual((order_row["category_id"], order_row["category_source"]), ("books", "rule"))
+        with self._use_db_path(), get_db() as conn:
+            unlink_order_charges(conn, txn_links.find_link(conn, LINK_KIND, "K-1")["id"])
+        self.assertEqual(self._card_charge_fields("K-1"), [])
+
+    def test_an_order_is_not_a_duplicate_of_its_own_charge_through_the_copied_text(self):
+        from backend.services.duplicate_detection import scan_scope_for_cross_account_duplicates
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order()], account_id="amazon", apply_categorization=False)
+        self.assertEqual(len(self._card_charge_fields("111-0000000-0000010")), 1)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(scan_scope_for_cross_account_duplicates(conn, ["amazon", "card"]), 0)
+
+    def test_orders_linked_before_the_copy_existed_get_it_from_the_backfill(self):
+        from backend.db.database import _backfill_amazon_charge_text
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order()], account_id="amazon", apply_categorization=False)
+            # As an order linked before this change stored it: no copied text.
+            for row in conn.execute("SELECT id, import_evidence_json FROM txn WHERE account_id = 'amazon'").fetchall():
+                evidence = json.loads(row["import_evidence_json"])
+                evidence["extra_text_fields"] = [f for f in evidence.get("extra_text_fields") or []
+                                                 if f.get("role") != "linked"]
+                conn.execute("UPDATE txn SET import_evidence_json = ? WHERE id = ?", (json.dumps(evidence), row["id"]))
+        self.assertEqual(self._card_charge_fields("111-0000000-0000010"), [])
+        with self._use_db_path(), get_db() as conn:
+            _backfill_amazon_charge_text(conn)
+        self.assertEqual([f["value"] for f in self._card_charge_fields("111-0000000-0000010")], ["AMAZON.COM"])
+
     def test_a_pending_charge_waits_until_it_posts(self):
         self._import_order_without_charge()
         charge = self._add_card_charge(37.32)
@@ -2228,7 +2283,7 @@ class AmazonOrdersTests(unittest.TestCase):
         charge_y = self._add_card_charge(50.00, date="2024-05-09", account_id=card2, name="AMZN Mktp")
 
         with self._use_db_path(), get_db() as conn:
-            paired = _pair_equal_amount_clusters(conn, self.batch_id)
+            paired = _pair_equal_amount_clusters(conn, self.batch_id, recategorize=False)
             a_charges = txn_links.member_txn_ids(conn, link_a, role="charge")
             b_charges = txn_links.member_txn_ids(conn, link_b, role="charge")
         self.assertEqual(paired, 2)
