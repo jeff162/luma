@@ -652,7 +652,7 @@ export const HELP_TOPICS = [
           into that owner's accounts arrive unflagged. Transactions in an account with no owner are always
           flagged. Transactions already flagged are not changed.
         </p>
-        <p>The flag clears three ways:</p>
+        <p>The flag clears four ways:</p>
         <ul>
           <li>Editing the transaction's category clears it. Correcting or setting the category counts as reviewing it.
           </li>
@@ -673,6 +673,12 @@ export const HELP_TOPICS = [
             the import which need review. Clicking the pill opens the import&apos;s transactions with the
             <strong>Needs review</strong> quick filter already on; the same filter turns off to show the rest of the import.
             Next to the pill is a button to <strong>mark all reviewed</strong>.
+          </li>
+          <li>
+            A transaction a pairing takes out of the totals is cleared: the card charge for an Amazon order,
+            the bank or card side of a PayPal payment, and both sides of a transfer to or from PayPal. The
+            order or the PayPal payment is the transaction that counts and keeps its own flag. Unpairing puts
+            the flag back.
           </li>
         </ul>
       </>

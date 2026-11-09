@@ -354,8 +354,13 @@ uncategorized.
 - **Cleared** by a manual category edit (the actions that write `category_source = 'manual'`), by
   saving a split or a reimbursement's allocations — the row has plainly been looked at — or by an
   explicit mark-reviewed, per row or over a whole import card. Automatic categorization never clears it.
-- **Set back on by hand only**, through the bulk editor's *Review status*, which is the one writer that
-  raises the flag after arrival.
+- **Cleared on a row a pairing moves into the background**: an Amazon card charge linked to its order, and
+  whatever a PayPal funding pair excludes. The row that counts carries the review, and there is nothing
+  left to decide about the excluded one. The pairing keeps the old value with the prior category it already
+  keeps, and undoing the pairing raises the flag again only if it was raised before
+  (`services/review_flagging.py`).
+- **Set back on by hand**, through the bulk editor's *Review status*, which is the one writer that
+  raises the flag after arrival apart from undoing a pairing.
 - **`owner.flag_new_for_review`** (default on, read through `services/review_flagging.py`) is per owner
   because the flag is written at ingest, where a sync has no user to ask but every row has an owner. A
   row with no owner is always flagged.

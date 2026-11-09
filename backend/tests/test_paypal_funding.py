@@ -189,6 +189,49 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
             pf.unpair(conn, self._pair_links())
         self.assertEqual(self._category_of(charge), (self.fun, "manual"))
 
+    # --- review: what a pair excludes goes into the background ------------------------------------------
+
+    def _flag_all(self, *txn_ids):
+        with self._db() as conn:
+            conn.executemany("UPDATE txn SET needs_review = 1 WHERE id = ?", [(t,) for t in txn_ids])
+
+    def _review_of(self, txn_id):
+        with self._db() as conn:
+            return conn.execute("SELECT needs_review FROM txn WHERE id = ?", (txn_id,)).fetchone()["needs_review"]
+
+    def test_a_payment_pair_clears_the_card_rows_review_and_unpairing_restores_it(self):
+        payment = self._txn(self.paypal, "2026-08-25", 50.0, "Harbor Relief Fund", category=self.charity)
+        charge = self._txn(self.card, "2026-08-23", 50.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
+        self._flag_all(payment, charge)
+        self._pass()
+        self.assertEqual(self._review_of(charge), 0)
+        self.assertEqual(self._review_of(payment), 1)
+        with self._db() as conn:
+            pf.unpair(conn, self._pair_links())
+        self.assertEqual(self._review_of(charge), 1)
+
+    def test_a_transfer_pair_clears_both_halves_and_unpairing_restores_them(self):
+        withdrawal = self._txn(self.paypal, "2026-07-09", 196.0, "Withdrawal", category=self.fun,
+                               type_value="User Initiated Withdrawal")
+        deposit = self._txn(self.checking, "2026-07-10", -196.0, "Deposit ACH PAYPAL TRANSFER", category=self.fun)
+        self._flag_all(withdrawal, deposit)
+        self._pass()
+        self.assertEqual((self._review_of(withdrawal), self._review_of(deposit)), (0, 0))
+        with self._db() as conn:
+            pf.unpair(conn, self._pair_links())
+        self.assertEqual((self._review_of(withdrawal), self._review_of(deposit)), (1, 1))
+
+    def test_a_row_recategorized_after_pairing_keeps_its_review_on_unpairing(self):
+        # Restoring follows the category: a row someone has since filed by hand is theirs, flag included.
+        self._txn(self.paypal, "2026-08-25", 50.0, "Harbor Relief Fund", category=self.charity)
+        charge = self._txn(self.card, "2026-08-23", 50.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
+        self._flag_all(charge)
+        self._pass()
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET category_id = ?, category_source = 'manual' WHERE id = ?", (self.fun, charge))
+            pf.unpair(conn, self._pair_links())
+        self.assertEqual(self._review_of(charge), 0)
+
     # --- transfer pairs --------------------------------------------------------------------------------
 
     def test_a_withdrawal_to_the_bank_is_money_movement_on_both_sides(self):

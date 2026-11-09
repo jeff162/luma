@@ -207,6 +207,51 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(restored["category_source"], "manual")
         self.assertEqual(restored["category_overridden"], 1)
 
+    # ---- review: the order carries it, the paired charge goes into the background -----------------
+
+    def _flag(self, txn_id, value=1):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET needs_review = ? WHERE id = ?", (value, txn_id))
+
+    def test_pairing_clears_the_charges_review_and_unlinking_restores_it(self):
+        charge_id = self._add_card_charge(37.32)
+        self._flag(charge_id)
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+        self.assertEqual(self._txn(charge_id)["needs_review"], 0)
+        self.assertEqual(self._amazon_orders()[0]["needs_review"], 1)
+        with self._use_db_path(), get_db() as conn:
+            unlink_order_charges(conn, result["link_id"])
+        self.assertEqual(self._txn(charge_id)["needs_review"], 1)
+
+    def test_undoing_a_pairing_leaves_a_charge_that_was_not_flagged_unflagged(self):
+        charge_id = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+            reverse_amazon_order(conn, result["link_id"])
+        self.assertEqual(self._txn(charge_id)["needs_review"], 0)
+
+    def test_removing_the_order_restores_the_charges_review(self):
+        charge_id = self._add_card_charge(37.32)
+        self._flag(charge_id)
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+        self.assertEqual(self._txn(charge_id)["needs_review"], 0)
+        with self._use_db_path(), get_db() as conn:
+            reverse_amazon_order(conn, result["link_id"])
+        self.assertEqual(self._txn(charge_id)["needs_review"], 1)
+
+    def test_a_link_saved_before_the_flag_was_kept_leaves_review_alone_on_unlink(self):
+        charge_id = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+            link = txn_links.get_link(conn, result["link_id"])
+            meta = link["metadata"]
+            meta["charge_prior"].pop("needs_review")
+            txn_links.set_metadata(conn, result["link_id"], meta)
+            unlink_order_charges(conn, result["link_id"])
+        self.assertEqual(self._txn(charge_id)["needs_review"], 0)
+
     # ---- non-cash and unmatched dispositions ------------------------------------------------------
 
     def test_non_cash_order_recorded_excluded_without_a_charge(self):

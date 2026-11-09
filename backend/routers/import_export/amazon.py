@@ -52,7 +52,7 @@ from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
-from backend.services.review_flagging import flags_new_transactions
+from backend.services.review_flagging import REVIEW_PRIOR_KEY, flags_new_transactions, restore_review_flag
 from backend.services.rule_suggestion_review import release_rule_suggestion_rows
 from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 from backend.services.restore_state import require_no_pending_restore
@@ -2002,11 +2002,7 @@ def _detach_charge(conn: sqlite3.Connection, link_id: str, charge_id: str) -> No
     meta = (link.get("metadata") or {}) if link else {}
     prior = _charge_prior_for(meta, charge_id)
     if prior:
-        conn.execute(
-            "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
-            (prior.get("category_id"), prior.get("category_source"),
-             category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
-        )
+        _restore_charge(conn, charge_id, prior)
     txn_links.remove_member(conn, link_id, charge_id)
     priors = meta.get("charge_priors")
     if isinstance(priors, dict):
@@ -2745,11 +2741,7 @@ def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
         for charge_id in txn_links.member_txn_ids(conn, link_id, role="charge"):
             prior = _charge_prior_for(meta, charge_id)
             if prior:
-                conn.execute(
-                    "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
-                    (prior.get("category_id"), prior.get("category_source"),
-                     category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
-                )
+                _restore_charge(conn, charge_id, prior)
         txn_links.delete_link(conn, link_id)
     # An items-only import parks its per-item detail for a later orders file; undoing that import must remove
     # what it parked (an orphan/parking batch creates no links, so this is its only undo effect). Undoing the
@@ -2764,19 +2756,34 @@ def _exclude_charge(conn: sqlite3.Connection, charge_id: str) -> dict:
     """Move the matched charge into the excluded funding category, returning its prior categorization so
     :func:`reverse_amazon_order` can restore it exactly (including a manual category we overrode)."""
     row = conn.execute(
-        "SELECT category_id, category_source, category_overridden FROM txn WHERE id = ?", (charge_id,)
+        "SELECT category_id, category_source, category_overridden, needs_review FROM txn WHERE id = ?",
+        (charge_id,),
     ).fetchone()
     prior = {
         "category_id": row["category_id"],
         "category_source": row["category_source"],
         "category_overridden": row["category_overridden"],
+        REVIEW_PRIOR_KEY: row["needs_review"],
     }
     funding_id = find_or_create_funding_category(conn)
+    # The order is the row that counts, and carries the review; the charge goes into the background
+    # (services/review_flagging.py).
     conn.execute(
-        "UPDATE txn SET category_id = ?, category_source = 'enrichment', category_overridden = 0 WHERE id = ?",
+        "UPDATE txn SET category_id = ?, category_source = 'enrichment', category_overridden = 0, "
+        "needs_review = 0 WHERE id = ?",
         (funding_id, charge_id),
     )
     return prior
+
+
+def _restore_charge(conn: sqlite3.Connection, charge_id: str, prior: dict) -> None:
+    """Give a charge leaving its order what :func:`_exclude_charge` took: its category and its review flag."""
+    conn.execute(
+        "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
+        (prior.get("category_id"), prior.get("category_source"),
+         category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
+    )
+    restore_review_flag(conn, charge_id, prior)
 
 
 async def _read_amazon_uploads(files, known_files: "dict | None" = None):
@@ -3104,11 +3111,7 @@ def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
     for charge_id in charge_ids:
         prior = _charge_prior_for(meta, charge_id)
         if prior:
-            conn.execute(
-                "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
-                (prior.get("category_id"), prior.get("category_source"),
-                 category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
-            )
+            _restore_charge(conn, charge_id, prior)
     # Delete the link first so its members' FK rows go, then the order transaction itself.
     txn_links.delete_link(conn, link_id)
     release_rule_suggestion_rows(conn, order_ids)

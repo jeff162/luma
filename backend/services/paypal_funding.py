@@ -87,6 +87,7 @@ from backend.services.money_movement import (
 )
 from backend.services.money_movement import LINK_KIND as WALLET_FUNDING_KIND
 from backend.services.reconciliation_attention import ledger_attention, ledger_cached
+from backend.services.review_flagging import REVIEW_PRIOR_KEY, restore_review_flag
 from backend.services.txn_summaries import txn_summaries
 
 LINK_KIND = "paypal_funding"
@@ -144,6 +145,7 @@ class _Ledger:
         self.paypal_rows = [dict(r) for r in conn.execute(f"""
             SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split, t.import_batch_id,
                    t.import_evidence_json, t.category_id, t.category_source, t.category_overridden,
+                   t.needs_review,
                    COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) AS excluded,
                    COALESCE(a.parent_account_id, a.id) AS root_id,
                    COALESCE(a.owner_id, pa.owner_id)   AS owner_id
@@ -156,7 +158,7 @@ class _Ledger:
         """).fetchall()]
         self.other_rows = [dict(r) for r in conn.execute(f"""
             SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split,
-                   t.category_id, t.category_source, t.category_overridden,
+                   t.category_id, t.category_source, t.category_overridden, t.needs_review,
                    COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) AS excluded,
                    COALESCE(a.parent_account_id, a.id) AS root_id,
                    COALESCE(a.owner_id, pa.owner_id)   AS owner_id
@@ -361,14 +363,17 @@ def _analyze(ledger: _Ledger) -> dict:
 
 
 def _exclude(conn: sqlite3.Connection, row: dict) -> dict:
-    """Move a row into "Money movement", returning what it held so a reversal can put it back."""
+    """Move a row into "Money movement", returning what it held so a reversal can put it back. The row goes
+    into the background, so its review flag is cleared with the rest (services/review_flagging.py)."""
     prior = {
         "category_id": row["category_id"],
         "category_source": row["category_source"],
         "category_overridden": row["category_overridden"],
+        REVIEW_PRIOR_KEY: row["needs_review"],
     }
     conn.execute(
-        "UPDATE txn SET category_id = ?, category_source = 'enrichment', category_overridden = 0 WHERE id = ?",
+        "UPDATE txn SET category_id = ?, category_source = 'enrichment', category_overridden = 0, "
+        "needs_review = 0 WHERE id = ?",
         (ensure_excluded_transfers_leaf(conn, MONEY_MOVEMENT_CATEGORY), row["id"]),
     )
     return prior
@@ -409,7 +414,7 @@ def funding_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
 
 
 def _restore(conn: sqlite3.Connection, txn_id: str, prior: dict) -> None:
-    """Put a row's category back — only while it still holds what the pairing set."""
+    """Put a row's category and review flag back — only while it still holds what the pairing set."""
     row = conn.execute("SELECT category_id, category_source FROM txn WHERE id = ?", (txn_id,)).fetchone()
     if not row or row["category_source"] != "enrichment" or row["category_id"] != money_movement_category_id_if_exists(conn):
         return
@@ -418,6 +423,7 @@ def _restore(conn: sqlite3.Connection, txn_id: str, prior: dict) -> None:
         (prior.get("category_id"), prior.get("category_source"),
          category_lock_for(prior.get("category_source"), prior.get("category_overridden")), txn_id),
     )
+    restore_review_flag(conn, txn_id, prior)
 
 
 def _release(conn: sqlite3.Connection, link_id: str) -> Optional[dict]:
