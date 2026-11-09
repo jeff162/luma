@@ -148,8 +148,9 @@ representation — the cost is finding the matches, not combining them.
 
 ## The Tasks list is recomputed on every mutation
 
-`/tasks` has no timer. It is fetched on every route change and on every successful mutation anywhere in
-the app (the `luma:data-mutated` broadcast), so each of its conditions runs at that cadence. Two do
+`/tasks` has no timer. It is fetched on every route change, on every successful mutation anywhere in
+the app (the `luma:data-mutated` broadcast), and when the app returns to the foreground, so each of its
+conditions runs at that cadence. Two do
 work that is not constant-time:
 
 - **Amazon reconciliation** runs a whole report per completed Amazon batch. Its count is cached against

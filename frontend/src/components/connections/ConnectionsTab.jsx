@@ -1175,7 +1175,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           <Tooltip describeTrigger content={syncingAny
             ? 'A sync is already running'
             : `Pull new and changed transactions for all ${connectionCount} connection${connectionCount === 1 ? '' : 's'}`}>
-            <Button onClick={() => syncAll(connected)} disabled={syncingAny}>
+            <Button onClick={syncAll} disabled={syncingAny}>
               {syncingAny ? 'Syncing…' : '↻ Sync now'}
             </Button>
           </Tooltip>

@@ -102,3 +102,45 @@ describe('ledgerRunsFinished', () => {
     expect(ledger()).toBe('1')
   })
 })
+
+describe('returning to the foreground', () => {
+  // A tablet keeps a backgrounded page alive for days, so a sync run elsewhere has to reach this page when
+  // it comes back into view: the freshness it shows, and the pages holding their own copy of the ledger.
+  function ForegroundProbe() {
+    const { providers, runsFinished, ledgerRunsFinished } = useSyncStatus()
+    return (
+      <>
+        <span data-testid="synced">{providers?.[0]?.connections?.[0]?.last_synced_at || 'none'}</span>
+        <span data-testid="finished">{runsFinished}</span>
+        <span data-testid="ledger">{ledgerRunsFinished}</span>
+      </>
+    )
+  }
+  const listing = at => ({ providers: [{ provider: 'plaid', connections: [{ id: 'c1', syncing: false, last_synced_at: at }] }] })
+  const synced = () => screen.getByTestId('synced').textContent
+  const comeBack = () => document.dispatchEvent(new Event('visibilitychange'))
+
+  it('counts a sync that finished elsewhere as a run ending', async () => {
+    api.getProviders.mockResolvedValueOnce(listing('2026-09-03T07:40:00Z'))
+    render(<SyncStatusProvider><ForegroundProbe /></SyncStatusProvider>)
+    await waitFor(() => expect(synced()).toBe('2026-09-03T07:40:00Z'))
+    expect(finished()).toBe('0')
+
+    api.getProviders.mockResolvedValueOnce(listing('2026-09-05T07:40:00Z'))
+    comeBack()
+    await waitFor(() => expect(synced()).toBe('2026-09-05T07:40:00Z'))
+    expect(finished()).toBe('1')
+    expect(ledger()).toBe('1')
+  })
+
+  it('leaves the counters alone when nothing synced while away', async () => {
+    api.getProviders.mockResolvedValue(listing('2026-09-03T07:40:00Z'))
+    render(<SyncStatusProvider><ForegroundProbe /></SyncStatusProvider>)
+    await waitFor(() => expect(synced()).toBe('2026-09-03T07:40:00Z'))
+
+    comeBack()
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2))
+    expect(finished()).toBe('0')
+    expect(ledger()).toBe('0')
+  })
+})

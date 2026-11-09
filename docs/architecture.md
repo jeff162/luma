@@ -379,9 +379,9 @@ preferences. `lib/savedFilters.js` holds the rules:
     does not stamp the watermark, since it cannot see cross-payee effects; bulk edits owe once per batch.
     Every scan settles what is owed within its scope, so a failed settle is retried by the next one
     (`data-model.md` → *When a scan runs*).
-  - **Full catch-up** (`POST /recurring/auto-scan`): app load runs a global scan only when the `db_meta`
-    watermark says one is due (never scanned, or older than the daily interval), and settles any owed
-    rescan that is overdue. It also hosts the payee-key re-derivation repair.
+  - **Full catch-up** (`POST /recurring/auto-scan`): app load and a return to the foreground run a
+    global scan only when the `db_meta` watermark says one is due (never scanned, or older than the daily
+    interval), and settle any owed rescan that is overdue. It also hosts the payee-key re-derivation repair.
 
 - **A money movement between two tracked accounts is one series that owns both legs.** `scan_and_store`
   runs a transfer pass first: `transfer_pairs.pair_money_movements` pairs rows structurally (same amount
@@ -646,7 +646,7 @@ folder, although the upload expands one: an archive found on disk is one nobody 
 - **Scanning is request-driven; there is no scheduler.** The app has per-identity database paths, so a
   timer thread would have no tenant to run as. `POST /import-export/watch/auto-scan` scans only if one
   is due (a `db_meta` watermark, `AUTO_SCAN_MIN_INTERVAL_MINUTES`) and is called when the data scope
-  activates and when `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the unconditional
+  activates, when the app returns to the foreground, and when `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the unconditional
   *Check now*. The nav badge and Tasks read a persisted count (`attention_counts`) and never touch the
   filesystem.
 - **A per-file watermark keeps a scan cheap.** `import_watch_file` holds `(size, mtime)` per entry, so
@@ -1166,10 +1166,10 @@ the browser sends with the upload and by tenant, which the browser polls at `GET
 an `async def` body would hold the event loop and the poll could not be answered.
 
 **A request-driven catch-up claims itself before its long work** (`single_runner`,
-`backend/db/database.py`). App load, a second tab and a page mount can each ask for the same catch-up —
-the recurring auto-scan, the duplicate-detection rescan, a watched-folder scan — and each would read
-"due" before the other stamps it, so both would do the work, and two folder scans would import one file
-twice. A read-only due check answers the common case without the write lock. Only work that is due takes
+`backend/db/database.py`). App load, a return to the foreground, a second tab and a page mount can each
+ask for the same catch-up — the recurring auto-scan, the duplicate-detection rescan, a watched-folder
+scan — and each would read "due" before the other stamps it, so both would do the work, and two folder
+scans would import one file twice. A read-only due check answers the common case without the write lock. Only work that is due takes
 a claim, written in its own short immediate transaction, and a second caller is turned away while it
 stands. A claim left by a process that died lapses after its lease.
 

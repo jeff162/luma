@@ -8,7 +8,8 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
-import { api, SESSION_LOST_EVENT } from './lib/api.js'
+import { api, SESSION_LOST_EVENT, signalDataMutated } from './lib/api.js'
+import { useOnForeground } from './lib/useOnForeground.js'
 import SoleVaultMemberWarning from './components/SoleVaultMemberWarning.jsx'
 import { useSoleVaultMember } from './lib/useSoleVaultMember.js'
 import {
@@ -1090,6 +1091,26 @@ function DisplayFormatScope({ children }) {
   return children
 }
 
+// The backend work that runs only when a client asks. Each call is gated on the server (a watermark, a
+// version or an interval), so asking when nothing is due is a cheap no-op.
+function requestDueBackgroundWork() {
+  // Recurring detection: scan if never scanned (e.g. a database migrated from a pre-recurring schema) or
+  // stale since the last import or sync.
+  api.autoScanRecurring().catch(() => { })
+  // Watched import folders, same shape and same watermark: a folder nobody has looked at since the
+  // interval passed is checked, so a file dropped there yesterday is in the ledger by the time the user
+  // opens anything. The nav badge reads a persisted count and never scans, which is why this is the only
+  // client trigger.
+  api.autoScanWatchedFolders().catch(() => { })
+  // Re-examine stored rows when the duplicate matcher's rules have changed since this database was last
+  // scanned. Version-gated rather than time-gated, so it is a no-op on every call but the first after a
+  // rule change.
+  api.rescanDuplicates().catch(() => { })
+  // Whether a newer version has been released. The server makes a request only if the install has opted
+  // in and a day has passed since the last one.
+  api.autoCheckForUpdate().catch(() => { })
+}
+
 export default function App() {
   /*
    * App boots through one of two gates before the main shell exists: authenticated sign-in/bootstrap, or local
@@ -1396,7 +1417,8 @@ export default function App() {
     // Two refresh triggers, by design:
     //   * `luma:data-mutated` — same-session immediacy: any successful mutation anywhere emits
     //     this from the api layer (see `signalDataMutated` in api.js), so the badge updates without
-    //     the user navigating, and no call site has to remember to refresh it.
+    //     the user navigating, and no call site has to remember to refresh it. Returning to the
+    //     foreground emits it too (below), for what changed while the page was out of view.
     //   * `location.pathname` in the deps — navigation backstop: re-fetch on every route change to
     //     pick up changes this session didn't make (another tab, a background sync). With the api
     //     emit covering local mutations, this is no longer compensating for a missed broadcast.
@@ -1405,29 +1427,25 @@ export default function App() {
     // even when /tasks itself is showing pending items.
   }, [authEnabled, currentUser, activeLocalProfile, location.pathname])
 
-  // Recurring-detection catch-up: once the data scope is active, ask the backend to scan if one is due
-  // (never scanned — e.g. a database migrated from a pre-recurring schema — or stale). The backend gates
-  // on a watermark, so this is a cheap no-op when a recent import/sync already scanned. Keyed to the
-  // active scope (not navigation) so it fires once per session, and again after a profile switch.
+  // Background catch-up: once the data scope is active, and again each time the app comes back to the
+  // foreground, ask the backend for the work that runs only when something asks for it. Keyed to the active
+  // scope, so it fires once per load and again after a profile switch; the foreground pass is for a page
+  // a tablet has kept open for days, which would otherwise never ask again.
   useEffect(() => {
     if (authEnabled && !currentUser) return
     if (!authEnabled && !activeLocalProfile) return
     if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
     recurringAutoScanScopeRef.current = preferenceSubjectId
-    api.autoScanRecurring().catch(() => { })
-    // Watched import folders, same shape and same watermark: a folder nobody has looked at since the
-    // interval passed is checked once the scope is live, so a file dropped there yesterday is in the
-    // ledger by the time the user opens anything. The nav badge reads a persisted count and never scans,
-    // which is why this is the only load-time trigger.
-    api.autoScanWatchedFolders().catch(() => { })
-    // Same shape, different trigger: re-examine stored rows once when the duplicate matcher's rules have
-    // changed since this database was last scanned. Version-gated rather than time-gated, so it is a
-    // no-op on every load but the first after a rule change.
-    api.rescanDuplicates().catch(() => { })
-    // Whether a newer version has been released. The server makes a request only if the install has
-    // opted in and a day has passed since the last one; otherwise this is a no-op like the calls above.
-    api.autoCheckForUpdate().catch(() => { })
+    requestDueBackgroundWork()
   }, [authEnabled, currentUser, activeLocalProfile, preferenceSubjectId])
+
+  // The server-computed counts (the Tasks badge and page, the reimbursement count, stored documents) listen
+  // for the mutation signal, and returning to the foreground is the other moment they may be out of date:
+  // another device or the catch-up above may have changed them while the page was out of view.
+  useOnForeground(() => {
+    requestDueBackgroundWork()
+    signalDataMutated()
+  }, { enabled: !!preferenceSubjectId })
 
   useEffect(() => {
     if (!startupRouteApplied) return

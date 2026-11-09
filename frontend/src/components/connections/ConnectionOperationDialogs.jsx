@@ -12,10 +12,12 @@
 
 import { AppConfirmDialog, AppNoticeDialog, Spinner } from '../ui.jsx'
 import { EditedTransactionsWarning } from '../EditedTransactionsWarning.jsx'
+import { formatRelativeTimestamp, formatTimestamp } from '../../lib/utils.js'
 
 export function connectionOperationDialogs({
   notice, onDismissNotice,
   removeSyncTarget, removingSync, onConfirmRemoveSynced, onCancelRemoveSynced,
+  resyncConfirm, onConfirmResync, onCancelResync,
 }) {
   const summary = removeSyncTarget?.summary
   const edited = summary?.edited_transactions || []
@@ -51,6 +53,16 @@ export function connectionOperationDialogs({
             </>
           )}
         </AppConfirmDialog>
+      ) : null}
+
+      {resyncConfirm ? (
+        <AppConfirmDialog
+          title="Sync again?"
+          description={`Every connection synced ${formatRelativeTimestamp(resyncConfirm.lastSynced)} (${formatTimestamp(resyncConfirm.lastSynced)}).`}
+          confirmLabel="Sync again"
+          onConfirm={onConfirmResync}
+          onCancel={onCancelResync}
+        />
       ) : null}
 
       {notice ? (

@@ -37,6 +37,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useDetachedReportViewer } from '../lib/useDetachedReportViewer.js'
+import { useOnForeground } from '../lib/useOnForeground.js'
+import { syncedSince } from '../lib/connectionSummary.js'
 import { SyncStatusPanel } from '../components/SyncStatusPanel.jsx'
 import { addToRoster, foldLiveProgress, foldResponse, rosterMayHaveChangedLedger } from '../lib/syncRoster.js'
 
@@ -115,9 +117,10 @@ function connectionRows(providers) {
 const runningOf = rows => rows.filter(r => r.syncing)
 
 export function SyncStatusProvider({ children }) {
-  // The listing every consumer shares, refreshed by whichever read happens to run — the boot check below,
-  // the observer's ticks during a sync, a run's own seed, and once more when a run ends. Null until the
-  // first read lands, which is what lets a consumer tell "no connections" apart from "not asked yet".
+  // The listing every consumer shares, refreshed by whichever read happens to run — the load and foreground
+  // check below, the observer's ticks during a sync, a run's own seed, once more when a run ends, and the
+  // check before a Sync now. Null until the first read lands, which is what lets a consumer tell
+  // "no connections" apart from "not asked yet".
   const [providers, setProviders] = useState(null)
   const readConnections = useCallback(async () => {
     const payload = await fetchProviders()
@@ -197,19 +200,57 @@ export function SyncStatusProvider({ children }) {
     return () => { alive = false; clearInterval(id) }
   }, [anyDriving, watching, readConnections, setViewer])
 
-  // A sync already running when this tab loaded — started in another tab, or here before a reload. Adopted
-  // rather than ignored: the panel state is in memory by design, so without this a reload mid-backfill
-  // leaves the user with no indication that anything is happening.
-  useEffect(() => {
-    let alive = true
-    readConnections().then(rows => {
-      if (!alive || !runningOf(rows).length) return
+  // `runsFinished` and `ledgerRunsFinished` — see the run-end effect below, and the foreground read here,
+  // which also counts a sync that finished elsewhere.
+  const [runsFinished, setRunsFinished] = useState(0)
+  const [ledgerRunsFinished, setLedgerRunsFinished] = useState(0)
+  const providersRef = useRef(providers)
+  providersRef.current = providers
+
+  // Re-read the listing outside a run, adopting any sync it finds already going — started in another tab or
+  // on another device, or here before a reload. Adopted rather than ignored: the panel state is in memory by
+  // design, so without this a reload mid-backfill leaves the user with no indication that anything is
+  // happening. Returns `{ providers, running }`, or null when the read failed, so a caller can tell a
+  // failed read from an install with no connections.
+  //
+  // A sync that already *finished* elsewhere since the last read is counted as a run ending, so the pages
+  // holding their own copy of what it wrote reload just as they would after one seen here. It always counts
+  // as a ledger change: the connection records only its most recent call, and a run is several calls, so a
+  // last call that brought nothing in says nothing about the ones before it.
+  const refreshConnections = useCallback(async () => {
+    let payload
+    try {
+      ({ providers: payload = [] } = await api.getProviders())
+    } catch {
+      return null
+    }
+    const previous = providersRef.current
+    providersRef.current = payload
+    setProviders(payload)
+    const running = runningOf(connectionRows(payload)).length > 0
+    const busy = anyDrivingRef.current || watchingRef.current
+    if (running && !busy) {
       lastRunningAtRef.current = Date.now()
+      // Set ahead of the render so an overlapping read does not adopt the same run a second time.
+      watchingRef.current = true
       setWatching(true)
       open({ adopted: true })
-    }).catch(() => {})
-    return () => { alive = false }
-  }, [open, readConnections])
+    } else if (!running && !busy && previous && syncedSince(previous, payload)) {
+      setRunsFinished(n => n + 1)
+      setLedgerRunsFinished(n => n + 1)
+    }
+    return { providers: payload, running }
+  }, [open])
+
+  // At load, and whenever the app comes back to the foreground. A tablet keeps a backgrounded page alive
+  // for days, and the listing is otherwise read only around this tab's own runs, so a sync done elsewhere
+  // left the freshness shown here at whatever it was when the page was last in view. Skipped while a run
+  // is live, because the observer above is already reading it.
+  useEffect(() => { refreshConnections() }, [refreshConnections])
+  useOnForeground(() => {
+    if (anyDrivingRef.current || watchingRef.current) return
+    refreshConnections()
+  })
 
   // One more read when a run ends, because the observer above stops the moment nothing is syncing and its
   // last tick therefore saw the run mid-flight. `last_synced_at` moves exactly once per sync — at the end —
@@ -220,14 +261,13 @@ export function SyncStatusProvider({ children }) {
   // copy of it — the Import page's history cards above all, whose row counts, account chips and review pills
   // otherwise stayed at whatever the page last loaded, mid-sync or before it, until something unrelated
   // reloaded them. A counter rather than a callback so a page can simply watch it while mounted, however
-  // the run was started (its own panel, the navigation pane, another tab). 0 means no run has ended.
+  // the run was started (its own panel, the navigation pane, another tab — or another device, counted by
+  // `refreshConnections` above). 0 means no run has ended.
   //
   // `ledgerRunsFinished` counts only the endings that may have changed transactions, for the pages that
   // show them (see `useAfterLedgerSync`). Those reload a list the user may be scrolled into or editing, so
   // a sync that brought nothing in leaves them alone; `rosterMayHaveChangedLedger` says when that is known.
   const wasBusyRef = useRef(false)
-  const [runsFinished, setRunsFinished] = useState(0)
-  const [ledgerRunsFinished, setLedgerRunsFinished] = useState(0)
   useEffect(() => {
     const busy = anyDriving || watching
     if (wasBusyRef.current && !busy) {
@@ -354,9 +394,9 @@ export function SyncStatusProvider({ children }) {
 
   const value = useMemo(
     () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching, runsFinished,
-              ledgerRunsFinished, runSync, runSyncAll, viewer, open, close, minimize, restore }),
+              ledgerRunsFinished, runSync, runSyncAll, refreshConnections, viewer, open, close, minimize, restore }),
     [providers, syncState, runProviders, runConnections, watching, runsFinished, ledgerRunsFinished, runSync,
-      runSyncAll, viewer, open, close, minimize, restore],
+      runSyncAll, refreshConnections, viewer, open, close, minimize, restore],
   )
   return <SyncStatusContext.Provider value={value}>{children}</SyncStatusContext.Provider>
 }

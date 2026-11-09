@@ -2,7 +2,7 @@
 // sitting beside it.
 
 import { describe, expect, it } from 'vitest'
-import { connectionAccountsLabel, providerSummaryLine, connectionProviderLabel, providerConnectionStates, relinkCandidates, syncFreshness, syncNavLabel } from '../connectionSummary.js'
+import { connectionAccountsLabel, providerSummaryLine, connectionProviderLabel, providerConnectionStates, recentFullSync, relinkCandidates, syncedSince, syncFreshness, syncNavLabel } from '../connectionSummary.js'
 
 describe('providerSummaryLine', () => {
   it('reports a running sync instead of the freshness it supersedes', () => {
@@ -242,5 +242,45 @@ describe('providerConnectionStates', () => {
     const s = providerConnectionStates({ connections: [] })
     expect(s).toMatchObject({ unmapped: 0, review: 0, lastSynced: null, allSynced: false })
     expect(providerConnectionStates().connections).toEqual([])
+  })
+})
+
+describe('recentFullSync', () => {
+  const at = t => ({ last_synced_at: t })
+  const now = Date.parse('2026-09-05T08:00:00Z')
+
+  it('asks only when the connection furthest behind is inside the window', () => {
+    expect(recentFullSync([
+      { provider: 'plaid', connections: [at('2026-09-05T07:50:00Z')] },
+      { provider: 'simplefin', connections: [at('2026-09-05T07:40:00Z')] },
+    ], now)).toBe('2026-09-05T07:40:00Z')
+    expect(recentFullSync([
+      { provider: 'plaid', connections: [at('2026-09-05T07:50:00Z')] },
+      { provider: 'simplefin', connections: [at('2026-09-03T07:40:00Z')] },
+    ], now)).toBeNull()
+  })
+
+  it('does not ask while any connection has never synced', () => {
+    expect(recentFullSync([
+      { provider: 'plaid', connections: [at('2026-09-05T07:50:00Z'), at(null)] },
+    ], now)).toBeNull()
+  })
+})
+
+describe('syncedSince', () => {
+  const listing = (...connections) => [{ provider: 'plaid', connections }]
+
+  it('sees a connection whose last sync moved forward, and nothing when none did', () => {
+    const before = listing({ id: 'c1', last_synced_at: '2026-09-03T07:40:00Z' })
+    expect(syncedSince(before, listing({ id: 'c1', last_synced_at: '2026-09-05T07:40:00Z' }))).toBe(true)
+    expect(syncedSince(before, listing({ id: 'c1', last_synced_at: '2026-09-03T07:40:00Z' }))).toBe(false)
+  })
+
+  it('counts a connection added elsewhere once it has synced', () => {
+    const before = listing({ id: 'c1', last_synced_at: '2026-09-03T07:40:00Z' })
+    const after = listing({ id: 'c1', last_synced_at: '2026-09-03T07:40:00Z' }, { id: 'c2', last_synced_at: null })
+    expect(syncedSince(before, after)).toBe(false)
+    after[0].connections[1].last_synced_at = '2026-09-05T07:40:00Z'
+    expect(syncedSince(before, after)).toBe(true)
   })
 })

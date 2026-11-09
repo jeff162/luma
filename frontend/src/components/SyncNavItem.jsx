@@ -24,14 +24,13 @@
 // **Collapsed, the icon carries the state** — turning while a run is live, a check once it has finished —
 // in the same colours the open row's glyph uses, since the label is gone and a tablet has no hover.
 
-import { useState } from 'react'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
-import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
+import { useConnectionOperations } from '../lib/useConnectionOperations.js'
 import { connectionProviderLabel as providerLabel, syncFreshness, syncNavLabel } from '../lib/connectionSummary.js'
 import { useRelativeTimestamp } from '../lib/useRelativeTimestamp.js'
 import { rosterAdded } from '../lib/syncRoster.js'
 import { formatTimestamp } from '../lib/utils.js'
-import { AppNoticeDialog, VISUALLY_HIDDEN_STYLE } from './ui.jsx'
+import { VISUALLY_HIDDEN_STYLE } from './ui.jsx'
 import { NavIcon } from './navIcons.jsx'
 
 // What the tooltip says about each provider under the headline, so a stale overall figure can be traced
@@ -52,9 +51,9 @@ export function SyncNavItem({ style, activeStyle, collapsed = false }) {
   // at boot to spot a sync started elsewhere, and keeps current through a run — this component used to
   // request the same endpoint a second time on every app load purely because the context's flattened
   // projection dropped `last_synced_at`. One request, one owner.
-  const { providers, viewer, syncState, runProviders, runConnections, watching, restore, runSyncAll } = useSyncStatus()
-  const { ensureVault } = useVaultGateContext()
-  const [notice, setNotice] = useState(null)
+  const { providers, viewer, syncState, runProviders, runConnections, watching, restore } = useSyncStatus()
+  // The same Sync now the Connections tab and the Data Import card offer, with its confirmation and notices.
+  const { syncAll, dialogsNode } = useConnectionOperations()
 
   // Between the driver's calls no connection reports as running, so `runConnections` alone would blink;
   // `syncState` is this tab's memory of a run it is driving and `watching` is the observer's judgement
@@ -72,24 +71,11 @@ export function SyncNavItem({ style, activeStyle, collapsed = false }) {
   const added = runConnections.reduce((n, e) => n + rosterAdded(e), 0)
   const finished = !!viewer && !driving
 
-  const onClick = async () => {
+  const onClick = () => {
     // While a run is live or its summary is waiting, this row is the way back to the panel rather than a
     // way to start a second pull.
     if (driving || finished) { restore(); return }
-    if (!(await ensureVault())) return
-    // days: 0 is the routine top-up every provider card sends — it keeps a cursor provider's maintained
-    // window at its full width rather than narrowing history an initial pull already fetched.
-    const { failures } = await runSyncAll(freshness.byProvider.map(p => p.provider), { days: 0 })
-    if (failures.length) {
-      setNotice({
-        title: failures.length === 1 ? 'A data provider could not be synced' : 'Some data providers could not be synced',
-        // Named per provider: with several connected, "sync failed" leaves the user to work out which one
-        // — and the others may well have imported fine, which the panel behind this notice still shows.
-        description: failures
-          .map(f => `${providerLabel(f.provider)}: ${f.error?.message || 'the sync did not complete'}`)
-          .join('\n'),
-      })
-    }
+    syncAll()
   }
 
   const label = syncNavLabel({ driving, finished, added, relativeLabel })
@@ -140,9 +126,7 @@ export function SyncNavItem({ style, activeStyle, collapsed = false }) {
           {label}
         </span>
       </button>
-      {notice ? (
-        <AppNoticeDialog title={notice.title} description={notice.description} onClose={() => setNotice(null)} />
-      ) : null}
+      {dialogsNode}
     </>
   )
 }

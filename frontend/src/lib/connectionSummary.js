@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { parseTimestamp } from './utils.js'
+
 // The one line a provider's card shows about itself, in the header — the text that has to stand alone
 // when the card is collapsed.
 //
@@ -171,6 +173,31 @@ export function syncFreshness(providers = []) {
   return { connectionCount, lastSynced: oldest, neverSynced, byProvider }
 }
 
+
+// A sync of everything is confirmed when everything is already this fresh, because a repeat pull brings
+// in next to nothing and still spends a provider's request allowance. The test is the *oldest* sync, the
+// same figure the sync controls display: one connection days behind means the sync has work to do.
+export const RESYNC_CONFIRM_WINDOW_MS = 30 * 60 * 1000
+
+// The oldest `last_synced_at` when every connection has synced inside that window, else null.
+export function recentFullSync(providers = [], now = Date.now()) {
+  const { connectionCount, lastSynced, neverSynced } = syncFreshness(providers)
+  if (!connectionCount || neverSynced || !lastSynced) return null
+  const age = now - parseTimestamp(lastSynced).getTime()
+  return age < RESYNC_CONFIRM_WINDOW_MS ? lastSynced : null
+}
+
+// Whether any connection finished a sync between two reads of the providers listing: its
+// `last_synced_at` moved forward, or it is new and has synced (a connect elsewhere pulls its history).
+export function syncedSince(previous = [], next = []) {
+  const before = new Map()
+  for (const p of previous) for (const c of p.connections || []) before.set(c.id, c.last_synced_at || null)
+  return next.some(p => (p.connections || []).some(c => {
+    if (!c.last_synced_at) return false
+    const was = before.get(c.id)
+    return !was || parseTimestamp(c.last_synced_at) > parseTimestamp(was)
+  }))
+}
 
 // The navigation pane's sync row, in the same precedence shape as `providerSummaryLine` above and for the
 // same reason: it is a rule with edges, and the component is where those edges would go untested.

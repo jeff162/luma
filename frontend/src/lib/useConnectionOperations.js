@@ -25,11 +25,13 @@ import { useCallback, useState } from 'react'
 import { api } from './api.js'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
-import { connectionProviderLabel } from './connectionSummary.js'
+import { connectionProviderLabel, recentFullSync } from './connectionSummary.js'
 import { connectionOperationDialogs } from '../components/connections/ConnectionOperationDialogs.jsx'
 
 export function useConnectionOperations({ onChanged } = {}) {
-  const { syncState, setSyncState, runSync: syncUntilComplete, runSyncAll } = useSyncStatus()
+  const {
+    providers: knownProviders, syncState, setSyncState, runSync: syncUntilComplete, runSyncAll, refreshConnections,
+  } = useSyncStatus()
   const { ensureVault } = useVaultGateContext()
   const [notice, setNotice] = useState(null)
   const [refreshingConnId, setRefreshingConnId] = useState(null)
@@ -38,6 +40,8 @@ export function useConnectionOperations({ onChanged } = {}) {
   // it synced) feeds the confirm dialog before anything is deleted.
   const [removeSyncTarget, setRemoveSyncTarget] = useState(null)
   const [removingSync, setRemovingSync] = useState(false)
+  // A Sync now held for confirmation because everything synced moments ago: `{ lastSynced, list }`.
+  const [resyncConfirm, setResyncConfirm] = useState(null)
 
   // Tells the host something changed that no sync run reports. The actions that end in a run (a sync, more
   // history, rebuilt accounts) deliberately do not call it: every run's end already reaches the host
@@ -90,13 +94,14 @@ export function useConnectionOperations({ onChanged } = {}) {
 
   // Every provider that has something to sync, as one run. This is what a page-level or app-level
   // control means by "sync" — bring in everything new — as against the per-connection check a
-  // connection's card offers. Failures are collected per provider rather than raised, so one bank being down neither
-  // abandons the run nor hides that the others imported fine.
-  const syncAll = useCallback(async (providers) => {
-    const list = (providers || [])
-      .filter(p => (p.connections || []).length)
-      .map(p => p.provider)
-    if (!list.length) return
+  // connection's card offers. Failures are collected per provider rather than raised, so one bank being
+  // down neither abandons the run nor hides that the others imported fine.
+  //
+  // The Connections tab, the Data Import card and the navigation pane all start it here. The listing is
+  // read fresh first, because what this page last loaded can be days old on a tablet: a sync since run
+  // elsewhere is then confirmed rather than repeated, and one still running elsewhere is adopted into the
+  // panel rather than started again. The vault is asked for only once a pull is going ahead.
+  const runAll = useCallback(async (list) => {
     if (!(await ensureVault())) return
     const { failures } = await runSyncAll(list, { days: 0 })
     if (failures.length) {
@@ -110,6 +115,23 @@ export function useConnectionOperations({ onChanged } = {}) {
       })
     }
   }, [ensureVault, runSyncAll])
+
+  const syncAll = useCallback(async () => {
+    const fresh = await refreshConnections()
+    if (fresh?.running) return
+    const listing = fresh?.providers || knownProviders || []
+    const list = listing.filter(p => (p.connections || []).length).map(p => p.provider)
+    if (!list.length) return
+    const lastSynced = recentFullSync(listing)
+    if (lastSynced) { setResyncConfirm({ lastSynced, list }); return }
+    await runAll(list)
+  }, [knownProviders, refreshConnections, runAll])
+
+  const confirmResync = useCallback(() => {
+    const list = resyncConfirm?.list
+    setResyncConfirm(null)
+    if (list) runAll(list)
+  }, [resyncConfirm, runAll])
 
   // Deepen one connection's history. `fullHistory` is what separates this from a routine top-up, which
   // sends the same `days`: for a cursor provider it raises `days_requested` and the provider backfills
@@ -208,6 +230,9 @@ export function useConnectionOperations({ onChanged } = {}) {
       removingSync,
       onConfirmRemoveSynced: confirmRemoveSynced,
       onCancelRemoveSynced: () => setRemoveSyncTarget(null),
+      resyncConfirm,
+      onConfirmResync: confirmResync,
+      onCancelResync: () => setResyncConfirm(null),
     }),
   }
 }
