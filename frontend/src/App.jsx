@@ -537,7 +537,7 @@ function DataProviderInfoButton({ label = 'data providers' }) {
             padding: '10px 12px',
             borderRadius: 12,
             border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
-            background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, white 2%), var(--surface))',
+            background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 98%, white), var(--surface))',
             boxShadow: '0 16px 40px rgba(15, 23, 42, 0.24)',
             display: 'grid',
             gap: 8,
@@ -649,7 +649,7 @@ function LocalPreferenceProfileScreen({
     }}>
       <div style={{
         width: 'min(560px, 100%)',
-        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 3%), color-mix(in srgb, var(--surface) 98%, var(--surface2) 16%))',
+        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 97%, white), color-mix(in srgb, var(--surface) 98%, var(--surface2) 16%))',
         border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
         borderRadius: 20,
         padding: 28,

@@ -347,7 +347,7 @@ export function MatchingTransactionsReport({ state, categories, onClose, onKeepC
           gap: 16,
           padding: '18px 20px',
           borderBottom: '1px solid var(--border)',
-          background: 'color-mix(in srgb, var(--surface) 94%, rgba(15, 23, 42, 0.12))',
+          background: 'color-mix(in srgb, var(--surface) 99%, #0f172a)',
         }}
         >
           <div style={{ minWidth: 0, flex: 1 }}>

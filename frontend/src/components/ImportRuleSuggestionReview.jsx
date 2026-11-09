@@ -1431,7 +1431,7 @@ export default function ImportRuleSuggestionReview({
           margin: '-2px -2px 4px',
           border: '1px solid color-mix(in srgb, var(--border) 82%, white 8%)',
           borderRadius: 14,
-          background: 'color-mix(in srgb, var(--surface) 92%, rgba(15, 23, 42, 0.18))',
+          background: 'color-mix(in srgb, var(--surface) 98%, #0f172a)',
           backdropFilter: 'blur(10px)',
           boxShadow: '0 10px 22px rgba(15, 23, 42, 0.14)',
         }}

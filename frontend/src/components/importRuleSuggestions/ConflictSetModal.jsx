@@ -52,7 +52,7 @@ export function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
           gap: 16,
           padding: '14px 16px',
           borderBottom: '1px solid var(--border)',
-          background: 'color-mix(in srgb, var(--surface) 94%, rgba(15, 23, 42, 0.12))',
+          background: 'color-mix(in srgb, var(--surface) 99%, #0f172a)',
           backdropFilter: 'blur(10px)',
         }}>
           <div>

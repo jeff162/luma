@@ -458,8 +458,8 @@ export function SectionEyebrow({ children, style }) {
 export function getFloatingPanelSurfaceStyle({ active = true, radius = 16 } = {}) {
   return {
     background: active
-      ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 2%), var(--surface))'
-      : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, black 3%), var(--surface))',
+      ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 98%, white), var(--surface))'
+      : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 97%, black), var(--surface))',
     border: active
       ? '1px solid color-mix(in srgb, var(--accent) 30%, color-mix(in srgb, var(--border) 88%, white 10%))'
       : '1px solid color-mix(in srgb, var(--border) 88%, white 8%)',
@@ -472,8 +472,8 @@ export function getFloatingPanelSurfaceStyle({ active = true, radius = 16 } = {}
 
 export function getFloatingPanelHeaderBackground(active = true) {
   return active
-    ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 72%, var(--surface)), color-mix(in srgb, var(--surface) 82%, var(--accent) 8%))'
-    : 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 62%, var(--surface)), color-mix(in srgb, var(--surface) 92%, black 4%))'
+    ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 72%, var(--surface)), color-mix(in srgb, var(--surface) 91%, var(--accent)))'
+    : 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 62%, var(--surface)), color-mix(in srgb, var(--surface) 96%, black))'
 }
 
 export function OverlayBackdrop({
