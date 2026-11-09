@@ -263,17 +263,10 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
     setTimeout(onDismiss, 1800)
   }
 
+  // Closing the editor answers the suggestion: the toast would only offer the same editor again.
   function handleCancel() {
     setShowModal(false)
-    // Give the user a short grace period after closing the modal so the suggestion does not disappear immediately.
-    clearTimeout(timerRef.current)
-    clearInterval(intervalRef.current)
-    startRef.current = Date.now() - (TIMEOUT_MS - 3000)
-    intervalRef.current = setInterval(() => {
-      const pct = Math.max(0, 100 - ((Date.now() - startRef.current) / TIMEOUT_MS) * 100)
-      setProgress(pct)
-    }, 50)
-    timerRef.current = setTimeout(onDismiss, 3000)
+    onDismiss()
   }
 
   const merchantDisplay = prompt.merchantName || 'this merchant'
