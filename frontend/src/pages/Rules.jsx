@@ -5,8 +5,7 @@ import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { createPortal } from 'react-dom'
-import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle } from '../components/ui.jsx'
+import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
@@ -14,6 +13,7 @@ import RuleForm, { amountConditionSummary, ruleFormInitialValues } from '../comp
 import RulePreviewDialog from '../components/RulePreviewDialog.jsx'
 import { isLowPriority } from '../lib/rulePriority.js'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
+import RuleDeleteButton from '../components/RuleDeleteButton.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
@@ -269,11 +269,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
   // Opt-in (off by default): re-evaluate the transactions this rule previously categorized, so rows this
   // edit drops from scope revert instead of retaining the old category.
   const [reconcile, setReconcile] = useState(false)
-  // Delete confirmation state, kept separate from the edit's own `reconcile`: the two answer the same
-  // question but about different acts, and carrying one answer over to the other would silently apply a
-  // choice made about an edit the user then abandoned.
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [deleteReconcile, setDeleteReconcile] = useState(false)
 
   if (!rule) return null
 
@@ -292,11 +287,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
       // Save button — visible on reopen because this overlay renders null instead of unmounting.
       setWorking(false)
     }
-  }
-
-  function closeDeleteConfirm() {
-    setConfirmDelete(false)
-    setDeleteReconcile(false)
   }
 
   // Floating, so it can sit beside the rule checkup that opened it. Until it has a remembered place it
@@ -338,16 +328,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
               Update conditions and actions without leaving the rules list
             </div>
           </div>
-          {/* Destructive, so it sits apart from Save, and behind a confirm. Deleting from here saves opening
-              the rule, deciding against it, and hunting the same rule down in the list to remove it. */}
-          <IconButton
-            onClick={() => setConfirmDelete(true)}
-            disabled={working}
-            aria-label="Delete this rule"
-            style={{ marginLeft: 'auto', flexShrink: 0 }}
-          >
-            🗑
-          </IconButton>
+          <RuleDeleteButton onDelete={revert => onDelete(rule.id, revert)} disabled={working} />
         </div>
       )}
     >
@@ -367,38 +348,6 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
             hideFooterActions
             onDraftChange={setDraftState}
           />
-
-      {/* Portalled: `AppDialog` does not portal itself, and mounted here it would stack and position
-          against this overlay's own fixed, blurred backdrop rather than the viewport. See
-          the comment on `AppDialog` in `ui.jsx`. */}
-      {confirmDelete ? createPortal(
-        <AppConfirmDialog
-          title="Delete this rule?"
-          description="The rule moves to the rules trash, where it can be restored from Settings."
-          confirmLabel="Delete rule"
-          // Not "Cancel": the editor's own Cancel is on screen behind this, abandoning the whole edit
-          // rather than just the deletion, and two buttons reading the same word mean different things.
-          cancelLabel="Keep rule"
-          confirmVariant="danger"
-          onConfirm={() => { const revert = deleteReconcile; closeDeleteConfirm(); onDelete(rule.id, revert) }}
-          onCancel={closeDeleteConfirm}
-          borderColor="var(--danger)"
-        >
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: 'var(--muted)', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={deleteReconcile}
-              onChange={e => setDeleteReconcile(e.target.checked)}
-              style={{ marginTop: 2 }}
-            />
-            <span>
-              Also re-evaluate the transactions this rule categorized, so they fall to another matching
-              rule or back to uncategorized. Off leaves their categories as they are.
-            </span>
-          </label>
-        </AppConfirmDialog>,
-        document.body,
-      ) : null}
     </FloatingDialog>
   )
 }
@@ -692,7 +641,7 @@ export default function Rules() {
   }
 
   async function handleDelete(id, reconcile = false) {
-    await api.deleteRule(id, { reconcile })
+    await txnMutations.deleteRule(id, { reconcile })
     if (editingRuleId === id) setEditingRuleId(null)
     setCheckupRefreshKey(key => key + 1)
     loadRules()
@@ -828,7 +777,7 @@ export default function Rules() {
         <label htmlFor={searchId} style={VISUALLY_HIDDEN_STYLE}>
           Search rules by merchant
         </label>
-        <SearchInput id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" wrapperStyle={{ width: 260 }} />
+        <SearchInput id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" size="regular" wrapperStyle={{ width: 260 }} />
 
         {/* Structured facet filter — page-local, session-scoped (never touches the app-wide FilterContext). */}
         <div style={{ position: 'relative' }}>
@@ -837,7 +786,7 @@ export default function Rules() {
             onClick={() => setShowFilter(o => !o)}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              Filter{activeFacetCount > 0 ? <ActionCountBadge count={activeFacetCount} /> : null}
+              {activeFacetCount > 0 ? <>Filter<ActionCountBadge count={activeFacetCount} /></> : '+Filter'}
             </span>
           </Button>
           {showFilter ? (
@@ -876,7 +825,7 @@ export default function Rules() {
               onChange={e => setCleanupWindow(e.target.value)}
               aria-label="Clean up rules unused for"
               name="rule-cleanup-window"
-              style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}
+              style={{ ...getFormControlStyle({ size: 'compact', clickable: true }) }}
             >
               <option value="">—</option>
               <option value="6:months">6 months</option>
@@ -888,6 +837,7 @@ export default function Rules() {
           </label>
           {cleanupBeforeDate ? (
             <Button
+              size="compact"
               variant="secondary"
               disabled={cleanupCount === 0}
               onClick={() => setCleanupOpen(true)}

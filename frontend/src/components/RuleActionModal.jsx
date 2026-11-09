@@ -6,7 +6,8 @@
  * shared so every transaction surface (the Transactions ledger and every report list built on
  * TransactionListTable) opens the same rule editor rather than re-implementing the conflict /
  * merge handling. Floating, so it can be moved off the transactions it is written for. `state` is { mode: 'create', txnId, categoryId, keywordSource, transactionData }
- * or { mode: 'edit', ruleId, txnId }; `onSaved` lets the host reconcile after a save/apply.
+ * or { mode: 'edit', ruleId, txnId }; `onSaved` lets the host reconcile after a save/apply, or after a delete
+ * ({ mode: 'delete', reconciled }, where `reconciled` means the rule's transactions were re-evaluated).
  */
 
 import { useState, useEffect } from 'react'
@@ -16,6 +17,7 @@ import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm, { ruleFormInitialValues } from './RuleForm.jsx'
 import { Button } from './ui.jsx'
 import FloatingDialog from './FloatingDialog.jsx'
+import RuleDeleteButton from './RuleDeleteButton.jsx'
 
 export default function RuleActionModal({ state, onClose, onSaved }) {
   const [categories, setCategories] = useState([])
@@ -122,6 +124,18 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
     onClose()
   }
 
+  async function handleDelete(reconcile) {
+    setError('')
+    try {
+      await txnMutations.deleteRule(state.ruleId, { reconcile })
+    } catch (err) {
+      setError(err.message || 'Failed to delete rule')
+      return
+    }
+    onSaved?.({ mode: 'delete', ruleId: state.ruleId, reconciled: reconcile })
+    onClose()
+  }
+
   const initialValues = state.mode === 'edit'
     ? (rule ? ruleFormInitialValues(rule) : null)
     : {
@@ -141,12 +155,20 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
   // failure. Placed here rather than beside the other early return because it reads `initialValues`.
   if ((loading || !initialValues) && !loadSlow) return null
 
+  const title = state.mode === 'edit'
+    ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
+    : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')
+
   return (
     <FloatingDialog
       panelKey="ui.ruleAction.panel"
-      title={state.mode === 'edit'
-        ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
-        : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')}
+      title={title}
+      header={state.mode === 'edit' && rule ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
+          <RuleDeleteButton onDelete={handleDelete} />
+        </div>
+      ) : null}
       onClose={onClose}
       width={640}
       bodyPadding={0}

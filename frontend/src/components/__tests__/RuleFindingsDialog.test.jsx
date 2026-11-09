@@ -39,7 +39,7 @@ import { txnMutations } from '../../lib/txnMutations.js'
 
 vi.mock('../../lib/api.js', () => ({
   api: {
-    getRuleOverlaps: vi.fn(), deleteRule: vi.fn(),
+    getRuleOverlaps: vi.fn(),
     dismissRuleOverlap: vi.fn(), restoreRuleOverlap: vi.fn(),
     getRuleRangeDrift: vi.fn(),
     dismissRuleRangeDrift: vi.fn(), restoreRuleRangeDrift: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock('../../lib/api.js', () => ({
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: (_key, fallback) => [fallback, () => {}],
 }))
-vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn(), updateRule: vi.fn() } }))
+vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn(), updateRule: vi.fn(), deleteRule: vi.fn() } }))
 
 // Call counts are asserted below (a re-run of the check, a delete that must not fire), so the shared api
 // mock has to be reset between tests as well as the DOM.
@@ -150,7 +150,7 @@ function payload(findings, dismissedCount) {
 function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissedCount = 0 } = {}) {
   api.getRuleOverlaps.mockResolvedValue(payload(findings, dismissedCount))
   api.getRuleRangeDrift.mockResolvedValue(payload(drift, driftDismissedCount))
-  api.deleteRule.mockResolvedValue({ ok: true })
+  txnMutations.deleteRule.mockResolvedValue({ ok: true })
   txnMutations.updateRule.mockResolvedValue({ ok: true })
   api.dismissRuleOverlap.mockResolvedValue({ ok: true })
   api.restoreRuleOverlap.mockResolvedValue({ ok: true })
@@ -208,9 +208,9 @@ describe('RuleFindingsDialog', () => {
     const { onRulesChanged } = renderDialog([REDUNDANT])
     await userEvent.click(await screen.findByText('Delete'))
     // Arming the confirm must not itself delete anything.
-    expect(api.deleteRule).not.toHaveBeenCalled()
+    expect(txnMutations.deleteRule).not.toHaveBeenCalled()
     await userEvent.click(screen.getByText('Delete rule'))
-    expect(api.deleteRule).toHaveBeenCalledWith('ajiRestaurant', { reconcile: false })
+    expect(txnMutations.deleteRule).toHaveBeenCalledWith('ajiRestaurant', { reconcile: false })
     // The check is re-run, because a delete dissolves every finding that rule appeared in.
     await waitFor(() => expect(api.getRuleOverlaps).toHaveBeenCalledTimes(2))
     expect(onRulesChanged).toHaveBeenCalled()
@@ -228,14 +228,14 @@ describe('RuleFindingsDialog', () => {
     await userEvent.click(await screen.findByText('Delete'))
     await userEvent.click(screen.getByLabelText(/re-evaluate its transactions/))
     await userEvent.click(screen.getByText('Delete rule'))
-    expect(api.deleteRule).toHaveBeenCalledWith('ajiRestaurant', { reconcile: true })
+    expect(txnMutations.deleteRule).toHaveBeenCalledWith('ajiRestaurant', { reconcile: true })
   })
 
   it('abandons a delete on cancel', async () => {
     renderDialog([REDUNDANT])
     await userEvent.click(await screen.findByText('Delete'))
     await userEvent.click(screen.getByText('Cancel'))
-    expect(api.deleteRule).not.toHaveBeenCalled()
+    expect(txnMutations.deleteRule).not.toHaveBeenCalled()
     expect(screen.queryByText('Delete rule')).toBeNull()
   })
 

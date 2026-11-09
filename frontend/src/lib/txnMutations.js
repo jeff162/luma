@@ -90,6 +90,13 @@ export const txnMutations = {
     return result
   },
 
+  // A delete with `reconcile` re-derives the transactions the rule categorized.
+  async deleteRule(ruleId, options) {
+    const result = await api.deleteRule(ruleId, options)
+    notifyTransactionsChanged()
+    return result
+  },
+
   // Move one of a rule's amount bounds out to a charge and re-apply the rule, as one request.
   async widenRuleRange(ruleId, bound, amount) {
     const result = await api.widenRuleRange(ruleId, bound, amount)

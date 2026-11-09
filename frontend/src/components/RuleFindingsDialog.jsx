@@ -534,7 +534,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   }, [refreshKey])
 
   const deleteRule = (ruleId, reconcile) => runAction(async () => {
-    await api.deleteRule(ruleId, { reconcile })
+    await txnMutations.deleteRule(ruleId, { reconcile })
     onRulesChanged?.()
   })
 

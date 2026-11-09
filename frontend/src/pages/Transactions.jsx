@@ -152,7 +152,7 @@ export default function Transactions() {
       removeRow(txnId)
       setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === txnId)))
     },
-    onRuleSaved: ({ applyToExisting }) => { if (applyToExisting) reload() },
+    onRuleSaved: ({ applyToExisting, reconciled }) => { if (applyToExisting || reconciled) reload() },
     categories,
     onAddCategory: addCategory,
   })
@@ -755,6 +755,7 @@ export default function Transactions() {
               onChange={setQuickFilter}
               placeholder="Search…"
               aria-label="Search transactions"
+              size="compact"
               title="Matches names, imported text, category, account, date, amount, and the text inside attached documents. -42.10 is money paid out, +42.10 money received. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or doc:brake pads."
               wrapperStyle={{ width: 180 }}
             />

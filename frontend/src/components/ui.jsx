@@ -389,6 +389,10 @@ export function getFormControlStyle({
     sm: { padding: '5px 8px', fontSize: 12, borderRadius: 6 },
     md: { padding: '7px 10px', fontSize: 13, borderRadius: 6 },
     lg: { padding: '8px 12px', fontSize: 14, borderRadius: 8 },
+    // A `Button` size's height, for a field in a row of buttons. A fixed height rather than padding, because
+    // a select draws a taller text line than an input at the same font size and ignores `line-height`.
+    regular: { padding: '0 10px', height: 29, boxSizing: 'border-box', fontSize: 13, borderRadius: 8 },
+    compact: { padding: '0 8px', height: 22, boxSizing: 'border-box', fontSize: 12, borderRadius: 6 },
   }
   const chosenSize = sizes[size] || sizes.md
   const background = surface === 'base' ? 'var(--surface)' : 'var(--surface2)'
@@ -1211,8 +1215,10 @@ export function Select({ value, onChange, options, style, id, ...rest }) {
 // `forwardRef` because these fields cannot be reached any other way: a sensitive field renders with
 // `suppressAutofillId`, deliberately carrying no id or name, so a caller wanting to move focus to the
 // next one (Enter-to-advance in the vault dialogs) has no selector to query and needs the node itself.
+//
+// `size` is a `getFormControlStyle` size, not the HTML attribute.
 export const Input = forwardRef(function Input(
-  { value, onChange, placeholder, style, id, suppressAutofillId = false, ...rest }, ref,
+  { value, onChange, placeholder, style, id, size = 'lg', suppressAutofillId = false, ...rest }, ref,
 ) {
   // `...rest` forwards a11y/form props (aria-label, name, type, …) the wrapper used to swallow —
   // a placeholder alone isn't an accessible name, so callers can give the field a real label.
@@ -1235,7 +1241,7 @@ export const Input = forwardRef(function Input(
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       style={{
-        ...getFormControlStyle({ size: 'lg' }),
+        ...getFormControlStyle({ size }),
         ...style,
       }}
     />

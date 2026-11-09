@@ -29,6 +29,7 @@ const txnMutationRestrictions = [
   { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
   { object: 'api', property: 'widenRuleRange', message: 'Use txnMutations.widenRuleRange so derived counts get invalidated.' },
   { object: 'api', property: 'updateRule', message: 'Use txnMutations.updateRule so derived counts get invalidated.' },
+  { object: 'api', property: 'deleteRule', message: 'Use txnMutations.deleteRule so derived counts get invalidated.' },
   { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
   { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
   { object: 'api', property: 'createTransaction', message: 'Use txnMutations.createTransaction so derived views get invalidated.' },
