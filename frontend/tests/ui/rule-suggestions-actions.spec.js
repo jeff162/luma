@@ -156,6 +156,11 @@ test('edits made on a card in place are what saving it sends', async ({ page, re
 })
 
 test('narrowing a pending suggestion’s criteria splits it into the matched rows and the rest, creating no rule', async ({ page, request }) => {
+  // The demo's gas bills are seasonal and dated from today, so how many reach $100 depends on the date.
+  const gas = await rowsFor(request, 'Northgate Gas')
+  const atLeast100 = gas.filter(row => Math.abs(row.amount) >= 100).length
+  expect(atLeast100).toBeGreaterThan(0)
+  expect(atLeast100).toBeLessThan(gas.length)
   await openReview(page)
   await card(page, 'Northgate Gas').getByRole('button', { name: 'Open Rule Editor' }).click()
   await page.getByRole('button', { name: '＋ Amount' }).click()
@@ -165,9 +170,9 @@ test('narrowing a pending suggestion’s criteria splits it into the matched row
   const cards = card(page, 'Northgate Gas')
   await expect(cards).toHaveCount(2)
   const refined = cards.filter({ hasText: 'at least $100.00' })
-  await expect(refined).toContainText('4 matching rows')
+  await expect(refined).toContainText(new RegExp(`(?<!\\d)${atLeast100} matching rows?\\b`))
   await expect(refined.getByRole('button', { name: 'Edit selection criteria' })).toBeVisible()
-  await expect(cards.filter({ hasNotText: 'at least $100.00' })).toContainText('10 matching rows')
+  await expect(cards.filter({ hasNotText: 'at least $100.00' })).toContainText(new RegExp(`(?<!\\d)${gas.length - atLeast100} matching rows?\\b`))
   expect(await ruleFor(request, 'northgate gas')).toBeNull()
 })
 

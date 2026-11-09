@@ -1482,8 +1482,10 @@ export function Badge({ label, toneKey, markerKind = 'category', className }) {
 //
 // So: keep them, and make it visible that they are not the answer yet. Dimmed, non-interactive (a click on
 // a stale bar would drill into figures that are about to change), and `aria-busy` for anyone not seeing
-// the dimming. It gates on `useBusyIndicator`, so a reload quick enough to be imperceptible does not dim
-// at all — otherwise this would reintroduce the flicker it exists to replace, in a subtler form.
+// the dimming. The dimming gates on `useBusyIndicator`, so a reload quick enough to be imperceptible does
+// not dim at all — otherwise this would reintroduce the flicker it exists to replace, in a subtler form.
+// Clicks follow `refreshing` instead: the indicator's minimum display outlasts the reload, and a chart
+// whose new figures are already drawn must not ignore a click (`transient-failures.md` entry 3).
 export function StaleWhileRefreshing({ refreshing, children, style }) {
   const stale = useBusyIndicator(refreshing)
   return (
@@ -1494,7 +1496,7 @@ export function StaleWhileRefreshing({ refreshing, children, style }) {
         // Fading in both directions: an instant jump between opacities is its own flicker, and the fade
         // out doubles as the "it's current now" signal.
         transition: 'opacity 160ms ease',
-        pointerEvents: stale ? 'none' : undefined,
+        pointerEvents: refreshing ? 'none' : undefined,
         ...style,
       }}
     >

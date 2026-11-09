@@ -150,6 +150,10 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   `~/.cache/ms-playwright/chromium-*` binary as `executablePath`, since the build number in that path
   changes with each Playwright update.
 
+- Judge a run by its exit status, not by its pass count. Vitest exits 1 when it catches unhandled
+  errors even though every test passes, and prints them apart from the counts, so a missing provider
+  mock reads as "1838 passed" and still fails CI.
+
 - Investigate a red run before re-running it, because a green re-run destroys the state that explained
   it. The gate writes every run to `data/check-logs/` and prints the path, and keeps a failed browser
   run's screenshots, videos and traces in `data/check-logs/last-browser-failure/`; check the failure

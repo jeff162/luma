@@ -98,75 +98,63 @@ say so directly: an inverted pair with ascending rowids is that, and nothing els
 
 ## 3. A click on a same-span trend bar does not navigate
 
-**Status: fixed in the test (2026-10-25). Sunset: 2026-11-22.** Before the fix it fired in roughly one full
-browser run in four, so a month of the suite's usual few runs a week would almost certainly have shown it
-again. If it has not fired by then, delete this entry and the diagnostics in the spec
-(`instrumentTrendClick`, `trendClickReport`), and add the lesson to `agent-profile.md` → *Writing a test*:
-after a chart or a list re-renders with new data, wait for the new content to replace the old rather than
-for the request.
+**Status: fixed in the product (2026-11-09). Sunset: 2026-12-07.** The chart was still dimmed as stale
+when the test clicked, and a dimmed chart ignored pointer events (below). The cause was read from the
+evidence but not reproduced on demand, so the sunset stands in for that: four failures in about two weeks
+of runs means four quiet weeks would almost certainly have shown it again. If it has not fired by then,
+delete this entry and the spec's diagnostics (`instrumentTrendClick`, `trendClickReport`), drop the entry
+reference in `StaleWhileRefreshing`'s comment, and add the lesson below to `agent-profile.md`.
 
-**Last seen: 2026-10-25.**
+**Last seen: 2026-11-09.**
 
 ### Symptom
 
 `frontend/tests/ui/dashboard.spec.js` → *single-period trend keeps its grain chooser through bar clicks
 and compares exact spans* fails at the first bar click: the trend's chooser has just been switched to
 *Same span each month* under *Month to date*, the test clicks in the column of the oldest plot bar, and
-`← Back to Month to date` never appears in 20 seconds. The failing run took 23.2s against ~3.5s for a
-passing one, in a full browser run on 7 workers. Once in three full runs that day; it has passed in every
-run since.
+`← Back to Month to date` never appears in 20 seconds. A failing run takes about 25s against ~3.5s for a
+passing one. Seen in full browser runs on 7 workers; it has not failed when the spec runs alone.
 
-### Evidence
+### Cause
 
-The screenshot, video and trace were lost: the suite was re-run before they were read, and Playwright
-empties `test-results/` at the start of every run. What was noted from the screenshot first:
+`StaleWhileRefreshing` (`components/ui.jsx`) dims the trend and sets `pointer-events: none` while
+`computedTrend` is null, through `useBusyIndicator`. That hook shows its state only after 150ms of
+loading, then holds it for at least 400ms, so the chart can stay non-interactive for up to 400ms after the
+new data has rendered. Switching to same span clears the trend for about 200ms, long enough for the dim to
+show, and the test clicks about 400ms after the response, at the edge of that hold. A click inside the
+window reaches the card behind the chart and does nothing.
 
-- the chooser read *Same span each month*, so the switch had happened;
-- the pointer sat over the oldest plot bar (Sep 2025), with recharts' hover band drawn;
-- the tooltip read "Sep 1 – Sep 17, 2025 · Spending: $58.90", which is same-span data, so by the time of
-  the screenshot the new buckets had rendered;
-- there was no back-step button, so the click never re-pinned the period.
+This affects people too: a click on the trend within 400ms of it redrawing is ignored, with nothing to say
+why. The dimming is right to linger, because removing it sooner would flicker. Blocking clicks is only
+needed while the figures are actually loading, so `pointer-events` now follows `refreshing` rather than
+the delayed `stale` state. The test is unchanged: it already waits for the same-span chart to replace the
+monthly one, which means the data is current.
 
-A second occurrence (2026-10-25, a full run on 7 workers; it passed in the next full run and in nine
-repeats of the spec), and a third the same way later that day, failed one step earlier, before any
-click: `bar.scrollIntoViewIfNeeded()` reported the bar `firstPlotBar()` had returned as not stable and
-then not attached to the document. That bar was
-found by position (`nth(count / 2)`), so it was one of the bars on screen *before* the same-span
-response, and the chart replaced it while the test was scrolling to it. The click report below did not
-print, because it only covers failures from the click onward.
+### How it was found
 
-### What is suspected, and why it is not proven
+The fourth occurrence (2026-11-09, full run on 7 workers; the spec passed when re-run alone) printed:
 
-The test waits for the same-span *request* to be sent, not for its response, and then measures the bar
-and clicks. In a passing run the response lands about 220ms before the click, because finding the bar
-takes that long; a response slower than that lands between the measurement and the click, or after it.
-Two ways that loses the click, and the screenshot fits both:
+- the response at −400ms, the bar measured at −7ms, and the click at 0;
+- the measured bar still attached and the scroll unchanged (6px) from measurement to click, which ruled
+  out a redraw under the click;
+- no tooltip showing, and the click's target was a classless `DIV` outside `.recharts-wrapper`, even though
+  (372, 455) was inside the plot's box.
 
-- **The chart is redrawn under the press.** The response replaces the bucket set, and the pan
-  re-anchors on a new set (`Dashboard.jsx`, the `useLayoutEffect` keyed on `trendBucketsKey`), so the
-  mousedown and the mouseup can land on different nodes, or the click on a column the press was not on.
-- **recharts reports nothing active at the click.** The trend's click reads the hover state, not the
-  click position (`lib/chartInteraction.js`), and a click with no active index is ignored. A click in the
-  same frame as a redraw can find that state reset.
+That combination fit neither earlier theory. The Playwright trace's DOM snapshot at the click, rebuilt
+and hit-tested at the test's 1280×720 viewport, showed the plot's container carrying `opacity: 0.45;
+pointer-events: none`, so the point resolved to the card behind it.
 
-The test now waits for the same-span response and then for a bar from the monthly chart to leave the
-page before it finds one, so the first way cannot recur: the chart it measures and clicks has finished
-redrawing. That wait cannot hide the second, which would be a defect a person can hit: a click ignored on
-a settled chart still fails, and the report below says so.
+Earlier occurrences (three on 2026-10-25) were read as a race between the same-span response and the
+click. Two of them failed while scrolling to a bar the redraw had replaced. The test was changed to wait
+for the response and for the monthly chart to leave, which fixed that failure. It also moved the click
+later, closer to the end of the dim's 400ms hold.
 
-### What the next occurrence will say
+### Lesson for `agent-profile.md` when this entry closes
 
-`instrumentTrendClick` in the spec records, on the page's clock, every summary request and when it settled,
-and for each mousedown, mouseup and click: the element under the pointer, whether it was inside the chart,
-the bar count, **whether the bar the test measured is still in the document**, the plot's scroll offset,
-and **the tooltip recharts was showing**. The failure prints all of it from the switch to same span
-onward, timed against the bar's mousedown, with the chooser and the date chip as they stand.
-
-- A range-trend response between *bar measured* and the mousedown, the measured bar detached, or a scroll
-  offset that moved: the chart was redrawn under the click, which the wait above should now prevent, so
-  look first at what else redraws the chart.
-- The measured bar still attached, the scroll unchanged, and no tooltip showing at the click: recharts
-  dropped a click on a settled chart. That is a product defect.
+A click that lands outside the element it aimed at, on a settled page, points to something that disabled
+or covered the target: check `pointer-events` and overlays before looking for timing. A Playwright trace
+keeps a DOM snapshot of each action, so the page at the moment of a failed click can be rebuilt and
+hit-tested after the run.
 
 ---
 

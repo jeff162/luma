@@ -18,6 +18,11 @@ import userEvent from '@testing-library/user-event'
 import ReimbursementPanel from '../ReimbursementPanel.jsx'
 import { api } from '../../lib/api.js'
 
+vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
+  const { useState } = await import('react')
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+})
+
 vi.mock('../../lib/api.js', () => ({
   api: {
     getTransactionReimbursement: vi.fn(),
