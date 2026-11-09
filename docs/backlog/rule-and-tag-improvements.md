@@ -9,9 +9,12 @@ One-offs too small for their own file:
   my copy, keep the inherited one".
 - **A rule option that stops lower rules from applying**, as mail filters have, so one rule can fully
   govern the transactions it matches.
+- **Whether saving a rule overrides hand-set categories.** *Apply to existing* in the rule editor
+  recategorizes every match, including rows categorized by hand. A decision is owed on whether it should
+  spare them by default and let them be opted in one by one from the affected-transactions report.
 
-**Where it stands:** ideas, not started. When an entry grows into a project, give it its own file; when
-it ships, delete the entry.
+**Where it stands:** ideas, not started; the hand-set categories entry needs a decision first. When an
+entry grows into a project, give it its own file; when it ships, delete the entry.
 
 ## Showing every source of a transaction's tag
 
@@ -50,3 +53,38 @@ ranked below it contribute nothing to that transaction.
   (`recurring_detection._candidate_members`).
 - The checkup's outcome test (`rule_overlaps._outcomes_agree`) would change: with a stopping rule in a
   pair, tags and a rename that only one side carries would depend on which rule wins.
+
+## Whether saving a rule overrides hand-set categories
+
+**Decision owed.** Saving a rule with *Apply to existing* ticked, from the Rules page, the rule toast's
+editor or the rule action dialog, calls the full-force apply (`_apply_rule_to_existing` with
+`preserve_manual=False`, `routers/rules.py`). It recategorizes every matching row, including a row whose
+category was set by hand (`category_source = 'manual'`). Every other path a rule reaches existing rows
+by spares those rows: rules running on import and sync, a merge or replace, widening a rule's amount
+range, and accepting a suggestion on the review page. Split transactions keep their categories under
+both modes.
+
+So the editor's *Transactions affected by this rule* report (`RulePreviewDialog`) lists hand-set rows,
+and categorizing one of them by hand from the report does not take it out of the list, because the
+apply would still change it.
+
+Sometimes overriding hand-set categories is the point: a rule written to correct a merchant that was
+categorized by hand inconsistently. Sometimes it is not: a few deliberate exceptions should survive.
+
+**The user's idea.** Spare hand-set rows by default (`preserve_manual=True`). The affected-transactions
+report also lists the hand-set matches the apply would skip, with a checkbox on each to include it, so
+correcting earlier hand edits is a deliberate, row-by-row choice.
+
+**What it would touch.**
+
+- The preview endpoint the editor calls would report the spared hand-set rows separately from the rows
+  that would change, so the editor's "N would change" count and the report agree with what the apply
+  does.
+- The apply would take the ids opted in, on top of the gentle apply. `_apply_rule_to_existing` already
+  takes `txn_ids` to restrict an apply; one call could do the gentle apply and a second, full-force one
+  restricted to the opted-in rows.
+- The report needs a selection column on those rows. `TransactionListTable` has none today, so either it
+  gains one or the spared rows get a section of their own.
+- Every editor caller of `txnMutations.applyRule` changes together (`pages/Rules.jsx`,
+  `RuleSuggestionToast.jsx`, `RuleActionModal.jsx`), along with the help text that describes *Apply to
+  existing*.
