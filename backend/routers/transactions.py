@@ -1122,6 +1122,34 @@ def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple
     return where, params, expand_splits, ", ".join(order_by_parts)
 
 
+def transaction_ids_matching(conn, txn_ids, *, facets, filters: dict) -> set[str]:
+    """Which of `txn_ids` the list feed would show under these filters.
+
+    For a surface that lists something other than transactions but is narrowed by the FilterBar, so it
+    reads the filters exactly as the ledger does — split parts under a category scope included — rather
+    than restating them. A trashed row never matches.
+    """
+    txn_ids = list(dict.fromkeys(txn_ids))
+    if not txn_ids:
+        return set()
+    where, params, expand_splits, _ = transaction_list_scope(
+        facets=facets, sort_by=None, sort_dir=None, filters={**filters, "ids": ",".join(txn_ids)},
+    )
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT t.id
+        FROM {txn_effective_sql(conn, expand=expand_splits)} t
+        JOIN account a ON a.id = t.account_id
+        LEFT JOIN account p ON p.id = a.parent_account_id
+        LEFT JOIN category c ON c.id = t.category_id
+        LEFT JOIN category pc ON pc.id = c.parent_id
+        {where}
+        """,
+        params,
+    ).fetchall()
+    return {row["id"] for row in rows}
+
+
 @router.get("")
 def list_transactions(
     month:        Optional[str] = Query(None, description="YYYY-MM"),

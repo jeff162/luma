@@ -1319,6 +1319,33 @@ def outstanding(conn: sqlite3.Connection) -> dict:
     }
 
 
+def _filter_members(record: dict) -> list[dict]:
+    """The members a filter is tested against: the expense side, whose debt it is, or the repayments of a
+    record that has no expense yet. Testing every member would let "not Jeff" keep Jeff's debt whenever
+    the repayment landed in a shared account."""
+    members = [member for member in record.get("members", []) if not member.get("trashed")]
+    expenses = [member for member in members if member.get("claim", 0) > 0]
+    return expenses or members
+
+
+def entry_txn_ids(report: dict) -> list[str]:
+    """Every transaction a filter has to be tested against to mark the report's entries."""
+    ids = [member["txn_id"] for record in report["reimbursements"] for member in _filter_members(record)]
+    return ids + [row["txn_id"] for row in report["loose"]]
+
+
+def mark_filter_matches(report: dict, matched: set[str]) -> None:
+    """Mark each entry with whether it matches the FilterBar, given the transactions that do.
+
+    A record matches when one of its `_filter_members` does; a loose row when it does itself.
+    """
+    report["filtered"] = True
+    for record in report["reimbursements"]:
+        record["matches_filter"] = any(member["txn_id"] in matched for member in _filter_members(record))
+    for row in report["loose"]:
+        row["matches_filter"] = row["txn_id"] in matched
+
+
 # ---------------------------------------------------------------------------
 # Reminders that have come due
 # ---------------------------------------------------------------------------

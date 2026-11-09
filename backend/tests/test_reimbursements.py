@@ -1242,6 +1242,84 @@ class ReminderOwnerTests(ReimbursementTestCase):
         self.assertEqual([g["owner_id"] for g in groups], [UNASSIGNED_OWNER])
 
 
+class OutstandingFilterTests(unittest.TestCase):
+    """The FilterBar marks the report's entries rather than removing them, reading the filters as the
+    ledger does. A record is tested on its expense side, since that is whose debt it is."""
+
+    def _seed(self, path):
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        alex, robin = str(uuid.uuid4()), str(uuid.uuid4())
+        conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Alex')", (alex,))
+        conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Robin')", (robin,))
+        account = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO account (id, external_account_id, provider, name, display_name, type, "
+            "subtype, mask, owner_id) VALUES (?,?,'fixture_reimb_filter','Everyday','Everyday',"
+            "'checking','checking','0000',?)",
+            (account, f"acct_{account}", SHARED_OWNER_ID),
+        )
+        receivable_group = conn.execute(
+            "SELECT id FROM category WHERE system_key = ?", (REIMBURSABLE_SYSTEM_KEY,)
+        ).fetchone()["id"]
+        receivable = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals, sort_order) "
+            "VALUES (?,?,'Awaiting reimbursement','expense',1,0)",
+            (receivable, receivable_group),
+        )
+
+        def txn(owner, amount, date):
+            txn_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, "
+                "display_name, raw_name, date, is_pending, category_overridden) "
+                "VALUES (?,?,?,?,?,'Tickets','Tickets','Tickets',?,0,0)",
+                (txn_id, account, owner, receivable, amount, date),
+            )
+            return txn_id
+
+        seeded = {
+            "alex": alex, "robin": robin,
+            "expense": txn(alex, 375.0, "2026-02-14"),
+            "repayment": txn(robin, -100.0, "2026-03-01"),
+            "loose": txn(robin, 60.0, "2026-05-20"),
+        }
+        conn.commit()
+        conn.close()
+        return seeded
+
+    def _report(self, client, **params):
+        response = client.get("/api/reimbursements/outstanding", params=params)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_entries_are_marked_by_the_filters_and_the_total_stays_whole(self):
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            created = client.post("/api/reimbursements", json={"claims": [
+                {"txn_id": seeded["expense"]}, {"txn_id": seeded["repayment"]},
+            ], "counterparty": "Dana"})
+            self.assertEqual(created.status_code, 200, created.text)
+
+            unfiltered = self._report(client)
+            self.assertNotIn("filtered", unfiltered)
+
+            # Robin's filter: the record is Alex's debt even though its repayment is on Robin's row.
+            robin = self._report(client, owner_ids=seeded["robin"])
+            self.assertTrue(robin["filtered"])
+            self.assertFalse(robin["reimbursements"][0]["matches_filter"])
+            self.assertTrue(robin["loose"][0]["matches_filter"])
+            self.assertEqual(robin["total"], unfiltered["total"])
+
+            not_alex = self._report(client, exclude_owner_ids=seeded["alex"])
+            self.assertFalse(not_alex["reimbursements"][0]["matches_filter"])
+
+            february = self._report(client, date_start="2026-02-01", date_end="2026-02-28")
+            self.assertTrue(february["reimbursements"][0]["matches_filter"])
+            self.assertFalse(february["loose"][0]["matches_filter"])
+
+
 class MoveClaimTests(ReimbursementTestCase):
     """Moving a portion between records — the path out of a row attached to the wrong reimbursement,
     which the ordinary picker cannot offer because it lists unclaimed money only."""

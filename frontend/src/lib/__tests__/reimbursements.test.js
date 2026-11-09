@@ -6,6 +6,7 @@ import {
   claimRemainder,
   matchCandidates,
   reimbursementBoard,
+  reimbursementListedCount,
   dropRefusal,
   claimOnRowSummary,
   reimbursementCardSummary,
@@ -764,5 +765,19 @@ describe('movableClaims', () => {
 
   it('skips a completed record, which has no work left to take from', () => {
     expect(movableClaims({ reimbursements: [target, { ...held, completed: true }] }, 'mine')).toHaveLength(0)
+  })
+})
+
+// The button counts what matches the page's filters, in both columns; with none set, everything.
+describe('reimbursementListedCount', () => {
+  const row = (txn_id, unclaimed, matches_filter) => ({ txn_id, date: '2026-08-01', unclaimed, matches_filter })
+
+  it('counts every entry when no filters are set', () => {
+    expect(reimbursementListedCount({ reimbursements: [], loose: [row('a', 10), row('b', -5)] })).toBe(2)
+  })
+
+  it('counts only the matching entries when filters are set', () => {
+    const report = { filtered: true, reimbursements: [], loose: [row('a', 10, true), row('b', 10, false), row('c', -5, false)] }
+    expect(reimbursementListedCount(report)).toBe(1)
   })
 })

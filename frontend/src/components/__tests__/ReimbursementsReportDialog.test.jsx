@@ -364,3 +364,34 @@ describe('owner chips', () => {
     expect([...labels.values()]).toEqual(['Alex', 'Sam Okafor', 'Sam Whitfield'])
   })
 })
+
+// The page's filters narrow the Expected side; the Received side stays whole so a repayment can still be
+// dragged onto what it repays, and Show everything drops the narrowing for the report alone.
+describe('the page filters', () => {
+  const MATCHING = { ...LOOSE, txn_id: 'm1', payee: 'Matching Dinner', matches_filter: true }
+  const OTHER = { ...LOOSE, txn_id: 'o1', payee: 'Other Person Dinner', matches_filter: false }
+  const PAYMENT = { txn_id: 'r1', date: '2026-09-01', payee: 'From Sam', unclaimed: -50, parts: [], matches_filter: false }
+  const FILTERS = { owner_ids: 'frances' }
+
+  function openFiltered() {
+    api.getOutstandingReimbursements.mockResolvedValue({
+      total: 190, filtered: true, reimbursements: [], loose: [MATCHING, OTHER, PAYMENT],
+    })
+    return render(
+      <StrictMode>
+        <ReimbursementsReportDialog categories={[]} filterParams={FILTERS} onClose={() => {}} />
+      </StrictMode>,
+    )
+  }
+
+  it('lists only matching expected rows, keeps every received row, and can show everything', async () => {
+    openFiltered()
+    expect(await screen.findByRole('button', { name: /Matching Dinner/ })).toBeTruthy()
+    expect(api.getOutstandingReimbursements).toHaveBeenCalledWith(FILTERS)
+    expect(screen.queryByRole('button', { name: /Other Person Dinner/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /From Sam/ })).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show everything' }))
+    expect(screen.getByRole('button', { name: /Other Person Dinner/ })).toBeTruthy()
+  })
+})

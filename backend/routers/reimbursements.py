@@ -30,10 +30,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.routers.transactions import transaction_ids_matching
+from backend.services.transaction_facets import AmountFilter, TransactionFacets, coerce_facets
 from backend.services.reimbursements import (
     DEFAULT_REMINDER_DAYS,
     MAX_REMINDER_DAYS,
@@ -43,7 +45,9 @@ from backend.services.reimbursements import (
     default_reminder_days,
     delete_reimbursement,
     due_reminders,
+    entry_txn_ids,
     get_reimbursement,
+    mark_filter_matches,
     move_claim,
     outstanding,
     remove_transaction,
@@ -120,11 +124,34 @@ def _guard(call):
 
 
 @router.get("/outstanding")
-def read_outstanding():
+def read_outstanding(
+    facets: TransactionFacets = Depends(),
+    amount: AmountFilter = Depends(),
+    date_start: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_end: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
     """Everything currently sitting in the holding group: the linked reimbursements, the loose rows that
-    belong to none yet, and the total — which equals the group's own balance."""
+    belong to none yet, and the total — which equals the group's own balance.
+
+    The FilterBar's filters do not remove anything: with any set, each entry is marked with whether it
+    matches (`mark_filter_matches`), so the report can narrow to them and still offer the rest. The total
+    stays the whole balance either way."""
+    facets = coerce_facets(facets)
+    filters = {
+        "date_start": date_start if isinstance(date_start, str) else None,
+        "date_end": date_end if isinstance(date_end, str) else None,
+        **(amount.as_params() if isinstance(amount, AmountFilter) else {}),
+    }
+    # The comparators carry defaults, so only the bounds and the side say an amount filter is set.
+    filtered = (bool(facets) and any(facets.as_params().values())) or any(
+        filters.get(key) is not None for key in ("date_start", "date_end", "direction", "amount_min", "amount_max")
+    )
     with get_db() as conn:
-        return outstanding(conn)
+        report = outstanding(conn)
+        if filtered:
+            matched = transaction_ids_matching(conn, entry_txn_ids(report), facets=facets, filters=filters)
+            mark_filter_matches(report, matched)
+        return report
 
 
 @router.get("/settings")

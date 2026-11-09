@@ -2793,6 +2793,12 @@ once finished the **completion record**.
   money in the group. A record adds a counterparty and the pairing that settling needs.
 - **Moving a claim between records releases and re-attaches in one transaction, in that order**, since
   the invariant counts claims across every record.
+- **The FilterBar marks entries; it never removes them.** `GET /reimbursements/outstanding` takes the
+  ledger's date, facet and amount filters and reads them through the list feed's own filter
+  (`transaction_ids_matching`). A record is tested against its expense members, or its repayments when it
+  has no expense, because that is whose debt it is; a loose row is tested itself. The total stays the
+  group's whole balance. The report narrows only the Expected side, so a repayment outside the filters
+  can still be paired.
 
 ### Settling and completing
 

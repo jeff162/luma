@@ -690,7 +690,12 @@ export const api = {
   // unclaimed, which is the whole answer for a row that is only in one reimbursement; it is stated only
   // where a row is divided between several.
   getTransactionReimbursement: (txnId) => request(`/transactions/${txnId}/reimbursement`),
-  getOutstandingReimbursements: () => request('/reimbursements/outstanding'),
+  // `filterParams` are the FilterBar's (date, chips, amount). They mark the entries that match rather than
+  // removing any, so the total stays the whole balance.
+  getOutstandingReimbursements: (filterParams = {}) => {
+    const q = new URLSearchParams(Object.entries(filterParams).filter(([, v]) => v != null && v !== '')).toString()
+    return request(`/reimbursements/outstanding${q ? `?${q}` : ''}`)
+  },
   getReimbursement:    (id)         => request(`/reimbursements/${id}`),
   createReimbursement: (body)       => request('/reimbursements', { method: 'POST', body: JSON.stringify(body) }),
   updateReimbursement: (id, body)   => request(`/reimbursements/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

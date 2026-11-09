@@ -606,7 +606,7 @@ export const HELP_TOPICS = [
         <p>
           The <strong>Reimbursements</strong> button at the top of the page brings up a list of the
           un-resolved reimbursable transactions so expenses and payments can be paired. The count on the
-          button is how many entries that list holds.
+          button and the list follow the filters set on the page.
         </p>
         <p>
           <strong>Tags</strong> opens the list of tags, where a tag is added, renamed, recolored or
@@ -1045,7 +1045,9 @@ export const HELP_TOPICS = [
         <p>
           Where more than one person is set up as an owner, each expected row starts with a chip naming
           whose account the expense is on (hovering it shows the full name), and the pills above the
-          columns narrow the <strong>Expected</strong> column to one person. <strong>Received</strong> is
+          columns narrow the <strong>Expected</strong> column to one person. The page&apos;s filters narrow
+          the <strong>Expected</strong> column too, tested against the expense rather than the repayment;
+          {' '}<strong>Show everything</strong> drops them for the list alone. <strong>Received</strong> is
           never narrowed, since a repayment can land on anyone&apos;s account.
         </p>
         <p>

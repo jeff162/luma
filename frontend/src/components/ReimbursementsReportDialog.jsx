@@ -53,11 +53,17 @@ import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointer
  * removable rather than silent, because a report that quietly hid most of its contents would be worse
  * than one that did not filter at all.
  *
+ * **The page's FilterBar narrows the Expected side too**, and *Show everything* drops that for the report
+ * alone: the dialog covers the bar, and a filter left set on the page would otherwise make the report
+ * read as though less were owed. The Received side stays whole so a repayment can still be paired.
+ *
  * A dialog rather than a page, following the Amazon reconciliation report it is modelled on: it is a
  * periodic review of a pile of work rather than a place to navigate to and dwell in.
  */
 export default function ReimbursementsReportDialog({
   categories, onAddCategory, onClose, onChanged,
+  // The page's FilterBar filters (date, chips, amount), sent as the transaction list takes them.
+  filterParams = null,
   // The Tasks deep link's narrowing. `ownerId` uses the same `unassigned` token the transaction list's
   // owner facet does, so the task's link and this filter name the same set.
   ownerId = null,
@@ -80,19 +86,21 @@ export default function ReimbursementsReportDialog({
   // state rather than a prop read straight through.
   const [owner, setOwner] = useState(ownerId)
   const [showDueOnly, setShowDueOnly] = useState(dueOnly)
+  const [narrowToFilters, setNarrowToFilters] = useState(true)
   const [savingDays, setSavingDays] = useState(false)
 
   const load = useCallback(() => {
     let cancelled = false
-    api.getOutstandingReimbursements()
+    api.getOutstandingReimbursements(filterParams || {})
       .then(result => { if (!cancelled) setReport(result) })
       .catch(err => { if (!cancelled) setError(err?.message || 'This report could not be loaded.') })
     return () => { cancelled = true }
-  }, [])
+  }, [filterParams])
 
   useEffect(load, [load])
 
-  const board = reimbursementBoard(report, { ownerId: owner, dueOnly: showDueOnly })
+  const filtersNarrow = narrowToFilters && !!report?.filtered
+  const board = reimbursementBoard(report, { ownerId: owner, dueOnly: showDueOnly, narrowToFilters: filtersNarrow })
   const reminderDays = report?.reminder_days || 0
   // Counted off the unfiltered report so the control can say what dropping the filter would reveal.
   const everything = reimbursementBoard(report)
@@ -293,7 +301,7 @@ export default function ReimbursementsReportDialog({
           {/* The narrowing a task's link arrived with, stated and removable. A report that quietly hid
               most of its rows would be worse than one that did not filter — the reader would be looking
               at a total that did not match the list under it. */}
-          {filtered > 0 || owner || showDueOnly ? (
+          {filtered > 0 || owner || showDueOnly || filtersNarrow ? (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
               fontSize: 12.5, padding: '6px 8px', borderRadius: 6,
@@ -301,21 +309,22 @@ export default function ReimbursementsReportDialog({
             }}>
               <span style={{ color: 'var(--muted)' }}>
                 Showing {showDueOnly ? 'what is due' : 'everything'}
+                {filtersNarrow ? ' matching the filters' : ''}
                 {ownerName ? ` on ${ownerName}'s accounts` : (owner ? ' on unassigned accounts' : '')}
                 {' '}&mdash; {formatMoneyMagnitude(Math.abs(shownTotal))} of the total above
                 {filtered > 0 ? ` · ${filtered} hidden` : ''}
               </span>
               <Button
                 variant="secondary"
-                onClick={() => { setOwner(null); setShowDueOnly(false) }}
-                disabled={!owner && !showDueOnly}
+                onClick={() => { setOwner(null); setShowDueOnly(false); setNarrowToFilters(false) }}
+                disabled={!owner && !showDueOnly && !filtersNarrow}
               >Show everything</Button>
             </div>
           ) : null}
 
           {!board.expenses.length && !board.income.length ? (
             <EmptyState message={
-              owner || showDueOnly
+              owner || showDueOnly || filtersNarrow
                 ? 'Nothing here matches that. Show everything to see the rest.'
                 : 'Nothing is waiting to come back.'
             } />

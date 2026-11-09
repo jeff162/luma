@@ -281,8 +281,10 @@ export function isRepaymentRow(unclaimed) {
  * A record whose only member is a repayment sits on the left with everything else: it is a record, and
  * what it is waiting for is an expense.
  */
-export function reimbursementBoard(report, { ownerId = null, dueOnly = false, today } = {}) {
+export function reimbursementBoard(report, { ownerId = null, dueOnly = false, narrowToFilters = false, today } = {}) {
   const reminderDays = report?.reminder_days || 0
+  // Whether an entry matches the page's FilterBar. The server marks entries only when filters are set.
+  const matchesFilters = marked => !report?.filtered || !!marked?.matches_filter
   const records = (report?.reimbursements || []).map(item => {
     const members = (item?.members || []).filter(member => !member?.trashed)
     const dates = members.map(member => member?.date).filter(Boolean).sort()
@@ -296,6 +298,7 @@ export function reimbursementBoard(report, { ownerId = null, dueOnly = false, to
       // owed. A repayment landing on someone else's account does not make the debt theirs.
       owners: ownersOf(members.filter(member => round2(member.claim) > 0)),
       dueOn: recordDueDate(item, reminderDays),
+      matchesFilters: matchesFilters(item),
     }
   })
   const loose = (report?.loose || []).map(row => ({
@@ -305,24 +308,27 @@ export function reimbursementBoard(report, { ownerId = null, dueOnly = false, to
     row,
     owners: ownersOf([row]),
     dueOn: looseDueDate(row, reminderDays),
+    matchesFilters: matchesFilters(row),
   }))
   const owed = loose.filter(entry => round2(entry.row.unclaimed) > 0)
   const paid = loose.filter(entry => round2(entry.row.unclaimed) < 0)
   const keep = entry => matchesOwner(entry, ownerId) && (!dueOnly || isDue(entry.dueOn, today))
+    && (!narrowToFilters || entry.matchesFilters)
   return {
     // The right-hand pile is money *in*, which is never due and belongs to nobody in particular for the
-    // purpose of chasing — narrowing it by the task's owner would hide the very repayments that could
-    // settle what the task is about.
+    // purpose of chasing — narrowing it by the task's owner or the page's filters would hide the very
+    // repayments that could settle what is listed on the left.
     expenses: byDateDescending([...records, ...owed].filter(keep)),
     income: byDateDescending(paid),
   }
 }
 
-// How many entries the report dialog lists, both columns, unfiltered. Counted off the board rather than
-// the raw report so the figure on the button is the number of rows the dialog opens to.
+// How many entries in both columns match the page's filters (all of them when none are set), for the
+// button that opens the report. Counted off the board rather than the raw report so it counts the rows
+// the dialog lists.
 export function reimbursementListedCount(report) {
   const board = reimbursementBoard(report)
-  return board.expenses.length + board.income.length
+  return [...board.expenses, ...board.income].filter(entry => entry.matchesFilters).length
 }
 
 /*

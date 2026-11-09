@@ -120,7 +120,6 @@ export default function Transactions() {
   const [tagsOpen, setTagsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const storedDocuments = useStoredDocuments()
-  const reimbursements = useReimbursementCount()
   // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
   // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
   // rather than being applied here: the report owns what its filters mean.
@@ -218,14 +217,20 @@ export default function Transactions() {
   // Bulk edit. The filter params below mirror the list fetch exactly so "select all matching" resolves
   // the same rows server-side. The ledger is the paginated source of truth, so Apply re-fetches (via
   // onReload) rather than patching rows in place.
+  // The FilterBar's part of the list's filters (date, chips, amount), which the reimbursements count and
+  // report are narrowed by as well. The chip row becomes parameters through the shared facet registry
+  // (lib/filterParams.js), so a bulk "select all matching" resolves the exact same rows the list shows
+  // (exclusions and all).
+  const filterBarParams = useMemo(() => ({
+    date_start: getRawDate()?.start || undefined,
+    date_end: getRawDate()?.end || undefined,
+    ...selectionsToParams(filters.selections),
+    ...amountFilterParams(filters.amount),
+  }), [filters, getRawDate])
+  const reimbursements = useReimbursementCount(filterBarParams)
   const currentFilterParams = useMemo(() => {
-    // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), so a
-    // bulk "select all matching" resolves the exact same rows the list shows (exclusions and all).
-    const facetParams = selectionsToParams(filters.selections)
     return {
-      date_start: getRawDate()?.start || undefined,
-      date_end: getRawDate()?.end || undefined,
-      ...facetParams,
+      ...filterBarParams,
       // The toolbar filter rides the AND parameter rather than joining the facet's OR list: it is a
       // separate control, so setting it on top of a FilterBar attribute chip has to *narrow*. Folding
       // it into `attribute_ids` would OR the two, and a second filter that widens the result is the one
@@ -234,9 +239,8 @@ export default function Transactions() {
       // squatted on `category_id` and silently won.)
       require_all_attribute_ids: activeAttribute,
       quick_filter: debouncedQuickFilter || undefined,
-      ...amountFilterParams(filters.amount),
     }
-  }, [filters, getRawDate, activeAttribute, debouncedQuickFilter])
+  }, [filterBarParams, activeAttribute, debouncedQuickFilter])
 
 
   useEffect(() => {
@@ -1067,6 +1071,7 @@ export default function Transactions() {
           <ReimbursementsReportDialog
             categories={categories}
             onAddCategory={addCategory}
+            filterParams={filterBarParams}
             ownerId={reimbursementsDeepLink.ownerId}
             dueOnly={reimbursementsDeepLink.dueOnly}
             onClose={() => setReimbursementsOpen(false)}
