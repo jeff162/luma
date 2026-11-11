@@ -117,7 +117,6 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
       <FloatingDialog
         panelKey="ui.addTransaction.panel"
         title="Add a transaction"
-        description="For anything the app cannot see for itself — cash, a cheque, an account that is not connected."
         onClose={onClose}
         width={560}
         actions={
