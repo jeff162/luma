@@ -62,9 +62,10 @@ const ACCOUNT_ROW_GAP = 10
 const ACCOUNT_ROW_PADDING = '3px 10px'
 const ACCOUNT_CONTROL_HEIGHT = 22
 const ACCOUNT_DETACH_DROP_ZONE_WIDTH = 84
-// The account list is the only thing on its own tab now, so it isn't constrained to share a width with
-// the sparse Owners panel — give it modestly more room for long account names.
-const ACCOUNTS_SECTION_BASE_WIDTH = 720
+// The account list fills the content area up to a readable cap; the Name column takes the extra width.
+// The sparse Owners panel on the other tab keeps a fixed width, since more room only spreads it out.
+const ACCOUNTS_LIST_MAX_WIDTH = 960
+const OWNERS_PANEL_WIDTH = 720
 // In-page tabs (mirroring the Import page). The active tab is session-scoped: it sticks while the
 // app is open but resets to Accounts next launch (a within-session convenience, not a durable preference).
 const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners']]
@@ -72,11 +73,6 @@ const ACCOUNTS_TAB_STORAGE_KEY = 'luma.accounts.tab'
 const ACCOUNT_TYPE_ORDER = Object.fromEntries(ACCOUNT_TYPES.map((type, index) => [type.value, index]))
 const ACCOUNT_SORT_KEYS = ['name', 'type', 'owner']
 const DEFAULT_ACCOUNT_SORT_DIRECTIONS = { name: 'asc', type: 'asc', owner: 'asc' }
-const ACCOUNT_SECTION_DEFAULTS = {
-  accountList: false,
-  dataSources: false,
-  accountOwners: false,
-}
 
 
 // "Shared" only becomes an assignable owner when there are multiple personal owners; otherwise it would just duplicate the sole-owner default.
@@ -137,10 +133,6 @@ function getAccountsSortStorageKey(dbInstanceId, userId) {
 
 function isObjectLike(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function getSectionExpanded(sectionState, sectionKey) {
-  return sectionState?.[sectionKey] ?? ACCOUNT_SECTION_DEFAULTS[sectionKey] ?? true
 }
 
 function formatCountSummary(count, singular, plural = `${singular}s`) {
@@ -1512,8 +1504,6 @@ export default function Accounts() {
   const listRef = useRef(null)
   const accountsPanelRef = useRef(null)
   const initialSortSeedRef = useRef('')
-  const [accountsPanelWidth, setAccountsPanelWidth] = useState(ACCOUNTS_SECTION_BASE_WIDTH)
-  const sectionPanelWidth = accountsPanelWidth
 
   // Active in-page tab, session-scoped (sticks while the app is open, resets to Accounts next launch). A
   // `?tab=` query param (e.g. from a Tasks deep-link that targets a specific tab) takes precedence on arrival.
@@ -1781,27 +1771,6 @@ export default function Accounts() {
     applyAccountSort(sortKey, sortDir)
     initialSortSeedRef.current = seed
   }, [applyAccountSort, dbInstanceId, loading, sortDir, sortKey, sortLoaded, userId])
-
-  useEffect(() => {
-    if (!accountsPanelRef.current || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0]
-      if (!entry) return
-      const nextWidth = Math.round(entry.contentRect.width)
-      // A zero is the panel leaving, not the panel measuring. The observed element lives on the Accounts
-      // tab only, so switching to Owners unmounts it and the observer reports 0 on the way
-      // out — and this width is handed to the card on *that* tab, which would take it literally and
-      // render `width: 0px`, collapsing to their borders. Nothing that disappears has a width worth
-      // mirroring, so the last real measurement stands until a real one replaces it.
-      if (!nextWidth) return
-      if (!getSectionExpanded(sectionExpandedState, 'accountList') && accountsPanelWidth && nextWidth < accountsPanelWidth) return
-      // Mirror the table width into the lower cards so the page still reads as one
-      // anchored column even when account rows reflow or the create row appears.
-      setAccountsPanelWidth(nextWidth)
-    })
-    observer.observe(accountsPanelRef.current)
-    return () => observer.disconnect()
-  }, [accounts.length, accountsPanelWidth, loading, sectionExpandedState, showCreateAccount])
 
   function openCreateAccount() {
     setContextOpen(false)
@@ -2446,8 +2415,8 @@ export default function Accounts() {
                   account mutation, and swapping the whole list for a spinner each time moved everything
                   below it twice per edit. A reload holds the current list until the new one arrives. */}
               {loading && accounts.length === 0 ? <Spinner /> : (
-                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                  <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div ref={accountsPanelRef} style={{ position: 'relative', width: '100%', maxWidth: ACCOUNTS_LIST_MAX_WIDTH }}>
                     <SectionCard
                       summary={accountListSummary}
                       collapsible={false}
@@ -2468,7 +2437,18 @@ export default function Accounts() {
                           <span style={{ whiteSpace: 'nowrap' }}>{ownerWarning}</span>
                         </span>
                       ) : null}
-                      width={sectionPanelWidth}
+                      headerActions={rootAccounts.length > 0 ? (
+                        <Button
+                          size="compact"
+                          variant="secondary"
+                          pressed={tagsEditMode}
+                          onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
+                          title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
+                        >
+                          {tagsEditMode ? 'Done' : 'Edit tags'}
+                        </Button>
+                      ) : null}
+                      width="100%"
                       style={{ overflow: 'hidden', alignSelf: 'flex-start' }}
                     >
                       {rootAccounts.length === 0 && !showCreateAccount ? (
@@ -2527,25 +2507,14 @@ export default function Accounts() {
                                 },
                                 {
                                   key: 'tags',
+                                  label: 'Tags',
                                   sortable: false,
-                                  resizable: accountDividerDraggable('tags'),
-                                  draggable: false,
                                   cellPadding: 0,
                                   contentPadding: '0 9px',
-                                  render: () => (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: 0.3, textTransform: 'uppercase' }}>Tags</span>
-                                      <Button
-                                        size="compact"
-                                        variant="secondary"
-                                        pressed={tagsEditMode}
-                                        onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
-                                        title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
-                                      >
-                                        {tagsEditMode ? 'Done' : 'Edit tags'}
-                                      </Button>
-                                    </div>
-                                  ),
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: accountDividerDraggable('tags'),
+                                  draggable: false,
                                 },
                                 { key: 'actions', kind: 'spacer', cellPadding: 0 },
                               ]}
@@ -2734,7 +2703,7 @@ export default function Accounts() {
               onDeleteOwner={owner => setPendingOwnerDelete(owner)}
               onError={showAsyncNotice}
               disabled={showCreateAccount}
-              width={sectionPanelWidth}
+              width={OWNERS_PANEL_WIDTH}
               collapsible={false}
             />
           )}
