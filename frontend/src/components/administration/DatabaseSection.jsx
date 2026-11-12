@@ -263,7 +263,8 @@ export default function DatabaseSection({ db, storage, onStorageChanged }) {
             a decision regarding duplicates and to allow importing rows which were rejected or skipped.
           </p>
           <p style={{ margin: 0 }}>
-            <strong>Free up import space</strong> clears this record. Transactions are unaffected
+            <strong>Show import space&hellip;</strong> lists what each import holds, and <strong>Clear
+            detail</strong> there clears it. Transactions are unaffected
             and the affected Import Records are flagged as cleared in the history. After freeing the space,
             duplicate decisions cannot be revisited nor can skipped or rejected rows be imported without
             re-importing the original file.

@@ -124,12 +124,12 @@ export const HELP_SECTIONS = [
   {
     key: 'administration',
     label: 'Server',
-    blurb: 'Running the installation: how it starts and who can reach it.',
+    blurb: 'Running the installation: how it starts, who can reach it, and keeping its databases in order.',
   },
   {
     key: 'general-concepts',
     label: 'General concepts',
-    blurb: `What holds for the whole ledger rather than one page: the single currency, where the data lives and how it is backed up, and who can reach it.`,
+    blurb: `What holds for the whole ledger rather than one page: the single currency, how the data is backed up, and who can reach it.`,
   },
 ]
 
@@ -157,7 +157,7 @@ export const HELP_TOPICS = [
             All of the data remains local unless it is moved somewhere else; {APP_NAME} never makes an
             outgoing connection unless specifically requested (e.g. downloading transactions from a data
             provider, storing a backup on a cloud service). Where the data sits and how to keep a copy of
-            it are covered in <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+            it are covered in <HelpLink to="/help/backup-restore">Backup / Restore</HelpLink>.
           </li>
           <li>
             Amounts are all in one currency, chosen once for the whole ledger &mdash;
@@ -610,9 +610,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           <strong>Tags</strong> opens the list of tags, where a tag is added, renamed, recolored or
-          deleted (see <HelpLink to="/help/tags">how tags work</HelpLink>). <strong>Export&hellip;</strong>{' '}
-          writes transactions to a CSV file (see{' '}
-          <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>).
+          deleted (see <HelpLink to="/help/tags">how tags work</HelpLink>).
         </p>
         <h4>Markers on a row</h4>
         <p>
@@ -1252,7 +1250,7 @@ export const HELP_TOPICS = [
           Attached files are stored as individual files in a directory next to the database file rather
           than inside the database. Attachments are included in backups along with the transactions that
           reference them -- so a backup taken after attaching a receipt contains the receipt. See{' '}
-          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+          <HelpLink to="/help/backup-restore">Backup / Restore</HelpLink>.
         </p>
       </>
     ),
@@ -2370,7 +2368,7 @@ export const HELP_TOPICS = [
             <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
             stored credential. Needed when a restore brings back a connection's credential without
             its accounts, which is reported on the <strong>Tasks</strong> page (see{' '}
-            <HelpLink to="/help/data-and-backups#restoring">restoring a backup</HelpLink>).
+            <HelpLink to="/help/backup-restore#restoring">restoring a backup</HelpLink>).
           </li>
           <li>
             <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
@@ -2622,22 +2620,23 @@ export const HELP_TOPICS = [
     id: 'csv-export',
     section: 'transactions',
     title: 'Exporting transactions to CSV',
-    surfaces: ['Transactions (Export…)', 'Copy transactions (Download CSV)'],
+    surfaces: ['CSV export (Settings)', 'Copy transactions (Download CSV)'],
     summary: 'A CSV export writes the transactions matching a filter, with the chosen columns, in roughly the shape they were imported. It is not a backup: splits, tags, rules and attachments stay behind.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          <strong>Export&hellip;</strong> on the Transactions page writes the transactions matching a
-          filter to a CSV file, one row per transaction, with the columns ticked below the filter. The
-          filter starts as a copy of the page&apos;s own, and changing it leaves the page as it was. With
-          no filter set, every transaction is written. For a list too large to copy, the{' '}
-          <strong>Copy transactions</strong> dialog offers the same file as <strong>Download CSV</strong>.
+          <strong>CSV export</strong> on the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page
+          writes the transactions matching a filter to a CSV file, one row per transaction, with the
+          columns ticked below the filter. The filter starts as a copy of the one set on the Transactions
+          page, and changing it leaves that one as it was. With no filter set, every transaction is
+          written. For a list too large to copy, the <strong>Copy transactions</strong> dialog on the
+          Transactions page offers the same file as <strong>Download CSV</strong>.
         </p>
         <p>
           A CSV export gives the data back roughly as it was imported, with some of the work done since
           &mdash; renames, categories, notes. It cannot carry all of it, and is not a way to move or keep
-          the data: a <HelpLink to="/help/data-and-backups">backup</HelpLink> is.
+          the data: a <HelpLink to="/help/backup-restore">backup</HelpLink> is.
         </p>
         <p>
           Text starting with <code>=</code>, <code>+</code>, <code>-</code> or <code>@</code> is written
@@ -3184,7 +3183,7 @@ export const HELP_TOPICS = [
         <p>
           Each order also carries the text of the charge it is paired with, shown as <strong>Card
             charge</strong> in its origin detail. A rule with <strong>Also match the original / source
-            statement text</strong> on, say for <em>Kindle Svcs</em>, therefore categorizes the orders paid
+              statement text</strong> on, say for <em>Kindle Svcs</em>, therefore categorizes the orders paid
           through that service, including ones whose charge is paired later. Unpairing a charge takes its
           text off the order.
         </p>
@@ -3243,7 +3242,7 @@ export const HELP_TOPICS = [
           An order that names no card, such as a digital order, only matches a charge that reads as Amazon
           (<em>AMZN</em> or <em>AMAZON</em>, or the names Amazon bills its own services under: <em>Prime
             Video</em>, <em>Kindle</em> and <em>Audible</em>). One paid through PayPal lands in <strong>No charge
-            found</strong> and is linked by hand.
+              found</strong> and is linked by hand.
         </p>
 
         <h4>Several rows at once</h4>
@@ -3745,7 +3744,11 @@ export const HELP_TOPICS = [
           <li>
             <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
             encrypted to a backup key, and is where the backup encryption keys are kept. Administrators
-            only. See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+            only. See <HelpLink to="/help/backup-restore">Backup / Restore</HelpLink>.
+          </li>
+          <li>
+            <strong>CSV export</strong> writes transactions to a CSV file.
+            See <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>.
           </li>
           <li>
             <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
@@ -3806,16 +3809,9 @@ export const HELP_TOPICS = [
             opened.
           </li>
           <li>
-            *needs review* <strong>Database</strong> checks both database files for damage, shows the space each one
-            uses table by table, and gives space back. <strong>Compact now</strong> returns the free
-            space inside the data file to the disk. <strong>Import storage</strong> clears the record
-            each import keeps of every row it did not bring in: the duplicates it caught, matches against
-            another source, what an enrichment changed, and the rows it rejected. That record is often the
-            largest part of the database, and every backup carries it. Clearing it leaves the imported
-            transactions alone, and each import stays in the import history, marked as cleared. Its
-            refused rows can no longer be reviewed, imported anyway or used to undo an enrichment, and a
-            transaction it removed as a duplicate moves to Settings → Trash. Clearing cannot be undone.
-            See <HelpLink to="/help/data-and-backups#checking">checking the databases</HelpLink>.
+            <strong>Database Maintenance</strong> checks the database files for damage, gives back
+            space they no longer need, and clears the record each import keeps of the rows it did not
+            bring in. See <HelpLink to="/help/database-maintenance">database maintenance</HelpLink>.
           </li>
         </ul>
         <HelpHeading anchor="about">About</HelpHeading>
@@ -4123,6 +4119,43 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'database-maintenance',
+    section: 'administration',
+    title: 'Database maintenance',
+    surfaces: ['Database Maintenance (Settings)'],
+    summary: 'The database files can be checked for damage, and space they no longer need given back, from Settings.',
+    body: () => (
+      <>
+        <p>
+          {APP_NAME} stores data in two database files: data.db is the default location for the ledger and
+          control.db holds users, settings and security information. Documents are stored in the documents
+          directory which lives next to the databases. <strong>Startup configuration</strong> on the
+          Settings page lists these locations and indicates whether the names have been overridden.
+        </p>
+        <HelpHeading anchor="checking">Checking the databases</HelpHeading>
+        <p>
+          <strong>Database Integrity</strong> runs an internal database integrity check to ensure
+          that the databases are error free. It also verifies that the documents in the document directory
+          are readable. The same checks run as part of a backup or restore.
+        </p>
+        <HelpHeading anchor="space">Space used</HelpHeading>
+        <p>
+          Free space in the database is created when transactions and other items are deleted. This
+          space gets reused before the database grows or it can be manually freed
+          with <strong>Compact now</strong>. Large deletions trigger a compaction automatically.
+        </p>
+        <HelpHeading anchor="import-storage">Excess import storage</HelpHeading>
+        <p>
+          Imports retain rows which were not added to the ledger so a decision regarding duplicates can be
+          revisited and a skipped or rejected row imported later. Depending on the pattern of imports this
+          may be a significant amount of space and it is carried in the
+          backup. <strong>Show import space&hellip;</strong> lists what each import holds, and <strong>Clear
+            detail</strong> there returns the space when it is no longer needed for the selected import files.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'single-currency',
     section: 'general-concepts',
     title: 'Single-currency support',
@@ -4156,52 +4189,46 @@ export const HELP_TOPICS = [
     ),
   },
   {
-    id: 'data-and-backups',
+    id: 'backup-restore',
     section: 'general-concepts',
-    title: 'Data on disk, and backups',
-    surfaces: ['Backup / Restore (Settings)', 'Database (Settings)'],
-    summary: `Transactions live in a plain-text database. Handle the file carefully if the data is considered sensitive.`,
+    title: 'Backup / Restore',
+    surfaces: ['Backup / Restore (Settings)'],
+    summary: 'Creating and restoring backups.',
     body: () => (
       <>
         <p>
-          There are two SQLite databases which store almost all of the data for {APP_NAME}.
-          Attachments are stored outside the databases in a documents directory next
-          to the data file.
-        </p>
-        <p>
-          Accounts, transactions, categories, tags are all stored in{' '}
-          <strong>plain text</strong> in the data.db file. Application settings, user
-          profiles, and other non-transaction related data is stored in the control.db file.
-          Secrets and credentials for accessing <HelpLink to="/help/data-providers">data
-            providers</HelpLink>{' '} are encrypted and are spread across both files.
-        </p><p>
-          Protection for the transaction data comes from the computer's security (disk encryption,
-          OS login, who can physically reach the machine, who has access to the network).
-          A sign-in password is available to restrict <em>network</em> access to {APP_NAME}.
-        </p>
-        <HelpHeading anchor="backups">Backups</HelpHeading>
-        <p>
           Backups are made and restored by an administrator, using <strong>Backup / Restore</strong> on
-          the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. Everything is included
-          in a backup, the restore process can select which of the following to restore:
+          the <HelpLink to="/help/page-settings#data">Settings</HelpLink> page. A backup holds everything,
+          in three parts which a restore can put back separately:
         </p>
         <ul>
           <li>
-            <strong>Ledger</strong> &mdash; categories, rules, owners, accounts,
-            transactions, attached documents and preferences. For data connections,
+            <strong>Ledger</strong> &mdash; accounts, owners, transactions, categories, tags, rules,
+            attached documents and preferences. This is the data.db file, stored in{' '}
+            <strong>plain text</strong>, and the documents directory next to it. For data connections,
             everything except the secret credential.
           </li>
           <li>
             <strong>Users &amp; security</strong> &mdash; the users, the sign-in settings, password hashes,
-            two-factor secrets, and the backup keys.
+            two-factor secrets, and the backup keys. This is the control.db file.
           </li>
           <li>
-            <strong>Data provider credentials</strong> &mdash; the stored
-            credential for each connection and the provider secrets, encrypted as they are in
-            the <HelpLink to="/help/credential-vault">vault</HelpLink>. This can be unlocked with
-            any user's vault unlock methods: passphrases, recovery codes and passkeys.
+            <strong>Data provider credentials</strong> &mdash; the stored credential for each connection
+            and the provider secrets, encrypted as they are in
+            the <HelpLink to="/help/credential-vault">vault</HelpLink>. The vault is spread across both
+            files and opens with its users' unlock methods (passphrases, recovery codes and passkeys),
+            which is why the credentials restore together with Users &amp; security.
           </li>
         </ul>
+        <p>
+          Protection for the transaction data comes from the computer's security (disk encryption,
+          OS login, who can physically reach the machine, who has access to the network).
+          A sign-in password is available to restrict <em>network</em> access to {APP_NAME}. An
+          unencrypted backup is as exposed as the database files;{' '}
+          <HelpLink to="/help/copied-database">if the database or a backup is copied</HelpLink> has
+          the steps.
+        </p>
+        <HelpHeading anchor="backups">Backups</HelpHeading>
         <p>
           The encrypted contents are only as hard to break into as the weakest unlock method. Recovery codes and
           passkeys are known to be strong, so they are always included. A backup that isn't encrypted omits any
@@ -4221,130 +4248,42 @@ export const HELP_TOPICS = [
           The private key needs to be kept somewhere safe, apart from the backup.
         </p>
         <HelpHeading anchor="restoring">Restoring a backup</HelpHeading>
-        <p>*needs review*</p>
         <p>
-          Generally the whole backup is restored. Selective restores are supported for use in
-          special circumstances such as moving the ledger but not the Users and Security information.
+          A restore operation starts by erasing the section being restored so following a restore all
+          that remains is what was in the backup. Data provider connections start syncing from the last
+          syncpoint recorded in the backup.
         </p>
-        <ul>
-          <li>
-            <strong>Users &amp; security</strong> removes users not in the backup and signs everyone out.
-            If the backup has sign-in turned on, the restore  asks for the username and password of
-            an administrator in the backup to ensure someone can sign in afterwards.
-          </li>
-          <li>
-            <strong>Data provider credentials</strong> &mdash; a connection the backup doesn't have loses
-            its credential and has to be reconnected.
-          </li>
-        </ul>
+        <HelpHeading anchor="partial-restore">Restoring part of a backup</HelpHeading>
         <p>
-          Restoring the ledger together with the data provider credentials leaves exactly the backup's
-          data connections. One that is only on this installation is removed and named in the result.
-          The next sync of each connection fetches what has arrived since the backup.
+          <strong>Ledger</strong> only replaces the accounts, transactions, categories, rules, documents
+          and preferences. Users, sign-in settings and the vault stay as they are. This is the choice when
+          moving a ledger onto an installation that already has its own users. For existing connections
+          not in the backup use <strong>Refresh accounts</strong> on the connection menu to restore the
+          accounts and re-fetch the transaction history. The old ledger may have contained transactions no
+          longer available in the history from the data provider. These will be lost. To preserve these,
+          consider a CSV export of the transactions before performing the restore.
         </p>
         <p>
-          Restoring the ledger without the credentials matches the data connections up:
+          <strong>Users &amp; security</strong> but not <strong>Data provider credentials</strong> retains
+          the existing vault, however only existing users who are in the backup will be able to open it
+          after the restore. If none of the existing users are in the backup, the vault is reset and the
+          connections need to be re-established.
         </p>
-        <ul>
-          <li>
-            A connection in both keeps its credential, and the next sync fetches what has arrived since
-            the backup.
-          </li>
-          <li>
-            A connection only in the backup has to be reconnected.
-          </li>
-          <li>
-            A connection only on this installation loses its list of accounts and its synced
-            transactions. <strong>Refresh accounts</strong> in the connection's menu fetches the list again.
-          </li>
-        </ul>
+        <HelpHeading anchor="older-credentials">Credentials in an older backup</HelpHeading>
         <p>
-          A ledger restore is refused while a data connection is syncing.
+          A restore will not bring back data provider credentials that may have been exposed.
+          After <strong>Replace vault key</strong>, <strong>Respond to an exposure</strong>, or a <strong>vault
+            reset</strong> <em>for a compromised passphrase</em>, earlier backups hold credentials that are no longer safe to
+          use. Restoring one of these skips these credentials and the connections will need to be
+          re-established.
         </p>
         <p>
-          <strong>Older backups:</strong>
-        </p>
-        <ul>
-          <li>
-            A backup made before <strong>Replace vault key</strong>, before the vault was rebuilt after a
-            passphrase was compromised, or before{' '}
-            <HelpLink to="/help/vault-settings#exposure">Respond to an exposure</HelpLink>, does not bring
-            back working data provider credentials.
-          </li>
-          <li>
-            After the vault was rebuilt for a forgotten passphrase, restoring an older backup's
-            credentials removes those of connections reconnected since. The confirmation names them.
-          </li>
-          <li>
-            A backup opens with the passphrases and recovery codes in use when it was made, so a replaced
-            one is worth keeping, with the date, for as long as that backup might be restored.
-          </li>
-        </ul>
-        <p>
-          After the ledger is restored, every earlier backup, including the one just restored, asks for
-          confirmation as if it came from another system. A backup made after the restore is the one to
-          rely on.
+          A vault reset <em>for a forgotten passphrase</em> is different. Nothing was exposed, so
+          restoring <strong>Users &amp; security</strong> restores the vault and the unlock methods in use
+          when the backup was made. The restore will identify any connections which had been updated since
+          the backup as they may need attention.
         </p>
 
-        <HelpHeading anchor="checking">Checking the databases</HelpHeading>
-        <p>*needs review*</p>
-        <p>
-          <strong>Database</strong> in the Server group of Settings checks both files for damage, for
-          rows that refer to rows that are gone, and that every attached document's file can be read. It
-          does not check that the data makes sense. The check also runs before every backup and after
-          every restore.
-        </p>
-        <ul>
-          <li>
-            Documents on the server need to be readable by the user which the server runs
-            as in order for a backup to be made. If the backup complains that there is a
-            problem, the Database maintenance screen may have more details or check
-            the permissions related to the documents on the server.
-          </li>
-          <li>
-            When the only problem is an index, <strong>Rebuild indexes</strong> repairs it without losing
-            anything.
-          </li>
-          <li>
-            Anything else is repaired from a backup. The section names the newest backup made from
-            databases that passed. A backup made from a damaged database may be missing rows.
-          </li>
-          <li>
-            A restore does not replace the files themselves, so damage to a file can remain afterwards,
-            and the restore says so. To start from clean files, stop {APP_NAME}, move its database files
-            aside (Startup configuration shows where they are), start it again and restore the backup.
-          </li>
-        </ul>
-
-        <HelpHeading anchor="credentials-restore-passphrase">Restoring an older credentials backup</HelpHeading>
-        <p>*needs review*</p>
-        <p>
-          Earlier versions made a separate credentials backup. It still restores, replacing only the
-          credentials, into a vault that exists here and is unlocked.
-        </p>
-        <ul>
-          <li>
-            On the installation that made it, nothing more is asked.
-          </li>
-          <li>
-            After the vault was rebuilt for a forgotten passphrase, or on a different installation, the
-            restore asks for an unlock method of the user who made the backup, as it was then: the
-            passphrase, the recovery code or a passkey. A passkey works only where the installation is
-            reached at the same name it was added at (for example <code>luma.local</code>), over HTTPS.
-          </li>
-          <li>
-            After <strong>Replace vault key</strong>, or a rebuild for a compromised passphrase, nothing is
-            restored, and the connections have to be reconnected.
-          </li>
-        </ul>
-
-        <HelpHeading anchor="exposed-files">If the database files are exposed</HelpHeading>
-        <p>
-          The transactions in the copy are exposed, and where there are data connections the
-          credentials in it are retired at their providers, even though they are encrypted.{' '}
-          <HelpLink to="/help/copied-database">If the database or a backup is copied</HelpLink> has the
-          steps.
-        </p>
       </>
     ),
   },
@@ -4383,7 +4322,7 @@ export const HELP_TOPICS = [
             Choose <strong>Replace vault key&hellip;</strong>.
           </li>
           <li>
-            Make a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>.
+            Make a new <HelpLink to="/help/backup-restore#backups">backup</HelpLink>.
           </li>
         </ol>
       </>
@@ -4404,7 +4343,7 @@ export const HELP_TOPICS = [
           set of administrative functions (users can be designated an administrator or not).
           All {APP_NAME} users see and edit the same data; there is no concept of some data
           being hidden from some users. See{' '}
-          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink> for
+          <HelpLink to="/help/backup-restore">Backup / Restore</HelpLink> for
           information on what needs to be protected on disk if that is of interest.
         </p>
         <p>

@@ -10,7 +10,7 @@ the logs.
 | Surface | What it holds |
 | --- | --- |
 | `README.md` → *Installing Luma*, *Running Luma as a server*, *Locked out* | the downloads, the Docker sequence, the password reset command |
-| Help → *Running Luma as a server*, *Configuration settings*, *Data on disk, and backups* | the Linux and Windows server sequences, each setting, backup and restore |
+| Help → *Running Luma as a server*, *Configuration settings*, *Backup / Restore*, *Database maintenance* | the Linux and Windows server sequences, each setting, backup and restore, the database check |
 | [`architecture.md`](architecture.md) → *Cross-platform approach* | the launcher as built: the bind and the URL, the lockfile, opening a browser, stopping, liveness, packaged-build roots |
 | [`security-model.md`](security-model.md) → *Transport security* | whether a topology may run over plain HTTP, and why the host name is load-bearing |
 | [`releasing.md`](releasing.md) | building the artifacts, and the packaging decisions |

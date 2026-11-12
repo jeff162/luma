@@ -35,7 +35,6 @@ import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
 import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import StoredDocumentsDialog from '../components/StoredDocumentsDialog.jsx'
 import TagsDialog from '../components/TagsDialog.jsx'
-import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx'
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import { useReimbursementCount } from '../lib/useReimbursementCount.js'
 import WindowedRows from '../components/WindowedRows.jsx'
@@ -118,7 +117,6 @@ export default function Transactions() {
   const [addingTransaction, setAddingTransaction] = useState(false)
   const [storedDocumentsOpen, setStoredDocumentsOpen] = useState(false)
   const [tagsOpen, setTagsOpen] = useState(false)
-  const [exportOpen, setExportOpen] = useState(false)
   const storedDocuments = useStoredDocuments()
   // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
   // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
@@ -744,7 +742,6 @@ export default function Transactions() {
             {storedDocuments.documents?.length ? `Stored documents (${storedDocuments.documents.length})` : 'Stored documents'}
           </Button>
           <Button variant="secondary" onClick={() => setTagsOpen(true)}>Tags</Button>
-          <Button variant="secondary" onClick={() => setExportOpen(true)}>Export…</Button>
           {/* The ledger is where someone notices a transaction is missing, so this is where adding one
               belongs — beside the list it will appear in, not parked in Settings. */}
           <Button variant="secondary" onClick={() => setAddingTransaction(true)}>+New</Button>
@@ -1064,8 +1061,6 @@ export default function Transactions() {
             }}
           />
         )}
-
-        {exportOpen && <ExportTransactionsDialog onClose={() => setExportOpen(false)} />}
 
         {reimbursementsOpen && (
           <ReimbursementsReportDialog

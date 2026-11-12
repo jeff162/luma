@@ -58,7 +58,7 @@ test('right-clicking a row dismisses the merchant hover instead of covering the 
 
 // The Export dialog opens on a copy of the page's filter. Two things only a browser shows: the filter
 // popover opens whole inside a dialog, and changing the copy leaves the page's own chips and list alone.
-test('the export dialog works on a copy of the page filter', async ({ page }) => {
+test('the CSV export works on a copy of the page filter', async ({ page }) => {
   const feed = await (await page.request.get('/api/transactions?limit=1')).json()
   const first = feed.transactions[0]
   const fragment = (first.display_name || first.merchant_name || first.raw_name).slice(0, 4).trim()
@@ -78,28 +78,22 @@ test('the export dialog works on a copy of the page filter', async ({ page }) =>
   await expect(countLabel).not.toHaveText(unfilteredCount)
   const filteredCount = await countLabel.textContent()
 
-  await page.getByRole('button', { name: 'Export…' }).click()
-  const dialog = page.locator('[data-modal-overlay]')
-  await expect(dialog.getByText(chipText)).toBeVisible()
+  // The export lives in Settings and starts from a copy of the shared filter, so the chip set here is
+  // already in place there, and clearing it there leaves this page's filter alone. Reached through the
+  // navigation rather than by URL, because a page load would drop the filter being copied.
+  await page.getByRole('link', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'CSV export' }).click()
+  const section = page.locator('section', { has: page.getByRole('heading', { name: 'CSV export' }) })
+  await expect(section.getByText(chipText)).toBeVisible()
 
   const download = page.waitForEvent('download')
-  await dialog.getByRole('button', { name: 'Export', exact: true }).click()
+  await section.getByRole('button', { name: 'Export', exact: true }).click()
   expect((await download).suggestedFilename()).toMatch(/\.csv$/)
-  await expect(dialog).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Export…' }).click()
-  await dialog.getByRole('button', { name: 'Clear all' }).click()
-  await expect(dialog.getByText(chipText)).toHaveCount(0)
-  // The category tree is the popover's tallest tab, and taller than the dialog's body. A popover placed
-  // inside that body is cut off at its edge; the tab row's parent is the popover itself.
-  await dialog.getByRole('button', { name: /Filters?/ }).click()
-  await dialog.getByRole('button', { name: 'Categories' }).click()
-  await expect(dialog.getByRole('button', { name: 'Categories' }).locator('xpath=../..')).toBeInViewport({ ratio: 1 })
-  // The open popover can sit over the dialog's footer, so it is closed before Cancel is reached.
-  await page.keyboard.press('Escape')
-  await expect(dialog.getByRole('button', { name: 'Categories' })).toHaveCount(0)
-  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await section.getByRole('button', { name: 'Clear all' }).click()
+  await expect(section.getByText(chipText)).toHaveCount(0)
 
+  await page.getByRole('link', { name: 'Transactions' }).click()
   await expect(pageChip).toHaveCount(1)
   await expect(countLabel).toHaveText(filteredCount)
 })

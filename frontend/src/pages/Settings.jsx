@@ -30,6 +30,7 @@ import { ServerCertificateSection } from '../components/ServerCertificate.jsx'
 import ConfigurationSection from '../components/administration/ConfigurationSection.jsx'
 import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
 import DatabaseSection from '../components/administration/DatabaseSection.jsx'
+import CsvExportSection from '../components/settings/CsvExportSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import DisplaySizeSection from '../components/settings/DisplaySizeSection.jsx'
@@ -111,8 +112,14 @@ export default function Settings() {
         canAdminister && {
           key: 'backup',
           title: 'Backup / Restore',
-          help: <FeatureExplainer topic="data-and-backups" placement="bottom-left" />,
+          help: <FeatureExplainer topic="backup-restore" placement="bottom-left" />,
           content: <BackupRestoreSection />,
+        },
+        {
+          key: 'csvExport',
+          title: 'CSV export',
+          help: <FeatureExplainer topic="csv-export" placement="bottom-left" />,
+          content: <CsvExportSection />,
         },
         {
           key: 'trash',
@@ -215,6 +222,7 @@ export default function Settings() {
           title: 'Database Maintenance',
           note: storage?.database_bytes ? formatBytes(storage.database_bytes) : '',
           description: 'Database compaction and integrity check',
+          help: <FeatureExplainer topic="database-maintenance" placement="bottom-left" />,
           refresh: <RefreshButton onRefresh={databaseState.load} loading={databaseState.loading} />,
           content: <DatabaseSection db={databaseState} storage={storage} onStorageChanged={loadStorage} />,
         },

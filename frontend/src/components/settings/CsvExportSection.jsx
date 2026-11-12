@@ -2,32 +2,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { api, downloadUrl } from '../lib/api.js'
-import { amountFilterIsActive, amountFilterParams, selectionsToParams } from '../lib/filterParams.js'
-import { FilterProvider, useFilters } from '../lib/FilterContext.jsx'
-import FilterBar from './FilterBar.jsx'
-import { AppDialog, Button, Card } from './ui.jsx'
-import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { DEFAULT_EXPORT_COLS, EXPORT_COLUMNS } from '../lib/importExport/constants.js'
+import { api, downloadUrl } from '../../lib/api.js'
+import { amountFilterIsActive, amountFilterParams, selectionsToParams } from '../../lib/filterParams.js'
+import { FilterProvider, useFilters } from '../../lib/FilterContext.jsx'
+import FilterBar from '../FilterBar.jsx'
+import { Button, Card } from '../ui.jsx'
+import { DEFAULT_EXPORT_COLS, EXPORT_COLUMNS } from '../../lib/importExport/constants.js'
 
 /*
- * The CSV export, opened from the Transactions page: pick a filter and columns, then download.
+ * The CSV export: pick a filter and columns, then download.
  *
- * The page's filter is "what am I looking at now"; an export is "what slice of history do I want a copy
- * of". So the dialog starts from a *copy* of the page's date, chips and amount, in a FilterProvider of its own:
- * adjusting the export never disturbs the filter the rest of the app reads.
+ * The app's filter is "what am I looking at now"; an export is "what slice of history do I want a copy
+ * of". So the section starts from a *copy* of the shared date, chips and amount, in a FilterProvider of
+ * its own: adjusting the export never disturbs the filter the rest of the app reads.
  */
-export default function ExportTransactionsDialog({ onClose }) {
+export default function CsvExportSection() {
   const { filters, getRawDate } = useFilters()
   // Read once, when the provider mounts — which is what makes it a copy.
   return (
     <FilterProvider initialDate={getRawDate()} initialSelections={filters.selections} initialAmount={filters.amount}>
-      <ExportTransactionsDialogContent onClose={onClose} />
+      <CsvExportForm />
     </FilterProvider>
   )
 }
 
-function ExportTransactionsDialogContent({ onClose }) {
+function CsvExportForm() {
   const { filters, getRawDate } = useFilters()
   const [selectedCols, setSelectedCols] = useState(() => new Set(DEFAULT_EXPORT_COLS))
   const [exporting, setExporting] = useState(false)
@@ -51,30 +50,15 @@ function ExportTransactionsDialogContent({ onClose }) {
         ...selectionsToParams(filters.selections),
         ...amountFilterParams(filters.amount),
       }))
-      onClose()
     } catch (err) {
       setError(err.message || 'Export failed')
+    } finally {
       setExporting(false)
     }
   }
 
   return (
-    <AppDialog
-      title={(
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          Export transactions to a .csv file
-          <FeatureExplainer topic="csv-export" placement="bottom-left" />
-        </span>
-      )}
-      onClose={onClose}
-      width="min(720px, 100%)"
-      actions={(
-        <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={exportCsv} disabled={selectedCols.size === 0 || exporting}>Export</Button>
-        </>
-      )}
-    >
+    <div style={{ display: 'grid', gap: 12 }}>
       <Card style={{ padding: 0 }}>
         <FilterBar />
       </Card>
@@ -102,6 +86,11 @@ function ExportTransactionsDialogContent({ onClose }) {
         })}
       </div>
       {error ? <div style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}
-    </AppDialog>
+      <div>
+        <Button onClick={exportCsv} disabled={selectedCols.size === 0 || exporting}>
+          {exporting ? 'Exporting…' : 'Export'}
+        </Button>
+      </div>
+    </div>
   )
 }

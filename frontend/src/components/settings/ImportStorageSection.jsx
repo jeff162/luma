@@ -19,7 +19,7 @@ export default function ImportStorageSection({ storage = null, onChanged }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <Button variant="secondary" size="compact" onClick={() => setOpen(true)}>Free up import space</Button>
+        <Button variant="secondary" size="compact" onClick={() => setOpen(true)}>Show import space…</Button>
         {storage ? (
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>
             {bytes
