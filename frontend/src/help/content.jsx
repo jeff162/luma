@@ -123,7 +123,7 @@ export const HELP_SECTIONS = [
   },
   {
     key: 'administration',
-    label: 'Server',
+    label: 'Server Configuration',
     blurb: 'Running the installation: how it starts, who can reach it, and keeping its databases in order.',
   },
   {
@@ -3714,60 +3714,67 @@ export const HELP_TOPICS = [
     section: 'settings',
     title: 'Settings',
     surfaces: ['Settings'],
-    summary: 'Preferences and housekeeping in three groups: Personal, Data and Server. What only an administrator may change is listed only for an administrator. Almost none of it has to be touched to use the app.',
+    summary: 'User Preferences, Backup/Restore, CSV Export, and various maintenance functions.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>Settings is a collection of both controls that affect {APP_NAME}'s behavior
-          and various utility type functions, listed in groups by what they are about. A section only
-          an administrator may change is listed only for an administrator. With sign-in protection off
-          there are no roles, and every section is listed.</p>
+          and various utility type functions.
+        </p>
         <HelpHeading anchor="personal">Personal</HelpHeading>
         <ul>
           <li>
-            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc., the display size, and how
-            dates and numbers are written. Dates and amounts typed into {APP_NAME} are read in the same
-            format. Display size draws the whole app smaller or larger, from 80% to 125%. It is kept for
-            each kind of screen: a laptop, a desktop monitor, and a tablet held upright or sideways each
-            have their own, wherever the user signs in. A screen not yet set starts from the size chosen
-            most recently. It is also on the right-click menu of the user's name at the bottom of
-            the navigation pane, so each size can be tried on the page being looked at.
+            <strong>Appearance</strong> adjusts the display theme, the display size, and how
+            dates and numbers are displayed and interpreted as input.
+            Display scaling and the theme are stored for different devices based on screen size.
+            This means that a tablet can have different settings for portrait and landscape modes.
+            The settings are per screen size+input device (touch v mouse), so two devices with the same screen size
+            and same pointer device will share the same settings. Screen layout (eg. column sizes and order) for
+            the various tables is also stored per screen size+input device. There is a right-click menu
+            on the user profile at the bottom of the navigation pane that also allows the scaling
+            factor to be changed.
           </li>
           <li>
-            <strong>Security</strong> holds the password, passkeys and two-factor sign-in of the user
-            signed in. It is listed only while sign-in protection is on.
+            <strong>Security</strong> (only visible when sign-in protection is enabled) supports
+            changing the password, adding passkeys and enabling 2FA as part of password access.
             See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
         </ul>
         <HelpHeading anchor="data">Data</HelpHeading>
         <ul>
           <li>
-            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
-            encrypted to a backup key, and is where the backup encryption keys are kept. Administrators
+            <strong>Backup / Restore</strong> makes and restores system backups. Generates
+            and tracks backup encryption keys. Administrators
             only. See <HelpLink to="/help/backup-restore">Backup / Restore</HelpLink>.
           </li>
           <li>
-            <strong>CSV export</strong> writes transactions to a CSV file.
+            <strong>CSV export</strong> generates a portable CSV file containing the selected
+            transaction information.
             See <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>.
           </li>
           <li>
-            <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
-            sections that empty separately. An administrator also sees the backup history entries
-            removed from Backup / Restore.
+            <strong>Trash</strong> holds deleted items to serve as a undo
+            mechanism. Items can be purged from the trash which is not reversible.
           </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
-            <strong>Dismissed duplicate pairs</strong> lists the pairs of transactions that have
-            been marked as not duplicates. These are stored so a subsequent pass does not
-            suggest them as duplicates again. Mistakes can be corrected by reopening a dismissed
-            pair and then returning to the duplicate detection report to resolve it.{' '}
-            <strong>Distinct account pairs</strong> lists the pairs of accounts that have been
-            identified as distinct because a cross-account duplicate was surfaced and the action
-            was to accept both transactions. Cross-account duplicates exist because different sources
-            may identify the same account differently so what appears to be a cross-account duplicate
-            may in fact be the same transaction in the same account with two different names. This
-            table is about tracking the pairs which are not the same. Mistakes can be removed with
-            the <strong>Forget</strong> button.
+            <ul>
+              <li>
+
+                <strong>Dismissed duplicate pairs</strong> lists the pairs of transactions that have
+                been marked as not duplicates. These are stored so a subsequent pass does not
+                suggest them as duplicates again. Mistakes can be corrected by reopening a dismissed
+                pair and then returning to the duplicate detection report to resolve it.{' '}
+              </li>
+              <li>
+                <strong>Distinct account pairs</strong> lists the pairs of accounts that have been
+                identified as distinct because a cross-account duplicate was surfaced and the action
+                was to accept both transactions. Cross-account duplicates exist because different sources
+                may identify the same account differently so what appears to be a cross-account duplicate
+                may in fact be the same transaction in the same account with two different names. This
+                table is about tracking the pairs which are not the same. Mistakes can be removed with
+                the <strong>Forget</strong> button.
+              </li>
+            </ul>
           </li>
           <li>
             <strong>Currency</strong> defines the meaning of the values in the
@@ -3783,51 +3790,38 @@ export const HELP_TOPICS = [
             protection is on.
           </li>
           <li>
-            <strong>Sign-in protection</strong> turns sign-in protection on and off and sets the
+            <strong>Sign-in protection</strong> manages sign-in protection sets the
             password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
           <li>
-            <strong>Security checklist</strong> compares this installation with the recommended
-            security practices and marks each one met or not met.
+            <strong>Security checklist</strong> reports on this installation's compliance with
+            the recommended best practices.
             See <HelpLink to="/help/security-checklist">security checklist</HelpLink>.
           </li>
           <li>
-            <strong>Server certificate</strong> appears only on a server that other computers reach over
-            HTTPS. It offers the certificate each computer installs once so its browser trusts the server,
-            with the steps for Windows, Mac, Linux and a tablet, and shows the certificate's fingerprint. The same
-            download is offered on the sign-in screen.
+            <strong>Server certificate</strong> when a HTTPS proxy is in use to display the
+            certificate each computer needs to install so that its browser will trust the server.
+            Instructions are available for Windows, Mac, Linux and a tablet. The
+            certificate's fingerprint is displayed so it can be verified.
           </li>
           <li>
-            <strong>Startup configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
-            it shows how various settings are derived and when a default value has been
-            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
+            <strong>Startup configuration</strong> lists the current value and source of the various settings.
+            Most of the settings here come from the optional <code>.env</code> file.{' '}
             <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
           </li>
           <li>
             <strong>Error log</strong> lists the errors recorded in the "console log" file.
-            A new error adds a task to the Tasks page, which clears once the error log has been
-            opened.
           </li>
           <li>
-            <strong>Database Maintenance</strong> checks the database files for damage, gives back
-            space they no longer need, and clears the record each import keeps of the rows it did not
-            bring in. See <HelpLink to="/help/database-maintenance">database maintenance</HelpLink>.
+            <strong>Database Maintenance</strong> reports on database health and supports
+            freeing various kinds of unneeded space.
+            See <HelpLink to="/help/database-maintenance">database maintenance</HelpLink>.
           </li>
         </ul>
-        <HelpHeading anchor="about">About</HelpHeading>
         <p>
-          <strong>About</strong>, the button at the right of the Settings title, lists the current version, license,
-          a pointer to the github repository, and the instance identifier. The instance identifier is
-          stored in backups so that a restore can warn before a backup is restored to a system
-          other than the one which it came from. Every restore gives the system a new identifier, so a
-          backup made before a restore is treated as coming from another system. For an administrator, About is also where the check
-          for a new version is switched on or off. When it is on, {APP_NAME} periodically checks for a
-          new release and adds a task when one is available.
-          The task can be dismissed, and returns with the next release.
-        </p>
-        <p>
-          <strong>Copy details</strong> copies the version, how {APP_NAME} is running, the system it runs on and the
-          browser, ready to paste into a bug report. File paths, host names and financial data are left out.
+          <strong>Copy details</strong> copies various version and configuration details
+          useful in a problem report to the
+          clipboard. Identifying system details and financial data are not included.
         </p>
       </>
     ),
@@ -3837,42 +3831,52 @@ export const HELP_TOPICS = [
     section: 'administration',
     title: `Running ${APP_NAME} as a server`,
     surfaces: ['Set up HTTPS (Tasks)', 'Security checklist (Settings)'],
-    summary: `One computer runs ${APP_NAME} and the other computers in the household open it in a browser. The same download does this when started in server mode; a reverse proxy in front of it adds HTTPS, which passkeys and connecting a data source from another device both need.`,
+    summary: `One computer hosts ${APP_NAME} for the other computers in the household.`,
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
           A downloaded copy of {APP_NAME} normally serves only the computer it runs on. Started in{' '}
-          <strong>server mode</strong>, the same copy stays running in the background, opens no browser,
-          and answers to a name on the local network, <code>luma.local</code> unless changed, so every
-          other computer opens the same address without knowing which machine the server is.
-        </p>
+          <strong>server mode</strong>, {APP_NAME} stays running in the background
+          and responds to <code>luma.local</code> (by default) on the local network.        </p>
         <p>
-          Everyone connected sees the same data. Sign-in protection is what decides who can connect:
-          with it off, anyone on the network can open the installation
-          (see <HelpLink to="/help/account-security">account security</HelpLink>).
+          All users see the same data. Sign-in protection can be enabled to limit access.
+          See <HelpLink to="/help/account-security">account security</HelpLink> for details.
         </p>
 
         <HelpHeading anchor="with-https">With HTTPS</HelpHeading>
         <p>
-          {APP_NAME} does not provide HTTPS itself; a small program
-          called a reverse proxy sits in front of it on the same computer and does. The steps below use
-          Caddy as the proxy and are for a Linux server. Run them as the user the server should run as,
-          from the folder the download was unpacked into.
+          Without HTTPS other computers connected to the server cannot use passkeys and cannot open
+          the vault. The issue with passkeys is part of the passkey implementation. The vault is {APP_NAME}'s
+          rule: the vault passphrase protects the data provider credentials, so it is not accepted over
+          an unencrypted connection. With the vault closed, data connections cannot be created or synced.
+          Passkeys and data connections can be used from a browser on the server accessing the
+          server via <code>localhost</code>.
+        </p>
+        <p>
+          HTTPS access is provided by Caddy, a small program which handles HTTPS connections and passes
+          the requests to {APP_NAME} over HTTP. Best practice is to accept the default configuration
+          where  {APP_NAME} only responds to HTTP requests from the local machine, from localhost. A
+          browser running on the server can access {APP_NAME} via localhost but all other machines need
+          to access luma.local via https.
+        </p>
+        <HelpHeading anchor="on-linux">On a Linux server</HelpHeading>
+        <p>
+          These are the steps to configure Caddy as the proxy and {APP_NAME} to start at system boot. Run
+          them from the folder with the download as the user the server should run as.
         </p>
         <ol>
           <li>
-            To answer to a name other than <code>luma.local</code>, create a file
-            named <code>.env</code> beside the program containing <code>MDNS_NAME=</code> followed by
-            the name, without the <code>.local</code> ending.
+            To adjust any of the default settings, including the network name {APP_NAME} advertises,
+            use <code>env-example.txt</code> to create a file
+            named <code>.env</code> beside the program containing the changes.
           </li>
           <li>Install Caddy from the Linux distribution's packages.</li>
           <li>
-            Give Caddy its configuration, which {APP_NAME} writes for the name and port in use:
+            Use {APP_NAME} to generate the Caddy configuration file and activate it:
             <pre><code>{'./luma --caddyfile | sudo tee /etc/caddy/Caddyfile\nsudo systemctl reload caddy'}</code></pre>
           </li>
           <li>
-            Install {APP_NAME} as a service, so it starts whenever the computer does:
+            Install {APP_NAME} as a service, so it starts when the computer boots:
             <pre><code>{'./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service\nsudo systemctl daemon-reload\nsudo systemctl enable --now luma'}</code></pre>
           </li>
           <li>
@@ -3881,15 +3885,13 @@ export const HELP_TOPICS = [
           </li>
         </ol>
         <p>
-          A firewall on the server has to allow TCP port 443 and UDP port 5353. A Mac can be the server
-          as well, with the same <code>.env</code> file and Caddy configuration; starting both is then
-          set up with that system's own tools.
+          Allow TCP port 443 and UDP port 5353 through the firewall.
         </p>
 
         <HelpHeading anchor="on-windows">On a Windows server</HelpHeading>
         <p>
-          On Windows {APP_NAME} runs the proxy itself and starts when its user signs in. From the
-          folder the download was unpacked into:
+          On Windows {APP_NAME} configures and runs Caddy itself, and is set to start when its user
+          signs in. From the folder containing the contents of the download:
         </p>
         <ol>
           <li>
@@ -3897,36 +3899,35 @@ export const HELP_TOPICS = [
           </li>
           <li>
             Download Caddy for Windows and put <code>caddy.exe</code> in the same folder
-            as <code>luma.exe</code>. {APP_NAME} then starts it, configures it and stops it.
+            as <code>luma.exe</code>.
           </li>
           <li>
-            In a command prompt in that folder, run this once:
+            In a command prompt in that folder, set {APP_NAME} to start when the user signs in:
             <pre><code>{'luma --start-at-sign-in'}</code></pre>
-            From the next sign-in on, {APP_NAME} starts as a server with no window, and an icon in the
-            notification area shows the address, opens {APP_NAME}, and stops and starts it.{' '}
-            <code>luma --server --tray</code> starts it straight away,
-            and <code>luma --no-start-at-sign-in</code> undoes the step. Replacing{' '}
-            <code>luma.exe</code> with a newer version in the same folder, after
-            choosing <strong>Exit</strong> on the icon, needs nothing further; after
-            moving the folder, or unpacking a newer version into a different one, run the command
-            again from there.
+            From the next sign-in on, {APP_NAME} starts as a server with no window. An icon in the
+            notification area shows the address, opens {APP_NAME}, and stops and starts it.
           </li>
           <li>
-            The first time each one runs, Windows Firewall asks which networks may reach Caddy and
-            which may reach {APP_NAME}. <strong>Private networks</strong> covers the other computers
-            in a household. <strong>Public networks</strong> also lets anyone on a public network the
-            server joins reach the sign-in page. If the other computers still cannot connect, Windows
-            may be treating the home network as public; its profile is set under the network's
-            properties in Windows Settings.
+            The first time {APP_NAME} runs, Windows Firewall asks which networks may reach Caddy and
+            which may reach {APP_NAME}. Select <strong>Private networks only</strong> to avoid accepting
+            connections on a public wifi. If {APP_NAME} is not reachable on the home network, Windows
+            may be treating the home network as public.
+            Search for "Allow an app through Windows Firewall" to check the firewall settings and "Firewall & network protection"
+            for the public/private network setting.
           </li>
         </ol>
         <p>
-          The server runs while that user is signed in. If it does not start, a message names the log
-          file holding the reason.
+          To start the server without signing out and back in, use
+          <pre><code>luma --server --tray</code></pre>
+          Disable starting at sign-in with
+          <pre><code>luma --no-start-at-sign-in</code></pre>
+
+          If {APP_NAME} is moved to a different folder, the start-at-sign-in command needs to be run
+          again from the new location to update the Windows registry.
         </p>
         <p>
-          To have the server start with the computer instead, with nobody signed in, use a Windows
-          scheduled task in place of step 3:
+          The server runs while that user is signed in. To have the server start with the computer instead, with nobody signed in, use a Windows
+          scheduled task instead of starting at sign-in:
         </p>
         <ol>
           <li>
@@ -3947,6 +3948,16 @@ export const HELP_TOPICS = [
           start line of <code>luma.log</code>, beside the data.
         </p>
 
+        <HelpHeading anchor="on-mac">On a Mac</HelpHeading>
+        <p>**needs review** verify on a mac</p>
+        <p>
+          A Mac can be the server as well, with the same <code>.env</code> file and the same Caddy
+          configuration, which <code>luma --caddyfile</code> prints. An application started from
+          Finder takes no command line, so server mode is set with <code>SERVER_MODE=true</code> in{' '}
+          <code>.env</code>. Installing Caddy and starting both at boot are set up with that system's own
+          tools.
+        </p>
+
         <HelpHeading anchor="each-device">On each computer that connects</HelpHeading>
         <p>
           The first visit shows a browser warning, because the proxy issues its own certificate and no
@@ -3965,22 +3976,24 @@ export const HELP_TOPICS = [
 
         <HelpHeading anchor="without-https">Without HTTPS</HelpHeading>
         <p>
-          A server can also be put on the network directly, with no proxy and no certificate to
-          install: set <code>FRONTEND_HOST=0.0.0.0</code> in <code>.env</code>, skip the Caddy steps,
-          and open <code>http://luma.local:8010</code>. HTTPS takes only the steps above and is how a
-          server is meant to be run; going without it is the choice of whoever runs the server. What
-          it costs:
+          To configure a server so it can be reached from the network via HTTP:
+        </p><p>
+          Skip the Caddy steps and define FRONTEND_HOST in the <code>.env</code> file:
+          <pre><code>FRONTEND_HOST=0.0.0.0</code></pre>
+          Use <code>http://luma.local:8010</code> to reach {APP_NAME}.
+        </p>
+        <p>The following are the consequences of using HTTP to reach a server:
         </p>
         <ul>
           <li>
-            Everything crosses the network unencrypted, sign-in passwords and the vault passphrase
-            included. A vault passphrase read off the network opens the data provider credentials in
-            any copy of the database or of a backup.
+            Everything crosses the network unencrypted, sign-in passwords included.
           </li>
           <li>Passkeys are unavailable.</li>
           <li>
-            A data source can be connected, and a provider's secret saved or shown, only from a
-            browser on the server itself. Syncing and everything else works from any computer.
+            The vault opens only from a browser on the server itself, so that is where a data source is
+            connected and synced. The vault passphrase protects the data provider credentials in the
+            database and in every backup, and is not accepted over an unencrypted connection.
+            Everything else works from any computer.
           </li>
         </ul>
         <p>
@@ -3989,12 +4002,21 @@ export const HELP_TOPICS = [
         </p>
 
         <HelpHeading anchor="updating">Updating the server</HelpHeading>
-        <p>
-          Stop the service, unpack the new download in the same place as the last one, and start it
-          again. The <code>.env</code> file and the data are not part of the download and are left as
-          they were.
-        </p>
-        <pre><code>{'sudo systemctl stop luma\ntar -xzf luma-<version>-linux-x64.tar.gz\nsudo systemctl start luma'}</code></pre>
+        <ul>
+          <li>
+            <strong>Linux:</strong> stop the service, unzip and untar the download over the current installation, and
+            re-start it:
+            <pre><code>{'sudo systemctl stop luma\nunzip luma-<version>-linux-<arch>.zip\ntar -xzf luma-<version>-linux-<arch>.tar.gz\nsudo systemctl start luma'}</code></pre>
+          </li>
+          <li>
+            <strong>Windows:</strong> choose <strong>Exit</strong> on the system tray icon, unzip the new
+            download into the same folder, and start {APP_NAME} again. A server started by a scheduled
+            task is stopped and started from Task Scheduler instead.
+          </li>
+          <li>
+            <strong>Mac:</strong> stop the server, drag the new application onto Applications, and start it again.
+          </li>
+        </ul>
       </>
     ),
   },
@@ -4003,42 +4025,29 @@ export const HELP_TOPICS = [
     section: 'administration',
     title: 'Security checklist',
     surfaces: ['Security checklist (Settings)'],
-    summary: `Compares this installation with the recommended security practices, and marks each one met, not met or unknown.`,
+    summary: `Compares this installation with the recommended security practices.`,
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Each line is a recommended practice, marked <strong>Met</strong>, <strong>Not met</strong>{' '}
-          or <strong>Unknown</strong>, with a link to where it is changed. Practices that don't apply
-          are left out. For example, a copy only this computer can open has no HTTPS line. Nothing is
-          enforced; not meeting a practice is allowed.
+          Each line is a recommended practice, whether this installation meets it, and a link to where it
+          is changed. Practices that don't apply to the configuration are omitted (an instance served over
+          localhost does not require HTTPS). Nothing is enforced; deciding to ignore a practice is allowed.
         </p>
-        <ul>
-          <li>
-            <strong>Sign-in required.</strong> Without it, anyone on the network can see and change all
-            of the data.
-          </li>
-          <li>
-            <strong>HTTPS for other devices.</strong> Without it, what they send is not encrypted, they
-            cannot use passkeys, and they cannot connect data sources.
-            See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>. A red{' '}
-            <strong>Not met</strong> means HTTPS is set up but can be bypassed: {APP_NAME} also listens on the
-            network directly (<code>FRONTEND_HOST</code> is set to something other than <code>localhost</code>),
-            so devices can skip the proxy.
-          </li>
-          <li>
-            <strong>Opened by name.</strong> Passkeys work only when the server is opened by a name such
-            as <code>luma.local</code>, not by an IP address.
-          </li>
-          <li>
-            <strong>Strong vault passphrase</strong>, <strong>Vault is backed up</strong>,{' '}
-            <strong>Server certificate unchanged</strong> and <strong>Latest version</strong> match the
-            tasks of the same kind. A dismissed task still shows here.
-          </li>
-        </ul>
         <p>
-          The name, vault passphrase and backup lines depend on who is looking. The rest are the same
-          for everyone.
+          Choosing to run a server configuration without HTTPS introduces two limits
+          because the network traffic is not encrypted. Passkeys do not function without
+          https if they are from a host other than localhost, and {APP_NAME} refuses to
+          open the vault because its passphrase would be exposed on the network. Data sources are
+          then connected and synced from a browser on the server.
+
+        </p>
+        <p>
+          An issue flagged with a red <strong>Not met</strong> is more urgent than an amber one. It means a protection that is set
+          up can be bypassed. For example, when HTTPS is configured, if {APP_NAME} is
+          reachable without going through the HTTPS proxy then some traffic will be encrypted
+          but some will not. This may be intentional to allow for passkeys and data connections
+          while still allowing for non-HTTPS traffic.   <strong>Unknown</strong> means the practice cannot be judged yet.
+
         </p>
       </>
     ),

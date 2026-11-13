@@ -233,16 +233,64 @@ class ProtectedLinkGateTests(unittest.TestCase):
                 for name, code in self._codes(client).items():
                     self.assertNotEqual(code, self.REFUSED, f"{name} {kwargs}")
 
-    def test_what_carries_no_provider_secret_is_left_alone(self):
-        """A passphrase over plain HTTP is the operator's call on their own network, as sign-in is, and
-        a save that leaves the secret untouched puts nothing secret on the wire."""
-        from backend.tests._api_client import LAN_CLIENT, STRONG_PASSPHRASE, api_client
+    def test_what_carries_no_secret_is_left_to_the_vault(self):
+        """A save that leaves the provider secret untouched puts nothing secret on the wire, so the link
+        gate lets it by. It still needs the vault open, which another device over plain HTTP cannot do."""
+        from backend.tests._api_client import LAN_CLIENT, api_client
 
         with api_client(client_host=LAN_CLIENT) as (client, _):
-            unlocked = client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
-            self.assertEqual(unlocked.status_code, 200, unlocked.text)
             saved = client.post("/api/providers/plaid/config", json={"client_id": "id", "env": "sandbox"})
-            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["detail"]["code"], "vault_locked", saved.text)
+
+    def _vault_secret_calls(self, client):
+        from backend.tests._api_client import STRONG_PASSPHRASE
+
+        secret = {"passphrase": STRONG_PASSPHRASE}
+        return {
+            "judge a passphrase": client.post("/api/auth/vault/passphrase-strength", json=secret),
+            "set a passphrase": client.post("/api/auth/vault/set-passphrase", json=secret),
+            "unlock": client.post("/api/auth/vault/unlock", json=secret),
+            "change a passphrase": client.post("/api/auth/vault/change-passphrase", json={
+                "old_passphrase": STRONG_PASSPHRASE, "new_passphrase": STRONG_PASSPHRASE + "-renewed"}),
+            "issue a recovery code": client.post("/api/auth/vault/recovery-code"),
+            "recover": client.post("/api/auth/vault/recover", json={
+                "recovery_code": "x", "new_passphrase": STRONG_PASSPHRASE}),
+            "unlock with a passkey": client.post("/api/auth/vault/passkey/unlock", json={
+                "credential_id": "c", "prf_output": "cA=="}),
+        }
+
+    def _vault_codes(self, client):
+        codes = {}
+        for name, response in self._vault_secret_calls(client).items():
+            detail = response.json().get("detail")
+            codes[name] = detail.get("code") if isinstance(detail, dict) else None
+        return codes
+
+    def test_a_vault_secret_from_another_device_over_plain_http_is_refused(self):
+        from backend.tests._api_client import LAN_CLIENT, api_client
+
+        with api_client(base_url="http://localhost", client_host=LAN_CLIENT) as (client, _):
+            for name, code in self._vault_codes(client).items():
+                self.assertEqual(code, self.REFUSED, name)
+
+    def test_a_source_build_can_let_vault_secrets_through_but_not_provider_secrets(self):
+        from unittest import mock
+
+        from backend.tests._api_client import LAN_CLIENT, api_client
+
+        with mock.patch.object(transport, "VAULT_OVER_PLAIN_HTTP", True), \
+                api_client(base_url="http://localhost", client_host=LAN_CLIENT) as (client, _):
+            for name, code in self._vault_codes(client).items():
+                self.assertNotEqual(code, self.REFUSED, name)
+            self.assertEqual(self._codes(client)["reveal a provider secret"], self.REFUSED)
+
+    def test_a_vault_secret_passes_the_gate_once_the_link_is_protected(self):
+        from backend.tests._api_client import LAN_CLIENT, api_client
+
+        for kwargs in ({"base_url": "https://ledger.local", "client_host": LAN_CLIENT}, {}):
+            with api_client(**kwargs) as (client, _):
+                for name, code in self._vault_codes(client).items():
+                    self.assertNotEqual(code, self.REFUSED, f"{name} {kwargs}")
 
 
 class BehindTheProxyTests(unittest.TestCase):

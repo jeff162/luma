@@ -1210,6 +1210,10 @@ export default function App() {
   const [dataLocation, setDataLocation] = useState(null)
   // Stopping the whole application, offered only where it would work — see `routers/app_control.py`.
   const [shutdownAvailable, setShutdownAvailable] = useState(false)
+  // Whether this browser may send a vault secret: it is on the server, or behind HTTPS (the server's
+  // answer, `transport.vault_link_is_protected`).
+  // True until the server says otherwise, so nothing is refused on a guess.
+  const [linkProtected, setLinkProtected] = useState(true)
   const [pendingShutdown, setPendingShutdown] = useState(false)
   const [shuttingDown, setShuttingDown] = useState(false)
   const [shutdownError, setShutdownError] = useState('')
@@ -1270,6 +1274,7 @@ export default function App() {
     activeLocalProfile,
     preferenceSubjectId,
     demoLoaded,
+    linkProtected,
     setAuthEnabled,
     setPasswordPolicy,
     setCurrentUser,
@@ -1287,6 +1292,7 @@ export default function App() {
     activeLocalProfile,
     preferenceSubjectId,
     demoLoaded,
+    linkProtected,
   ])
 
   async function hydrateStartupRoute(profileId = '', options = {}) {
@@ -1347,6 +1353,7 @@ export default function App() {
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDataLocation(status.data_location || null)
         setShutdownAvailable(!!status.app_shutdown_available)
+        setLinkProtected(status.transport?.vault_link_protected !== false)
         setDbInstanceId(status.db_instance_id || '')
         setBundledLicenseAvailable(!!status.bundled_license_available)
         setBuildStamp(status.build_stamp || '')

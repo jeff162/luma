@@ -53,8 +53,9 @@ def _sign_in_item() -> dict | None:
 # What going without HTTPS costs another device, said after whichever reason applies.
 def _without_https_costs() -> str:
     passwords = ", including passwords," if auth_required() else ""
-    return (f"What they send{passwords} is not encrypted, they cannot use passkeys, and they cannot connect "
-            "data sources.")
+    vault = ("they cannot connect data sources" if transport.VAULT_OVER_PLAIN_HTTP
+             else "they cannot open the vault, so they cannot connect or sync data sources")
+    return f"What they send{passwords} is not encrypted, they cannot use passkeys, and {vault}."
 
 
 def _https_item() -> dict | None:
@@ -135,11 +136,11 @@ def _backup_item(tasks: dict[str, dict]) -> dict | None:
     if not credentials_exports_detail():
         return None
     title = "Vault is backed up"
-    due = [task["description"] for task_id, task in tasks.items() if task_id.startswith("backup_due_")]
+    due = tasks.get("backup_due")
     if not due:
         return _item("backups", title, MET,
                      "The vault and data provider credentials have not changed since the last backup.")
-    return _item("backups", title, NOT_MET, " ".join(due), "/settings?section=backup", "Open Backup / Restore")
+    return _item("backups", title, NOT_MET, due["description"], "/settings?section=backup", "Open Backup / Restore")
 
 
 def _certificate_item(tasks: dict[str, dict]) -> dict | None:

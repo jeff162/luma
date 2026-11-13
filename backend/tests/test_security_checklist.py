@@ -116,6 +116,13 @@ class SecurityChecklistTests(unittest.TestCase):
         self.assertEqual(item["status"], security_checklist.NOT_MET)
         self.assertEqual(item["link"], "/settings?section=about")
 
+    def test_the_backup_item_follows_the_backup_task(self):
+        transport.declare_listener(reachable=False, direct=False)
+        due = {"id": "backup_due", "description": "A change since the last backup."}
+        with mock.patch.object(security_checklist, "credentials_exports_detail", return_value=[{}]):
+            items = {item["id"]: item for item in security_checklist.build(_req(), [due])}
+        self.assertEqual(items["backups"]["status"], security_checklist.NOT_MET)
+
 
 if __name__ == "__main__":
     unittest.main()

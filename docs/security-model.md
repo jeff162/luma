@@ -487,26 +487,42 @@ distrust of who can reach the box, and that same distrust makes a sniffable **se
 unacceptable — protecting only the login exchange protects nothing, since the cookie is a bearer token on
 every request.
 
-**Only the provider secret is enforced; the rest is recommended.** Running plain HTTP on a network is a
-statement of trust in that network, so the app states what it costs where it is met — passkeys report
-themselves unavailable, and a dismissible *Set up HTTPS* task appears once there is a sign-in to protect —
-and refuses nothing else. Nothing about the topology is asked ahead of time.
+**Provider secrets and vault secrets are enforced; the rest is recommended.** Running plain HTTP on a
+network is a statement of trust in that network, so the app states what it costs where it is met —
+passkeys report themselves unavailable, and a dismissible *Set up HTTPS* task appears once there is a
+sign-in to protect — and refuses nothing else. Nothing about the topology is asked ahead of time.
 
-**What is enforced is enforced by the server.** `transport.require_protected_link` refuses a request from
-another device over plain HTTP wherever it would carry a provider's secret: saving an app secret,
-revealing one, connecting a source (the pasted token, or the exchange that ends a Link session), and
-opening the Link session that leads to one. The interface refuses first for the sake of the explanation;
-the server's refusal is the rule.
+**What is enforced is enforced by the server**, for a request from another device over plain HTTP:
+
+- **A provider's secret** (`transport.require_protected_link`): saving an app secret, revealing one,
+  connecting a source (the pasted token, or the exchange that ends a Link session), and opening the Link
+  session that leads to one.
+- **A secret that opens the vault** (`transport.require_protected_vault_link`): judging, setting or
+  changing a passphrase, unlocking with one, issuing or using a recovery code, re-enrolling, and a
+  passkey's registration and unlock.
+
+**A vault secret never crosses the network unencrypted.** The passphrase is held to a strength rule
+because it guards the key the provider credentials are encrypted under, in the database and in every copy
+and backup of it; one read off the network makes that rule pointless. An unlock belongs to the browser
+session that made it, so the consequence is the whole rule a plain-HTTP install runs under: **the vault
+opens only from a browser on the server**, and connecting, syncing, refreshing accounts and anything else
+that needs the vault open is done there. The ledger itself is unaffected and is used from any device.
+This replaced an earlier design that let the passphrase through so such an install could sync from
+anywhere; that traded the vault's protection for a convenience HTTPS already provides. Someone building
+from source who wants that trade sets `transport.VAULT_OVER_PLAIN_HTTP`; it is a constant and not a
+setting, so no shipped build and no `.env` line turns the protection off. Provider secrets stay refused
+either way.
+
+The interface refuses first, before a secret is typed, since a refusal after the request has been sent is
+too late for the secret in it (`VaultGateContext`). The server's refusal is the rule.
 
 **What the gate leaves out:**
 
-- **The vault passphrase.** Refusing the unlock would stop an install that chose plain HTTP from syncing
-  at all, and a captured passphrase still cannot reach a provider secret through the app from the network.
 - **Sign-in.** Recommended, never required.
 - **Backups, in both directions.** The credentials in one are ciphertext under the vault key, and what it
   holds in the clear is protected by encrypting the file, as at rest.
 - **Finishing a Link repair, syncing, refreshing accounts, disconnecting.** No secret travels between the
-  browser and the server.
+  browser and the server, so none is refused on its own account; each needs the vault open.
 
 **Passkeys make the host name load-bearing, and the failure is silent.** WebAuthn needs a secure context
 and an RP id must be a **domain**:

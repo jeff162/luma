@@ -576,14 +576,14 @@ class AccountsBackupTests(unittest.TestCase):
         with api_client(base_url=SITE) as (client, _):
             self._seed_vault(client)
             tasks = lambda: {t["id"] for t in client.get("/api/tasks").json()["tasks"]}  # noqa: E731
-            self.assertNotIn("backup_due_vault_change", tasks(), "no backup was ever taken")
+            self.assertNotIn("backup_due", tasks(), "no backup was ever taken")
             self._export(client)
             client.post("/api/auth/vault/change-passphrase", json={
                 "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-renewed",
             })
-            self.assertIn("backup_due_vault_change", tasks())
+            self.assertIn("backup_due", tasks())
             self._export(client)
-            self.assertNotIn("backup_due_vault_change", tasks())
+            self.assertNotIn("backup_due", tasks())
 
 
     def test_credentials_replaced_after_a_backup_ask_for_a_new_one(self):
@@ -595,12 +595,27 @@ class AccountsBackupTests(unittest.TestCase):
             with cdb.get_control_db() as conn:
                 conn.execute("UPDATE credentials_export SET exported_at = datetime('now', '-1 minute')")
             cdb.record_credentials_reissued()
-            self.assertIn("backup_due_credentials_replaced", tasks())
+            self.assertIn("backup_due", tasks())
             self._export(client)
             with cdb.get_control_db() as conn:
                 conn.execute("UPDATE credentials_export SET exported_at = datetime('now', '+1 minute') "
                              "WHERE exported_at = (SELECT MAX(exported_at) FROM credentials_export)")
-            self.assertNotIn("backup_due_credentials_replaced", tasks())
+            self.assertNotIn("backup_due", tasks())
+
+    def test_several_vault_changes_after_a_backup_raise_one_task(self):
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            self._export(client)
+            with cdb.get_control_db() as conn:
+                conn.execute("UPDATE credentials_export SET exported_at = datetime('now', '-1 minute')")
+            client.post("/api/auth/vault/change-passphrase", json={
+                "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-renewed",
+            })
+            rotated = client.post("/api/auth/vault/rotate")
+            self.assertEqual(rotated.status_code, 200, rotated.text)
+            # Matched by prefix so the test also fails against a builder raising one task per event.
+            due = [t for t in client.get("/api/tasks").json()["tasks"] if t["id"].startswith("backup_due")]
+            self.assertEqual(len(due), 1)
 
 
 class RestoringAdminCheckTests(unittest.TestCase):

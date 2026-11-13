@@ -541,6 +541,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   // *strip* — a configuration surface — and reads the same flags the gate does.
   const {
     vault, ensureVault, openVault, adoptPasskeyUnlock, adoptVaultState, lockVault, changePassphrase,
+    linkProtected, refuseUnprotected,
   } = useVaultGateContext()
   const [vaultSettingsOpen, setVaultSettingsOpen] = useState(false)
   const [vaultRecoveryOpen, setVaultRecoveryOpen] = useState(false)
@@ -1159,7 +1160,7 @@ export default function ConnectionsTab({ onShowHistory }) {
         passkeyBusy={passkeyBusy}
         passkeyLabel={passkeyLabel}
         onSettings={() => setVaultSettingsOpen(true)}
-        onRecover={() => setVaultRecoveryOpen(true)}
+        onRecover={() => (linkProtected ? setVaultRecoveryOpen(true) : refuseUnprotected())}
         onCheck={() => openVault('check')}
         onLock={lockVault}
       />

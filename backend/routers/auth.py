@@ -12,7 +12,7 @@ import json
 import math
 import urllib.parse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import app_config
@@ -394,6 +394,8 @@ def _auth_status_payload(request: Request | None = None) -> dict:
             "is_loopback": transport.request_is_loopback(request),
             "scheme": transport.request_scheme(request),
             "is_https": transport.request_is_https(request),
+            # Whether this browser may send a vault secret; the interface refuses first on it.
+            "vault_link_protected": transport.vault_link_is_protected(request),
             "https_expected": transport.https_expected(request, perimeter_on=enabled),
             "https_warning_suppressed": get_https_warning_suppressed(),
         }
@@ -1104,7 +1106,7 @@ def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:
     })
 
 
-@router.post("/vault/passphrase-strength")
+@router.post("/vault/passphrase-strength", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_passphrase_strength(body: VaultPassphraseRequest, request: Request):
     """Whether a passphrase being chosen clears the floor, asked while it is typed.
 
@@ -1129,7 +1131,7 @@ def _proof_required_error(exc: Exception) -> HTTPException:
     })
 
 
-@router.post("/vault/set-passphrase")
+@router.post("/vault/set-passphrase", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
     # Set (or replace) this user's vault passphrase. The first passphrase in the workspace mints the
     # DEK; re-setting your own re-seals it (requires being unlocked). For anyone else this is an
@@ -1165,7 +1167,7 @@ def vault_credentials_backups(request: Request):
     return {"backups": [{"exported_at": e["exported_at"]} for e in exports]}
 
 
-@router.post("/vault/change-passphrase")
+@router.post("/vault/change-passphrase", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_change_passphrase(body: VaultChangePassphraseRequest, request: Request):
     user = _require_current_user(request)
     _begin_attempt(_VAULT, user["id"])
@@ -1184,7 +1186,7 @@ def vault_change_passphrase(body: VaultChangePassphraseRequest, request: Request
     return {"user": _session_payload(user)}
 
 
-@router.post("/vault/unlock")
+@router.post("/vault/unlock", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_unlock(body: VaultPassphraseRequest, request: Request):
     user = _require_current_user(request)
     _begin_attempt(_VAULT, user["id"])
@@ -1233,7 +1235,7 @@ def vault_mark_passphrases_unchecked(request: Request):
 RESET_CONFIRM_PHRASE = "RESET VAULT"
 
 
-@router.post("/vault/recovery-code")
+@router.post("/vault/recovery-code", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_issue_recovery_code(request: Request):
     """Mint a recovery code, replacing any current one, and return it **once**.
 
@@ -1255,7 +1257,7 @@ def vault_issue_recovery_code(request: Request):
     return {"recovery_code": code, "user": _session_payload(user)}
 
 
-@router.post("/vault/recover")
+@router.post("/vault/recover", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_recover(body: VaultRecoverRequest, request: Request):
     """Open the vault with a recovery code and set a new passphrase, in one step.
 
@@ -1293,7 +1295,7 @@ def vault_recover(body: VaultRecoverRequest, request: Request):
 
 # --- The destructive reset ------------------------------------------------------------------------
 
-@router.post("/vault/passkey/set-passphrase")
+@router.post("/vault/passkey/set-passphrase", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_passkey_set_passphrase(body: VaultPasskeyPassphraseRequest, request: Request):
     """Prove with a passkey and set a new passphrase, in one step.
 
@@ -1331,7 +1333,7 @@ def vault_passkey_set_passphrase(body: VaultPasskeyPassphraseRequest, request: R
     return {"user": _session_payload(user)}
 
 
-@router.post("/vault/reenrol")
+@router.post("/vault/reenrol", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_reenrol(body: VaultReenrolRequest, request: Request):
     """Ask to be let back in: replace an unopenable passphrase slot with a pending one.
 
@@ -1473,7 +1475,7 @@ def vault_reissue_credentials(request: Request):
         raise locked
     except SyncInProgress as exc:
         raise HTTPException(status_code=409, detail={"code": "sync_running", "message": str(exc)})
-    # For the backup task (`routers/tasks.py` → `_backup_due_tasks`), only when something was replaced.
+    # For the backup task (`routers/tasks.py` → `_backup_due_task`), only when something was replaced.
     if any(o["outcome"] == REISSUED for o in outcomes):
         record_credentials_reissued()
     return {
@@ -1613,7 +1615,7 @@ def vault_passkey_params(request: Request):
     }
 
 
-@router.post("/vault/passkey/register")
+@router.post("/vault/passkey/register", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
     user = _require_current_user(request)
     context = transport.passkey_context(request)
@@ -1635,7 +1637,7 @@ def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
     return {"passkey": result, "user": _session_payload(user)}
 
 
-@router.post("/vault/passkey/unlock")
+@router.post("/vault/passkey/unlock", dependencies=[Depends(transport.require_protected_vault_link)])
 def vault_passkey_unlock(body: VaultPasskeyUnlockRequest, request: Request):
     user = _require_current_user(request)
     try:

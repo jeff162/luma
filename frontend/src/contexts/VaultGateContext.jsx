@@ -62,11 +62,34 @@ function vaultFlags(user) {
   }
 }
 
+// Raised in place of any prompt for a vault secret when this browser reaches the server over the network
+// without HTTPS. The server refuses the same requests (`transport.require_protected_vault_link`); refusing
+// here first is what keeps the secret from being typed and sent at all.
+export const UNPROTECTED_VAULT_NOTICE = {
+  title: 'The vault cannot be opened over plain HTTP from another device',
+  description: 'A vault passphrase sent over the network without HTTPS could be read on the way, and it '
+    + 'protects every data provider credential. Open the vault from a browser on the computer the '
+    + 'server runs on, or set up HTTPS first.',
+}
+
 export function VaultGateProvider({ children }) {
-  const { currentUser, setCurrentUser } = useAppSession()
+  const { currentUser, setCurrentUser, linkProtected = true } = useAppSession()
   const vault = useMemo(() => vaultFlags(currentUser), [currentUser])
-  const { mode, offerPasskey, ensureVault, openVault, closeVault } = useVaultGate(vault)
+  const { mode, offerPasskey, closeVault, openVault: promptVault, ensureVault: promptIfLocked } = useVaultGate(vault)
   const [notice, setNotice] = useState(null)
+
+  // Every way of asking for a vault secret passes through these two, so an unprotected link is turned
+  // away once, here. An action waiting on the gate is released as declined.
+  const openVault = useCallback((...args) => {
+    if (linkProtected) return promptVault(...args)
+    setNotice(UNPROTECTED_VAULT_NOTICE)
+    return Promise.resolve(false)
+  }, [promptVault, linkProtected])
+  const ensureVault = useCallback((options) => {
+    if (linkProtected) return promptIfLocked(options)
+    setNotice(UNPROTECTED_VAULT_NOTICE)
+    return Promise.resolve(false)
+  }, [promptIfLocked, linkProtected])
   // Held apart from the gate's own mode on purpose: the gate exists to make a blocked action resume once
   // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
   // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
@@ -155,12 +178,14 @@ export function VaultGateProvider({ children }) {
   const value = useMemo(() => ({
     vault, mode, offerPasskey, ensureVault, openVault, closeVault,
     submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
-    changingPassphrase, changePassphrase: () => setChangingPassphrase(true),
+    changingPassphrase,
+    changePassphrase: () => (linkProtected ? setChangingPassphrase(true) : setNotice(UNPROTECTED_VAULT_NOTICE)),
+    linkProtected, refuseUnprotected: () => setNotice(UNPROTECTED_VAULT_NOTICE),
     submitPassphraseChange, completePassphraseChange, closePassphraseChange: () => setChangingPassphrase(false),
     notice, dismissNotice: () => setNotice(null),
   }), [vault, mode, offerPasskey, ensureVault, openVault, closeVault,
     submitVault, adoptPasskeyUnlock, adoptVaultState, lockVault, refreshVault,
-    changingPassphrase, submitPassphraseChange, completePassphraseChange, notice])
+    changingPassphrase, submitPassphraseChange, completePassphraseChange, notice, linkProtected])
 
   return <VaultGateContext.Provider value={value}>{children}</VaultGateContext.Provider>
 }

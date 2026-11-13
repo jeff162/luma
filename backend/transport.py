@@ -21,8 +21,8 @@ aggregator/vault configured (no live bank secret on the wire). Enabling sign-in 
 provider on a networked bind therefore implies HTTPS.
 
 Most of that rule is advice, because running plain HTTP on a network someone trusts is their decision.
-One part is enforced: `require_protected_link` refuses the operations that put a provider secret on
-the wire. `docs/security-model.md` -> "Transport security" lists them, and what is left out and why.
+One part is enforced: `require_protected_link` and `require_protected_vault_link` refuse the operations
+that put a provider secret or a vault unlock secret on the wire. `docs/security-model.md` -> "Transport security" lists them, and what is left out and why.
 """
 
 import ipaddress
@@ -198,21 +198,52 @@ def link_is_protected(request: Request) -> bool:
     return request_is_loopback(request) or request_is_https(request)
 
 
-def require_protected_link(request: Request) -> None:
-    """Refuse a request that would carry a provider secret across the network in cleartext.
+# For someone building from source who accepts the old trade: True lets a vault secret cross the network
+# over plain HTTP, so a plain-HTTP install can open the vault, and so sync, from any device. Deliberately
+# a constant and not a setting, so no shipped build and no line in `.env` can turn the protection off
+# (`security-model.md` -> *Transport security*).
+VAULT_OVER_PLAIN_HTTP = False
 
-    Says what to do instead, because both ways out are ordinary: the same action works from a browser on
-    the server itself, and HTTPS makes it work from anywhere."""
+
+def vault_link_is_protected(request: Request) -> bool:
+    """Whether this request may carry a secret that opens the vault."""
+    return VAULT_OVER_PLAIN_HTTP or link_is_protected(request)
+
+
+def _refuse_unprotected_link(request: Request, what: str) -> None:
     if link_is_protected(request):
         return
     raise HTTPException(status_code=403, detail={
         "code": "protected_link_required",
         "message": (
-            "This cannot be done over plain HTTP from another device, because a data provider's secret "
-            f"would cross the network unprotected. Use a browser on the computer {app_name()} runs on, "
-            "or set up HTTPS first."
+            f"This cannot be done over plain HTTP from another device, because {what} would cross the "
+            f"network unprotected. Use a browser on the computer {app_name()} runs on, or set up HTTPS "
+            "first."
         ),
     })
+
+
+def require_protected_link(request: Request) -> None:
+    """Refuse a request that would carry a provider secret across the network in cleartext.
+
+    Says what to do instead, because both ways out are ordinary: the same action works from a browser on
+    the server itself, and HTTPS makes it work from anywhere."""
+    _refuse_unprotected_link(request, "a data provider's secret")
+
+
+def require_protected_vault_link(request: Request) -> None:
+    """Refuse a request that would carry a vault unlock secret across the network in cleartext: a
+    passphrase, a recovery code or a passkey's output, typed or returned.
+
+    A vault secret opens the key the provider credentials are encrypted under, in this database and in
+    every copy and backup of it, which is why the passphrase is held to a strength rule; one read off the
+    network undoes that. So the vault opens only over a protected link, and since an unlock belongs to the
+    browser session that made it, everything that needs the vault open follows: over plain HTTP a
+    connection is created, synced and repaired from a browser on the server
+    (`security-model.md` -> *Transport security*). `VAULT_OVER_PLAIN_HTTP` lifts it."""
+    if VAULT_OVER_PLAIN_HTTP:
+        return
+    _refuse_unprotected_link(request, "a secret that opens the vault")
 
 
 def https_expected(request: Request, *, perimeter_on: bool) -> bool:

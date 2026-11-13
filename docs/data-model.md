@@ -2340,7 +2340,7 @@ which also records `accounts_version`.
   `backup_history` row, and `withdrawn_at` is set while that row is in the trash; every reader skips a
   withdrawn row. The reset dialog lists the newest
   backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup
-  tasks compare the newest with the vault now (`routers/tasks.py` → `_backup_due_tasks`).
+  task compares the newest with the vault now (`routers/tasks.py` → `_backup_due_task`).
 - **`retired_vault_key`** (control database) records each seal of a key a reset or a rotation retired,
   with the reason. Removing the last member resets the vault and retires its key as `lost`
   (`crypto_service.remove_vault_member`). Credentials under a key retired as `compromised` or `replaced` are not restored, from

@@ -84,8 +84,12 @@ def _https_setup_task(request: Request | None) -> dict | None:
         "title":       "Set up HTTPS",
         "description": (
             "This server is reached over the network without HTTPS, so sign-in passwords and the session "
-            "cross the network unencrypted. Passkeys are unavailable, and a data source can be connected "
-            "only from a browser on the server. HTTPS, from a reverse proxy on the server, changes all three."
+            "cross the network unencrypted. Passkeys are unavailable, and "
+            + ("a data source can be connected only from a browser on the server. "
+               if transport.VAULT_OVER_PLAIN_HTTP else
+               "the vault opens only from a browser on the server, so data sources are connected and synced "
+               "there. ")
+            + "HTTPS, from a reverse proxy on the server, changes all three."
         ),
         "count":       1,
         "link":        "/help/running-a-server",
@@ -181,71 +185,59 @@ def _vault_passphrase_check_task(request: Request | None) -> dict | None:
     }
 
 
-def _backup_due_tasks(request: Request | None) -> list[dict]:
+def _backup_due_task(request: Request | None) -> dict | None:
     """A change to the vault or the credentials since the last backup that carried them, which leaves the
-    backups before it less useful: they open only with an old passphrase, bring back a vault since reset, no
-    longer restore the credentials at all (`crypto_service.UNTRUSTED_RETIREMENTS`), or restore credentials
-    since replaced at their providers.
+    backups before it less useful. One card, worded for the strongest consequence, because the events
+    stack: a key replacement after a reset makes the reset's milder consequence moot.
+
+    From strongest to mildest: the credentials in every earlier backup are no longer restorable (a key
+    retired as `replaced` or `compromised`, `crypto_service.UNTRUSTED_RETIREMENTS`) or no longer accepted
+    at the providers (`record_credentials_reissued`); the vault was reset for a lost passphrase, so an
+    earlier backup brings back the vault as it was; this member's passphrase changed, so their earlier
+    backups open with the old one. The first two compare against the newest backup by anyone, since
+    any backup taken after the event carries the vault as it is now; the passphrase case is this
+    member's own, since only their backups carried it.
 
     Raised only where a credentials backup was ever made, so nobody who never kept one is told to keep
-    another, and shown to whoever can take a backup. Each is dismissed for the change that raised it,
-    by the wrapping in force or the retirement's date, so the next change raises it again; a backup taken
-    since clears it, since its export then matches."""
+    another, and shown to whoever can take a backup. Dismissed for the event that raised it, by the
+    retirement's date, the reissue's date or the wrapping in force, so the next event raises it again;
+    a backup taken since clears it, since its export then matches."""
     if request is None or not is_admin_or_local(request):
-        return []
+        return None
     user = getattr(request.state, "user", None) or {}
     exports = credentials_exports_detail()
     if not exports:
-        return []
-    tasks = []
-    own = [e for e in exports if e["user_id"] == user.get("id")]
-    fingerprint = crypto_service.current_wrapped_dek_fingerprint(user["id"]) if user.get("id") else None
-    if own and fingerprint and all(e["wrapped_dek_fingerprint"] != fingerprint for e in own):
-        reset = latest_vault_key_retirement(("lost", "compromised"))
-        if reset and reset["retired_at"] > own[0]["exported_at"]:
-            why = ("The vault was reset after your last backup, so earlier backups bring back the vault as it "
-                   "was before the reset." if reset["reason"] == "lost" else
-                   "The vault was reset after an exposure, so earlier backups no longer restore the data "
-                   "provider credentials.")
-        else:
-            why = "Your vault passphrase changed after your last backup. Earlier backups require the old passphrase."
-        tasks.append({
-            "id":          "backup_due_vault_change",
-            "dismiss_key": f"backup_due_vault_change:{fingerprint}",
-            "title":       "Take a new backup",
-            "description": why,
-            "count":       1,
-            "link":        "/settings?section=backup",
-            "link_label":  "Open Backup / Restore",
-            "severity":    SEVERITY_INFO,
-        })
-    replaced = latest_vault_key_retirement(("replaced",))
-    if replaced and replaced["retired_at"] > exports[0]["exported_at"]:
-        tasks.append({
-            "id":          "backup_due_key_replaced",
-            "dismiss_key": f"backup_due_key_replaced:{replaced['retired_at']}",
-            "title":       "Take a new backup",
-            "description": "The vault key was replaced after the last backup, so earlier backups no longer "
-                           "restore the data provider credentials.",
-            "count":       1,
-            "link":        "/settings?section=backup",
-            "link_label":  "Open Backup / Restore",
-            "severity":    SEVERITY_INFO,
-        })
+        return None
+    newest = exports[0]["exported_at"]
+
+    untrusted = latest_vault_key_retirement(crypto_service.UNTRUSTED_RETIREMENTS)
     reissued = credentials_reissued_at()
-    if reissued and reissued > exports[0]["exported_at"]:
-        tasks.append({
-            "id":          "backup_due_credentials_replaced",
-            "dismiss_key": f"backup_due_credentials_replaced:{reissued}",
-            "title":       "Take a new backup",
-            "description": "The data provider credentials were replaced after the last backup, so earlier "
-                           "backups bring back credentials the providers no longer accept.",
-            "count":       1,
-            "link":        "/settings?section=backup",
-            "link_label":  "Open Backup / Restore",
-            "severity":    SEVERITY_INFO,
-        })
-    return tasks
+    stamps = [s for s in ((untrusted or {}).get("retired_at"), reissued) if s and s > newest]
+    if stamps:
+        why, stamp = ("The data provider credentials changed after the last backup. Earlier backups no "
+                      "longer restore them."), max(stamps)
+    else:
+        lost = latest_vault_key_retirement(("lost",))
+        own = [e for e in exports if e["user_id"] == user.get("id")]
+        fingerprint = crypto_service.current_wrapped_dek_fingerprint(user["id"]) if user.get("id") else None
+        if lost and lost["retired_at"] > newest:
+            why, stamp = ("The vault was reset after the last backup. Earlier backups open with the unlock "
+                          "methods in use before the reset."), lost["retired_at"]
+        elif own and fingerprint and all(e["wrapped_dek_fingerprint"] != fingerprint for e in own):
+            why, stamp = ("The vault passphrase changed after the last backup. Earlier backups open with "
+                          "the old passphrase."), fingerprint
+        else:
+            return None
+    return {
+        "id":          "backup_due",
+        "dismiss_key": f"backup_due:{stamp}",
+        "title":       "Take a new backup",
+        "description": why,
+        "count":       1,
+        "link":        "/settings?section=backup",
+        "link_label":  "Open Backup / Restore",
+        "severity":    SEVERITY_INFO,
+    }
 
 
 def _server_error_task(request: Request | None) -> dict | None:
@@ -453,7 +445,7 @@ def security_tasks(request: Request | None) -> list[dict]:
     condition, and putting the reminder away does not change it."""
     found = [
         _vault_passphrase_task(request) or _vault_passphrase_check_task(request),
-        *_backup_due_tasks(request),
+        _backup_due_task(request),
         _proxy_certificate_task(request),
         _update_available_task(request),
     ]
@@ -476,7 +468,9 @@ def _build_tasks(request: Request | None) -> list[dict]:
     if passphrase_task:
         tasks.append(passphrase_task)
 
-    tasks.extend(_backup_due_tasks(request))
+    backup_task = _backup_due_task(request)
+    if backup_task:
+        tasks.append(backup_task)
 
     error_task = _server_error_task(request)
     if error_task:

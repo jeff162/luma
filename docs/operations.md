@@ -152,7 +152,7 @@ Server mode takes away what assumed a person at the machine:
 | Other devices open | `https://<name>.local` | `http://<name>.local:<port>` |
 | On the wire | TLS, terminated by the proxy | cleartext |
 | Passkeys | available | not available — a browser will not run one over HTTP |
-| Connecting a data source, saving or revealing a provider secret | from any device | from a browser on the server only |
+| Opening the vault, and so connecting or syncing a data source | from any device | from a browser on the server only |
 | Extra setup | the proxy, and its certificate trusted on each device | none |
 
 Both are supported configurations; what the direct form gives up, and why only that, is in

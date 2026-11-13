@@ -34,7 +34,9 @@ class TwoBrowserTests(unittest.TestCase):
     def _second_browser(self, user_id: str) -> TestClient:
         from backend.main import app
 
-        browser = TestClient(app)
+        # Over HTTPS, since a bare test client reads as another device, which the vault refuses over
+        # plain HTTP before the session is ever consulted.
+        browser = TestClient(app, base_url="https://testserver")
         selected = browser.post("/api/auth/select-identity", json={"user_id": user_id})
         self.assertEqual(selected.status_code, 200, selected.text)
         return browser
