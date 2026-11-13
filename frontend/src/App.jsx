@@ -84,7 +84,7 @@ import { useRevealFocusedField } from './lib/visibleViewport.js'
 // and the error boundary's fallback, which renders in place of it. Sharing the words is what keeps the
 // two from drifting apart.
 const BACKEND_STOPPED_TITLE = 'Luma has stopped'
-const BACKEND_STOPPED_BODY = 'Starting Luma again brings this tab back with everything as it was.'
+const BACKEND_STOPPED_BODY = ''
 const BACKEND_ABSENT_BODY = `Luma is not answering yet. ${BACKEND_STOPPED_BODY}`
 
 /* The button beside the notice, and the state it needs.
@@ -2114,85 +2114,85 @@ export default function App() {
                                       )}
                                     </div>
                                   ) : (
-                                  <div style={s.navFooter}>
-                                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                                      {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
-                                      {authEnabled ? (
-                                        <span onContextMenu={openNavProfileMenu} style={{ fontWeight: 600, color: 'var(--text)' }}>
-                                          {currentUser?.display_name || currentUser?.username}
-                                        </span>
-                                      ) : (
-                                        navProfileEditing && activeLocalProfile ? (
-                                          <TransientTextInput
-                                            value={navProfileDraft}
-                                            onChange={setNavProfileDraft}
-                                            onCommit={commitNavProfileRename}
-                                            onCancel={() => {
-                                              setNavProfileEditing(false)
-                                              setNavProfileDraft(activeLocalProfile.name)
-                                            }}
-                                            restoreOnEscape
-                                            style={{
-                                              display: 'inline-flex',
-                                              alignItems: 'center',
-                                              background: 'var(--surface2)',
-                                              color: 'var(--text)',
-                                              border: '1px solid var(--accent)',
-                                              borderRadius: 999,
-                                              padding: '4px 10px',
-                                              fontSize: 12,
-                                              fontWeight: 600,
-                                              verticalAlign: 'middle',
-                                              minWidth: 110,
-                                              outline: 'none',
-                                            }}
-                                          />
+                                    <div style={s.navFooter}>
+                                      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                                        {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
+                                        {authEnabled ? (
+                                          <span onContextMenu={openNavProfileMenu} style={{ fontWeight: 600, color: 'var(--text)' }}>
+                                            {currentUser?.display_name || currentUser?.username}
+                                          </span>
                                         ) : (
-                                          <button
-                                            onClick={handleSwitchLocalProfile}
-                                            onContextMenu={openNavProfileMenu}
-                                            className="ui-pill"
-                                            style={{
-                                              display: 'inline-flex',
-                                              alignItems: 'center',
-                                              gap: 6,
-                                              background: 'var(--surface2)',
-                                              color: 'var(--text)',
-                                              border: '1px solid var(--border)',
-                                              borderRadius: 999,
-                                              padding: '4px 10px',
-                                              fontSize: 12,
-                                              fontWeight: 600,
-                                              cursor: 'pointer',
-                                              verticalAlign: 'middle',
-                                            }}
-                                            title="Switch user profile"
-                                          >
-                                            {activeLocalProfile?.name || 'Choose profile'}
-                                            <PillMark kind="go" />
-                                          </button>
-                                        )
+                                          navProfileEditing && activeLocalProfile ? (
+                                            <TransientTextInput
+                                              value={navProfileDraft}
+                                              onChange={setNavProfileDraft}
+                                              onCommit={commitNavProfileRename}
+                                              onCancel={() => {
+                                                setNavProfileEditing(false)
+                                                setNavProfileDraft(activeLocalProfile.name)
+                                              }}
+                                              restoreOnEscape
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                background: 'var(--surface2)',
+                                                color: 'var(--text)',
+                                                border: '1px solid var(--accent)',
+                                                borderRadius: 999,
+                                                padding: '4px 10px',
+                                                fontSize: 12,
+                                                fontWeight: 600,
+                                                verticalAlign: 'middle',
+                                                minWidth: 110,
+                                                outline: 'none',
+                                              }}
+                                            />
+                                          ) : (
+                                            <button
+                                              onClick={handleSwitchLocalProfile}
+                                              onContextMenu={openNavProfileMenu}
+                                              className="ui-pill"
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: 6,
+                                                background: 'var(--surface2)',
+                                                color: 'var(--text)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 999,
+                                                padding: '4px 10px',
+                                                fontSize: 12,
+                                                fontWeight: 600,
+                                                cursor: 'pointer',
+                                                verticalAlign: 'middle',
+                                              }}
+                                              title="Switch user profile"
+                                            >
+                                              {activeLocalProfile?.name || 'Choose profile'}
+                                              <PillMark kind="go" />
+                                            </button>
+                                          )
+                                        )}
+                                      </div>
+                                      {authEnabled && (
+                                        <Button variant="quiet" onClick={handleLogout} style={{ width: '100%' }}>
+                                          Sign out
+                                        </Button>
                                       )}
-                                    </div>
-                                    {authEnabled && (
-                                      <Button variant="quiet" onClick={handleLogout} style={{ width: '100%' }}>
-                                        Sign out
-                                      </Button>
-                                    )}
-                                    {/* Last, because it is the most final thing here — and named for the whole
+                                      {/* Last, because it is the most final thing here — and named for the whole
                                 application rather than "Quit", which beside "Sign out" would read as
                                 ending the session. Absent unless the backend says stopping would work. */}
-                                    {shutdownAvailable && (
-                                      <Button
-                                        variant="quiet"
-                                        onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
-                                        style={{ width: '100%', marginTop: 8 }}
-                                        title="Stop Luma on this computer"
-                                      >
-                                        Shut down Luma
-                                      </Button>
-                                    )}
-                                  </div>
+                                      {shutdownAvailable && (
+                                        <Button
+                                          variant="quiet"
+                                          onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
+                                          style={{ width: '100%', marginTop: 8 }}
+                                          title="Stop Luma on this computer"
+                                        >
+                                          Shut down Luma
+                                        </Button>
+                                      )}
+                                    </div>
                                   )}
                                   {navCollapsed ? null : (
                                     <div

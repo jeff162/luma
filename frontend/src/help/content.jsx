@@ -3445,8 +3445,8 @@ export const HELP_TOPICS = [
           <strong>Import anyway</strong> brings in a row that was held back. A transaction that was imported
           and removed afterwards is listed under <strong>Removed later</strong>, where{' '}
           <strong>Restore</strong> puts it back (see{' '}
-          <HelpLink to="/help/removed-as-duplicates">a transaction that was imported, then
-            removed</HelpLink>). Undoing the import a row was matched against checks the row again, and it
+          <HelpLink to="/help/removed-as-duplicates">transactions removed as duplicates after
+            import</HelpLink>). Undoing the import a row was matched against checks the row again, and it
           comes in unless something else in the ledger accounts for it.
         </p>
         <p>
@@ -3649,29 +3649,58 @@ export const HELP_TOPICS = [
   {
     id: 'removed-as-duplicates',
     section: 'duplicates',
-    title: 'A transaction that was imported, then removed as a duplicate',
+    title: 'Transactions removed as duplicates after import',
     surfaces: ['File ledger (↗)', 'Duplicate-detection report (Removed later)'],
-    summary: 'Most duplicates are caught during the import. One removed afterwards, by a decision on the duplicate report or an account merge, stays on its import\'s duplicate report under Removed later, where it can be restored.',
+    summary: 'Transactions that were imported and then removed because they turned out to be duplicates. They are kept on the duplicate report and can be restored.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Most duplicates are caught during the import and never reach the ledger. A few are removed
-          afterwards, by a decision on a{' '}
-          <HelpLink to="/help/cross-account-duplicates">Review</HelpLink> row, an account{' '}
-          <HelpLink to="/help/merging-accounts">merge</HelpLink>, or a doubled charge merged on
-          the <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink>.
+          The import process automatically filters out transactions it is confident are duplicates. When
+          it is not clear, the transaction is imported and also added to
+          the <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> to be examined. If it turns
+          out to be a duplicate, one of the two copies is removed from the ledger.
+        </p>
+        <h4>What removes a transaction</h4>
+        <ul>
+          <li>
+            <strong>Discard new</strong> on a suspected duplicate. The newly imported transaction is
+            removed and the one already in the ledger stays.
+          </li>
+          <li>
+            <strong>Replace existing</strong> on a suspected duplicate. The newly imported transaction is
+            the better record, so it stays and the one already in the ledger is removed.
+          </li>
+          <li>
+            <strong>Merging two accounts.</strong> Two sources sometimes use different names for the same
+            account, so each one's transactions land on a separate account.{' '}
+            <HelpLink to="/help/merging-accounts">Merging</HelpLink> the accounts puts both sets on one
+            account, and a transaction both sources brought in is then there twice. One copy of each is
+            removed.
+          </li>
+          <li>
+            <strong>A card charge that is in the ledger twice for one Amazon order.</strong>{' '}
+            The <HelpLink to="/help/amazon-reconciliation">Amazon reconciliation report</HelpLink> lists
+            these as <strong>Duplicate detected</strong>, and the extra copy is removed from there.
+          </li>
+        </ul>
+        <h4>Finding a removed transaction</h4>
+        <p>
+          A removed transaction is not deleted. It stays on the duplicate report of the file that imported
+          it, under <strong>Removed later</strong>, beside the transaction that was kept in its place.
         </p>
         <p>
-          A removed row stays on the <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> of
-          the import it came from, under <strong>Removed later</strong>. <strong>Replace existing</strong>{' '}
-          removes the older copy, so that can be a different file from the one where the decision was made.
-          The <strong>Removed as duplicates</strong> line in that file&apos;s ledger
-          (the <strong>↗</strong>) opens the report on just those rows.
+          After <strong>Replace existing</strong>, the removed transaction is one that an earlier file
+          imported, so it is on that earlier file's report and not on the report where the choice was made.
         </p>
         <p>
-          <strong>Restore</strong> on the row puts it back. Detaching a merged account restores every
-          removal the merge made.
+          A file that has had transactions removed shows <strong>Removed as duplicates</strong> with a
+          count above its transaction list (the <strong>↗</strong> beside the file name). The link there
+          opens the duplicate report on only those transactions.
+        </p>
+        <h4>Putting one back</h4>
+        <p>
+          <strong>Restore</strong> on the row returns the transaction to the ledger. For merged accounts,
+          detaching the account returns all of them at once.
         </p>
       </>
     ),
