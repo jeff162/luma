@@ -19,6 +19,7 @@ Luma is a local-first personal finance tool. It collects transaction data from b
 - [Getting started with real data](#getting-started-with-real-data)
 - [Running Luma as a server](#running-luma-as-a-server)
 - [Locked out](#locked-out)
+- [The databases do not belong together](#the-databases-do-not-belong-together)
 - [Running from source](#running-from-source)
 - [Platform support](#platform-support)
 - [Tech stack](#tech-stack)
@@ -353,6 +354,21 @@ A forgotten password is reset from a terminal on the computer that holds the dat
 | Source checkout           | `backend/venv/bin/python -m backend.desktop --reset-password`            |
 
 It lists the accounts to choose from and asks for the new password, and is safe to run while Luma is running. The account chosen ends up as an active administrator with two-factor sign-in off, and current browser sessions are signed out. The vault passphrase is not affected.
+
+## The databases do not belong together
+
+Luma keeps its data in two files, the financial database and the control database (accounts and the vault), and opens them only when they belong to the same installation. When they do not, Luma shows a page saying so instead of the app. The usual cause is `DATA_DIR` or `DB_PATH` pointing at the wrong place, or only one of the two files having been moved; fixing the setting and starting Luma again is all that is needed.
+
+When the financial database is the right one, for example one carried over from another computer, it is paired with this installation's control database from a terminal:
+
+| Installation              | Command                                                                |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Windows or Linux download | `luma --adopt-ledger`, in the folder holding the program               |
+| macOS                     | `/Applications/Luma.app/Contents/Resources/server/luma --adopt-ledger` |
+| Docker                    | `docker compose exec app python -m backend.desktop --adopt-ledger`     |
+| Source checkout           | `backend/venv/bin/python -m backend.desktop --adopt-ledger`            |
+
+It shows both files and what the financial database holds, and asks before changing anything. If the financial database is gone, the same command creates an empty one, and a backup can be restored into it once Luma is running. Start Luma again afterwards.
 
 ## Running from source
 

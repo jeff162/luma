@@ -804,10 +804,10 @@ have their own endpoints and storage and are not part of this system.
 ### Identity, access & deployment model
 
 The shape is **one shared workspace with multiple login identities**; `security-model.md` has the
-assumptions behind it. Every member is provisioned into the single admin tenant and shares one data DB.
-Per-request DB routing (`set_current_db_path`, from the tenant row's `db_path`) stays wired and resolves
-every identity to the one configured database: creating a tenant record points it at `DB_PATH`, and
-startup corrects a record that has drifted (`reconcile_workspace_db_path`).
+assumptions behind it. Every member is provisioned into the single workspace and shares one data DB:
+the one the configuration names (`DB_PATH`), which every request uses. Nothing in the control database
+says where the data DB is, because a location written into one file goes stale the moment the files are
+copied or moved. *The two databases, and what separates them* covers how the pair is held together.
 
 - **Login is an authentication perimeter, not an authorization system.** It keeps non-users out. Every
   user sees and edits the same data, and no data route checks role.
@@ -826,7 +826,7 @@ startup corrects a record that has drifted (`reconcile_workspace_db_path`).
   `POST /auth/password-strength` as a password is typed (`usePasswordChecks`). That route is public in
   the middleware, because the first account and the change forced at sign-in come before any session
   exists, and answers only a session that is setting a password.
-- **The session carries identity in both modes.** The tenant middleware (`backend/main.py`) reads
+- **The session carries identity in both modes.** The sign-in session middleware (`backend/main.py`) reads
   `session['user_id']`. A perimeter-off session is stamped `pwless` (chosen via `POST
   /auth/select-identity`), and enabling sign-in invalidates `pwless` sessions on their next request.
 - **A session is also a row.** Every sign-in path calls `sign_in_sessions.start`, which records a
@@ -870,7 +870,7 @@ has several requests in flight.
   Sign-in passkeys are registered under their own user handle (`sign_in_user_handle`, a hash of the
   account id).
 - `POST /auth/passkey/register/begin|complete` needs a signed-in session. `GET /auth/passkey/params` and
-  `POST /auth/passkey/login/begin|complete` are public (in the tenant middleware's `public_paths`),
+  `POST /auth/passkey/login/begin|complete` are public (in the sign-in session middleware's `public_paths`),
   because the sign-in screen runs them before a session exists. `DELETE /auth/passkey/{id}` removes one.
 - **The challenge lives in the signed session**, which makes it single-use (popped on use) and bound to
   the browser that asked.
@@ -1168,9 +1168,7 @@ import card. The full rule is in `data-model.md`.
 requests execute at once.
 
 **Nothing is shared between those threads.** `get_db()` opens a fresh `sqlite3` connection per call and
-closes it at the end of the block; there is no pool. DB routing is a `ContextVar`
-(`_current_db_path`), so the control/data split cannot leak between requests. The concurrency that
-matters is SQLite's.
+closes it at the end of the block; there is no pool. The concurrency that matters is SQLite's.
 
 **WAL: readers never block, writers serialize.** A blocked writer waits out `_BUSY_TIMEOUT_SECONDS` and
 then fails with `database is locked`.
@@ -1261,6 +1259,25 @@ identities (the `user_account` table), the vault key slots — lives in the **co
 **Data-connection secrets sit in the data database**, encrypted (`provider_config.secret_enc`,
 `connection.credential_enc`), while the key that opens them stays in the control database. Both files
 are needed to reach a live credential.
+
+**The two files carry the same workspace id, and a startup checks it before opening the data
+database** (`control_database.pairing_problem`). The id is the control database's `tenant.id`, and the
+data database keeps it in `db_meta` (`WORKSPACE_ID_KEY`). A mismatched pair would run one installation's
+sign-ins and vault against another's ledger, and a path naming nothing would have SQLite create an empty
+ledger that looks like total data loss. So a startup that finds no ledger, a ledger with no id, or one
+with a different id finishes without opening it and answers every request with the explanation
+(`backend/pairing_lock.py`). `operations.md` → *When the two databases do not belong together* has
+the cases and the way back from each.
+
+- **A control database with no workspace yet adopts the ledger beside it.** Its first identity, or an
+  accounts restore, creates the workspace record with the ledger's id, or writes a new one into the
+  ledger when it has none. That is what lets a lost control database be replaced by a fresh one.
+- **The id never changes and never travels.** `db_meta` is not in a backup and a restore does not wipe
+  it, so restoring another system's file keeps this pair together. Unlike `instance_id`, which a restore
+  replaces on purpose (`data-model.md` → *The compatibility guard*).
+- **Re-pairing is a console action** (`--adopt-ledger`, `backend/ledger_adoption.py`), for the reason
+  `--reset-password` is: whoever can run it can already read both files, and anyone who can reach the
+  server cannot choose which ledger its sign-ins open.
 
 `data-model.md` is authoritative on tables and fields.
 

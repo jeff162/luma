@@ -328,6 +328,12 @@ the files hold in the clear, so whoever can run it against the databases can alr
 clears everything else that could keep the account out (`control_database.restore_admin_access`). **The
 vault is the boundary it does not cross**: a slot opens only with its own secret.
 
+**Pairing a ledger with a control database is the same kind of action.** `--adopt-ledger`
+(`backend/ledger_adoption.py`) decides which ledger an installation's sign-ins open, so it is a console
+tool and never a page: the page a refused start serves is reached before anyone signs in, and it shows the
+paths and the command only to a browser on the server itself (`operations.md` → *When the two databases
+do not belong together*).
+
 ## Passkeys and the second factor
 
 **A passkey signs in, and it also stands in for the authenticator code.** The ceremony runs with user

@@ -9,7 +9,7 @@ the logs.
 
 | Surface | What it holds |
 | --- | --- |
-| `README.md` → *Installing Luma*, *Running Luma as a server*, *Locked out* | the downloads, the Docker sequence, the password reset command |
+| `README.md` → *Installing Luma*, *Running Luma as a server*, *Locked out*, *The databases do not belong together* | the downloads, the Docker sequence, the password reset and ledger pairing commands |
 | Help → *Running Luma as a server*, *Configuration settings*, *Backup / Restore*, *Database maintenance* | the Linux and Windows server sequences, each setting, backup and restore, the database check |
 | [`architecture.md`](architecture.md) → *Cross-platform approach* | the launcher as built: the bind and the URL, the lockfile, opening a browser, stopping, liveness, packaged-build roots |
 | [`security-model.md`](security-model.md) → *Transport security* | whether a topology may run over plain HTTP, and why the host name is load-bearing |
@@ -32,6 +32,7 @@ This document does not repeat a sequence any of those hold. It records what the 
 - [Containers](#containers)
 - [Watched folders on a server](#watched-folders-on-a-server)
 - [Where the data lives, and how the app decides](#where-the-data-lives-and-how-the-app-decides)
+- [When the two databases do not belong together](#when-the-two-databases-do-not-belong-together)
 - [Restore is a destructive operation](#restore-is-a-destructive-operation)
 - [Locked out](#locked-out)
 - [Diagnosing a running instance](#diagnosing-a-running-instance)
@@ -368,11 +369,42 @@ keeps it beside the executable, installed uses the per-OS user-data directory (`
 artifact is which, `architecture.md` → *Packaged builds* for the mechanism). On a portable copy the folder
 *is* the installation, and moving it moves the data.
 
-**The control database records where the financial database is, and startup keeps that record true**
-(`reconcile_workspace_db_path` in `backend/db/control_database.py`). A packaged build adopts its
-configured location at every start, so a moved, renamed or copied portable folder keeps working. A
-source checkout adopts it only when the recorded file is gone, and otherwise logs a warning naming both;
-`DB_PATH` is how to say which is meant.
+**The settings are the only record of where the data is.** Neither database names the other, so a moved,
+renamed or copied folder opens the files that are in it. What holds the pair together is a workspace id
+in both, checked at every start (next section).
+
+## When the two databases do not belong together
+
+**A start whose two databases do not belong together does not open the ledger.** It finishes starting
+and answers every page with what is wrong and what to do, the API with a 503, and the log with the same
+text and both paths (`backend/pairing_lock.py`). It does not exit, because a packaged build started
+without a terminal would then show nothing, and a container would be restarted into the same failure.
+`/api/health` still answers, since it reports only that a server is listening.
+
+**The paths and the command are shown only to this machine.** The page is reached before anyone signs
+in, and paths describe the server, so a browser elsewhere is told what is wrong and pointed at the log.
+
+| Found at start | Usual cause | The way back |
+| --- | --- | --- |
+| no ledger at the configured path | a wrong `DATA_DIR` or `DB_PATH`, or only one file moved | fix the setting; if the ledger is gone, `--adopt-ledger` creates an empty one to restore a backup into |
+| a ledger with no workspace id | a path that names some other or older file | fix the setting, or `--adopt-ledger` if it is the right file |
+| a ledger with another workspace's id | files from two installations | fix the setting, or `--adopt-ledger` to keep this pairing |
+| a file that is not a database | a wrong path | fix the setting |
+
+**A control database with no workspace is never refused.** A new one adopts the ledger beside it at its
+first account, which is how a lost control database is replaced: start with only the ledger in place. The
+vault does not come back that way, since its key was in the lost file, so saved credentials cannot be
+opened and the connections are linked again.
+
+**`--adopt-ledger` is a console tool** (`backend/ledger_adoption.py`), run the same way as
+`--reset-password` (*Locked out*). It names both files and what the ledger holds, asks, writes this
+control database's workspace id into the ledger, and exits. The server is started again afterwards,
+since it decided at start not to open the ledger.
+
+**An upgrade from before the workspace id pairs the ledger the installation was using.** The control
+database used to record a path, and the upgrade writes the id into that ledger: the configured one in a
+packaged build, and in a checkout the recorded one while it exists. A checkout whose settings had drifted
+from its record therefore starts refused, and the log names the ledger it had been running on.
 
 ## Restore is a destructive operation
 

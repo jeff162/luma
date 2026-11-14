@@ -24,7 +24,7 @@ from backend.tests._api_client import api_client
 
 class AuthRejectionDiagnosticsTests(unittest.TestCase):
     def _reject(self, prepare):
-        """Make one request that the tenant middleware will refuse, and return its log line."""
+        """Make one request that the sign-in session middleware will refuse, and return its log line."""
         with api_client() as (client, _data_path):
             prepare(client)
             with self.assertLogs(level=logging.WARNING) as captured:

@@ -55,7 +55,7 @@ def start(session: dict, user_id: str, *, pwless: bool = False) -> None:
     """Sign `user_id` in on this browser, replacing whatever session it held.
 
     `pwless` marks a session established by choosing an identity with sign-in protection off, which the
-    tenant middleware refuses once protection is turned on."""
+    sign-in session middleware refuses once protection is turned on."""
     end(session)
     session_id = secrets.token_urlsafe(32)
     control_database.create_sign_in_session(

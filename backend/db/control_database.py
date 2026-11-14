@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Control database for auth, tenant routing, security settings, and user-scoped state.
+Control database for auth, the workspace record, security settings, and user-scoped state.
 
-Unlike the app database, this file manages cross-tenant concerns: who can sign in,
-which tenant DB a request should use, when auth becomes mandatory, and which local
-preference profiles or secret material belong to each user.
+Unlike the app database, this file manages what the installation needs in order to run: who can sign
+in, when auth becomes mandatory, which secret material belongs to each user, and which workspace the
+financial database must belong to (`pairing_problem`).
 """
 
 import base64
@@ -23,11 +23,14 @@ import uuid
 
 import segno
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from backend import password_strength
-from backend.db.database import DB_PATH, get_db, init_db
-from backend.app_logging import log_info, log_warning
+from backend.db.database import (
+    DB_PATH, current_db_path, get_db, get_workspace_id, init_db, set_workspace_id,
+)
+from backend.app_logging import log_warning
 from backend.runtime_config import app_name, is_frozen, resolve_control_db_path
 
 
@@ -203,23 +206,97 @@ def get_control_db():
         conn.close()
 
 
+# The one workspace record. Its `id` is the workspace id the financial database carries as well
+# (`database.WORKSPACE_ID_KEY`), which is how a startup tells whether the two files belong together.
+_TENANT_DDL = """
+    CREATE TABLE IF NOT EXISTS {table} (
+        id         TEXT PRIMARY KEY,
+        slug       TEXT NOT NULL UNIQUE,
+        name       TEXT NOT NULL,
+        status     TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+"""
+
+
+def _retire_tenant_db_path() -> None:
+    """Rebuild a `tenant` table from before the workspace id, dropping its `db_path` column.
+
+    The column recorded where the financial database was and routed requests to it. Requests use the
+    configured database, and the workspace id in both files is what says the two belong together. Before
+    the column goes, the ledger requests were using is given the workspace id, so an upgraded installation
+    keeps opening its own: the configured one in a packaged build, which adopted it at every start, and in
+    a checkout the recorded one while that file still exists.
+
+    The column is `UNIQUE`, which SQLite will not drop, so the table is copied into a new one and swapped.
+    `user_account.tenant_id` refers to it with `ON DELETE CASCADE`, so foreign keys are off for the swap:
+    dropping the old table with them on would delete every account. SQLite only changes that setting
+    outside a transaction, which is why this has a connection of its own in autocommit mode.
+    """
+    if not Path(CONTROL_DB_PATH).is_file():
+        return
+    conn = sqlite3.connect(CONTROL_DB_PATH, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(tenant)")}
+        if "db_path" not in columns:
+            return
+        rows = conn.execute("SELECT id, db_path FROM tenant").fetchall()
+        if len(rows) == 1:
+            _stamp_ledger_in_use(rows[0]["id"], rows[0]["db_path"])
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP TABLE IF EXISTS tenant_rebuilt")
+            conn.execute(_TENANT_DDL.format(table="tenant_rebuilt"))
+            conn.execute(
+                "INSERT INTO tenant_rebuilt (id, slug, name, status, created_at) "
+                "SELECT id, slug, name, status, created_at FROM tenant"
+            )
+            conn.execute("DROP TABLE tenant")
+            conn.execute("ALTER TABLE tenant_rebuilt RENAME TO tenant")
+            dangling = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if dangling:
+                raise RuntimeError(f"rebuilding the workspace table left {len(dangling)} dangling references")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+
+
+def _stamp_ledger_in_use(tenant_id: str, recorded: str) -> None:
+    configured = Path(DB_PATH)
+    recorded_path = Path(recorded)
+    in_use = recorded_path if not is_frozen() and recorded_path.is_file() else configured
+    if not in_use.is_file():
+        return
+    with get_db(str(in_use)) as data_conn:
+        # Only a ledger the app has initialized: stamping an empty file would leave `init_db` reading it as
+        # a database to migrate rather than one to create.
+        initialized = data_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'db_meta'"
+        ).fetchone()
+        if initialized and get_workspace_id(data_conn) is None:
+            set_workspace_id(data_conn, tenant_id)
+    if in_use.resolve() != configured.resolve():
+        log_warning(
+            f"[db] this workspace's financial database is {in_use.resolve()}, but this installation is "
+            f"configured for {configured.resolve()}. Set DB_PATH to the one that should be used."
+        )
+
+
 def init_control_db():
+    _retire_tenant_db_path()
     with get_control_db() as conn:
+        conn.execute(_TENANT_DDL.format(table="tenant"))
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS app_setting (
                 key        TEXT PRIMARY KEY,
                 value      TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS tenant (
-                id         TEXT PRIMARY KEY,
-                slug       TEXT NOT NULL UNIQUE,
-                name       TEXT NOT NULL,
-                db_path    TEXT NOT NULL UNIQUE,
-                status     TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS user_account (
@@ -487,11 +564,11 @@ def acknowledge_server_errors(through: int) -> None:
         )
 
 
-def _existing_shared_tenant_id() -> str | None:
-    """The one shared workspace tenant, if any exists. There is a single workspace, so a new identity
-    must adopt it rather than mint a second tenant (which would collide on the unique `tenant.db_path`).
-    Prefer a current user's tenant; fall back to any existing `tenant` row — the orphan case after every
-    identity was deleted (e.g. the developer "reset to first-run") but the tenant/data DB remained."""
+def workspace_id() -> str | None:
+    """The one shared workspace's id, if a workspace record exists. There is a single workspace, so a new
+    identity adopts it rather than minting a second. Prefer a current user's tenant; fall back to any
+    existing `tenant` row — the orphan case after every identity was deleted (e.g. the developer "reset to
+    first-run") but the workspace record remained."""
     with get_control_db() as conn:
         row = conn.execute(
             "SELECT tenant_id FROM user_account ORDER BY created_at, id LIMIT 1"
@@ -531,7 +608,7 @@ def _unify_local_profiles_into_users():
             row["username"].lower(): row["id"]
             for row in conn.execute("SELECT id, username FROM user_account").fetchall()
         }
-    shared_tenant_id = _existing_shared_tenant_id()
+    shared_tenant_id = workspace_id()
 
     mapping: dict[str, str] = {}
     for profile in profiles:
@@ -554,18 +631,13 @@ def _unify_local_profiles_into_users():
         mapping[profile["id"]] = user["id"]
 
     if mapping and shared_tenant_id:
-        with get_control_db() as conn:
-            tenant = conn.execute(
-                "SELECT db_path FROM tenant WHERE id = ?", (shared_tenant_id,)
-            ).fetchone()
-        if tenant:
-            with get_db(db_path=tenant["db_path"]) as data_conn:
-                for old_id, new_id in mapping.items():
-                    if old_id != new_id:
-                        data_conn.execute(
-                            "UPDATE ui_preference SET scope_id = ? WHERE scope_id = ?",
-                            (new_id, old_id),
-                        )
+        with get_db(db_path=DB_PATH) as data_conn:
+            for old_id, new_id in mapping.items():
+                if old_id != new_id:
+                    data_conn.execute(
+                        "UPDATE ui_preference SET scope_id = ? WHERE scope_id = ?",
+                        (new_id, old_id),
+                    )
 
     with get_control_db() as conn:
         conn.execute("DROP TABLE IF EXISTS local_preference_profile")
@@ -578,7 +650,7 @@ def create_local_identity(name: str) -> dict:
     normalized = (name or "").strip()
     if not normalized:
         raise ValueError("Name is required")
-    shared_tenant_id = _existing_shared_tenant_id()
+    shared_tenant_id = workspace_id()
     return _create_user_with_tenant(
         username=normalized,
         password="",
@@ -671,53 +743,79 @@ def disable_auth_mode():
     set_app_setting("auth_enabled", "0")
 
 
-def _workspace_db_path() -> str:
-    """The one financial database every identity shares. There is a single workspace: identities are rows
-    in the control DB and all adopt the configured database, so creating the tenant record resolves to the
-    configured path rather than minting a file per identity. Enabling sign-in therefore adopts the
-    existing data in place instead of stranding it in an unused file."""
-    return str(Path(DB_PATH))
+# What a startup finds when the two databases it was configured with do not belong together. Each is a
+# refusal to open the ledger: requests would otherwise run one installation's sign-ins and vault against
+# another's data, or against a file SQLite created empty because the configured path named nothing.
+PAIRING_MISSING = "missing"            # no financial database at the configured path
+PAIRING_UNREADABLE = "unreadable"      # a file is there, and it is not a database
+PAIRING_UNPAIRED = "unpaired"          # a database with no workspace id, as a newly created file has
+PAIRING_OTHER_WORKSPACE = "other_workspace"
 
 
-def reconcile_workspace_db_path() -> None:
-    """Make the workspace's recorded database the one this installation is configured for.
+@dataclass(frozen=True)
+class PairingProblem:
+    kind: str
+    ledger_path: str
+    control_path: str
 
-    The path is written once, when the first identity is created, and every request is routed by it —
-    while startup readies the *configured* database. The two are the same until the configuration moves
-    without the record: a portable folder that was moved, renamed or copied, a control database carried
-    to another installation, or a relative path met from a different working directory. Then startup
-    looks healthy and every request opens a file that is somewhere else or not there at all, which
-    SQLite answers by creating an empty one. Run at startup, before any request.
 
-    The configuration wins, with one exception. In a checkout, a recorded path that still names an
-    existing file is left alone and reported: adopting the configured path there would silently move an
-    installation that has been running on the recorded one onto an empty database, and nothing about a
-    checkout says its folder is the installation. A packaged build does say that — the folder, or the
-    user-data directory, is where its data lives — so there the configuration is adopted outright.
+def pairing_problem() -> PairingProblem | None:
+    """Whether the configured financial database belongs to this control database's workspace.
 
-    Only a single workspace is reconciled, which is all there has been since multi-tenant hosting was
-    dropped. More than one row is a database from before that, and is not this function's to rearrange.
+    Only a control database with a workspace has anything to check: a new one adopts whatever ledger it
+    is beside when its first identity is created (`_workspace_id_for_new_record`), which is how a lost
+    control database is replaced. Reads without writing, and never creates the ledger file, so a wrong path
+    is reported rather than answered with an empty database.
     """
-    configured = _workspace_db_path()
-    with get_control_db() as conn:
-        rows = conn.execute("SELECT id, db_path FROM tenant").fetchall()
-        if len(rows) != 1:
-            return
-        recorded = rows[0]["db_path"]
-        if Path(recorded).resolve() == Path(configured).resolve():
-            return
-        if Path(recorded).is_file() and not is_frozen():
-            log_warning(
-                f"[db] the control database records the financial database as {recorded}, but this "
-                f"installation is configured for {configured}. Requests are using the recorded one. "
-                "Set DB_PATH to the database that should be used."
-            )
-            return
-        conn.execute("UPDATE tenant SET db_path = ? WHERE id = ?", (configured, rows[0]["id"]))
-    log_info(
-        f"[db] the financial database is now {configured}; the control database recorded {recorded}",
-        keep_in_file=True,
-    )
+    workspace = workspace_id()
+    if workspace is None:
+        return None
+    ledger = Path(DB_PATH)
+
+    def problem(kind: str) -> PairingProblem:
+        return PairingProblem(kind, str(ledger.resolve()), str(Path(CONTROL_DB_PATH).resolve()))
+
+    if not ledger.is_file():
+        return problem(PAIRING_MISSING)
+    try:
+        with get_db(str(ledger)) as conn:
+            recorded = get_workspace_id(conn)
+    except sqlite3.DatabaseError:
+        return problem(PAIRING_UNREADABLE)
+    if recorded == workspace:
+        return None
+    return problem(PAIRING_UNPAIRED if recorded is None else PAIRING_OTHER_WORKSPACE)
+
+
+def adopt_ledger() -> None:
+    """Make the configured financial database this workspace's, creating an empty one if there is none.
+
+    The deliberate answer to a `pairing_problem`, run from a console (`backend/ledger_adoption.py`), never
+    from a request: re-pairing decides which ledger an installation's sign-ins open, which is not a
+    question anyone who can reach the server should be able to answer."""
+    workspace = workspace_id()
+    if workspace is None:
+        raise ValueError("there is no workspace to pair the financial database with")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    init_db(DB_PATH)
+    with get_db(DB_PATH) as conn:
+        set_workspace_id(conn, workspace)
+
+
+def _workspace_id_for_new_record() -> str:
+    """The id for a workspace record being created: the configured ledger's own when it already has one,
+    so a control database made fresh beside existing data adopts it, and otherwise a new id written into
+    the ledger. The ledger is written first; if the record then fails, the next attempt finds the id there."""
+    ledger = current_db_path()
+    Path(ledger).parent.mkdir(parents=True, exist_ok=True)
+    init_db(ledger)
+    with get_db(ledger) as conn:
+        existing = get_workspace_id(conn)
+        if existing:
+            return existing
+        new_id = str(uuid.uuid4())
+        set_workspace_id(conn, new_id)
+        return new_id
 
 
 def _create_user_with_tenant(
@@ -758,27 +856,19 @@ def _create_user_with_tenant(
         resolved_tenant_id = tenant_id
         if resolved_tenant_id:
             tenant = conn.execute(
-                "SELECT id, db_path FROM tenant WHERE id = ?",
+                "SELECT id FROM tenant WHERE id = ?",
                 (resolved_tenant_id,),
             ).fetchone()
             if not tenant:
                 raise ValueError("tenant not found")
         else:
-            # No tenant yet: this is the first identity on this control DB (bootstrap, or the first
-            # local profile). It gets the tenant record pointing at the one workspace database.
-            resolved_tenant_id = str(uuid.uuid4())
-            tenant_name = user_display_name
-            base_slug = _tenant_slug(clean_username)
-            db_path = _workspace_db_path()
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            init_db(db_path)
-            slug = _unique_tenant_slug(conn, base_slug)
+            # No workspace yet: this is the first identity on this control DB (bootstrap, or the first
+            # local profile), and it creates the workspace record.
+            resolved_tenant_id = _workspace_id_for_new_record()
+            slug = _unique_tenant_slug(conn, _tenant_slug(clean_username))
             conn.execute(
-                """
-                INSERT INTO tenant (id, slug, name, db_path)
-                VALUES (?, ?, ?, ?)
-                """,
-                (resolved_tenant_id, slug, tenant_name, db_path),
+                "INSERT INTO tenant (id, slug, name) VALUES (?, ?, ?)",
+                (resolved_tenant_id, slug, user_display_name),
             )
 
         user_id = str(uuid.uuid4())
@@ -826,8 +916,7 @@ def get_user_by_id(user_id: str) -> dict | None:
                 COALESCE(u.must_change_password, 0) AS must_change_password,
                 u.status,
                 u.tenant_id,
-                t.name AS tenant_name,
-                t.db_path
+                t.name AS tenant_name
             FROM user_account u
             JOIN tenant t ON t.id = u.tenant_id
             WHERE u.id = ?
@@ -852,8 +941,7 @@ def authenticate_user(username: str, password: str) -> dict | None:
                 u.totp_secret,
                 u.status,
                 u.tenant_id,
-                t.name AS tenant_name,
-                t.db_path
+                t.name AS tenant_name
             FROM user_account u
             JOIN tenant t ON t.id = u.tenant_id
             WHERE lower(u.username) = lower(?)
@@ -2042,13 +2130,12 @@ def _workspace_tenant_id(conn, users: list[dict]) -> str:
     row = conn.execute("SELECT id FROM tenant ORDER BY created_at, id LIMIT 1").fetchone()
     if row:
         return row["id"]
-    tenant_id = str(uuid.uuid4())
+    tenant_id = _workspace_id_for_new_record()
     first = next((u for u in users if u.get("role") == "admin"), users[0] if users else {})
     name = (first.get("display_name") or first.get("username") or "Workspace").strip() or "Workspace"
     conn.execute(
-        "INSERT INTO tenant (id, slug, name, db_path) VALUES (?, ?, ?, ?)",
-        (tenant_id, _unique_tenant_slug(conn, _tenant_slug(first.get("username") or name)), name,
-         _workspace_db_path()),
+        "INSERT INTO tenant (id, slug, name) VALUES (?, ?, ?)",
+        (tenant_id, _unique_tenant_slug(conn, _tenant_slug(first.get("username") or name)), name),
     )
     return tenant_id
 

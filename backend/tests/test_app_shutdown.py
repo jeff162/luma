@@ -54,7 +54,7 @@ class ShutdownCapabilityTests(unittest.TestCase):
         self.assertEqual(stopped, [True])
 
     def test_stopping_requires_a_session(self):
-        """It is not on the public path list, so the tenant middleware turns it away like any other
+        """It is not on the public path list, so the sign-in session middleware turns it away like any other
         endpoint. Worth pinning: a route that stops the process is the last one that should be
         reachable unauthenticated."""
         app_control.register_shutdown_handler(lambda: None)

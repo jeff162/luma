@@ -5,8 +5,8 @@
 Application bootstrap and request wiring for the backend.
 
 This file ties together startup configuration, middleware, and router registration. Its main guarantee
-is that each API request runs against the correct database for the authenticated user or local-mode
-session before any router code executes.
+is that no router code runs without an established session, and none runs at all against a financial
+database that does not belong with the control database (`pairing_lock.py`).
 
 Configuration is resolved *before* the app object exists, because the session secret and cookie name are
 constructor arguments to `SessionMiddleware` rather than something a request can look up later. That is
@@ -54,13 +54,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend import app_config, app_log_file, http_hardening, runtime_config, spa, transport
-from backend.app_logging import log_warning
-from backend.db.control_database import (
-    auth_required, get_user_by_id, init_control_db, reconcile_workspace_db_path,
-)
+from backend import app_config, app_log_file, http_hardening, pairing_lock, runtime_config, spa, transport
+from backend.app_logging import log_error, log_warning
+from backend.db.control_database import auth_required, get_user_by_id, init_control_db, pairing_problem
 from backend.db import contention_trace
-from backend.db.database import init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import init_db
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service, sign_in_sessions
 from backend.services.preferences import forget_departed_users
@@ -188,7 +186,7 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
 
-class TenantSessionMiddleware(BaseHTTPMiddleware):
+class SignInSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         transport.note_request(request)
         session = request.scope.get("session")
@@ -207,13 +205,12 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
         # session is unlocked. The session id is the vault scope: see `crypto_service` -> the unlock cache.
         vault_scope = crypto_service.set_vault_scope(sign_in_sessions.session_id(session))
         try:
-            return await self._resolve_tenant(request, call_next, ended)
+            return await self._resolve_user(request, call_next, ended)
         finally:
             crypto_service.reset_vault_scope(vault_scope)
 
-    async def _resolve_tenant(self, request: Request, call_next, ended: bool):
-        # Tenant selection is request-scoped: the control DB authenticates the user, then
-        # the app DB context is switched for just this request and always reset afterward.
+    async def _resolve_user(self, request: Request, call_next, ended: bool):
+        # The control DB authenticates the user; every request then uses the configured financial database.
         public_paths = {
             "/api/health",
             "/api/auth/status",
@@ -269,12 +266,8 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
                 f"session user_id {user_id!r} is not in the control database", request
             )
 
-        token = set_current_db_path(user["db_path"])
         request.state.user = user
-        try:
-            return await call_next(request)
-        finally:
-            reset_current_db_path(token)
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -284,15 +277,18 @@ async def lifespan(app: FastAPI):
     # Before `init_db`, so a start that fails there is kept and counted for the Tasks reminder — and left
     # attached when it does, since uvicorn reports the failure only after this function has raised.
     app_log_file.install()
-    # Before anything is routed by it: requests open the database the control DB records, and this is
-    # what keeps that the one being readied on the next line.
-    reconcile_workspace_db_path()
-    # The control DB is already initialized (configuration was resolved from it below); this readies the
-    # financial database so no request handling starts against partial state.
-    init_db()
-    # Beside the database just readied, so the folder a source may always watch is there to find.
-    import_watch.ensure_imports_dir()
-    forget_departed_users()
+    # Before the financial database is touched at all, since readying it would create a missing one.
+    problem = pairing_problem()
+    pairing_lock.engage(problem)
+    if problem is not None:
+        log_error(pairing_lock.log_message(problem))
+    else:
+        # The control DB is already initialized (configuration was resolved from it below); this readies
+        # the financial database so no request handling starts against partial state.
+        init_db()
+        # Beside the database just readied, so the folder a source may always watch is there to find.
+        import_watch.ensure_imports_dir()
+        forget_departed_users()
     try:
         yield
     finally:
@@ -311,7 +307,7 @@ app = FastAPI(
     title=config.app_name, version=runtime_config.APP_VERSION, lifespan=lifespan,
     docs_url=None, redoc_url=None, openapi_url=None,
 )
-app.add_middleware(TenantSessionMiddleware)
+app.add_middleware(SignInSessionMiddleware)
 app.add_middleware(
     # Starlette's `SessionMiddleware` with a clock-skew-tolerant signer: a wall clock that steps
     # backwards used to sign every session out for the length of the step. See `session_signing.py`.
@@ -373,6 +369,10 @@ def health():
 
 # Last, deliberately: this registers a catch-all that would shadow every route above it.
 spa_mounted = spa.mount_spa(app)
+
+# Outside the session layers, so a request is answered before anything reads a session or a database, and
+# inside the hardening below, so the explanation leaves with the same headers as everything else.
+app.add_middleware(pairing_lock.PairingLockMiddleware)
 
 # Outermost, so a refused host is answered before anything else runs, and every response — an error
 # included — leaves with the headers. `backend/http_hardening.py` has what each one defends.

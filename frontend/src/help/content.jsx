@@ -4201,6 +4201,17 @@ export const HELP_TOPICS = [
           directory which lives next to the databases. <strong>Startup configuration</strong> on the
           Settings page lists these locations and indicates whether the names have been overridden.
         </p>
+        <HelpHeading anchor="pairing">Keeping the two files together</HelpHeading>
+        <p>*needs review*</p>
+        <p>
+          The two database files belong to each other, so they are always moved or copied as a pair. If
+          {' '}{APP_NAME} is started with a ledger from a different installation, or the settings point at a
+          ledger that is not there, it shows a page explaining what is wrong instead of opening. Correcting
+          the setting is usually the fix. A ledger brought over from another computer is paired with this
+          installation from the command line, as described in the{' '}
+          <a href="https://github.com/jeff162/luma#the-databases-do-not-belong-together" target="_blank" rel="noreferrer">README's
+            <em> The databases do not belong together</em> section</a>.
+        </p>
         <HelpHeading anchor="checking">Checking the databases</HelpHeading>
         <p>
           <strong>Database Integrity</strong> runs an internal database integrity check to ensure

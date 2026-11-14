@@ -88,8 +88,8 @@ import uvicorn
 # First, before anything that can reach the database modules (see the module). `app_config` below does.
 import backend.load_env_file  # noqa: F401
 from backend import (
-    account_recovery, app_config, app_log_file, managed_proxy, mdns, runtime_config, server_setup, spa,
-    transport, tray,
+    account_recovery, app_config, app_log_file, ledger_adoption, managed_proxy, mdns, runtime_config,
+    server_setup, spa, transport, tray,
 )
 from backend.main import app, spa_mounted
 from backend.routers import app_control
@@ -634,12 +634,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Set a new password for an account locked out of sign-in, then exit without starting the "
              "server. Asks which account when USERNAME is left out.",
     )
+    parser.add_argument(
+        "--adopt-ledger",
+        action="store_true",
+        help="Pair the financial database the settings name with this installation's control database, "
+             "after showing both and asking, then exit without starting the server. For a server that "
+             "refuses to open its data because the two do not belong together.",
+    )
     args = parser.parse_args(argv)
 
-    # A recovery tool, not a launch: it needs the console it was typed into, so it runs before any
-    # redirect to the log, and it never touches the port or the lockfile.
+    # Recovery tools, not launches: they need the console they were typed into, so they run before any
+    # redirect to the log, and they never touch the port or the lockfile.
     if args.reset_password is not None:
         return account_recovery.run(args.reset_password or None)
+    if args.adopt_ledger:
+        return ledger_adoption.run()
 
     if args.certificate_fingerprint:
         return _print_certificate_fingerprint()

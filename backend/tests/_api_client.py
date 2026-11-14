@@ -1,15 +1,14 @@
 """Shared FastAPI TestClient harness.
 
-Exercises endpoints through the FULL stack — routing, the tenant-session middleware, Query-param
+Exercises endpoints through the FULL stack — routing, the sign-in session middleware, Query-param
 default resolution, and response serialization — which the direct-router-call tests deliberately
 bypass (and which is exactly where a class of bugs hides, e.g. unset Query() params arriving as
 FieldInfo objects when a router is called as a plain function).
 
-It points BOTH databases at fresh temp files (control DB, data DB, and the tenant root, so nothing
-touches the developer's real luma-data.db). Identity is uniform now — the tenant middleware requires a
-session in both modes — so the harness runs perimeter-off and establishes one by creating a local
-identity and selecting it. That identity adopts the temp data DB (its tenant db_path is the legacy
-path, which the harness has patched), so data endpoints reach exactly the temp DB the test seeds.
+It points BOTH databases at fresh temp files, so nothing touches the developer's real luma-data.db.
+The sign-in session middleware requires a session in both modes, so the harness runs perimeter-off and
+establishes one by creating a local identity and selecting it. Requests use the configured data DB,
+which the harness has patched, so data endpoints reach exactly the temp DB the test seeds.
 """
 
 import base64
@@ -75,8 +74,8 @@ def api_client(base_url: str | None = None, client_host: str = "127.0.0.1"):
     from backend.main import app
     try:
         with TestClient(_arriving_from(app, client_host), base_url=base_url or "http://testserver") as client:
-            # Establish a perimeter-off identity so the tenant middleware resolves a session (and routes
-            # to the temp data DB). Every data endpoint runs as this selected identity.
+            # Establish a perimeter-off identity so the sign-in session middleware resolves a session. Every data
+            # endpoint runs as this selected identity.
             created = client.post("/api/auth/identities", json={"name": "Tester"})
             assert created.status_code == 200, f"identity creation failed: {created.text}"
             identity = created.json()["identity"]

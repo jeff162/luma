@@ -2,7 +2,7 @@
 
 Every other backend test calls router functions directly, which bypasses three things only the real
 stack does: (1) FastAPI resolving unset Query() params to their defaults — call a router as a plain
-function and those params arrive as FieldInfo objects instead, a real bug class; (2) the tenant-session
+function and those params arrive as FieldInfo objects instead, a real bug class; (2) the sign-in session
 middleware; (3) request-body parsing + response serialization. These tests cover that gap with a few
 high-value endpoints rather than re-testing business logic (which the direct tests already own).
 """

@@ -2259,6 +2259,10 @@ file included, asks the `different_system` question. Whether the backup was this
 before the wipe, for the backup history and the watched folders. The id also namespaces browser-local UI
 caches, which a restore therefore starts afresh.
 
+**A restore leaves the workspace id alone.** It lives in `db_meta` beside `instance_id` and is not
+exported. It records which control database the ledger belongs to (`architecture.md` → *The two
+databases, and what separates them*), and restoring data does not change that.
+
 ### The backup history
 
 `backup_history` (`services/backup_history.py`) holds a row per backup made, written when the file is

@@ -171,8 +171,7 @@ class BackupFixtureTestCase(unittest.TestCase):
         # One user, since a restore keeps preferences only for people who exist once it is done.
         self.user_id = str(uuid.uuid4())
         with control_database.get_control_db() as cconn:
-            cconn.execute("INSERT INTO tenant (id, slug, name, db_path) VALUES ('fixture', 'fixture', 'Fixture', ?)",
-                          (str(self.db_path),))
+            cconn.execute("INSERT INTO tenant (id, slug, name) VALUES ('fixture', 'fixture', 'Fixture')")
             cconn.execute("INSERT INTO user_account (id, username, password_hash, tenant_id) "
                           "VALUES (?, 'fixture-user', '', 'fixture')", (self.user_id,))
 

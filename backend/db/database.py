@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Primary application database: schema and seeding for each tenant DB.
+Primary application database: schema and seeding for the financial database.
 
 This file owns the durable model the routers and services share. Its key guarantees
 are that fresh databases are created directly in the current shape, existing ones are
@@ -25,6 +25,9 @@ from backend.db import contention_trace
 from backend.runtime_config import resolve_db_path
 
 DB_PATH = resolve_db_path()
+# Every request uses `DB_PATH`, the database the configuration names. The override exists so a caller can
+# aim the code at another file for the length of a block, which is how the tests reach a database of their
+# own; nothing in the server sets it.
 _current_db_path: ContextVar[str | None] = ContextVar("luma_current_db_path", default=None)
 SHARED_OWNER_ID = "shared-owner"
 SHARED_OWNER_NAME = "shared"
@@ -37,8 +40,8 @@ def _normalize_db_path(db_path: str | None = None) -> str:
 
 
 def current_db_path() -> str:
-    """The data DB path in force right now — the per-request override when one is set, otherwise the
-    process default. Callers that need to put a file *beside* the database (a staged backup artifact, say)
+    """The data DB path in force right now — the override when one is set, otherwise the configured
+    database. Callers that need to put a file *beside* the database (a staged backup artifact, say)
     must use this rather than `DB_PATH` or `data_dir()`: `DB_PATH` can point outside the data directory,
     and neither reflects an override."""
     return _normalize_db_path()
@@ -2829,6 +2832,37 @@ def new_db_instance_id(conn) -> str:
         (instance_id,),
     )
     return instance_id
+
+
+# Which workspace this financial database belongs to: the id of the control database's one `tenant` row,
+# written into both files so a startup can tell whether the two it was configured with belong together
+# (`control_database.pairing_problem`). Unlike `instance_id` it never changes, a restore included, and it
+# is never carried in a backup: `db_meta` is not exported and a restore does not wipe it.
+WORKSPACE_ID_KEY = "workspace_id"
+
+
+def get_workspace_id(conn) -> str | None:
+    """The workspace this database belongs to, or None when it has not been given one. Writes nothing, so
+    it is safe on a database that may belong to another installation."""
+    has_meta = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'db_meta'"
+    ).fetchone()
+    if not has_meta:
+        return None
+    row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (WORKSPACE_ID_KEY,)).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def set_workspace_id(conn, workspace_id: str) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS db_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT OR REPLACE INTO db_meta (key, value) VALUES (?, ?)", (WORKSPACE_ID_KEY, workspace_id),
+    )
 
 
 def get_tenant_workflow_state(conn, key: str) -> dict:
