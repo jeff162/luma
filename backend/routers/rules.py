@@ -26,6 +26,7 @@ from backend.services.categorizer import (
     bump_rule_effect_dates,
     rule_scope_account_sql,
     rule_specificity_order_sql,
+    FEATURE_OWNED_CATEGORY_SOURCES,
     RULE_PRIORITY_LEVELS,
     RULE_PRIORITY_NORMAL,
 )
@@ -198,15 +199,21 @@ def _rule_matches_txn(rule, txn) -> bool:
     return rule_matches_row(rule, txn)
 
 
+# The feature-owned category sources no rule apply reaches (see `_apply_rule_to_existing`). The third,
+# `split`, is reached for its rename and tags and declines only the category.
+_APPLY_SPARED_SOURCES = tuple(source for source in FEATURE_OWNED_CATEGORY_SOURCES if source != "split")
+
+
 def _rule_visibly_changes_txn(rule, rule_tag_ids: set, txn, visible_tag_ids: set) -> bool:
     """Whether applying `rule` to this matched row changes what the row shows: its category, its name or
     its tags. The preview's filter and the apply's `updated` count both use it, so the number offered is
     the number reported. A provenance-only write — a `manual` row already in the rule's category becoming
     `rule`, or a clean name stored over an identical shown name — is not a change. Nor is anything on a
     trashed row, which no list shows. A split row's category is never changed (see
-    `_apply_rule_to_existing`). `visible_tag_ids` are the row's effective tags before the apply; every
-    rule tag is visible afterwards, since the apply clears a block on it."""
-    if txn["trashed_at"] is not None:
+    `_apply_rule_to_existing`), and a row whose source is in `_APPLY_SPARED_SOURCES` is not reached at all.
+    `visible_tag_ids` are the row's effective tags before the apply; every rule tag is visible afterwards,
+    since the apply clears a block on it."""
+    if txn["trashed_at"] is not None or txn["category_source"] in _APPLY_SPARED_SOURCES:
         return False
     if rule["category_id"] is not None and not txn["is_split"] and txn["category_id"] != rule["category_id"]:
         return True
@@ -267,23 +274,21 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    where_clauses, where_params = [], []
+    # Every apply, full-force included, spares the rows a feature owns (`_APPLY_SPARED_SOURCES`): taking an
+    # excluded Amazon charge or funding leg into a rule's category un-excludes it and counts the spend twice,
+    # and a refund follows the payment it returns. A split, the third feature-owned source, is reached so its
+    # rename and tags apply, and declines the category below.
+    where_clauses = [f"COALESCE(t.category_source, '') NOT IN ({','.join('?' * len(_APPLY_SPARED_SOURCES))})"]
+    where_params: list = list(_APPLY_SPARED_SOURCES)
     if preserve_manual:
-        # Preserve-manual reclaims trusted-import rows but spares a deliberate manual edit — and,
-        # for the same reason recategorize_all does, spares `enrichment` rows: a feature-owned
-        # excluded Amazon charge / suppressed funding leg must not be pulled into a rule's category
-        # by an automatic reclaim (it would un-exclude and double-count) — nor a refund following the
-        # payment it returns. The unscoped full-force apply (preserve_manual=False) remains the only
-        # path that may take them.
+        # Preserve-manual reclaims trusted-import rows but spares a deliberate manual edit.
         where_clauses.append("t.category_source IS NOT 'manual'")
-        where_clauses.append("t.category_source IS NOT 'enrichment'")
-        where_clauses.append("t.category_source IS NOT 'refund'")
     if txn_ids is not None:
         if not txn_ids:
             return []
         where_clauses.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
         where_params.extend(txn_ids)
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    where_sql = "WHERE " + " AND ".join(where_clauses)
 
     txns = conn.execute(
         f"""SELECT
@@ -297,6 +302,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.account_id,
                t.import_evidence_json,
                t.category_id,
+               t.category_source,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
                t.is_split,
@@ -423,7 +429,8 @@ class RulePreview(BaseModel):
 _RULE_PREVIEW_ROW_SQL = """
     SELECT
         t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.notes, t.import_evidence_json,
+        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.category_source, t.notes,
+        t.import_evidence_json,
         COALESCE(a.parent_account_id, a.id) AS account_id,
         t.owner_id,
         COALESCE(a.display_name, a.name) AS account_name,

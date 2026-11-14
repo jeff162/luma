@@ -62,7 +62,7 @@ editor or the rule action dialog, calls the full-force apply (`_apply_rule_to_ex
 category was set by hand (`category_source = 'manual'`). Every other path a rule reaches existing rows
 by spares those rows: rules running on import and sync, a merge or replace, widening a rule's amount
 range, and accepting a suggestion on the review page. Split transactions keep their categories under
-both modes.
+both modes, and neither mode reaches an excluded linked charge or a refund.
 
 So the editor's *Transactions affected by this rule* report (`RulePreviewDialog`) lists hand-set rows,
 and categorizing one of them by hand from the report does not take it out of the list, because the

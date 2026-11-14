@@ -919,8 +919,8 @@ What remains is two people writing the same field of the same row within seconds
 | `rule` | no | any automatic pass |
 | `import` | no | any automatic pass |
 | `cleared` | no | any automatic pass |
-| `enrichment` | no | the owning feature's reversal, or a full-force apply |
-| `refund` | no | follows its payment; a manual edit or a full-force apply ends that |
+| `enrichment` | no | the owning feature's reversal only; no rule apply takes it |
+| `refund` | no | follows its payment; a manual edit ends that, and no rule apply takes it |
 | NULL | no | any automatic pass |
 
 `enrichment`, `split` and `refund` are `FEATURE_OWNED_CATEGORY_SOURCES` (`services/categorizer.py`),
@@ -959,11 +959,13 @@ The operations:
   cleared row falls back to what import would have given it with no rule in the way: its file label's
   category as `import` when its batch is trusted (through `adopt_file_categories`), else uncategorized.
   A no-match `import` row is left as it is.
-- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match regardless of source,
+- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match that is not feature-owned,
   `manual` included, to `rule` and unlocked. An explicit apply is the user asking the rule to own those
-  rows.
+  rows. It does not reach `enrichment` or `refund` rows, and a split declines the category while taking
+  the rename and tags: taking an excluded charge or leg would count its spend twice, and nothing the
+  apply could intend needs that, since unlinking is what puts the row back in a counted category.
 - **Preserve-manual apply** (`?preserve_manual=true`, or `_apply_rule_to_existing` over a row list)
-  skips `manual`, `enrichment` and `refund` rows and reclaims `import` rows.
+  also skips `manual` rows, and reclaims `import` rows.
 - **Manual edits** write `manual` and the lock.
 
 ### Tags
@@ -1045,6 +1047,11 @@ manually created series are always `variable`; for a rule-backed one the rule ow
   are written from exactly the rows owned.
 - **An auto candidate is skipped when a user-owned series covers it**: same payee and category with an
   overlapping account scope, where NULL covers every account.
+- **A row a link set aside as a second record of counted money is not a member of anything**
+  (`_SHADOWED_TXN_IDS_SQL`): an Amazon order's card charge, and the excluded card or bank side of a PayPal
+  payment pair. The counted row carries the series; the charge would surface the same obligation again
+  as money movement, and transfer pairing cannot absorb it because both rows go the same direction. A
+  PayPal transfer pair's legs stay in the pool, since they are the movement.
 - **One charge per occurrence date.** When several share a date, the one closest to the series' typical
   amount is the member and the rest are left for other series. This is why there is no
   duplicated-charge signal: a real double charge is import dedupe's question.

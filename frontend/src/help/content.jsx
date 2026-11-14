@@ -1580,7 +1580,8 @@ export const HELP_TOPICS = [
         <h4>Applying a rule when it is saved</h4>
         <p>
           Saving a rule offers <strong>Apply this rule now to N matching existing transactions</strong>.
-          Unlike Categorize, this also changes categories set by hand.
+          Unlike Categorize, this also changes categories set by hand. A charge moved to money movement
+          by an Amazon order or a PayPal pairing keeps its category, and so does a refund.
         </p>
         <h4>Undoing a rule's categorizations</h4>
         <p>

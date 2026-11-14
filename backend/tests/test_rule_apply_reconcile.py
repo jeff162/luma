@@ -199,6 +199,32 @@ class RuleApplyReconcileTests(unittest.TestCase):
         self.assertEqual(set(affected), {changes, owned_by_hand, trashed})
         self.assertEqual((owner["category_source"], owner["category_overridden"]), ("rule", 0))
 
+    def test_no_apply_takes_a_row_a_feature_owns(self):
+        # An excluded Amazon charge taken into the rule's category would count the spend twice, and a
+        # refund follows its payment. Neither is offered by the preview nor touched by either apply mode.
+        account_id = self._account()
+        excluded_leaf = self._expense_leaf("Funding")
+        category_id = self._expense_leaf("Books")
+        rule_id = self._rule(category_id=category_id, keyword="kindle")
+        owned = {source: self._txn(account_id=account_id, merchant=f"Kindle {source}")
+                 for source in ("enrichment", "refund")}
+        with self._use_db_path(), get_db() as conn:
+            for source in owned:
+                conn.execute("UPDATE txn SET category_id = ?, category_source = ? WHERE id = ?",
+                             (excluded_leaf, source, owned[source]))
+
+        with self._use_db_path():
+            preview = preview_rule(RulePreview(keyword="kindle", category_id=category_id))
+        self.assertEqual(preview["transactions"], [])
+
+        for preserve_manual in (False, True):
+            with self._use_db_path(), get_db() as conn:
+                affected = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
+                rows = conn.execute("SELECT id, category_id, category_source FROM txn").fetchall()
+            self.assertEqual(affected, [])
+            self.assertEqual({r["id"]: (r["category_id"], r["category_source"]) for r in rows},
+                             {txn_id: (excluded_leaf, source) for source, txn_id in owned.items()})
+
 
 if __name__ == "__main__":
     unittest.main()

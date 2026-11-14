@@ -43,6 +43,7 @@ from typing import NamedTuple
 from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.services.account_groups import effective_account_id_sql
+from backend.services.amazon_order_amount import LINK_KIND as AMAZON_ORDER_LINK_KIND
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql, rule_specificity_order_sql
 from backend.services.transaction_facets import UNASSIGNED_OWNER_ID, owner_lens_admits
 from backend.services.transfer_pairs import (
@@ -184,6 +185,35 @@ def _pool_cutoff(window_months: int) -> str:
     return (date.today() - timedelta(days=int(window_months * 30.44))).isoformat()
 
 
+# Rows a link has set aside as the second record of money another row already counts: an Amazon order's
+# card charge, and the card or bank side of a PayPal payment pair (same direction as its PayPal row, and
+# excluded by the pairing). The counted row is the series; the shadow would surface the same obligation a
+# second time as money movement. A PayPal transfer pair is not a shadow: its two opposite legs are the
+# movement transfer pairing reads. Bound by `_shadowed_params`.
+_SHADOWED_TXN_IDS_SQL = """
+    SELECT m.txn_id
+    FROM   txn_link l
+    JOIN   txn_link_member m ON m.link_id = l.id AND m.role = 'charge'
+    WHERE  l.kind = ?
+    UNION ALL
+    SELECT c.txn_id
+    FROM   txn_link l
+    JOIN   txn_link_member c  ON c.link_id = l.id AND c.role = ?
+    JOIN   txn_link_member pm ON pm.link_id = l.id AND pm.role = ?
+    JOIN   txn ct ON ct.id = c.txn_id
+    JOIN   txn pt ON pt.id = pm.txn_id
+    WHERE  l.kind = ?
+      AND  (ct.amount > 0) = (pt.amount > 0)
+      AND  ct.category_source = 'enrichment'
+"""
+
+
+def _shadowed_params() -> tuple[str, ...]:
+    # Imported here because paypal_funding reaches this module through txn_trash.
+    from backend.services import paypal_funding
+    return (AMAZON_ORDER_LINK_KIND, paypal_funding.COUNTERPART_ROLE, paypal_funding.PAYPAL_ROLE,
+            paypal_funding.LINK_KIND)
+
 # Recent, live transactions eligible for detection. Trashed and pending rows excluded; account resolved to
 # its effective (top-level) account so merged children fold into the parent.
 _POOL_SQL = """
@@ -206,7 +236,8 @@ _POOL_SQL = """
     WHERE  t.trashed_at IS NULL
       AND  t.is_pending = 0
       AND  t.date >= ?
-"""
+      AND  t.id NOT IN ({shadowed})
+""".format(shadowed=_SHADOWED_TXN_IDS_SQL)
 
 # Narrows the pool to money-movement rows, the only ones transfer pairing reads.
 _MONEY_MOVEMENT_SQL = " AND COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) <> 0"
@@ -216,7 +247,7 @@ def _pool_rows(conn: sqlite3.Connection, window_months: int, where: str = "", pa
     """The detection pool, optionally narrowed by `where` (an `AND …` clause over `_POOL_SQL`'s aliases).
     A row with no date or no payee key is not a candidate for anything and is left out."""
     pool: list[dict] = []
-    for r in conn.execute(_POOL_SQL + where, (_pool_cutoff(window_months), *params)).fetchall():
+    for r in conn.execute(_POOL_SQL + where, (_pool_cutoff(window_months), *_shadowed_params(), *params)).fetchall():
         d = _parse_date(r["date"])
         if d is None:
             continue
@@ -269,7 +300,7 @@ def _reference_now(conn: sqlite3.Connection, window_months: int) -> date:
     lags real today. Read with its own query so a scan that loads only part of the pool measures every
     series against the same date a full scan does."""
     row = conn.execute(
-        "SELECT MAX(t.date) AS newest FROM (" + _POOL_SQL + ") t", (_pool_cutoff(window_months),)
+        "SELECT MAX(t.date) AS newest FROM (" + _POOL_SQL + ") t", (_pool_cutoff(window_months), *_shadowed_params())
     ).fetchone()
     return _parse_date(row["newest"]) or date.today()
 

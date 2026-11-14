@@ -22,6 +22,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers.recurring import (
     SeriesUpdate, list_series, restore_series, suppress_series, update_series,
 )
+from backend.services import txn_links
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
     maybe_auto_scan,
@@ -668,6 +669,47 @@ class RecurringDetectionTests(unittest.TestCase):
                 ids = [r["id"] for r in conn.execute("SELECT id FROM txn").fetchall()]
                 keys = payee_keys_for_ids(conn, ids)
         self.assertEqual(keys, {"amzn mktp", "netflix"})
+
+    def _add_shadowed_pairs(self, *, kind, roles, counted_payee, shadow_payee):
+        """A monthly obligation recorded twice, linked under `kind`: the counted row on a second account,
+        and the card charge that the link moved into a money-movement leaf (`enrichment`)."""
+        counted_role, shadow_role = roles
+        other_account = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO account (id, provider, name, display_name) VALUES (?, 'fixture', 'Other', 'Other')",
+                (other_account,),
+            )
+            parent = conn.execute("SELECT id FROM category WHERE system_key = 'unassigned'").fetchone()["id"]
+            excluded = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO category (id, parent_id, name, exclude_from_totals) VALUES (?, ?, 'Funding', 1)",
+                (excluded, parent),
+            )
+            for i in range(10):
+                d = (date.today() - timedelta(days=30 * i)).isoformat()
+                counted, shadow = str(uuid.uuid4()), str(uuid.uuid4())
+                insert = ("INSERT INTO txn (id, account_id, owner_id, category_id, category_source, amount, "
+                          "merchant_name, display_name, raw_name, date) VALUES (?,?,?,?,?,?,?,?,?,?)")
+                conn.execute(insert, (counted, other_account, SHARED_OWNER_ID, self.cats["Streaming"], "rule",
+                                      -14.95, counted_payee, counted_payee, counted_payee, d))
+                conn.execute(insert, (shadow, self.account_id, SHARED_OWNER_ID, excluded, "enrichment",
+                                      -14.95, shadow_payee, shadow_payee, shadow_payee, d))
+                txn_links.create_link(conn, kind, [(counted, counted_role), (shadow, shadow_role)])
+
+    def test_a_linked_amazon_charge_is_not_a_second_series(self):
+        # The order is the record; its card charge, moved to an excluded leaf, would otherwise surface the
+        # same subscription again as money movement.
+        self._add_shadowed_pairs(kind="amazon_order", roles=("order", "charge"),
+                                 counted_payee="Audiobook Club Plus;", shadow_payee="Audiobook Club")
+        self._scan()
+        self.assertEqual([s["display_name"] for s in self._series()], ["Audiobook Club Plus;"])
+
+    def test_the_excluded_side_of_a_paypal_payment_pair_is_not_a_second_series(self):
+        self._add_shadowed_pairs(kind="paypal_funding", roles=("paypal", "counterpart"),
+                                 counted_payee="Streamly", shadow_payee="PAYPAL *STREAMLY")
+        self._scan()
+        self.assertEqual([s["display_name"] for s in self._series()], ["Streamly"])
 
 
     # --- Rule-backed series + pin/exclude overrides + lifecycle -----------------------------------
