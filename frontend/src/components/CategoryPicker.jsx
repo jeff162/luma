@@ -18,6 +18,19 @@ const ENTRIES_TOWARD_FIELD = 4
  * biases matches toward the currently selected group, and can branch directly into creating a missing
  * category or group so recategorization never dead-ends on "no results".
  */
+
+const SUBSTRING_RANK = 2
+
+// How well a name matches a lowercased query: 0 starts with it, 1 a word starts with it, SUBSTRING_RANK
+// contains it, null no match.
+function getNameMatchRank(name, query) {
+  const normalizedName = String(name || '').toLowerCase()
+  if (normalizedName.startsWith(query)) return 0
+  if (normalizedName.split(/[\s/&-]+/).some(part => part.startsWith(query))) return 1
+  if (normalizedName.includes(query)) return SUBSTRING_RANK
+  return null
+}
+
 function renderHighlightedCategoryName(name, query) {
   if (!query) return name
 
@@ -290,31 +303,42 @@ export default function CategoryPicker({
   const selected = categories.find(c => c.id === value)
   const selectedGroupId = selected?.parent_id ?? null
   const trimmedQuery = query.trim().toLowerCase()
+  // A group whose name matches the search brings in all of its categories, so a set of categories can
+  // be found by its group without repeating the group's name in each. Group names match only at the
+  // start of the name or of a word: there are few groups, and a mid-word match on an early letter or two
+  // would expand nearly all of them.
+  const matchedGroupRanks = useMemo(() => {
+    const ranks = new Map()
+    if (!trimmedQuery) return ranks
+    for (const group of groups) {
+      const rank = getNameMatchRank(group.name, trimmedQuery)
+      if (rank != null && rank < SUBSTRING_RANK) ranks.set(group.id, rank)
+    }
+    return ranks
+  }, [groups, trimmedQuery])
   const matchingItems = useMemo(() => {
     if (!trimmedQuery) return []
 
-    function getMatchRank(category) {
-      const categoryName = String(category.name || '').toLowerCase()
-
-      if (categoryName.startsWith(trimmedQuery)) return 0
-      if (categoryName.split(/[\s/&-]+/).some(part => part.startsWith(trimmedQuery))) return 1
-      if (categoryName.includes(trimmedQuery)) return 2
-      return null
-    }
-
     return leaves
-      .map(category => ({
-        category,
-        rank: getMatchRank(category),
-        inSelectedGroup: selectedGroupId != null && category.parent_id === selectedGroupId,
-      }))
+      .map(category => {
+        const ownRank = getNameMatchRank(category.name, trimmedQuery)
+        return {
+          category,
+          direct: ownRank != null,
+          rank: ownRank ?? matchedGroupRanks.get(category.parent_id) ?? null,
+          inSelectedGroup: selectedGroupId != null && category.parent_id === selectedGroupId,
+        }
+      })
       .filter(item => item.rank != null)
+      // A category matched by its own name stays ahead of one shown only because its group matched, so
+      // the best direct match is still the first row Enter or Tab would pick.
       .sort((a, b) => {
+        if (a.direct !== b.direct) return a.direct ? -1 : 1
         if (a.rank !== b.rank) return a.rank - b.rank
         if (a.inSelectedGroup !== b.inSelectedGroup) return a.inSelectedGroup ? -1 : 1
         return String(a.category.name || '').localeCompare(String(b.category.name || ''), undefined, { sensitivity: 'base' })
       })
-  }, [leaves, trimmedQuery, selectedGroupId])
+  }, [leaves, trimmedQuery, selectedGroupId, matchedGroupRanks])
   const displayGroups = useMemo(() => {
     // Even in search mode, keep matches grouped under their parents so the user can judge context and create in the right place.
     if (!trimmedQuery) {
@@ -328,9 +352,11 @@ export default function CategoryPicker({
     for (const item of matchingItems) {
       const existing = groupEntries.get(item.category.parent_id) ?? {
         categories: [],
+        hasDirect: false,
         bestRank: item.rank,
       }
       existing.categories.push(item.category)
+      existing.hasDirect ||= item.direct
       existing.bestRank = Math.min(existing.bestRank, item.rank)
       groupEntries.set(item.category.parent_id, existing)
     }
@@ -338,17 +364,18 @@ export default function CategoryPicker({
     return groups
       .map(group => {
         const entry = groupEntries.get(group.id)
-        return entry ? { group, categories: entry.categories, bestRank: entry.bestRank } : null
+        return entry ? { group, ...entry, groupMatched: matchedGroupRanks.has(group.id) } : null
       })
       .filter(Boolean)
       .sort((a, b) => {
+        if (a.hasDirect !== b.hasDirect) return a.hasDirect ? -1 : 1
         const aInSelectedGroup = selectedGroupId != null && a.group.id === selectedGroupId
         const bInSelectedGroup = selectedGroupId != null && b.group.id === selectedGroupId
         if (aInSelectedGroup !== bInSelectedGroup) return aInSelectedGroup ? -1 : 1
         if (a.bestRank !== b.bestRank) return a.bestRank - b.bestRank
         return String(a.group.name || '').localeCompare(String(b.group.name || ''), undefined, { sensitivity: 'base' })
       })
-  }, [groups, leaves, matchingItems, selectedGroupId, trimmedQuery])
+  }, [groups, leaves, matchingItems, matchedGroupRanks, selectedGroupId, trimmedQuery])
   const displayedCategories = useMemo(
     () => displayGroups.flatMap(entry => entry.categories),
     [displayGroups],
@@ -720,13 +747,13 @@ export default function CategoryPicker({
                     <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                   </>
                 ) : null}
-                {displayGroups.map(({ group, categories: groupCategories }) => {
+                {displayGroups.map(({ group, categories: groupCategories, groupMatched }) => {
                   const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
                   return (
                     <div key={group.id}>
                       <SectionEyebrow style={{ padding: '5px 10px 1px', display: 'flex', alignItems: 'center', gap: 7 }}>
                         <CategoryMarker kind="group" />
-                        <span>{group.name}</span>
+                        <span>{groupMatched ? renderHighlightedCategoryName(group.name, trimmedQuery) : group.name}</span>
                       </SectionEyebrow>
                       {groupCategories.map(c => {
                         const active = trimmedQuery && displayedIndexById.get(c.id) === cursor
