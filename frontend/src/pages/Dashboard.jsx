@@ -1105,7 +1105,7 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Yearly trend</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Yearly cash flow trend</div>
           <TrendSpanSelect
             value={span}
             onChange={onSpanChange}
@@ -1137,7 +1137,7 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Monthly trend</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Monthly cash flow trend</div>
           <TrendsWindowSelect value={effectiveWindow} options={windowOptions} onChange={onYearChange} compact />
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
@@ -1556,7 +1556,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
       <div ref={splitRowRef} style={{ display: 'grid', gridTemplateColumns: `${leftFr}fr 16px ${1 - leftFr}fr`, position: 'relative', zIndex: 1, minWidth: 0 }}>
         <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total per month</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total {viewIsIncome ? 'income' : 'spending'} per month</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
             {latestRunRate != null
               ? <>12-mo run rate: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(latestRunRate)}/mo</span></>
@@ -1643,7 +1643,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
         <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>{viewIsIncome ? 'Annual income totals' : 'Annual totals'}</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{viewIsIncome ? 'Annual income totals' : 'Annual spending totals'}</div>
             <TrendSpanSelect
               value={span}
               onChange={onSpanChange}
@@ -1663,7 +1663,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
       <Card style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
-          Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
+          Average monthly {viewIsIncome ? 'income' : 'spending'}{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
           <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{trendWindow.label.toLowerCase()}</span>
           {!drillGroup && (
             <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>· click a group to see its categories</span>
@@ -2995,9 +2995,9 @@ export default function Dashboard() {
                       {/* Money out leads, as spending does on the other two frames — the cards are read
                           as a row across frames, so a consistent reading order matters more here than
                           mirroring the diagram below, which runs sources-left to destinations-right. */}
-                      <SummaryTotalCard label={`Money out · ${singlePeriodLabel}`}
+                      <SummaryTotalCard label={`Spending · ${singlePeriodLabel}`}
                         value={cashFlowGraph?.outflowTotal || 0} />
-                      <SummaryTotalCard label={`Money in · ${singlePeriodLabel}`}
+                      <SummaryTotalCard label={`Income · ${singlePeriodLabel}`}
                         value={cashFlowGraph?.inflowTotal || 0} color="var(--success)" />
                       {/* Signed on the cash axis, so a period that spent more than it took in reads
                           negative rather than being flattened into a magnitude. */}
@@ -3007,9 +3007,9 @@ export default function Dashboard() {
                     </>
                   ) : (
                     <>
-                      <SummaryTotalCard label={`Total spending · ${singlePeriodLabel}`} value={totalSpend} />
+                      <SummaryTotalCard label={`Spending · ${singlePeriodLabel}`} value={totalSpend} />
                       {totalIncome > 0 && (
-                        <SummaryTotalCard label={`Total income · ${singlePeriodLabel}`} value={totalIncome}
+                        <SummaryTotalCard label={`Income · ${singlePeriodLabel}`} value={totalIncome}
                           color="var(--success)" />
                       )}
                     </>
@@ -3439,7 +3439,7 @@ export default function Dashboard() {
                         {trendIsSameSpan
                           ? `The selected span, repeated each ${trendGrainNoun(filters.date)}`
                           : `${grainWord} totals ${describeTrendSpan(trendSpanPref)}`}
-                        {' · click a bar to focus it · scroll horizontally to pan'}
+                        {' · click a bar to select that period'}
                       </div>
                       <StaleWhileRefreshing refreshing={computedTrend == null} style={{ display: 'flex', alignItems: 'flex-start' }}>
                         {/* The value axis, held out of the scroll so it stays readable at any pan
@@ -3725,41 +3725,41 @@ export default function Dashboard() {
                 {/* A drill keeps the current breakdown on screen until the group's figures arrive, so the
                     page does not collapse around a spinner and spring back. */}
                 <StaleWhileRefreshing refreshing={drillLoading}>
-                    <Card>
-                      <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, alignItems: 'center' }}>
-                        <span style={{ color: 'var(--text)', fontWeight: 600 }}>
-                          {cmpLevel === 'groups' ? 'By group' : cmpGroup?.group_name}
+                  <Card>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, alignItems: 'center' }}>
+                      <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                        {cmpLevel === 'groups' ? 'By group' : cmpGroup?.group_name}
+                      </span>
+                      <div style={{ display: 'flex', gap: 12, marginLeft: 'auto', fontSize: 11 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 20, height: 4, background: 'var(--accent)', display: 'inline-block', borderRadius: 2 }} />
+                          {periodLabel(periodA)}
                         </span>
-                        <div style={{ display: 'flex', gap: 12, marginLeft: 'auto', fontSize: 11 }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <span style={{ width: 20, height: 4, background: 'var(--accent)', display: 'inline-block', borderRadius: 2 }} />
-                            {periodLabel(periodA)}
-                          </span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <span style={{ width: 20, height: 4, background: 'var(--accent)', opacity: 0.35, display: 'inline-block', borderRadius: 2 }} />
-                            {periodLabel(periodB)}
-                          </span>
-                        </div>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 20, height: 4, background: 'var(--accent)', opacity: 0.35, display: 'inline-block', borderRadius: 2 }} />
+                          {periodLabel(periodB)}
+                        </span>
                       </div>
+                    </div>
 
-                      {cmpLevel === 'groups' && coloredCmpGroups.map(g => (
-                        <CompareRow
-                          key={g.group_id}
-                          label={g.group_name} color={g.group_color} kind="group"
-                          a={g.totalA} b={g.totalB} maxVal={cmpMaxGroup}
-                          onClick={() => cmpDrillToCategories(g)}
-                        />
-                      ))}
+                    {cmpLevel === 'groups' && coloredCmpGroups.map(g => (
+                      <CompareRow
+                        key={g.group_id}
+                        label={g.group_name} color={g.group_color} kind="group"
+                        a={g.totalA} b={g.totalB} maxVal={cmpMaxGroup}
+                        onClick={() => cmpDrillToCategories(g)}
+                      />
+                    ))}
 
-                      {cmpLevel === 'categories' && coloredCmpCats.map(c => (
-                        <CompareRow
-                          key={c.category_id}
-                          label={c.category_name} color={c.category_color} kind="category"
-                          a={c.totalA} b={c.totalB} maxVal={cmpMaxCat}
-                          onClick={null}
-                        />
-                      ))}
-                    </Card>
+                    {cmpLevel === 'categories' && coloredCmpCats.map(c => (
+                      <CompareRow
+                        key={c.category_id}
+                        label={c.category_name} color={c.category_color} kind="category"
+                        a={c.totalA} b={c.totalB} maxVal={cmpMaxCat}
+                        onClick={null}
+                      />
+                    ))}
+                  </Card>
                 </StaleWhileRefreshing>
               </>
             )}
