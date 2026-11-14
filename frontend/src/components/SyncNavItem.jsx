@@ -32,6 +32,7 @@ import { rosterAdded } from '../lib/syncRoster.js'
 import { formatTimestamp } from '../lib/utils.js'
 import { VISUALLY_HIDDEN_STYLE } from './ui.jsx'
 import { NavIcon } from './navIcons.jsx'
+import { NavPaneHint } from './NavPaneHint.jsx'
 
 // What the tooltip says about each provider under the headline, so a stale overall figure can be traced
 // to the connection responsible for it without opening the Connections tab.
@@ -99,33 +100,35 @@ export function SyncNavItem({ style, activeStyle, collapsed = false }) {
   const glyphColor = driving ? 'var(--accent)' : finished ? 'var(--success)' : 'var(--muted)'
   return (
     <>
-      <button type="button" onClick={onClick} title={title} style={{
-        ...rowStyle,
-        width: 'auto',
-        background: driving || finished ? rowStyle.background : 'none',
-        border: 'none',
-        cursor: 'pointer',
-        textAlign: 'left',
-        font: 'inherit',
-        fontSize: 14,
-        minWidth: 0,
-      }}>
-        {collapsed ? (
-          <span style={{ color: glyphColor }}>
-            <NavIcon
-              name={finished ? 'syncDone' : 'sync'}
-              className={driving ? 'ui-refresh-icon is-spinning' : undefined}
-            />
+      <NavPaneHint collapsed={collapsed} content={title} row describeTrigger>
+        <button type="button" onClick={onClick} title={collapsed ? undefined : title} style={{
+          ...rowStyle,
+          width: 'auto',
+          background: driving || finished ? rowStyle.background : 'none',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          font: 'inherit',
+          fontSize: 14,
+          minWidth: 0,
+        }}>
+          {collapsed ? (
+            <span style={{ color: glyphColor }}>
+              <NavIcon
+                name={finished ? 'syncDone' : 'sync'}
+                className={driving ? 'ui-refresh-icon is-spinning' : undefined}
+              />
+            </span>
+          ) : (
+            <span aria-hidden style={{ flexShrink: 0, marginRight: 8, color: glyphColor }}>
+              {finished ? '✓' : '↻'}
+            </span>
+          )}
+          <span style={collapsed ? VISUALLY_HIDDEN_STYLE : { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {label}
           </span>
-        ) : (
-          <span aria-hidden style={{ flexShrink: 0, marginRight: 8, color: glyphColor }}>
-            {finished ? '✓' : '↻'}
-          </span>
-        )}
-        <span style={collapsed ? VISUALLY_HIDDEN_STYLE : { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {label}
-        </span>
-      </button>
+        </button>
+      </NavPaneHint>
       {dialogsNode}
     </>
   )

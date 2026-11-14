@@ -95,7 +95,10 @@ export function getTooltipSurfaceStyle({ tone = 'neutral' } = {}) {
 // `describeTrigger` also gives the hint to assistive technology, as the trigger's description, for a
 // plain-text hint on a single control. A disabled control needs it: the hover is its only way to say why,
 // and a screen reader never sees a hover.
-export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0, describeTrigger = false }) {
+//
+// `side="right"` places the hint beside the trigger, centred on it, instead of below it. Use it for a
+// column of triggers, where a hint below one would cover the next.
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', side = 'below', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0, describeTrigger = false }) {
   const triggerRef = useRef(null)
   const descriptionId = useId()
   const tipRef = useRef(null)
@@ -194,13 +197,17 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     if (!trigger || !tip) return
     const vw = document.documentElement.clientWidth
     const vh = document.documentElement.clientHeight
-    const left = alignOnAxis({
-      start: align === 'right' ? trigger.right - tip.width : trigger.left, size: tip.width, lo: 0, hi: vw,
-    })
-    const top = besideOnAxis({ before: trigger.top, after: trigger.bottom, size: tip.height, lo: 0, hi: vh })
+    const left = side === 'right'
+      ? besideOnAxis({ before: trigger.left, after: trigger.right, size: tip.width, lo: 0, hi: vw })
+      : alignOnAxis({
+        start: align === 'right' ? trigger.right - tip.width : trigger.left, size: tip.width, lo: 0, hi: vw,
+      })
+    const top = side === 'right'
+      ? alignOnAxis({ start: trigger.top + (trigger.height - tip.height) / 2, size: tip.height, lo: 0, hi: vh })
+      : besideOnAxis({ before: trigger.top, after: trigger.bottom, size: tip.height, lo: 0, hi: vh })
     // Measured in screen pixels, placed in CSS pixels (displaySize.js).
     setPos({ top: toCssPx(top), left: toCssPx(left) })
-  }, [open, content, align, bare, fit])
+  }, [open, content, align, side, bare, fit])
   if (!content) return children
   const triggerChild = describeTrigger && isValidElement(children)
     ? cloneElement(children, {

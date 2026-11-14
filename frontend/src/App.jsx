@@ -71,6 +71,7 @@ import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx
 import { useDismissibleLayer } from './lib/uiInteractions.js'
 import { ActionMenu } from './components/ActionMenu.jsx'
 import { AppConfirmDialog, AppDialog, Button, PillMark, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
+import { NavPaneHint } from './components/NavPaneHint.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -454,7 +455,11 @@ function CollapsedNavLogo({ dataLocation, version }) {
     shown?.path,
     shown?.controlPath ? `Control database: ${shown.controlPath}` : null,
   ].filter(Boolean).join('\n')
-  return <img src={LUMA_ICON_URL} alt={APP_NAME} title={hoverText} width={28} height={28} style={{ display: 'block' }} />
+  return (
+    <NavPaneHint collapsed content={hoverText} describeTrigger>
+      <img src={LUMA_ICON_URL} alt={APP_NAME} width={28} height={28} style={{ display: 'block' }} />
+    </NavPaneHint>
+  )
 }
 
 function clampNavPaneWidth(value) {
@@ -1604,16 +1609,18 @@ export default function App() {
   }
 
   const navPaneToggle = (
-    <button
-      type="button"
-      className="nav-icon-button"
-      onClick={() => setNavCollapsed(collapsed => !collapsed)}
-      aria-expanded={!navCollapsed}
-      aria-label={navCollapsed ? 'Expand navigation pane' : 'Collapse navigation pane'}
-      title={navCollapsed ? 'Expand navigation pane' : 'Collapse navigation pane'}
-    >
-      <NavIcon name={navCollapsed ? 'expand' : 'collapse'} />
-    </button>
+    <NavPaneHint collapsed={navCollapsed} content="Expand navigation pane">
+      <button
+        type="button"
+        className="nav-icon-button"
+        onClick={() => setNavCollapsed(collapsed => !collapsed)}
+        aria-expanded={!navCollapsed}
+        aria-label={navCollapsed ? 'Expand navigation pane' : 'Collapse navigation pane'}
+        title={navCollapsed ? undefined : 'Collapse navigation pane'}
+      >
+        <NavIcon name={navCollapsed ? 'expand' : 'collapse'} />
+      </button>
+    </NavPaneHint>
   )
 
   async function handleLogout() {
@@ -2035,35 +2042,35 @@ export default function App() {
                                     </div>
                                   )}
                                   {NAV_LINKS.map(([to, label, icon]) => (
-                                    <NavLink
-                                      key={to}
-                                      to={to}
-                                      end={to === '/'}
-                                      title={navCollapsed ? label : undefined}
-                                      style={({ isActive }) => ({
-                                        ...(isActive ? activeStyle : s.link),
-                                        ...(navCollapsed ? s.linkCollapsed : null),
-                                      })}
-                                    >
-                                      {navCollapsed ? <NavIcon name={icon} /> : null}
-                                      <span style={navCollapsed ? s.visuallyHidden : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {label}
-                                      </span>
-                                      {to === '/tasks' && taskCount > 0 && (
-                                        <span style={{
-                                          background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
-                                          color: '#fff',
-                                          fontWeight: 700,
-                                          borderRadius: 99,
-                                          textAlign: 'center',
-                                          ...(navCollapsed
-                                            ? { position: 'absolute', top: 3, left: 22, fontSize: 10, padding: '0 4px', lineHeight: '15px', minWidth: 15 }
-                                            : { fontSize: 11, padding: '1px 7px', lineHeight: '18px', minWidth: 20 }),
-                                        }}>
-                                          {taskCount}
+                                    <NavPaneHint key={to} collapsed={navCollapsed} content={label} row>
+                                      <NavLink
+                                        to={to}
+                                        end={to === '/'}
+                                        style={({ isActive }) => ({
+                                          ...(isActive ? activeStyle : s.link),
+                                          ...(navCollapsed ? s.linkCollapsed : null),
+                                        })}
+                                      >
+                                        {navCollapsed ? <NavIcon name={icon} /> : null}
+                                        <span style={navCollapsed ? s.visuallyHidden : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {label}
                                         </span>
-                                      )}
-                                    </NavLink>
+                                        {to === '/tasks' && taskCount > 0 && (
+                                          <span style={{
+                                            background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
+                                            color: '#fff',
+                                            fontWeight: 700,
+                                            borderRadius: 99,
+                                            textAlign: 'center',
+                                            ...(navCollapsed
+                                              ? { position: 'absolute', top: 3, left: 22, fontSize: 10, padding: '0 4px', lineHeight: '15px', minWidth: 15 }
+                                              : { fontSize: 11, padding: '1px 7px', lineHeight: '18px', minWidth: 20 }),
+                                          }}>
+                                            {taskCount}
+                                          </span>
+                                        )}
+                                      </NavLink>
+                                    </NavPaneHint>
                                   ))}
                                   {/* Permanent, so it belongs with the pages rather than among the stashed-report
                               pills below it — see components/SyncNavItem.jsx. */}
@@ -2079,42 +2086,47 @@ export default function App() {
                                   {navCollapsed ? (
                                     <div style={s.navFooterCollapsed}>
                                       {authEnabled ? (
-                                        <span
-                                          role="img"
-                                          aria-label={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
-                                          title={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
-                                          onContextMenu={openNavProfileMenu}
-                                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, color: 'var(--muted)' }}
-                                        >
-                                          <ProfileInitials name={currentUser?.display_name || currentUser?.username} />
-                                        </span>
+                                        <NavPaneHint collapsed content={`Signed in as ${currentUser?.display_name || currentUser?.username}`}>
+                                          <span
+                                            role="img"
+                                            aria-label={`Signed in as ${currentUser?.display_name || currentUser?.username}`}
+                                            onContextMenu={openNavProfileMenu}
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, color: 'var(--muted)' }}
+                                          >
+                                            <ProfileInitials name={currentUser?.display_name || currentUser?.username} />
+                                          </span>
+                                        </NavPaneHint>
                                       ) : (
-                                        <button
-                                          type="button"
-                                          className="nav-icon-button"
-                                          onClick={handleSwitchLocalProfile}
-                                          onContextMenu={openNavProfileMenu}
-                                          aria-label={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}
-                                          title={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}
-                                        >
-                                          <ProfileInitials name={activeLocalProfile?.name} />
-                                        </button>
+                                        <NavPaneHint collapsed content={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}>
+                                          <button
+                                            type="button"
+                                            className="nav-icon-button"
+                                            onClick={handleSwitchLocalProfile}
+                                            onContextMenu={openNavProfileMenu}
+                                            aria-label={`Switch user profile (${activeLocalProfile?.name || 'none chosen'})`}
+                                          >
+                                            <ProfileInitials name={activeLocalProfile?.name} />
+                                          </button>
+                                        </NavPaneHint>
                                       )}
                                       {authEnabled && (
-                                        <button type="button" className="nav-icon-button" onClick={handleLogout} aria-label="Sign out" title="Sign out">
-                                          <NavIcon name="signOut" />
-                                        </button>
+                                        <NavPaneHint collapsed content="Sign out">
+                                          <button type="button" className="nav-icon-button" onClick={handleLogout} aria-label="Sign out">
+                                            <NavIcon name="signOut" />
+                                          </button>
+                                        </NavPaneHint>
                                       )}
                                       {shutdownAvailable && (
-                                        <button
-                                          type="button"
-                                          className="nav-icon-button"
-                                          onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
-                                          aria-label="Shut down Luma"
-                                          title="Shut down Luma — stop it on this computer"
-                                        >
-                                          <NavIcon name="shutDown" />
-                                        </button>
+                                        <NavPaneHint collapsed content="Shut down Luma — stop it on this computer" describeTrigger>
+                                          <button
+                                            type="button"
+                                            className="nav-icon-button"
+                                            onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
+                                            aria-label="Shut down Luma"
+                                          >
+                                            <NavIcon name="shutDown" />
+                                          </button>
+                                        </NavPaneHint>
                                       )}
                                     </div>
                                   ) : (

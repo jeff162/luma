@@ -3,6 +3,7 @@
 
 import { NavIcon } from './navIcons.jsx'
 import { VISUALLY_HIDDEN_STYLE } from './ui.jsx'
+import { NavPaneHint } from './NavPaneHint.jsx'
 
 // The nav-bar restore chip for a minimized detached report viewer (see lib/useDetachedReportViewer.js).
 // Extracted from the duplicate report's nav item so every detached report gets the same affordance:
@@ -34,21 +35,22 @@ export function MinimizedReportPill({ label, badgeCount = 0, tone = 'var(--warni
 
   if (collapsed) {
     return (
-      <button
-        type="button"
-        onClick={onRestore}
-        title={title}
-        style={{
-          ...chip,
-          position: 'relative',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 40, height: 36, padding: 0, margin: '4px 8px',
-        }}
-      >
-        <span style={{ color: tone }}><NavIcon name={navIcon} /></span>
-        <span style={VISUALLY_HIDDEN_STYLE}>{label}</span>
-        {badge}
-      </button>
+      <NavPaneHint collapsed content={title} row describeTrigger>
+        <button
+          type="button"
+          onClick={onRestore}
+          style={{
+            ...chip,
+            position: 'relative',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 40, height: 36, padding: 0, margin: '4px 8px',
+          }}
+        >
+          <span style={{ color: tone }}><NavIcon name={navIcon} /></span>
+          <span style={VISUALLY_HIDDEN_STYLE}>{label}</span>
+          {badge}
+        </button>
+      </NavPaneHint>
     )
   }
 

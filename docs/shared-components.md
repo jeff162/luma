@@ -63,6 +63,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `useVisibleViewport` and its helpers | Keeping a fixed layer that holds a text field above an on-screen keyboard. | `lib/visibleViewport.js` |
 | `useAnchoredPopup` | A popup kept against the element it belongs to: below, beside or over it, flipping when there is no room. | `lib/anchoredPopup.js` |
 | `useDetachedReportViewer` + `MinimizedReportPill` | A report that stays open across navigation and minimizes to the navigation pane. Each report passes a `navIcon` of its own (`components/navIcons.jsx`), which is all that tells it apart in a collapsed pane. | `lib/useDetachedReportViewer.js`, `components/MinimizedReportPill.jsx` |
+| `NavPaneHint` | The hover label of anything in the navigation pane, shown only when the pane is collapsed: at once, and beside the icon. Built on `Tooltip`'s `side="right"`. | `components/NavPaneHint.jsx` |
 | `useUnifiedDuplicatesViewer` | Opening the duplicate report from any surface. | `contexts/UnifiedDuplicatesViewerContext.jsx` |
 | `useReconciliationViewer` | Opening a reconciliation report. A new vendor is an entry in `reconciliationVendors.js` and `RECONCILIATION_REPORTS`, not a new dialog. | `contexts/ReconciliationViewerContext.jsx`, `components/importExport/reconciliation/`, `lib/reconciliationReports.js` |
 | `useBatchDetailPanels` | Opening an import's transaction list in place, from any surface. | `components/importExport/useBatchDetailPanels.jsx` |
