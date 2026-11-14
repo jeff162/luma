@@ -8,7 +8,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import OwnerLensTab from './components/OwnerLensTab.jsx'
-import { OwnerLensProvider } from './lib/OwnerLensContext.jsx'
+import { OwnerLensProvider, useOwnerLens } from './lib/OwnerLensContext.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api, SESSION_LOST_EVENT, signalDataMutated } from './lib/api.js'
 import { useOnForeground } from './lib/useOnForeground.js'
@@ -70,7 +70,7 @@ import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
 import { ActionMenu } from './components/ActionMenu.jsx'
-import { AppConfirmDialog, AppDialog, Button, PillMark, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, PillMark, Spinner, Toggle, Tooltip, TOUCH_GRIP_WIDTH, TouchResizeMark } from './components/ui.jsx'
 import { NavPaneHint } from './components/NavPaneHint.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
@@ -1188,6 +1188,10 @@ function BackgroundCatchUp() {
   const { refreshPreferences } = useUserPreferences()
   const runningRef = useRef(null)
   const lastInputRef = useRef(Date.now())
+  // Read through a ref so turning the lens on or off does not make a new `catchUp` and run it again.
+  const { on: lensOn, available: lensAvailable } = useOwnerLens()
+  const ruleReachRef = useRef(false)
+  ruleReachRef.current = lensOn && lensAvailable
 
   const catchUp = useCallback((learnFirst = false) => {
     if (runningRef.current) return runningRef.current
@@ -1199,6 +1203,9 @@ function BackgroundCatchUp() {
       await requestDueBackgroundWork()
       await tracker.check()
       signalDataMutated()
+      // Last, and not awaited: filling a stale cache can take seconds, and nothing above should wait for it.
+      // A page asking for the same cache meanwhile waits on this fill rather than starting its own.
+      api.warmDerivedCaches({ ruleReach: ruleReachRef.current }, { suppressMutationSignal: true }).catch(() => {})
     })().finally(() => { runningRef.current = null })
     return runningRef.current
   }, [tracker, refreshPreferences])
@@ -1861,7 +1868,7 @@ export default function App() {
   if (!authChecked) {
     return (
       <div style={{ minHeight: vh(100), display: 'grid', placeItems: 'center' }}>
-        <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading {APP_NAME}...</div>
+        <Spinner label={`Loading ${APP_NAME}…`} />
       </div>
     )
   }

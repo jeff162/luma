@@ -20,7 +20,8 @@ definition.
 - Each pass is row-major, as in `rule_overlaps`: a row's haystacks are derived once and tested against every
   open rule, and a rule drops out once it has met every owner bucket the ledger holds.
 - The answer is cached in `db_meta`, stamped with `rule_reach_epoch`, which a trigger moves on any write to
-  what the answer reads (`database._RULE_REACH_EPOCH_SOURCES`). A read with the epoch unmoved is one lookup.
+  what the answer reads (`database._RULE_REACH_EPOCH_SOURCES`). A read with the epoch unmoved is one lookup,
+  and reads that find it stale together share one scan (`services/cache_fill.py`).
   The cache travels with the database, so a restored ledger brings a cache that matches its own data or none.
 """
 
@@ -28,6 +29,7 @@ import json
 import sqlite3
 
 from backend.db.database import RULE_REACH_EPOCH_KEY, db_meta_epoch
+from backend.services.cache_fill import MISS, fill_once
 from backend.services.categorizer import row_match_texts, rule_matches_row_prepared, rule_scope_account_sql
 from backend.services.transaction_facets import UNASSIGNED_OWNER_ID
 
@@ -62,27 +64,33 @@ def rule_owner_reach(conn: sqlite3.Connection) -> dict[str, list[str]]:
     """`rule_id -> owner ids` for every live rule, `unassigned` standing for rows with no owner, from the
     cache when it is current. An empty list is a rule that matches nothing yet, which the lens shows to
     everyone."""
-    epoch = db_meta_epoch(conn, RULE_REACH_EPOCH_KEY)
-    row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (_CACHE_KEY,)).fetchone()
-    if row:
-        try:
-            cached = json.loads(row["value"])
-            if cached.get("epoch") == epoch:
-                return cached["reach"]
-        except (TypeError, ValueError, KeyError, AttributeError):
-            pass
-    reach = compute_rule_owner_reach(conn)
-    # A write on a read path: committed at once when the caller had nothing open, so the write lock is not
-    # held across the rest of the request (as `reconciliation_attention` does). db_meta has no triggers, so
-    # this write cannot move the epoch it is stamped with.
-    held = conn.in_transaction
-    conn.execute(
-        "INSERT INTO db_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (_CACHE_KEY, json.dumps({"epoch": epoch, "reach": reach})),
-    )
-    if not held:
-        conn.commit()
-    return reach
+    def read():
+        row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (_CACHE_KEY,)).fetchone()
+        if row:
+            try:
+                cached = json.loads(row["value"])
+                if cached.get("epoch") == db_meta_epoch(conn, RULE_REACH_EPOCH_KEY):
+                    return cached["reach"]
+            except (TypeError, ValueError, KeyError, AttributeError):
+                pass
+        return MISS
+
+    def fill() -> dict[str, list[str]]:
+        epoch = db_meta_epoch(conn, RULE_REACH_EPOCH_KEY)
+        reach = compute_rule_owner_reach(conn)
+        # A write on a read path: committed at once when the caller had nothing open, so the write lock is
+        # not held across the rest of the request (as `reconciliation_attention` does). db_meta has no
+        # triggers, so this write cannot move the epoch it is stamped with.
+        held = conn.in_transaction
+        conn.execute(
+            "INSERT INTO db_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_CACHE_KEY, json.dumps({"epoch": epoch, "reach": reach})),
+        )
+        if not held:
+            conn.commit()
+        return reach
+
+    return fill_once(conn, _CACHE_KEY, read, fill)
 
 
 def compute_rule_owner_reach(conn: sqlite3.Connection) -> dict[str, list[str]]:

@@ -18,8 +18,3 @@ def trace_queries(conn):
     finally:
         conn.set_trace_callback(None)
 
-
-def count_matching(statements, needle: str) -> int:
-    """Count captured statements containing `needle` (case-insensitive)."""
-    lowered = needle.lower()
-    return sum(1 for statement in statements if lowered in statement.lower())

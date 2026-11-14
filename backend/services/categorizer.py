@@ -17,7 +17,6 @@ from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
     load_rule_tag_sync_rows,
     sync_rule_tags_for_transaction,
-    would_sync_rule_tags_change,
 )
 
 # The category sources a feature owns — set by that feature, put back by it, and never taken by an
@@ -416,7 +415,7 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     caller that preloads rules must use exactly this query. Hoisting this out of the per-row loop is the
     whole performance fix: re-querying it per row is cheap in isolation but, multiplied by thousands of
     rows and several concurrent requests, collapses SQLite/GIL/IO super-linearly (≈60s for 4 concurrent
-    recategorize-preview calls vs ≈1s when the rules are loaded once).
+    whole-ledger passes vs ≈1s when the rules are loaded once).
     """
     return conn.execute(
         f"""SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
@@ -443,6 +442,63 @@ def load_rule_tags_by_id(conn: sqlite3.Connection) -> dict:
     return mapping
 
 
+def _rule_admits(rule, text: str, source_text_lc: str, owner_id, effective_account_id, effective_account_type) -> bool:
+    """Whether `rule`'s scope and merchant matcher admit a row: everything `categorize_transaction` tests
+    but the amount."""
+    if rule["owner_id"] is not None and rule["owner_id"] != owner_id:
+        return False
+    if rule["account_id"] is not None and rule["account_id"] != effective_account_id:
+        return False
+    if rule["account_type"] is not None and rule["account_type"] != effective_account_type:
+        return False
+    return merchant_matcher_matches(rule, text, source_text_lc, rule["match_source_text"])
+
+
+class PreparedRules:
+    """The ordered rule set for one pass over many rows, remembering which rules admit each row it has seen.
+
+    Testing every rule against every row is the whole cost of a pass over many rows: a recategorize, an
+    import or a sync (a few hundred rules over tens of thousands of rows is millions of matcher calls). Rows repeat: whether a rule admits a row depends only on the
+    row's name text, owner and effective account, and on its source text for a rule that reads it, and a
+    real ledger has far fewer such combinations than rows. So the answer is kept per combination, split so
+    that the few source-text rules, whose key is nearly unique per row, do not stop the name-only rules
+    from sharing theirs. The amount is tested per row, since it is too varied to key on. The verdicts are
+    exactly the unprepared loop's (`_rule_admits` is the one test both use), and the result keeps
+    precedence order.
+
+    Made per pass and dropped with it: the memo grows with the distinct rows seen, and it holds no answer
+    across a change to the rules."""
+
+    def __init__(self, rules: list):
+        self.rules = rules
+        self._name_rules = [(i, rule) for i, rule in enumerate(rules) if not rule["match_source_text"]]
+        self._source_rules = [(i, rule) for i, rule in enumerate(rules) if rule["match_source_text"]]
+        self._by_names: dict[tuple, list] = {}
+        self._by_source: dict[tuple, list] = {}
+
+    def candidates(self, text: str, source_text_lc: str, owner_id, effective_account_id, effective_account_type) -> list:
+        """The rules, in precedence order, whose scope and merchant matcher admit the row."""
+        key = (text, owner_id, effective_account_id, effective_account_type)
+        named = self._by_names.get(key)
+        if named is None:
+            named = self._by_names[key] = [
+                (i, rule) for i, rule in self._name_rules
+                if _rule_admits(rule, text, "", owner_id, effective_account_id, effective_account_type)
+            ]
+        sourced = None
+        if self._source_rules:
+            source_key = (*key, source_text_lc)
+            sourced = self._by_source.get(source_key)
+            if sourced is None:
+                sourced = self._by_source[source_key] = [
+                    (i, rule) for i, rule in self._source_rules
+                    if _rule_admits(rule, text, source_text_lc, owner_id, effective_account_id, effective_account_type)
+                ]
+        if sourced:
+            return [rule for _, rule in sorted(named + sourced, key=lambda entry: entry[0])]
+        return [rule for _, rule in named]
+
+
 def categorize_transaction(
     merchant_name: str | None,
     raw_name: str | None,
@@ -452,7 +508,7 @@ def categorize_transaction(
     account_id: str | None = None,
     effective_account_id: str | None = None,
     effective_account_type: str | None = None,
-    rules: list | None = None,
+    rules: list | PreparedRules | None = None,
     rule_tags_by_id: dict | None = None,
     source_text: str | None = None,
 ) -> dict | None:
@@ -468,25 +524,28 @@ def categorize_transaction(
         conn, account_id, effective_account_id, effective_account_type
     )
 
-    # Callers that categorize many rows in a loop (recategorize, preview, import, sync) pass `rules` /
-    # `rule_tags_by_id` in so they are loaded once; a lone single-row caller can omit them and we load
-    # on demand. Either way the matching/ordering below is identical — see load_categorization_rules.
+    # Callers that categorize many rows in a loop (recategorize, import, sync) pass `rules` /
+    # `rule_tags_by_id` in so they are loaded once, as `PreparedRules`;
+    # a lone single-row caller can omit them and we load on demand. Either way the matching/ordering below
+    # is identical — see load_categorization_rules.
     if rules is None:
         rules = load_categorization_rules(conn)
+    if isinstance(rules, PreparedRules):
+        candidates = rules.candidates(
+            text, source_text_lc, owner_id, resolved_effective_account_id, resolved_effective_account_type,
+        )
+    else:
+        candidates = [
+            rule for rule in rules
+            if _rule_admits(rule, text, source_text_lc, owner_id,
+                            resolved_effective_account_id, resolved_effective_account_type)
+        ]
 
     matched_rule_ids = []
     winning_category_id = None
     winning_clean_name = None
 
-    for rule in rules:
-        if rule["owner_id"] is not None and rule["owner_id"] != owner_id:
-            continue
-        if rule["account_id"] is not None and rule["account_id"] != resolved_effective_account_id:
-            continue
-        if rule["account_type"] is not None and rule["account_type"] != resolved_effective_account_type:
-            continue
-        if not merchant_matcher_matches(rule, text, source_text_lc, rule["match_source_text"]):
-            continue
+    for rule in candidates:
         if not _amount_rule_matches(amount, rule["amount_min"], rule["amount_max"], rule["debit_credit"]):
             continue
         matched_rule_ids.append(rule["id"])
@@ -525,7 +584,7 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
     """The transaction fields a matched rule sets through its *scalar* actions, in one place. Today that
     is only the rename: ``display_name`` = the rule's clean_name if it set one, else ``fallback_name``
     (the row's existing/raw name). Every rule-apply site consumes this identically — CSV import, Plaid
-    sync, ``recategorize_all``, and its preview count — so the derivation can't drift between them (the
+    sync and ``recategorize_all`` — so the derivation can't drift between them (the
     CSV path once silently dropped clean_name; that class of bug ends here), and a future scalar action
     such as a rule-set note is added *here* rather than at each site. ``result`` may be the dict
     ``categorize_transaction`` returns, a bare category_id from its legacy shape, or ``None`` when no
@@ -687,6 +746,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                COALESCE(p.type, a.type) AS effective_account_type""")
 
     rules = load_categorization_rules(conn)
+    prepared_rules = PreparedRules(rules)
     rules_by_id = {rule["id"]: rule for rule in rules}
     rule_tags_by_id = load_rule_tags_by_id(conn)
     tag_rows_by_txn = load_rule_tag_sync_rows(conn)
@@ -705,7 +765,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
             effective_account_type=txn["effective_account_type"],
-            rules=rules,
+            rules=prepared_rules,
             rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
         )
@@ -782,63 +842,6 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
     rule_conflicts.record(conn, results)
     return updated
-
-
-def preview_recategorize_count(conn: sqlite3.Connection) -> int:
-    # The Rules page uses this to decide whether "re-run categorization" is the
-    # likely next action, so the preview must mirror the same override-skipping,
-    # enrichment-skipping, and rule-matching contract as the real recategorize pass.
-    txns = _recategorize_candidates(conn, None, """
-               t.id,
-               t.merchant_name,
-               t.display_name,
-               t.raw_name,
-               t.amount,
-               t.owner_id,
-               t.account_id,
-               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
-               t.category_id,
-               t.display_name_source,
-               t.import_evidence_json,
-               COALESCE(p.type, a.type) AS effective_account_type""")
-
-    rules = load_categorization_rules(conn)
-    rule_tags_by_id = load_rule_tags_by_id(conn)
-    tag_rows_by_txn = load_rule_tag_sync_rows(conn)
-    needs_source_text = any(rule["match_source_text"] for rule in rules)
-    pending = 0
-    for txn in txns:
-        source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
-        result = categorize_transaction(
-            txn["merchant_name"], txn["raw_name"], txn["amount"], conn,
-            owner_id=txn["owner_id"],
-            account_id=txn["account_id"],
-            effective_account_id=txn["effective_account_id"],
-            effective_account_type=txn["effective_account_type"],
-            rules=rules,
-            rule_tags_by_id=rule_tags_by_id,
-            source_text=source_text,
-        )
-        cat_id = result["category_id"] if isinstance(result, dict) else result
-        matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
-        # Mirror recategorize_all's manual-name protection so the count matches what the pass would do.
-        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
-        current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
-        display_name_changed = apply_rule_name and name_effects["display_name"] != current_name
-        # Mirror the pass's default (retain): a no-match row does not change category, and rule-tags are
-        # additive (a no-longer-matched tag is not removed), so only a real set/change is counted.
-        category_would_change = cat_id is not None and cat_id != txn["category_id"]
-        existing_rule_tags = {tid for tid, row in tag_rows_by_txn.get(txn["id"], {}).items() if row["rule_present"]}
-        tag_target = existing_rule_tags | {str(t) for t in matched_tag_ids if t}
-        if (
-            category_would_change
-            or display_name_changed
-            or would_sync_rule_tags_change(conn, txn["id"], tag_target, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
-        ):
-            pending += 1
-
-    return pending
 
 
 # Built-in starter rule catalog: (keyword, leaf category name, amount_min, amount_max).

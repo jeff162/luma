@@ -16,7 +16,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.rules import _apply_rule_to_existing
-from backend.services.categorizer import preview_recategorize_count, recategorize_all
+from backend.services.categorizer import recategorize_all
 
 
 class RuleDebitCreditScopeTests(unittest.TestCase):
@@ -113,7 +113,6 @@ class RuleDebitCreditScopeTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
-                self.assertEqual(preview_recategorize_count(conn), 1)
                 self.assertEqual(recategorize_all(conn), 1)
                 txns = conn.execute(
                     "SELECT id, category_id, category_source FROM txn ORDER BY id"

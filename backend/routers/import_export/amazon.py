@@ -685,6 +685,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
     importer does. Non-cash orders sit in the excluded funding category (not NULL) and are skipped."""
     # Imported here (not at module load) to avoid a service→router import cycle; the pass is per-import.
     from backend.services.categorizer import (
+        PreparedRules,
         categorize_transaction,
         load_categorization_rules,
         load_rule_tags_by_id,
@@ -697,6 +698,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
     rules = load_categorization_rules(conn)
     if not rules:
         return
+    prepared_rules = PreparedRules(rules)
     rule_tags_by_id = load_rule_tags_by_id(conn)
     needs_source_text = any(rule["match_source_text"] for rule in rules)
     rows = conn.execute(
@@ -710,7 +712,7 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
         result = categorize_transaction(
             row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"],
-            rules=rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
+            rules=prepared_rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
         )
         results.append((row["id"], result))
         if not result:

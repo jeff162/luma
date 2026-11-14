@@ -28,12 +28,15 @@ from backend import transport
 from backend.authorization import is_admin_or_local, require_admin_or_local
 from backend.db.control_database import auth_required
 from backend.db.database import get_db, ledger_epoch
+from backend.routers.import_export.amazon import BATCH_SOURCE_KIND as AMAZON_BATCH_SOURCE_KIND
+from backend.routers.import_export.amazon import reconciliation_attention_count
 from backend.routers.tasks import security_tasks
 from backend.runtime_config import (
     APP_VERSION, build_stamp, bundled_license_path, checkout_commit, distribution_form, runs_in_container,
     third_party_notices,
 )
-from backend.services import proxy_certificate, security_checklist, update_check
+from backend.services import paypal_funding, proxy_certificate, security_checklist, update_check
+from backend.services.rule_owner_reach import rule_owner_reach
 from backend.services.storage_summary import storage_summary
 
 router = APIRouter()
@@ -234,6 +237,28 @@ def auto_update_check():
 def get_ledger_epoch():
     with get_db() as conn:
         return {"epoch": ledger_epoch(conn)}
+
+
+# The derived caches a start leaves stale, filled before a page asks for one, so the first visit to Tasks
+# or to Rules under the owner lens after a start or a write does not wait for a whole-ledger computation.
+# Asked for by the client's catch-up rather than run at start, because there is no tenant to run as until a
+# request names one (as with the watched-folder scan). Each read is a lookup when its cache is current. The
+# rule reach is filled only for a viewer whose lens is on, since nothing else reads it and its scan is
+# the most expensive of them.
+@router.post("/warm-derived-caches")
+def warm_derived_caches(rule_reach: bool = False):
+    with get_db() as conn:
+        amazon_batches = conn.execute(
+            "SELECT id FROM import_batch WHERE source_kind = ? AND status = 'completed'",
+            (AMAZON_BATCH_SOURCE_KIND,),
+        ).fetchall()
+        for row in amazon_batches:
+            reconciliation_attention_count(conn, row["id"])
+        paypal_funding.ledger_attention_count(conn)
+        paypal_funding.card_counts(conn)
+        if rule_reach:
+            rule_owner_reach(conn)
+    return {"ok": True}
 
 
 @router.get("/storage-summary")

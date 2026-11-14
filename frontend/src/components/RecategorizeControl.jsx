@@ -12,19 +12,11 @@ import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 // page. Retroactive recategorization (services/categorizer.recategorize_all) is global and
 // override-skipping: it runs every rule in one pass but never touches manually edited rows
 // (category_overridden = 1), so it cannot clobber user edits. A trusted import's category is not locked —
-// a file's categories rank below the rules, so a matching rule reclaims it here too. The hook owns the pending-count preview and the transient result note;
-// the presentational pieces render the button/banner so each page can place them in its own layout.
+// a file's categories rank below the rules, so a matching rule reclaims it here too. The hook owns the
+// transient result note; the presentational pieces render the button/banner so each page can place them in
+// its own layout.
 export function useRecategorize() {
-  const [pendingCount, setPendingCount] = useState(0)
   const [result, setResult] = useState(null)
-
-  const reloadPreview = useCallback(() => {
-    api.getRecategorizePreview()
-      .then(preview => setPendingCount(Number(preview?.pending || 0)))
-      .catch(() => setPendingCount(0))
-  }, [])
-
-  useEffect(() => { reloadPreview() }, [reloadPreview])
 
   // Auto-dismiss the result note, but tracked so the timer is cleared if the component unmounts first.
   useEffect(() => {
@@ -37,20 +29,18 @@ export function useRecategorize() {
     setResult(null)
     const outcome = await api.recategorize()
     setResult(outcome.updated)
-    setPendingCount(0)
-    reloadPreview()
     return outcome
-  }, [reloadPreview])
+  }, [])
 
   const dismissResult = useCallback(() => setResult(null), [])
 
-  return { pendingCount, result, run, reloadPreview, dismissResult }
+  return { result, run, dismissResult }
 }
 
 // Default label is "Categorize", with the ↻ carrying the "again" the word "Run" used to. Help names it
 // the same way: a topic that calls a button something the button does not say sends the reader looking
 // for a control that is not there, so the two move together.
-export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categorize', showCount = false }) {
+export function RecategorizeButton({ onRun, label = '↻ Categorize' }) {
   // Busy for as long as the run takes, including whatever the caller does once it returns. A run walks every
   // transaction, so on a real ledger it lasts long enough to be pressed twice with nothing on screen saying
   // the first press started anything; the result banner only arrives at the end.
@@ -65,17 +55,14 @@ export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categoriz
       setRunning(false)
     }
   }
-  const hasPending = pendingCount > 0
   return (
     <Button
       variant="secondary"
       onClick={run}
       disabled={running}
-      title={running ? 'Re-categorizing transactions…' : hasPending
-        ? `${pendingCount} transaction${pendingCount === 1 ? '' : 's'} could be re-categorized`
-        : 'No transactions currently look eligible for re-categorization'}
+      title={running ? 'Re-categorizing transactions…' : 'Run every rule over the transactions not categorized by hand'}
     >
-      {busy ? 'Categorizing…' : showCount && hasPending ? `${label} (${pendingCount})` : label}
+      {busy ? 'Categorizing…' : label}
     </Button>
   )
 }

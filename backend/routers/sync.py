@@ -48,11 +48,11 @@ from backend.services.paypal_funding import pair_after_ingest
 from backend.services.pending_supersession import oldest_held_pending_date, settle_vanished_pending
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
+    PreparedRules,
     categorize_transaction,
     load_categorization_rules,
     source_match_text_from_json,
     load_rule_tags_by_id,
-    preview_recategorize_count,
     recategorize_all,
     rule_scalar_effects,
 )
@@ -992,6 +992,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 
         # Rules are stable across a sync; load once for the per-transaction matcher below.
         rules = load_categorization_rules(conn)
+        prepared_rules = PreparedRules(rules)
         rule_tags_by_id = load_rule_tags_by_id(conn)
         # A sync captures the same evidence shape an import does (`capture_fields`), so a
         # `match_source_text` rule has to see it here too — otherwise such a rule reaches synced rows only
@@ -1289,7 +1290,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 
             result = categorize_transaction(
                 t["merchant_name"], t["raw_name"], t["amount"], conn,
-                owner_id=acc["owner_id"], account_id=acc["id"], rules=rules, rule_tags_by_id=rule_tags_by_id,
+                owner_id=acc["owner_id"], account_id=acc["id"], rules=prepared_rules, rule_tags_by_id=rule_tags_by_id,
                 source_text=source_match_text_from_json(evidence_json) if needs_source_text else None,
             )
             cat_id       = result["category_id"] if isinstance(result, dict) else result
@@ -2140,10 +2141,3 @@ def recategorize():
     if n:
         settle_owed_rescans()
     return {"updated": n}
-
-
-@router.get("/recategorize-preview")
-def recategorize_preview():
-    with get_db() as conn:
-        pending = preview_recategorize_count(conn)
-    return {"pending": pending}

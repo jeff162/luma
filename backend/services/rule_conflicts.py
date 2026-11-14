@@ -34,6 +34,7 @@ from typing import Iterable
 
 from backend.services import rule_overlaps
 from backend.services.categorizer import (
+    PreparedRules,
     categorize_transaction,
     load_categorization_rules,
     load_rule_tags_by_id,
@@ -111,6 +112,7 @@ def record_for_txns(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> None:
     rules = load_categorization_rules(conn)
     if len(rules) < 2:
         return
+    prepared_rules = PreparedRules(rules)
     rule_tags_by_id = load_rule_tags_by_id(conn)
     needs_source_text = any(rule["match_source_text"] for rule in rules)
     record(conn, (
@@ -119,7 +121,7 @@ def record_for_txns(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> None:
             owner_id=row["owner_id"], account_id=row["account_id"],
             effective_account_id=row["effective_account_id"],
             effective_account_type=row["effective_account_type"],
-            rules=rules, rule_tags_by_id=rule_tags_by_id,
+            rules=prepared_rules, rule_tags_by_id=rule_tags_by_id,
             source_text=source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None,
         ))
         for row in rows.values()

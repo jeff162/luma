@@ -31,6 +31,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Spinner } from '../components/ui.jsx'
 import { api } from './api.js'
 import { deviceLayoutPreferenceKey, useDeviceLayoutKey } from './deviceLayout.js'
 import { vh } from './displaySize.js'
@@ -229,7 +230,7 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
     return (
       <div style={{ minHeight: vh(100), display: 'grid', placeItems: 'center' }}>
         {/* Avoid flashing fallback defaults before the saved preference state arrives. */}
-        <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading preferences...</div>
+        <Spinner label="Loading preferences…" />
       </div>
     )
   }

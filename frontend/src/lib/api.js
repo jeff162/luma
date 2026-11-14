@@ -352,6 +352,9 @@ export const api = {
   autoCheckForUpdate: (opts = {}) => request('/app/update-check/auto', { method: 'POST', ...opts }),
   // The number every ledger write moves (`lib/ledgerEpoch.js`).
   getLedgerEpoch: () => request('/app/ledger-epoch'),
+  // Fills the server's derived caches a start or a write left stale (see `BackgroundCatchUp`).
+  warmDerivedCaches: ({ ruleReach = false } = {}, opts = {}) =>
+    request(`/app/warm-derived-caches${ruleReach ? '?rule_reach=true' : ''}`, { method: 'POST', ...opts }),
   // Settings -> About -> Copy details: version, how it runs, platform. Nothing that identifies the machine.
   getInstallationDetails: () => request('/app/installation-details'),
   // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown, detail, link }.
@@ -839,7 +842,6 @@ export const api = {
       { method: 'POST' },
     ),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
-  getRecategorizePreview: () => request('/sync/recategorize-preview'),
   // The data-connection log (the Sync log): every sync, plus each connect, reconnect, account refresh,
   // disconnect and credential reissue/revoke. `subjects` are filter-pill keys — a connection id, or
   // `connect:<provider>` for connect attempts that never became a connection — and `providers` selects

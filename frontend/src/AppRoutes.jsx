@@ -18,6 +18,8 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 
+import { Spinner } from './components/ui.jsx'
+
 import {
   loadAccountsPage,
   loadCategoriesPage,
@@ -52,7 +54,7 @@ export function RouteLoadingFallback() {
       placeItems: 'center',
       padding: 24,
     }}>
-      <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading page...</div>
+      <Spinner label="Loading page…" />
     </div>
   )
 }

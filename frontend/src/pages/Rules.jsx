@@ -400,10 +400,8 @@ export default function Rules() {
   const [conflictCount, setConflictCount] = useState(0)
   const checkupCount = rangeDriftCount + conflictCount
   const {
-    pendingCount: recategorizePendingCount,
     result: recategorizeResult,
     run: runRecategorize,
-    reloadPreview: loadRecategorizePreview,
     dismissResult: dismissRecategorizeResult,
   } = useRecategorize()
 
@@ -612,7 +610,6 @@ export default function Rules() {
     setCreateInitialValues({})
     setCreateTransactionData(null)
     loadRules()
-    loadRecategorizePreview()
   }
 
   async function mergeCollision() {
@@ -629,7 +626,6 @@ export default function Rules() {
       setEditingRuleId(null)
       setCheckupRefreshKey(key => key + 1)
       loadRules()
-      loadRecategorizePreview()
     } else {
       closeAddAfterSave()
     }
@@ -659,7 +655,6 @@ export default function Rules() {
     setEditingRuleId(null)
     setCheckupRefreshKey(key => key + 1)
     loadRules()
-    loadRecategorizePreview()
   }
 
   async function handleDelete(id, reconcile = false) {
@@ -667,7 +662,6 @@ export default function Rules() {
     if (editingRuleId === id) setEditingRuleId(null)
     setCheckupRefreshKey(key => key + 1)
     loadRules()
-    loadRecategorizePreview()
   }
 
   const editingRule = editingRuleId ? rules.find(rule => rule.id === editingRuleId) : null
@@ -722,7 +716,6 @@ export default function Rules() {
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules" help={<FeatureExplainer topic="page-rules" placement="bottom-left" />}>
           <RecategorizeButton
-            pendingCount={recategorizePendingCount}
             onRun={async () => { await runRecategorize(); loadRules() }}
           />
           <Tooltip describeTrigger content={hasImportedRuleSuggestionWork
@@ -1027,10 +1020,7 @@ export default function Rules() {
       {showStarterRules ? (
         <StarterRulesDialog
           onClose={() => setShowStarterRules(false)}
-          onAdded={() => {
-            loadRules()
-            loadRecategorizePreview()
-          }}
+          onAdded={loadRules}
         />
       ) : null}
 
@@ -1041,7 +1031,7 @@ export default function Rules() {
           owners={owners}
           accounts={accounts}
           onClose={() => setCleanupOpen(false)}
-          onDone={() => { setCleanupOpen(false); loadRules(); loadRecategorizePreview(); setCleanupCountKey(k => k + 1) }}
+          onDone={() => { setCleanupOpen(false); loadRules(); setCleanupCountKey(k => k + 1) }}
         />
       ) : null}
 
@@ -1053,7 +1043,7 @@ export default function Rules() {
           // The editor opens as a second floating panel above this one, which stays open with its
           // results so the two can be arranged side by side.
           onEditRule={openEditForm}
-          onRulesChanged={() => { loadRules(); loadRecategorizePreview() }}
+          onRulesChanged={loadRules}
           refreshKey={checkupRefreshKey}
         />
       ) : null}

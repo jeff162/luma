@@ -59,6 +59,7 @@ from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services.categorizer import (
     FEATURE_OWNED_CATEGORY_SOURCES,
+    PreparedRules,
     categorize_transaction,
     category_lock_for,
     extract_source_match_text,
@@ -2738,6 +2739,7 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
     if not rules:
         return
     rules_by_id = {r["id"]: r for r in rules}
+    prepared_rules = PreparedRules(rules)
     rule_tags_by_id = load_rule_tags_by_id(conn)
     needs_source_text = any(r["match_source_text"] for r in rules)
     rows = conn.execute(
@@ -2759,7 +2761,7 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
         result = categorize_transaction(
             row["merchant_name"], row["raw_name"], row["amount"], conn,
             owner_id=row["owner_id"], account_id=row["account_id"], effective_account_id=row["effective_account_id"],
-            effective_account_type=row["effective_account_type"], rules=rules, rule_tags_by_id=rule_tags_by_id,
+            effective_account_type=row["effective_account_type"], rules=prepared_rules, rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
         )
         results.append((row["id"], result))
@@ -2911,6 +2913,7 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                 (batch_id,),
             ).fetchall()
             rules = load_categorization_rules(conn)
+            prepared_rules = PreparedRules(rules)
             rule_tags_by_id = load_rule_tags_by_id(conn)
             needs_source_text = any(rule["match_source_text"] for rule in rules)
             for row in uncategorized_rows:
@@ -2922,7 +2925,7 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                     conn,
                     owner_id=row["owner_id"],
                     account_id=row["account_id"],
-                    rules=rules,
+                    rules=prepared_rules,
                     rule_tags_by_id=rule_tags_by_id,
                     source_text=source_text,
                 )
@@ -3480,6 +3483,7 @@ def run_import_parsed(
 
         # Rules are stable across an import; load once so the per-row matcher below doesn't re-query them.
         rules = load_categorization_rules(conn)
+        prepared_rules = PreparedRules(rules)
         rule_tags_by_id = load_rule_tags_by_id(conn)
         unflagged_owner_ids = owners_not_flagging(conn)
         # Accumulate the newest transaction date each rule supplies an effect for, flushed after the row
@@ -3765,7 +3769,7 @@ def run_import_parsed(
                     raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
-                    rules=rules,
+                    rules=prepared_rules,
                     rule_tags_by_id=rule_tags_by_id,
                     source_text=extract_source_match_text(import_evidence),
                 )
@@ -5430,6 +5434,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                   AND  category_overridden = 0
             """, (batch_id,)).fetchall()
             rules = load_categorization_rules(conn)
+            prepared_rules = PreparedRules(rules)
             rule_tags_by_id = load_rule_tags_by_id(conn)
             needs_source_text = any(rule["match_source_text"] for rule in rules)
             for row in uncategorized_rows:
@@ -5441,7 +5446,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     conn,
                     owner_id=row["owner_id"],
                     account_id=row["account_id"],
-                    rules=rules,
+                    rules=prepared_rules,
                     rule_tags_by_id=rule_tags_by_id,
                     source_text=source_text,
                 )

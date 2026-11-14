@@ -1,12 +1,12 @@
-"""Performance + equivalence guards for the categorizer — a cross-system chokepoint (sync, import,
-preview, and retroactive recategorize all flow through `categorize_transaction`).
+"""Performance + equivalence guards for the categorizer — a cross-system chokepoint (sync, import
+and retroactive recategorize all flow through `categorize_transaction`).
 
 Two regressions this pins, both of which are silent (correct results, just slow or divergent) and so
 would otherwise only surface as a mysterious slowdown like the one that prompted this:
 
   1. **No N+1.** A batch pass must load the rule set — and the rule/txn tag rows — ONCE, not re-query
      per transaction. Re-querying per row is cheap in isolation but collapses super-linearly under
-     concurrent requests (≈60s for 4 concurrent recategorize-preview calls vs sub-second when hoisted).
+     concurrent requests (≈60s for 4 concurrent whole-ledger passes vs sub-second when hoisted).
      This asserts the per-row query count stays flat no matter how many transactions are scanned.
 
   2. **Preloaded == on-demand.** `categorize_transaction` must return the SAME verdict whether the rules
@@ -32,13 +32,14 @@ from backend.db.database import (
     set_current_db_path,
 )
 from backend.services.categorizer import (
+    PreparedRules,
     categorize_transaction,
     load_categorization_rules,
     load_rule_tags_by_id,
-    preview_recategorize_count,
+    recategorize_all,
     seed_default_rules,
 )
-from backend.tests._query_count import count_matching, trace_queries
+from backend.tests._query_count import trace_queries
 
 # A mix that exercises both rule hits (the seeded defaults target these) and misses.
 MERCHANTS = [
@@ -103,11 +104,14 @@ class CategorizerPerfContractTests(unittest.TestCase):
             )
         return txn_id
 
-    def test_batch_preview_loads_rules_once_not_per_transaction(self):
+    def test_batch_pass_loads_rules_once_not_per_transaction(self):
         with self._use_db_path(), get_db() as conn, trace_queries(conn) as statements:
-            preview_recategorize_count(conn)
+            recategorize_all(conn)
 
-        rule_queries = count_matching(statements, "category_rule")
+        # Reads only: the pass also stamps each matched rule's last_effect_date, one UPDATE per rule.
+        rule_queries = sum(
+            1 for s in statements if s.lstrip().upper().startswith("SELECT") and "category_rule" in s.lower()
+        )
         # `_get_txn_tag_rows` (the per-row path) is keyed `WHERE txn_id = ?`; the hoisted preload is not.
         per_txn_tag_queries = sum(
             1 for s in statements if "txn_tag" in s.lower() and "txn_id = ?" in s.lower()
@@ -142,6 +146,32 @@ class CategorizerPerfContractTests(unittest.TestCase):
                     rules=rules, rule_tags_by_id=rule_tags_by_id,
                 )
                 self.assertEqual(_normalize(on_demand), _normalize(preloaded))
+
+    def test_prepared_rules_match_unprepared(self):
+        # Rows that share a name but differ in amount and in source text are what the prepared memo must
+        # tell apart, so add rules that read each, outranking the seeded ones through their priority.
+        with self._use_db_path(), get_db() as conn:
+            category_id = conn.execute("SELECT id FROM category WHERE parent_id IS NOT NULL LIMIT 1").fetchone()[0]
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, amount_min, priority_level) VALUES (?, ?, 'shell', 25, 1)",
+                (str(uuid.uuid4()), category_id),
+            )
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, match_source_text, priority_level) "
+                "VALUES (?, ?, 'fuel stop', 1, 1)",
+                (str(uuid.uuid4()), category_id),
+            )
+            rules = load_categorization_rules(conn)
+            prepared = PreparedRules(rules)
+            rows = conn.execute("SELECT merchant_name, raw_name, amount, owner_id, account_id FROM txn").fetchall()
+            for i, t in enumerate(rows):
+                source_text = "Fuel Stop 12" if i % 3 == 0 else "card purchase"
+                args = (t["merchant_name"], t["raw_name"], t["amount"], conn)
+                kwargs = {"owner_id": t["owner_id"], "account_id": t["account_id"], "source_text": source_text}
+                self.assertEqual(
+                    categorize_transaction(*args, rules=rules, **kwargs),
+                    categorize_transaction(*args, rules=prepared, **kwargs),
+                )
 
 
 if __name__ == "__main__":

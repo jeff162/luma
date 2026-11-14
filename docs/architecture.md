@@ -176,6 +176,13 @@ server-computed counts refresh. The page's own writes are absorbed by re-reading
 reports. A third, `rule_reach_epoch`, keeps the owner lens's rule reach
 cached (`data-model.md` → *Owner lens*).
 
+**The derived caches are filled ahead of the pages that read them.** A start moves `recon_epoch` and
+`rule_reach_epoch`, so every cache they stamp is stale until read, and a read that finds one stale runs
+the whole computation (seconds at ledger scale). The catch-up therefore ends with `POST
+/app/warm-derived-caches`, not awaited, which fills the reconciliation counts and, for a viewer whose lens
+is on, the rule reach. Readers that find the same cache stale together share one computation
+(`services/cache_fill.py`), so a page asking during the warm-up waits for it instead of repeating it.
+
 **Preferences are re-read on the same catch-up**, except on mount, where they were just loaded
 (`refreshPreferences` in `lib/UserPreferencesContext.jsx`). They are not part of the epoch: the read is
 small, and a preference change has no page to re-query. A key this page is still saving, or wrote while the
@@ -294,7 +301,7 @@ preferences. `lib/savedFilters.js` holds the rules:
   `create_rule_core`. See `data-model.md` → Accounts / Rules.
 
 - **Applying a match is shared per action.** Every path that runs rules — CSV import, sync,
-  `recategorize_all` and its preview count — matches once via `categorize_transaction` and applies the
+  `recategorize_all` — matches once via `categorize_transaction` and applies the
   result through shared points: tags via `sync_rule_tags_for_transaction`, scalar actions (the merchant
   rename) via `rule_scalar_effects`. One apply point per action is what keeps the paths from diverging
   and makes a new rule action a one-place change. Category *source* policy stays site-specific (import

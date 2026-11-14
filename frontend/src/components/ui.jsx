@@ -1519,13 +1519,15 @@ export function StaleWhileRefreshing({ refreshing, children, style }) {
   )
 }
 
-export function Spinner() {
+// The ring's style lives in index.html beside the refresh icon's, whose keyframes it shares.
+export function Spinner({ label = 'Loading…' }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
       padding: 40, color: 'var(--muted)', fontSize: 14,
     }}>
-      Loading…
+      <span className="ui-spinner-ring" aria-hidden="true" />
+      {label}
     </div>
   )
 }
