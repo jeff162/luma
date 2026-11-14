@@ -956,7 +956,7 @@ function SummaryTotalCard({ label, value, color }) {
   return (
     <Card style={{ padding: '14px 24px' }}>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, color }}>{formatSignedMoneyAmount(value)}</div>
+      <div data-testid="dashboard-total" style={{ fontSize: 28, fontWeight: 700, color }}>{formatSignedMoneyAmount(value)}</div>
     </Card>
   )
 }
@@ -1105,7 +1105,7 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Yearly cash flow trend</div>
+          <div data-testid="cash-flow-year-trend-title" style={{ fontSize: 14, fontWeight: 600 }}>Yearly cash flow trend</div>
           <TrendSpanSelect
             value={span}
             onChange={onSpanChange}
@@ -1137,7 +1137,7 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Monthly cash flow trend</div>
+          <div data-testid="cash-flow-month-trend-title" style={{ fontSize: 14, fontWeight: 600 }}>Monthly cash flow trend</div>
           <TrendsWindowSelect value={effectiveWindow} options={windowOptions} onChange={onYearChange} compact />
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
@@ -1662,9 +1662,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
       </div>
 
       <Card style={{ position: 'relative', zIndex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
+        <div data-testid="trend-averages-title" style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Average monthly {viewIsIncome ? 'income' : 'spending'}{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
-          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{trendWindow.label.toLowerCase()}</span>
+          <span data-testid="trend-averages-window" style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{trendWindow.label.toLowerCase()}</span>
           {!drillGroup && (
             <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>· click a group to see its categories</span>
           )}
@@ -2992,7 +2992,7 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                   {viewIsCashFlow ? (
                     <>
-                      {/* Money out leads, as spending does on the other two frames — the cards are read
+                      {/* Spending leads, as it does on the other two frames — the cards are read
                           as a row across frames, so a consistent reading order matters more here than
                           mirroring the diagram below, which runs sources-left to destinations-right. */}
                       <SummaryTotalCard label={`Spending · ${singlePeriodLabel}`}

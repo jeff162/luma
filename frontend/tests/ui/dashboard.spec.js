@@ -129,7 +129,7 @@ test('trends averages drill from a group to its categories and open a category r
   // page and lands them back at the top. The scroll may still move by exactly as much as a shorter page
   // forces (fewer categories than groups, read from the bottom), and no further; the viewport position
   // of the table cannot express that, since that clamp moves it too.
-  const averagesTitle = page.getByText(/^Monthly averages/).first()
+  const averagesTitle = page.getByTestId('trend-averages-title')
   const scrollState = () => averagesTitle.evaluate(el => {
     let node = el.parentElement
     while (node && !/(auto|scroll)/.test(getComputedStyle(node).overflowY)) node = node.parentElement
@@ -144,7 +144,7 @@ test('trends averages drill from a group to its categories and open a category r
   // Drilled: the table names the group and offers the way back, and its rows are categories.
   const back = page.getByRole('button', { name: 'All groups', exact: true })
   await expect(back).toBeVisible()
-  await expect(page.getByText(`Monthly averages · ${groupName}`)).toBeVisible()
+  await expect(averagesTitle).toContainText(groupName)
   const reportArrow = page.getByRole('button', { name: /^Open the transactions behind / }).first()
   await expect(reportArrow).toBeVisible()
   const scrollAfter = await scrollState()
@@ -158,9 +158,13 @@ test('trends averages drill from a group to its categories and open a category r
   expect(axisLabels.flat().length).toBeGreaterThan(0)
   expect(axisLabels.filter(labels => new Set(labels).size !== labels.length)).toEqual([])
   const categoryName = (await reportArrow.getAttribute('aria-label')).replace('Open the transactions behind ', '')
+  const tableWindow = await page.getByTestId('trend-averages-window').textContent()
   await reportArrow.click()
-  const reportTitle = page.getByText(new RegExp(`^${categoryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · (Last 12 months|\\d{4}) · Spending$`))
-  await expect(reportTitle).toBeVisible()
+  // The title states the report's scope, so it is asserted whole: the category, the table's window (read
+  // from the table, so the two must agree) and the spending view.
+  const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const reportTitle = page.getByTestId('period-detail-title')
+  await expect(reportTitle).toHaveText(new RegExp(`^${escape(categoryName)} · ${escape(tableWindow)} · Spending$`, 'i'))
 
   // The report sits over the table, so close it before stepping back up to the groups.
   await page.keyboard.press('Escape')
@@ -193,11 +197,13 @@ test('a trends drill waits for the group figures before switching the tab', asyn
     // The picker answers the choice at once; the table and title still describe the groups.
     const groupPicker = page.locator('select').filter({ has: page.locator('option', { hasText: 'All groups' }) })
     await expect(groupPicker.locator('option:checked')).toHaveText(groupName)
-    await expect(page.getByText('Monthly averages by group')).toBeVisible()
+    const averagesTitle = page.getByTestId('trend-averages-title')
+    await expect(averagesTitle).toBeVisible()
+    await expect(averagesTitle).not.toContainText(groupName)
     await expect(page.getByRole('button', { name: /^Open the transactions behind / })).toHaveCount(0)
 
     release()
-    await expect(page.getByText(`Monthly averages · ${groupName}`)).toBeVisible()
+    await expect(averagesTitle).toContainText(groupName)
     await expect(page.getByRole('button', { name: /^Open the transactions behind / }).first()).toBeVisible()
   } finally {
     release()

@@ -118,7 +118,7 @@ export default function PeriodDetail({
 
   const header = (
     <>
-      <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>
+      <div data-testid="period-detail-title" style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>
         {title}
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>

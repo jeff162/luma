@@ -250,7 +250,11 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   flag deadlocks only on the remount. The cancel flag is the one guard.
 
 - Assert the behavior, not the copy (a refusal by its status and the untouched row), because matching
-  the sentence turns every wording edit into a red run.
+  the sentence turns every wording edit into a red run. In a browser spec, reach a control by its role
+  and accessible name, which the a11y lane holds to anyway, and reach displayed text by a `data-testid`.
+  Text that only labels (a card or chart title) is not asserted. Text that states a result (the scope,
+  period or view a report was opened on) is the outcome, so assert it, taking the expected value from the
+  page or the fixture where one exists so that a rename moves both sides.
 
 - Assert the consequence rather than an attribute (click the disabled button and check the call did not
   happen), because an attribute is a claim about the element and not about the action.

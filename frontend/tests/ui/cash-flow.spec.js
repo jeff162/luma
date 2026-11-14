@@ -16,10 +16,9 @@ test('the cash flow frame draws the flow diagram over demo data', async ({ page 
   await page.getByRole('button', { name: 'Cash flow' }).click()
 
   // Three totals rather than the other frames' one or two: on this axis the net is a real figure, and
-  // it is signed, so a period that spent more than it took in reads negative.
-  await expect(page.getByText(/^Money out · /)).toBeVisible()
-  await expect(page.getByText(/^Money in · /)).toBeVisible()
-  await expect(page.getByText(/^Net · /)).toBeVisible()
+  // it is signed, so a period that spent more than it took in reads negative. Found by their test ids,
+  // since their labels are copy.
+  await expect(page.getByTestId('dashboard-total')).toHaveCount(3)
 
   // The diagram itself, and the control that chooses what it breaks down by.
   await expect(page.getByText('Cash flow by')).toBeVisible()
@@ -44,13 +43,14 @@ test('the cash flow trends form opens a year into its months', async ({ page }) 
 
   // Each card as the innermost element holding both its title and a chart. Taking the title's parent
   // instead broke the moment the title gained a control beside it (the trend-span chooser) and became a
-  // header row of its own, which is a change to the card's layout rather than to what it draws.
-  const card = title => page.locator('div')
-    .filter({ has: page.getByText(title, { exact: true }) })
+  // header row of its own, which is a change to the card's layout rather than to what it draws. The
+  // title is found by its test id, since its wording is copy.
+  const card = titleTestId => page.locator('div')
+    .filter({ has: page.getByTestId(titleTestId) })
     .filter({ has: page.locator('.recharts-wrapper') })
     .last()
-  const yearCard = card('Yearly trend')
-  const monthCard = card('Monthly trend')
+  const yearCard = card('cash-flow-year-trend-title')
+  const monthCard = card('cash-flow-month-trend-title')
   const picker = page.locator('select').filter({ has: page.locator('option', { hasText: 'Last 12 months' }) })
   await expect(picker).toHaveValue('last12')
 
