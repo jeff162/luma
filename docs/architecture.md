@@ -301,7 +301,7 @@ preferences. `lib/savedFilters.js` holds the rules:
   `create_rule_core`. See `data-model.md` → Accounts / Rules.
 
 - **Applying a match is shared per action.** Every path that runs rules — CSV import, sync,
-  `recategorize_all` — matches once via `categorize_transaction` and applies the
+  `recategorize_all` and its preview count — matches once via `categorize_transaction` and applies the
   result through shared points: tags via `sync_rule_tags_for_transaction`, scalar actions (the merchant
   rename) via `rule_scalar_effects`. One apply point per action is what keeps the paths from diverging
   and makes a new rule action a one-place change. Category *source* policy stays site-specific (import

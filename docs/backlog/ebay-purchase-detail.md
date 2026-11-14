@@ -132,8 +132,8 @@ stored.
 - **A `manual` name is left alone.** A deliberate rename wins, as it does everywhere; the evidence is
   still added.
 - **An `enrichment` name needs the same protection from automatic passes as `manual` has.** The
-  categorizer's rename guard (`display_name_source != "manual"` in `recategorize_all`) would otherwise
-  let any rule with a `clean_name` that matches —
+  categorizer's rename guard (`display_name_source != "manual"` in `recategorize_all`, mirrored in
+  `preview_recategorize_count` so the preview agrees with the run) would otherwise let any rule with a `clean_name` that matches —
   including one that tidies `EBAY O*` into `eBay` — put the old name back on the next Categorize run.
   This mirrors the category contract, where `category_source = 'enrichment'` is already feature-owned and
   skipped by automatic passes. As with `manual`, the explicit full-force rule apply may still overwrite

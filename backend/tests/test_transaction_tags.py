@@ -23,7 +23,7 @@ from backend.routers.transactions import (
     override_category,
     spending_by_group,
 )
-from backend.services.categorizer import recategorize_all
+from backend.services.categorizer import preview_recategorize_count, recategorize_all
 from backend.services.transaction_facets import TransactionFacets
 from backend.services.transaction_tags import (
     get_blocked_transaction_tag_map,
@@ -135,6 +135,7 @@ class TransactionTagsTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
+                self.assertEqual(preview_recategorize_count(conn), 1)
                 self.assertEqual(recategorize_all(conn), 1)
                 txn = conn.execute(
                     "SELECT category_id, display_name FROM txn WHERE id = ?",
@@ -158,6 +159,7 @@ class TransactionTagsTests(unittest.TestCase):
             with get_db() as conn:
                 self.assertEqual(recategorize_all(conn), 1)
                 set_manual_transaction_tag(conn, txn_id, essential_tag_id, present=False)
+                self.assertEqual(preview_recategorize_count(conn), 0)
                 self.assertEqual(recategorize_all(conn), 0)
                 tags = list_visible_transaction_tags(conn, txn_id)
 
@@ -171,6 +173,7 @@ class TransactionTagsTests(unittest.TestCase):
         with self._use_db_path():
             with get_db() as conn:
                 set_manual_transaction_tag(conn, txn_id, manual_tag_id, present=True)
+                self.assertEqual(preview_recategorize_count(conn), 0)
                 self.assertEqual(recategorize_all(conn), 0)
                 tags = list_visible_transaction_tags(conn, txn_id)
 

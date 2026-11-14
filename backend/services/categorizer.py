@@ -17,6 +17,7 @@ from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
     load_rule_tag_sync_rows,
     sync_rule_tags_for_transaction,
+    would_sync_rule_tags_change,
 )
 
 # The category sources a feature owns — set by that feature, put back by it, and never taken by an
@@ -524,10 +525,10 @@ def categorize_transaction(
         conn, account_id, effective_account_id, effective_account_type
     )
 
-    # Callers that categorize many rows in a loop (recategorize, import, sync) pass `rules` /
-    # `rule_tags_by_id` in so they are loaded once, as `PreparedRules`;
-    # a lone single-row caller can omit them and we load on demand. Either way the matching/ordering below
-    # is identical — see load_categorization_rules.
+    # Callers that categorize many rows in a loop (recategorize, its preview count, import, sync) pass
+    # `rules` / `rule_tags_by_id` in so they are loaded once, as `PreparedRules`; a lone single-row caller
+    # can omit them and we load on demand. Either way the matching/ordering below is identical — see
+    # load_categorization_rules.
     if rules is None:
         rules = load_categorization_rules(conn)
     if isinstance(rules, PreparedRules):
@@ -584,7 +585,7 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
     """The transaction fields a matched rule sets through its *scalar* actions, in one place. Today that
     is only the rename: ``display_name`` = the rule's clean_name if it set one, else ``fallback_name``
     (the row's existing/raw name). Every rule-apply site consumes this identically — CSV import, Plaid
-    sync and ``recategorize_all`` — so the derivation can't drift between them (the
+    sync, ``recategorize_all`` and its preview count — so the derivation can't drift between them (the
     CSV path once silently dropped clean_name; that class of bug ends here), and a future scalar action
     such as a rule-set note is added *here* rather than at each site. ``result`` may be the dict
     ``categorize_transaction`` returns, a bare category_id from its legacy shape, or ``None`` when no
@@ -842,6 +843,64 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
     rule_conflicts.record(conn, results)
     return updated
+
+
+def preview_recategorize_count(conn: sqlite3.Connection) -> int:
+    # The count on the rule-suggestions page's apply button: how many rows a run would change. It must
+    # mirror the same override-skipping, enrichment-skipping, and rule-matching contract as the real
+    # recategorize pass.
+    txns = _recategorize_candidates(conn, None, """
+               t.id,
+               t.merchant_name,
+               t.display_name,
+               t.raw_name,
+               t.amount,
+               t.owner_id,
+               t.account_id,
+               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+               t.category_id,
+               t.display_name_source,
+               t.import_evidence_json,
+               COALESCE(p.type, a.type) AS effective_account_type""")
+
+    rules = load_categorization_rules(conn)
+    prepared_rules = PreparedRules(rules)
+    rule_tags_by_id = load_rule_tags_by_id(conn)
+    tag_rows_by_txn = load_rule_tag_sync_rows(conn)
+    needs_source_text = any(rule["match_source_text"] for rule in rules)
+    pending = 0
+    for txn in txns:
+        source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
+        result = categorize_transaction(
+            txn["merchant_name"], txn["raw_name"], txn["amount"], conn,
+            owner_id=txn["owner_id"],
+            account_id=txn["account_id"],
+            effective_account_id=txn["effective_account_id"],
+            effective_account_type=txn["effective_account_type"],
+            rules=prepared_rules,
+            rule_tags_by_id=rule_tags_by_id,
+            source_text=source_text,
+        )
+        cat_id = result["category_id"] if isinstance(result, dict) else result
+        matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
+        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
+        # Mirror recategorize_all's manual-name protection so the count matches what the pass would do.
+        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
+        current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
+        display_name_changed = apply_rule_name and name_effects["display_name"] != current_name
+        # Mirror the pass's default (retain): a no-match row does not change category, and rule-tags are
+        # additive (a no-longer-matched tag is not removed), so only a real set/change is counted.
+        category_would_change = cat_id is not None and cat_id != txn["category_id"]
+        existing_rule_tags = {tid for tid, row in tag_rows_by_txn.get(txn["id"], {}).items() if row["rule_present"]}
+        tag_target = existing_rule_tags | {str(t) for t in matched_tag_ids if t}
+        if (
+            category_would_change
+            or display_name_changed
+            or would_sync_rule_tags_change(conn, txn["id"], tag_target, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
+        ):
+            pending += 1
+
+    return pending
 
 
 # Built-in starter rule catalog: (keyword, leaf category name, amount_min, amount_max).

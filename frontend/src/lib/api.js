@@ -842,6 +842,7 @@ export const api = {
       { method: 'POST' },
     ),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
+  getRecategorizePreview: () => request('/sync/recategorize-preview'),
   // The data-connection log (the Sync log): every sync, plus each connect, reconnect, account refresh,
   // disconnect and credential reissue/revoke. `subjects` are filter-pill keys — a connection id, or
   // `connect:<provider>` for connect attempts that never became a connection — and `providers` selects

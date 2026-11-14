@@ -91,7 +91,9 @@ export default function ImportRuleSuggestions() {
     result: recategorizeResult,
     run: runRecategorize,
     dismissResult: dismissRecategorizeResult,
-  } = useRecategorize()
+    pendingCount: recategorizePendingCount,
+    reloadPreview: reloadRecategorizePreview,
+  } = useRecategorize({ countPending: true })
   const reviewScope = useMemo(() => ({ batchId, profileId }), [batchId, profileId])
   const { openBatchDetail, panelsNode: batchDetailPanelsNode } = useBatchDetailPanels({
     categories,
@@ -260,6 +262,9 @@ export default function ImportRuleSuggestions() {
       trash_sets: result.trash_sets || [],
       generated_at: result.generated_at || null,
     })
+    // Accepting/replacing suggestions creates or repoints rules, so the retroactive-apply preview
+    // count can change — refresh it alongside the suggestion reload.
+    reloadRecategorizePreview()
   }
 
   // Every review action is one request that commits whole or not at all and answers with the payload that
@@ -470,6 +475,7 @@ export default function ImportRuleSuggestions() {
       if (!result) return
       setReconcileApplyNote(result.updated || 0)
       setResolveSummary(prev => (prev ? { ...prev, reconciledRuleIds: [] } : prev))
+      reloadRecategorizePreview()
     } finally {
       setRecategorizingMatches(false)
     }
@@ -623,6 +629,7 @@ export default function ImportRuleSuggestions() {
               help={<FeatureExplainer topic="generate-rules" placement="bottom-left" />}
             >
               <RecategorizeButton
+                pendingCount={recategorizePendingCount}
                 onRun={runRecategorize}
                 label="↻ Apply categorization rules"
               />

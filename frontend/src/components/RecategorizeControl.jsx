@@ -13,10 +13,25 @@ import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 // override-skipping: it runs every rule in one pass but never touches manually edited rows
 // (category_overridden = 1), so it cannot clobber user edits. A trusted import's category is not locked —
 // a file's categories rank below the rules, so a matching rule reclaims it here too. The hook owns the
-// transient result note; the presentational pieces render the button/banner so each page can place them in
-// its own layout.
-export function useRecategorize() {
+// transient result note and, where asked for, the pending count; the presentational pieces render the
+// button/banner so each page can place them in its own layout.
+//
+// `countPending` asks how many rows a run would change. Counting is a whole-ledger match (about a second on
+// a real ledger), so only the rule-suggestions page asks, where the count is on the button; `pendingCount`
+// stays null elsewhere. The hook counts on mount, and the page calls `reloadPreview` whenever its rules may
+// have changed.
+export function useRecategorize({ countPending = false } = {}) {
   const [result, setResult] = useState(null)
+  const [pendingCount, setPendingCount] = useState(null)
+
+  const reloadPreview = useCallback(() => {
+    if (!countPending) return
+    api.getRecategorizePreview()
+      .then(preview => setPendingCount(Number(preview?.pending || 0)))
+      .catch(() => setPendingCount(null))
+  }, [countPending])
+
+  useEffect(() => { reloadPreview() }, [reloadPreview])
 
   // Auto-dismiss the result note, but tracked so the timer is cleared if the component unmounts first.
   useEffect(() => {
@@ -29,18 +44,19 @@ export function useRecategorize() {
     setResult(null)
     const outcome = await api.recategorize()
     setResult(outcome.updated)
+    reloadPreview()
     return outcome
-  }, [])
+  }, [reloadPreview])
 
   const dismissResult = useCallback(() => setResult(null), [])
 
-  return { result, run, dismissResult }
+  return { result, run, dismissResult, pendingCount, reloadPreview }
 }
 
 // Default label is "Categorize", with the ↻ carrying the "again" the word "Run" used to. Help names it
 // the same way: a topic that calls a button something the button does not say sends the reader looking
 // for a control that is not there, so the two move together.
-export function RecategorizeButton({ onRun, label = '↻ Categorize' }) {
+export function RecategorizeButton({ onRun, label = '↻ Categorize', pendingCount = null }) {
   // Busy for as long as the run takes, including whatever the caller does once it returns. A run walks every
   // transaction, so on a real ledger it lasts long enough to be pressed twice with nothing on screen saying
   // the first press started anything; the result banner only arrives at the end.
@@ -55,14 +71,17 @@ export function RecategorizeButton({ onRun, label = '↻ Categorize' }) {
       setRunning(false)
     }
   }
+  const hasPending = pendingCount > 0
   return (
     <Button
       variant="secondary"
       onClick={run}
       disabled={running}
-      title={running ? 'Re-categorizing transactions…' : 'Run every rule over the transactions not categorized by hand'}
+      title={running ? 'Re-categorizing transactions…' : hasPending
+        ? `${pendingCount} transaction${pendingCount === 1 ? '' : 's'} could be re-categorized`
+        : 'Run every rule over the transactions not categorized by hand'}
     >
-      {busy ? 'Categorizing…' : label}
+      {busy ? 'Categorizing…' : hasPending ? `${label} (${pendingCount})` : label}
     </Button>
   )
 }

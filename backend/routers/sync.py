@@ -53,6 +53,7 @@ from backend.services.categorizer import (
     load_categorization_rules,
     source_match_text_from_json,
     load_rule_tags_by_id,
+    preview_recategorize_count,
     recategorize_all,
     rule_scalar_effects,
 )
@@ -2141,3 +2142,11 @@ def recategorize():
     if n:
         settle_owed_rescans()
     return {"updated": n}
+
+
+# The pending count on the rule-suggestions page's apply button.
+@router.get("/recategorize-preview")
+def recategorize_preview():
+    with get_db() as conn:
+        pending = preview_recategorize_count(conn)
+    return {"pending": pending}
