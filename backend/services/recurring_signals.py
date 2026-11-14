@@ -509,6 +509,10 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
                 str(s.get("series_name") or ""), s["key"])
     open_signals.sort(key=_sort_key)
 
+    return _signals_payload(open_signals, dismissed_count=dismissed_count, horizon_days=horizon_days)
+
+
+def _signals_payload(open_signals: list[dict], *, dismissed_count: int, horizon_days: int) -> dict:
     counts: dict[str, int] = {}
     for s in open_signals:
         counts[s["kind"]] = counts.get(s["kind"], 0) + 1
@@ -519,6 +523,14 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
         "dismissed_count": dismissed_count,
         "horizon_days": horizon_days,
     }
+
+
+def narrow_signals(payload: dict, series_ids: set[str]) -> dict:
+    """`compute_signals`' answer kept to the signals about these series, with the counts taken again over
+    what is left, so a badge never counts a finding its list does not show. The dismissed count is left
+    whole: it opens the review of every dismissal, which is not narrowed."""
+    kept = [s for s in payload["signals"] if s.get("series_id") in series_ids]
+    return _signals_payload(kept, dismissed_count=payload["dismissed_count"], horizon_days=payload["horizon_days"])
 
 
 def dismissed_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HORIZON_DAYS) -> list[dict]:

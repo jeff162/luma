@@ -231,6 +231,19 @@ class FacetSemanticsTests(unittest.TestCase):
             # "Whole Foods" is filed under Groceries and does not contain the fragment.
             self.assertEqual(list_payee_names(q="grocer", limit=20), ["Corner Grocer", "GROCERY Outlet"])
 
+    def test_the_owner_lens_narrows_and_an_owner_chip_cannot_widen_it(self):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO txn (id, account_id, date, amount, display_name, owner_id, is_pending, needs_review) "
+                "VALUES ('txn-none', ?, '2026-05-12', 5.0, 'Nobody', NULL, 0, 0)",
+                (self.account,),
+            )
+        self.assertEqual(self._ledger_ids(owner_lens=SHARED_OWNER_ID), {"txn-cat", "txn-uncat"})
+        self.assertEqual(self._ledger_ids(owner_lens="unassigned"), {"txn-none"})
+        # The chip and the lens AND: an owner outside the lens selects nothing rather than adding its rows.
+        self.assertEqual(self._ledger_ids(owner_lens=SHARED_OWNER_ID, owner_ids="unassigned"), set())
+        self.assertEqual(self._ledger_ids(owner_lens=f"{SHARED_OWNER_ID},unassigned", owner_ids="unassigned"), {"txn-none"})
+
     def test_an_unknown_facet_kwarg_is_refused(self):
         # The builder takes facets as **kwargs so that adding one touches only the registry. That must
         # not cost the typo-safety an explicit signature gave: a misspelled facet has to raise rather

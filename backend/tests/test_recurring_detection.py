@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.recurring import (
-    SeriesUpdate, restore_series, suppress_series, update_series,
+    SeriesUpdate, list_series, restore_series, suppress_series, update_series,
 )
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
@@ -506,6 +506,16 @@ class RecurringDetectionTests(unittest.TestCase):
                 still_linked = conn.execute(
                     "SELECT COUNT(*) FROM txn WHERE recurring_series_id = ?", (sid,)).fetchone()[0]
         self.assertEqual(still_linked, 0, "a suppressed series must still own no rows")
+
+    def test_a_series_names_the_owners_of_its_rows_suppressed_or_not(self):
+        # The owner lens filters series by whose rows they hold. A suppressed series links none, so its
+        # owners come from the snapshot, or the lens would show it to everyone.
+        self._add_series(payee="Netflix", category="Streaming", count=12, period_days=30, amount=15.99)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            self.assertEqual(list_series()["series"][0]["owner_ids"], [SHARED_OWNER_ID])
+            self.assertEqual(suppress_series(sid)["owner_ids"], [SHARED_OWNER_ID])
 
     def test_restoring_drops_the_snapshot(self):
         # A restored series owns rows again from the next scan, so a snapshot left behind would send the

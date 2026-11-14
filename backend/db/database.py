@@ -4073,6 +4073,10 @@ def init_db(db_path: str | None = None):
         # Once per start as well: a database swapped in from a backup can hold any value, including the
         # one a client last saw, and the cost is one reload on each client's next return.
         _bump_epoch(conn, "ledger_epoch")
+        _create_rule_reach_epoch_triggers(conn)
+        # Once per start, for the reason `_bump_recon_epoch` gives: a cached reach is stamped only with
+        # the data it came from, so a start is what keeps one from outliving the code that computed it.
+        _bump_epoch(conn, RULE_REACH_EPOCH_KEY)
         _create_purchase_link_prune_trigger(conn)
         _create_refund_follow_trigger(conn)
         _create_document_search_index(conn)
@@ -4173,6 +4177,46 @@ _LEDGER_EPOCH_SOURCE_TABLES = {
         "transfer_pair_decision",
     )
 }
+
+
+# Whose transactions each rule reaches (`services/rule_owner_reach.py`) is a scan of the whole ledger, so
+# it is cached and recomputed only when one more epoch ('rule_reach_epoch') has moved. It watches only
+# what that answer reads: the rules, the account fields a rule's scope and a row's owner come from, and
+# the transaction fields the matcher compares. Categorizing or tagging a row, the edits made most often,
+# leave it alone. The column-scoped triggers are dropped and created again at each start, so a change to
+# a column list here takes effect, which `CREATE TRIGGER IF NOT EXISTS` alone would not do.
+RULE_REACH_EPOCH_KEY = "rule_reach_epoch"
+_RULE_REACH_EPOCH_SOURCES = {
+    "category_rule": None,
+    "account": ("owner_id", "parent_account_id", "type"),
+    "txn": ("merchant_name", "raw_name", "amount", "owner_id", "account_id", "trashed_at", "import_evidence_json"),
+}
+
+
+def _create_rule_reach_epoch_triggers(conn: sqlite3.Connection) -> None:
+    key = RULE_REACH_EPOCH_KEY
+    for table, columns in _RULE_REACH_EPOCH_SOURCES.items():
+        for event in ("INSERT", "UPDATE", "DELETE"):
+            name = f"trg_{key}_{table}_{event.lower()}"
+            on = f"UPDATE OF {', '.join(columns)}" if event == "UPDATE" and columns else event
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+            conn.execute(f"""
+                CREATE TRIGGER {name}
+                AFTER {on} ON {table}
+                BEGIN
+                    INSERT INTO db_meta (key, value) VALUES ('{key}', 1)
+                    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+                END
+            """)
+
+
+def db_meta_epoch(conn: sqlite3.Connection, key: str) -> int:
+    """An epoch kept in db_meta; absent is 0."""
+    row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (key,)).fetchone()
+    try:
+        return int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def ledger_epoch(conn: sqlite3.Connection) -> int:

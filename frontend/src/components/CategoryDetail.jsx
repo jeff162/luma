@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
@@ -54,10 +55,16 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     [rangeMode, rangeKey, trend],
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
-  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}` : null
+  // The owner lens narrows the report as it does the page it was opened from (`lib/OwnerLensContext.jsx`).
+  const { params: lensParams } = useOwnerLens()
+  const lensKey = lensParams.owner_lens || ''
+  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}|${lensKey}` : null
   // The window + category: what the list fetches, what "select all matching" resolves, and what a download
   // of the list exports.
-  const listParams = useMemo(() => ({ ...range.params, category_ids: String(category.id) }), [range, category.id])
+  const listParams = useMemo(
+    () => ({ ...range.params, category_ids: String(category.id), ...lensParams }),
+    [range, category.id, lensParams],
+  )
   const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
   ), [listParams])
@@ -80,7 +87,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     // filter bar (Categories) pass nothing. With no explicit range we anchor the 36-month window to the
     // category's most recent activity (not today) so an old category still shows its latest 3 years
     // instead of an empty chart.
-    api.getMonthlyTrend(36, category.id, undefined, dateStart || undefined, dateEnd || undefined, undefined, undefined, undefined, (dateStart || dateEnd) ? {} : { anchor: 'latest' }).then(rows => {
+    api.getMonthlyTrend(36, category.id, undefined, dateStart || undefined, dateEnd || undefined, undefined, undefined, undefined, { ...lensParams, ...((dateStart || dateEnd) ? {} : { anchor: 'latest' }) }).then(rows => {
       if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
@@ -93,7 +100,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
       setTrendLoading(false)
     })
     return () => { cancelled = true }
-  }, [category.id, dateStart, dateEnd])
+  }, [category.id, dateStart, dateEnd, lensParams])
 
   // Reserve the full 7-row list height for year/all-time (their lists scroll at DETAIL_LIST_MAX_HEIGHT
   // regardless of any one month's count); month mode sizes to its busiest bar.

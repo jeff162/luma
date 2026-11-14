@@ -4,6 +4,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
+import { ownerKey, ownerLensAdmits } from '../lib/ownerLens.js'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
@@ -1495,6 +1497,7 @@ export default function Accounts() {
   const [collapsedGroupsLoaded, setCollapsedGroupsLoaded] = useState(false)
   // null = no owner filter (show all); empty string = unassigned-only; otherwise the selected owner_id.
   const [ownerFilter, setOwnerFilter] = useState(null)
+  const { lens: ownerLens } = useOwnerLens()
   const dragTooltipTimerRef = useRef(null)
   // The row the pending or showing merge hint is about, and the hint's element, which follows the pointer
   // without re-rendering the page on every move.
@@ -2124,7 +2127,6 @@ export default function Accounts() {
 
   const activeAccounts = accounts.filter(account => !account.trashed_at)
   const rootAccounts = activeAccounts.filter(account => !account.parent_account_id)
-  const orderedRootAccounts = rootAccounts
   const childAccountsByParent = activeAccounts.reduce((map, account) => {
     if (!account.parent_account_id) return map
     const list = map.get(account.parent_account_id) || []
@@ -2133,7 +2135,11 @@ export default function Accounts() {
     return map
   }, new Map())
 
-  const accountCountsByOwnerId = rootAccounts.reduce((counts, account) => {
+  // The owner lens narrows the list and its owner pills; the owners themselves stay manageable below, and
+  // the unowned-accounts warning stays, since assigning an owner is setup work for everyone.
+  const lensRootAccounts = rootAccounts.filter(account => ownerLensAdmits([ownerKey(account.owner_id)], ownerLens))
+  const orderedRootAccounts = lensRootAccounts
+  const accountCountsByOwnerId = lensRootAccounts.reduce((counts, account) => {
     const id = account.owner_id || ''
     counts.set(id, (counts.get(id) || 0) + 1)
     return counts
@@ -2152,17 +2158,19 @@ export default function Accounts() {
   ]
   // Only worth offering pills once there's more than one bucket to choose between.
   const showOwnerFilterRow = ownerFilterPills.length > 1
-  const displayRootAccounts = ownerFilter !== null
-    ? orderedRootAccounts.filter(account => (account.owner_id || '') === ownerFilter)
-    : orderedRootAccounts
+  // A pill picked before the lens changed may name an owner it now hides; it then filters nothing.
+  const effectiveOwnerFilter = ownerFilterPills.some(pill => pill.id === ownerFilter) ? ownerFilter : null
+  const displayRootAccounts = effectiveOwnerFilter !== null
+    ? lensRootAccounts.filter(account => (account.owner_id || '') === effectiveOwnerFilter)
+    : lensRootAccounts
   const draggingAccount = draggingAccountId ? activeAccounts.find(account => account.id === draggingAccountId) : null
   const detachDropActive = dropIntent?.kind === 'detach' && !!draggingAccount?.parent_account_id
 
   const ownerCount = owners.length
   const unownedCount = rootAccounts.filter(a => !a.owner_id).length
-  const mergedChildCount = activeAccounts.length - rootAccounts.length
-  const accountListSummary = rootAccounts.length
-    ? `${formatCountSummary(rootAccounts.length, 'account')}${mergedChildCount ? `, ${formatCountSummary(mergedChildCount, 'merged account')}` : ''}`
+  const mergedChildCount = lensRootAccounts.reduce((n, root) => n + (childAccountsByParent.get(root.id) || []).length, 0)
+  const accountListSummary = lensRootAccounts.length
+    ? `${formatCountSummary(lensRootAccounts.length, 'account')}${mergedChildCount ? `, ${formatCountSummary(mergedChildCount, 'merged account')}` : ''}`
     : 'No accounts'
   const ownerWarning = ownerCount > 0 && unownedCount > 0 ? `${unownedCount} account${unownedCount > 1 ? 's' : ''} need${unownedCount === 1 ? 's' : ''} an owner assigned` : ''
   const renameOwnerName = ownerRenameDialog?.name || ''
@@ -2355,7 +2363,7 @@ export default function Accounts() {
               <OwnerFilterPill
                 label="All"
                 count={rootAccounts.length}
-                active={ownerFilter === null}
+                active={effectiveOwnerFilter === null}
                 onClick={() => setOwnerFilter(null)}
               />
               {ownerFilterPills.map(pill => (
@@ -2363,7 +2371,7 @@ export default function Accounts() {
                   key={pill.id || '__unassigned__'}
                   label={pill.name}
                   count={pill.count}
-                  active={ownerFilter === pill.id}
+                  active={effectiveOwnerFilter === pill.id}
                   onClick={() => setOwnerFilter(prev => prev === pill.id ? null : pill.id)}
                 />
               ))}

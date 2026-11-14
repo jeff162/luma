@@ -358,6 +358,47 @@ class TaskDismissalTests(TasksFixtureTestCase):
             self.assertNotIn("configure_https", {t["id"] for t in get_tasks(request)["tasks"]})
 
 
+class TaskOwnerLensTests(TasksFixtureTestCase):
+    """The owner lens recounts the tasks that link to a lensed page, after dismissal has judged the whole
+    count, so looking through the lens can never lower a dismissal mark."""
+
+    _request = TaskDismissalTests._request
+    _visible_ids = TaskDismissalTests._visible_ids
+    _dismiss = TaskDismissalTests._dismiss
+
+    def setUp(self):
+        super().setUp()
+        self.alex = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Alex')", (self.alex,))
+
+    def _alex_txn(self):
+        txn_id = self._insert_txn(category_id=None)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET owner_id = ? WHERE id = ?", (self.alex, txn_id))
+
+    def _lensed(self, lens):
+        with self._use_db_path():
+            return {t["id"]: t for t in get_tasks(self._request(), lens)["tasks"]}
+
+    def test_the_uncategorized_count_follows_the_lens(self):
+        self._alex_txn()
+        self._insert_txn(category_id=None)
+        self.assertEqual(self._lensed(self.alex)["uncategorized_txns"]["count"], 1)
+        self.assertEqual(self._lensed(None)["uncategorized_txns"]["count"], 2)
+        self.assertNotIn("uncategorized_txns", self._lensed("unassigned"))
+
+    def test_a_lensed_view_does_not_lower_the_dismissal_mark(self):
+        self._alex_txn()
+        self._insert_txn(category_id=None)
+        self._dismiss()                                # mark = 2, the whole count
+        self._lensed(self.alex)                        # the lens sees 1; the mark must stay at 2
+        # A mark lowered to 1 would bring the task back here with nothing new to show.
+        self.assertNotIn("uncategorized_txns", self._visible_ids())
+        self._insert_txn(category_id=None)             # whole count 3
+        self.assertIn("uncategorized_txns", self._visible_ids())
+
+
 class ReimbursementTaskTests(TasksFixtureTestCase):
     """The reminder signal: that it appears at all, and that it splits by owner only where that means
     something.
@@ -443,6 +484,9 @@ class ReimbursementTaskTests(TasksFixtureTestCase):
         tasks = self._reimbursement_tasks()
         self.assertEqual(len(tasks), 2)
         self.assertEqual({t["count"] for t in tasks}, {1})
+        with self._use_db_path():
+            lensed = [t["id"] for t in get_tasks(None, alex)["tasks"] if t["id"].startswith("reimbursements_due")]
+        self.assertEqual(lensed, [f"reimbursements_due_{alex}"])
         # Each links to its own owner's rows, so the screen and the badge cannot disagree.
         self.assertTrue(all("owner_ids=" in t["link"] for t in tasks))
 

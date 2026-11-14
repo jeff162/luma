@@ -20,7 +20,7 @@ import uuid
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.db.database import get_db, single_runner
@@ -30,6 +30,7 @@ from backend.services.recurring_detection import (
     AMOUNT_MODE_VARIABLE,
     CADENCES,
     COUNTERPART_SCOPE_ACCOUNT_SQL,
+    SERIES_OWNERS_SQL,
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
     relink_rule_series,
@@ -37,6 +38,8 @@ from backend.services.recurring_detection import (
     maybe_auto_scan,
     owe_full_recurring_scan,
     scan_and_store,
+    series_owner_ids,
+    series_shown_under_lens,
     settle_owed_rescans,
     transfer_review,
 )
@@ -44,8 +47,10 @@ from backend.services.recurring_signals import (
     UPCOMING_HORIZON_DAYS,
     compute_signals,
     dismissed_signals,
+    narrow_signals,
 )
 from backend.services.signal_dismissals import dismiss, restore
+from backend.services.transaction_facets import split_ids
 
 router = APIRouter()
 
@@ -67,6 +72,8 @@ def _member_ids(row: sqlite3.Row) -> list[str] | None:
 def _serialize(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
+        # Empty for a series holding no rows, which the lens shows to everyone.
+        "owner_ids": series_owner_ids(row),
         "payee_key": row["payee_key"],
         "display_name": row["display_name"],
         "category_id": row["category_id"],
@@ -125,7 +132,7 @@ def _serialize(row: sqlite3.Row) -> dict:
 def _fetch(conn: sqlite3.Connection, series_id: str) -> sqlite3.Row:
     row = conn.execute(
         f"""
-        SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL},
+        SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL}, {SERIES_OWNERS_SQL},
                c.name AS category_name, a.display_name AS account_name,
                cp.display_name AS counterpart_account_name,
                COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
@@ -151,7 +158,7 @@ def list_series(include_suppressed: bool = False):
         where = "" if include_suppressed else "WHERE s.status != 'suppressed'"
         rows = conn.execute(
             f"""
-            SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL},
+            SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL}, {SERIES_OWNERS_SQL},
                    c.name AS category_name, a.display_name AS account_name,
                    cp.display_name AS counterpart_account_name,
                    COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
@@ -249,14 +256,25 @@ def restore_decision(body: RestoreDecision):
 # Signal routes are declared ahead of the `/{series_id}` ones so "signals" is never read as a series id.
 
 @router.get("/signals")
-def list_signals(horizon_days: int = UPCOMING_HORIZON_DAYS, include_dismissed: bool = False):
+def list_signals(
+    horizon_days: int = UPCOMING_HORIZON_DAYS,
+    include_dismissed: bool = False,
+    owner_lens: Optional[str] = Query(None, description="comma-separated owner IDs ('unassigned' for none); keeps the signals about series holding their rows"),
+):
     """The open anomaly/forecast signals over the current series (see `services/recurring_signals.py`).
     Derived on read, so this is always consistent with the ledger as it stands rather than with whatever
-    was true at the last import."""
+    was true at the last import.
+
+    Under the owner lens a signal stays when its series holds a lens owner's rows, or holds none, which is
+    how the series list itself is narrowed (`data-model.md` → *Owner lens*)."""
     if horizon_days < 1 or horizon_days > 365:
         raise HTTPException(status_code=400, detail="horizon_days must be between 1 and 365")
+    lens = split_ids(owner_lens, ",")
     with get_db() as conn:
-        return compute_signals(conn, horizon_days=horizon_days, include_dismissed=include_dismissed)
+        payload = compute_signals(conn, horizon_days=horizon_days, include_dismissed=include_dismissed)
+        if not lens:
+            return payload
+        return narrow_signals(payload, series_shown_under_lens(conn, lens))
 
 
 @router.get("/signals/dismissed")

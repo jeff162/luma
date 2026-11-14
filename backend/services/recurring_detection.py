@@ -44,6 +44,7 @@ from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql, rule_specificity_order_sql
+from backend.services.transaction_facets import UNASSIGNED_OWNER_ID, owner_lens_admits
 from backend.services.transfer_pairs import (
     group_key, pair_money_movements, pairs_by_movement,
 )
@@ -99,6 +100,34 @@ _LAST_SCAN_META_KEY = "recurring_last_scan_at"
 # The app-load catch-up rescans at most this often. Ingest and edit triggers bypass this gate with scoped
 # scans of their own, which do not restamp the watermark: only a full scan does.
 _AUTO_SCAN_MIN_INTERVAL_HOURS = 20.0
+
+
+# Whose transactions a series holds, for the owner lens (`data-model.md` → *Owner lens*): the owners of
+# its linked rows, and for a suppressed series, which links none, of the rows it held when suppressed.
+# `UNASSIGNED_OWNER_ID` stands for a row with no owner, as in the owner facet. Two subqueries rather than one OR, so
+# the linked-row half keeps `idx_txn_recurring`.
+SERIES_OWNERS_SQL = f"""
+    (SELECT group_concat(DISTINCT COALESCE(t.owner_id, '{UNASSIGNED_OWNER_ID}')) FROM txn t
+     WHERE  t.recurring_series_id = s.id AND t.trashed_at IS NULL) AS linked_owner_ids,
+    (SELECT group_concat(DISTINCT COALESCE(t.owner_id, '{UNASSIGNED_OWNER_ID}')) FROM txn t
+     WHERE  s.suppressed_member_ids IS NOT NULL
+       AND  t.id IN (SELECT value FROM json_each(s.suppressed_member_ids))) AS suppressed_owner_ids
+"""
+
+
+def series_owner_ids(row) -> list[str]:
+    owners = set()
+    for column in ("linked_owner_ids", "suppressed_owner_ids"):
+        if column in row.keys() and row[column]:
+            owners.update(row[column].split(","))
+    return sorted(owners)
+
+
+
+def series_shown_under_lens(conn: sqlite3.Connection, lens: list[str]) -> set[str]:
+    """The series the owner lens shows: those holding a lens owner's rows, and those holding none."""
+    rows = conn.execute(f"SELECT s.id, {SERIES_OWNERS_SQL} FROM recurring_series s").fetchall()
+    return {row["id"] for row in rows if owner_lens_admits(series_owner_ids(row), lens)}
 
 
 # Trailing domain endings dropped from the grouping key so "Mierf.org" and "MIERF" group together. Kept

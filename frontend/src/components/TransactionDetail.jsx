@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { AppConfirmDialog, AppNoticeDialog, Button, IconButton, Spinner, LinkButton } from './ui.jsx'
@@ -178,10 +179,12 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     [rangeMode, rangeKey, trend, openedMonth],
   )
   const anchorReady = rangeMode === 'all' ? (trend.length > 0 || !!openedMonth) : !!selectedMonth
-  const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}` : null
+  // The owner lens narrows the report as it does the page it was opened from (`lib/OwnerLensContext.jsx`).
+  const { params: lensParams } = useOwnerLens()
+  const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}|${lensParams.owner_lens || ''}` : null
   // The window + payee: what the list fetches, what "select all matching" resolves, and what a download of
   // the list exports.
-  const listParams = useMemo(() => ({ ...range.params, payees: payee }), [range, payee])
+  const listParams = useMemo(() => ({ ...range.params, payees: payee, ...lensParams }), [range, payee, lensParams])
   const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
   ), [listParams])
@@ -227,7 +230,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     if (!showPayeeActivity) { setTrendLoading(false); return }
     let cancelled = false
     setTrendLoading(true)
-    api.getPayeeTrend(payee, dateStart || undefined, dateEnd || undefined).then(rows => {
+    api.getPayeeTrend(payee, dateStart || undefined, dateEnd || undefined, undefined, lensParams).then(rows => {
       if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
@@ -244,7 +247,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       setTrendLoading(false)
     })
     return () => { cancelled = true }
-  }, [payee, dateStart, dateEnd, showPayeeActivity, openedMonth])
+  }, [payee, dateStart, dateEnd, showPayeeActivity, openedMonth, lensParams])
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, patch) {

@@ -19,6 +19,9 @@ import {
 } from './ui.jsx'
 import { ActionMenu, ActionMenuButton } from './ActionMenu.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
+import { OWNER_LENS_TAB_WIDTH_VAR } from './OwnerLensTab.jsx'
+import { ownerKey, ownerLensAdmits } from '../lib/ownerLens.js'
 import {
   makeSavedFilterId, reconcileSelections, savedFilterContent, savedFilterDate, savedFilterMatches, tidySavedFilterName,
   useSavedFilters,
@@ -228,10 +231,15 @@ const FILTER_TABS = [
 
 function FilterPopover({ onClose }) {
   const { filters, addSelection, addSelections, removeSelection, removeSelections, clearSelections } = useFilters()
+  const { lens } = useOwnerLens()
   const [tab, setTab] = useState('accounts')
   const [categories, setCategories] = useState([])
-  const [accounts, setAccounts] = useState([])
-  const [owners, setOwners] = useState([])
+  const [allAccounts, setAccounts] = useState([])
+  const [allOwners, setOwners] = useState([])
+  // Under the owner lens, only what it shows is offered: a chip for an owner outside it, or for an
+  // account one of them holds, would select nothing, since the lens ANDs with the chips.
+  const owners = useMemo(() => allOwners.filter(o => ownerLensAdmits([o.id], lens)), [allOwners, lens])
+  const accounts = useMemo(() => allAccounts.filter(a => ownerLensAdmits([ownerKey(a.owner_id)], lens)), [allAccounts, lens])
   const [tags, setTags] = useState([])
   const [attributes, setAttributes] = useState([])
   const [payeeSearch, setPayeeSearch] = useState('')
@@ -914,8 +922,9 @@ export default function FilterBar() {
     // the Date button rather than under the saved filters.
     <div style={{
       display: 'flex', alignItems: 'stretch', gap: 10,
-      padding: '8px 32px', borderBottom: '1px solid var(--border)',
-      background: 'var(--surface)', minHeight: 48,
+      // The right end stays clear of the owner lens's corner tab, which publishes its width where it is shown.
+      padding: '8px 32px', paddingRight: `calc(32px + var(${OWNER_LENS_TAB_WIDTH_VAR}, 0px))`,
+      borderBottom: '1px solid var(--border)', background: 'var(--surface)', minHeight: 48,
     }}>
       <SavedFilterChips savedFilters={savedFilters} updateSavedFilters={updateSavedFilters} />
 

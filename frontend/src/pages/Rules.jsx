@@ -4,6 +4,8 @@
 import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
+import { ownerLensAdmits } from '../lib/ownerLens.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -456,13 +458,33 @@ export default function Rules() {
     return map
   }, [categories])
 
+  // The owner lens shows the rules that reach a lens owner's transactions (`services/rule_owner_reach.py`).
+  // The reach is a ledger scan, so it is fetched only while the lens is on, and again whenever the rules
+  // reload; until it arrives the list waits rather than showing every rule and then shrinking.
+  const { lens: ownerLens } = useOwnerLens()
+  const [ownerReach, setOwnerReach] = useState(null)
+  const lensOn = !!ownerLens
+  useEffect(() => {
+    if (!lensOn) { setOwnerReach(null); return undefined }
+    let ignore = false
+    setOwnerReach(null)
+    api.getRuleOwnerReach()
+      .then(res => { if (!ignore) setOwnerReach(res?.owners || {}) })
+      .catch(() => { if (!ignore) setOwnerReach({}) })
+    return () => { ignore = true }
+  }, [lensOn, matchCacheVersion])
+  const lensLoading = lensOn && !ownerReach
+  const lensRules = useMemo(() => (
+    ownerLens && ownerReach ? rules.filter(rule => ownerLensAdmits(ownerReach[rule.id], ownerLens)) : rules
+  ), [rules, ownerLens, ownerReach])
+
   const filteredRules = useMemo(() => {
     // Expand group selections to their leaf ids and union with directly-selected leaves — so the pure
     // matcher only deals with leaf categoryIds while the UI keeps groups and leaves distinct.
     const effectiveCategoryIds = new Set(facets.categoryIds)
     for (const gid of facets.groupIds) for (const lid of (leafIdsByGroup[gid] || [])) effectiveCategoryIds.add(lid)
-    return filterRules(rules, search, { ...facets, categoryIds: [...effectiveCategoryIds] })
-  }, [rules, search, facets, leafIdsByGroup])
+    return filterRules(lensRules, search, { ...facets, categoryIds: [...effectiveCategoryIds] })
+  }, [lensRules, search, facets, leafIdsByGroup])
   // Alphabetical → A–Z sections; "Last used" → a flat, stalest-first list (never-used rules on top).
   const sectionItems = useMemo(() => {
     if (sortMode === 'lastUsed') {
@@ -508,7 +530,7 @@ export default function Rules() {
   const facetOptions = useMemo(() => {
     const catName = new Map(), tags = new Map(), owns = new Map(), accts = new Map(), types = new Map()
     const usedCat = new Set()
-    for (const r of rules) {
+    for (const r of lensRules) {
       if (r.category_id) { usedCat.add(r.category_id); if (!catName.has(r.category_id)) catName.set(r.category_id, r.category_name || r.category_id) }
       for (const tag of (r.tags || [])) if (!tags.has(tag.id)) tags.set(tag.id, tag)
       if (r.owner_id && !owns.has(r.owner_id)) owns.set(r.owner_id, r.owner_name || r.owner_id)
@@ -538,7 +560,7 @@ export default function Rules() {
       accounts: [...accts].map(([id, label]) => ({ id, label })).sort(byLabel),
       accountTypes: [...types].map(([id, label]) => ({ id, label })).sort(byLabel),
     }
-  }, [rules, categories])
+  }, [lensRules, categories])
 
   const updateFacet = (key, value) => setFacets(f => ({ ...f, [key]: value }))
   const clearFacets = () => setFacets(emptyRulesFacets())
@@ -870,15 +892,15 @@ export default function Rules() {
           />
 
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-            {filteredRules.length === rules.length
-              ? `${rules.length} rule${rules.length !== 1 ? 's' : ''}`
-              : `${filteredRules.length} of ${rules.length} rules`}
+            {filteredRules.length === lensRules.length
+              ? `${lensRules.length} rule${lensRules.length !== 1 ? 's' : ''}`
+              : `${filteredRules.length} of ${lensRules.length} rules`}
           </span>
         </div>
       </div>
 
       {/* Horizontal A–Z jump strip (alphabetical sort only; the "Last used" order isn't letter-sectioned). */}
-      {!loading && alphaMode && filteredRules.length > 0 ? (
+      {!loading && !lensLoading && alphaMode && filteredRules.length > 0 ? (
         <AlphaRail present={presentLetters} current={currentLetter} onJump={jumpToLetter} />
       ) : null}
 
@@ -906,10 +928,12 @@ export default function Rules() {
       ) : null}
 
       <div ref={scrollRef} data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 24px' }}>
-        {loading ? (
+        {loading || lensLoading ? (
             <div style={{ padding: 24 }}><Spinner /></div>
           ) : rules.length === 0 ? (
             <EmptyState message='No rules yet — click "+New" to create one' />
+          ) : lensRules.length === 0 ? (
+            <EmptyState message="No rules reach the owners shown" />
           ) : filteredRules.length === 0 ? (
             <EmptyState message="No rules match your search or filters" />
           ) : (

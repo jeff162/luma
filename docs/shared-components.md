@@ -11,6 +11,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | `FilterContext` / `FilterBar` | The app-wide date, amount and chip filter. | `lib/FilterContext.jsx`, `components/FilterBar.jsx` |
 | `selectionsToParams` / `amountFilterParams` | Turning the filter chips and the amount filter into API parameters. A new filter axis is one row in `FILTER_FACETS` and one in the backend registry (`data-model.md` → *One facet registry, both halves*). | `lib/filterParams.js` |
+| `useOwnerLens` + `ownerLensAdmits` | Narrowing a scoped page to the owner lens: spread its `params` into a transaction read, or filter a list held whole by what each item reaches. | `lib/OwnerLensContext.jsx`, `lib/ownerLens.js` |
 | `AttributeFilterControl` | A toolbar control that narrows a transaction list to one kind of transaction. | `components/AttributeFilterControl.jsx` |
 | `SearchInput` | The search box of a page or panel. In a row of buttons, `size` set to the buttons' size (`regular`, `compact`) matches their height; `getFormControlStyle` takes the same two sizes for a select. | `components/ui.jsx` |
 | `HighlightedText` / `MatchExcerpt` | Highlighting a search match: a term in a string, or a passage the server marked up. | `components/ui.jsx` |

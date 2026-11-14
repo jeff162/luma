@@ -1673,7 +1673,9 @@ export function SegmentedToggle({ value, options, onChange, ariaLabel, size = 'r
 // button with an optional trailing label. Prefer this over a bare checkbox for settings toggles so
 // the look stays consistent across the app. `ariaLabel` names a switch whose label is rendered
 // elsewhere in its row rather than beside it.
-export function Toggle({ checked, onChange, label, ariaLabel, disabled = false, style }) {
+// `size="compact"` draws a smaller track, for a switch set inside a compact control.
+export function Toggle({ checked, onChange, label, ariaLabel, disabled = false, style, size = 'regular' }) {
+  const compact = size === 'compact'
   return (
     <button
       type="button"
@@ -1696,14 +1698,14 @@ export function Toggle({ checked, onChange, label, ariaLabel, disabled = false, 
         flex: '0 0 auto',
         display: 'inline-flex', alignItems: 'center',
         justifyContent: checked ? 'flex-end' : 'flex-start',
-        width: 34, height: 20, padding: 2, boxSizing: 'border-box',
+        width: compact ? 26 : 34, height: compact ? 15 : 20, padding: 2, boxSizing: 'border-box',
         borderRadius: 999,
         background: checked ? 'var(--accent)' : 'var(--surface2)',
         border: '1px solid color-mix(in srgb, var(--accent) 20%, var(--border))',
         transition: 'background 120ms ease',
       }}>
         <span style={{
-          width: 14, height: 14, borderRadius: '50%',
+          width: compact ? 9 : 14, height: compact ? 9 : 14, borderRadius: '50%',
           background: '#fff',
           boxShadow: '0 1px 2px rgba(15, 23, 42, 0.35)',
         }} />

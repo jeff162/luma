@@ -34,8 +34,9 @@ the finding, not the reminder; don't re-impose them here.
 """
 
 import json
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from backend.authorization import is_admin_or_local
 from backend.db.database import get_db
 from backend.db.control_database import (
@@ -49,10 +50,11 @@ from backend import app_log_file, runtime_config, transport
 from backend.services import crypto_service, proxy_certificate, rule_conflicts, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
-from backend.services.recurring_detection import overdue_owed_rescan_count
-from backend.services.recurring_signals import compute_signals
+from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens
+from backend.services.recurring_signals import compute_signals, narrow_signals
 from backend.services.rule_range_drift import find_range_drift
 from backend.services.reimbursements import due_reminders
+from backend.services.transaction_facets import owner_lens_admits, owner_membership, split_ids
 
 router = APIRouter()
 
@@ -452,6 +454,35 @@ def security_tasks(request: Request | None) -> list[dict]:
     return [task for task in found if task]
 
 
+# Pending transactions are intentionally excluded because the rest of the product also keeps them out of
+# reporting and categorization chores until they settle. Trashed rows are excluded too: they no longer
+# appear in the Transactions list the task links to, so counting them here would overstate the work and
+# never reach zero.
+def _uncategorized_count(conn, lens: list[str] | None = None) -> int:
+    clauses = ["t.category_id IS NULL", "t.is_pending = 0", "t.trashed_at IS NULL"]
+    params: list = []
+    member = owner_membership(lens or [])
+    if member:
+        clauses.append(member[0])
+        params.extend(member[1])
+    return conn.execute(f"SELECT COUNT(*) AS n FROM txn t WHERE {' AND '.join(clauses)}", params).fetchone()["n"]
+
+
+def _uncategorized_task(n: int) -> dict | None:
+    if not n:
+        return None
+    return {
+        "id":          "uncategorized_txns",
+        "title":       "Uncategorized transactions",
+        "description": f"{n} transaction{'s have' if n != 1 else ' has'} "
+                       "no category. Categorizing them improves your Dashboard and reports.",
+        "count":       n,
+        "link":        "/transactions?only=uncategorized",
+        "link_label":  "Review transactions",
+        "severity":    SEVERITY_INFO,
+    }
+
+
 def _build_tasks(request: Request | None) -> list[dict]:
     """Every task that currently applies, before dismissal is taken into account."""
     tasks = []
@@ -520,25 +551,9 @@ def _build_tasks(request: Request | None) -> list[dict]:
         # also keeps them out of reporting and categorization chores until they settle.
         # Trashed rows are excluded too: they no longer appear in the Transactions list the
         # task links to, so counting them here would overstate the work and never reach zero.
-        uncategorized = conn.execute("""
-            SELECT COUNT(*) AS n
-            FROM   txn
-            WHERE  category_id IS NULL
-              AND  is_pending   = 0
-              AND  trashed_at   IS NULL
-        """).fetchone()["n"]
-
-        if uncategorized:
-            tasks.append({
-                "id":          "uncategorized_txns",
-                "title":       "Uncategorized transactions",
-                "description": f"{uncategorized} transaction{'s have' if uncategorized != 1 else ' has'} "
-                               "no category. Categorizing them improves your Dashboard and reports.",
-                "count":       uncategorized,
-                "link":        "/transactions?only=uncategorized",
-                "link_label":  "Review transactions",
-                "severity":    SEVERITY_INFO,
-            })
+        uncategorized_task = _uncategorized_task(_uncategorized_count(conn))
+        if uncategorized_task:
+            tasks.append(uncategorized_task)
 
         # Soft-detected duplicates flagged at import time (new account on either side) or after
         # an account merge. They never auto-trash, so they linger here until the user reviews.
@@ -759,11 +774,13 @@ _SIGNAL_TASKS = [
 ]
 
 
-def _recurring_signal_tasks(conn) -> list[dict]:
+def _recurring_signal_tasks(conn, counts: dict | None = None) -> list[dict]:
     """The recurring anomaly signals, one task per kind. Each signal is also dismissed one at a time on the
     page the task links to, and the count here only ever describes findings still open there; dismissing
-    the task hides the reminder until another finding of that kind appears."""
-    counts = compute_signals(conn)["counts"]
+    the task hides the reminder until another finding of that kind appears. `counts` is a narrowed set of
+    signal counts, for the owner lens; by default every open signal is counted."""
+    if counts is None:
+        counts = compute_signals(conn)["counts"]
     tasks = []
     for spec in _SIGNAL_TASKS:
         n = sum(counts.get(k, 0) for k in spec["kinds"])
@@ -900,10 +917,58 @@ def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dic
     return visible, hidden
 
 
+# The tasks the owner lens narrows: each links to a page the lens narrows, so the count it shows is the count
+# that page lists. Every other task links to an unscoped page (Import, the rule checkup, Accounts setup) or
+# is about the installation, and stays whole.
+_RECURRING_SIGNAL_TASK_IDS = {spec["id"] for spec in _SIGNAL_TASKS}
+
+
+def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
+    """Shown tasks recounted over the lens owners' rows; one with nothing left is dropped. Run after
+    dismissal, which always judges the whole count: a mark ratcheted down to a narrowed count would bring
+    the task back the moment the lens is switched off."""
+    narrowed: list[dict] = []
+    with get_db() as conn:
+        signal_counts = None
+        for task in tasks:
+            if task["id"] == "uncategorized_txns":
+                task = _keep_dismissal(task, _uncategorized_task(_uncategorized_count(conn, lens)))
+            elif task["id"].startswith("reimbursements_due_"):
+                # One task per owner already; the owner token is the task's own.
+                owner = task["id"].removeprefix("reimbursements_due_")
+                task = task if owner_lens_admits([owner], lens) else None
+            elif task["id"] == "reimbursements_due":
+                # Not split by owner on screen, but the report still groups what it counts by whose it is.
+                n = sum(g["count"] for g in due_reminders(conn)["groups"] if owner_lens_admits([g["owner_id"]], lens))
+                task = _keep_dismissal(task, _reimbursement_task(group=None, count=n) if n else None)
+            elif task["id"] in _RECURRING_SIGNAL_TASK_IDS:
+                if signal_counts is None:
+                    shown = series_shown_under_lens(conn, lens)
+                    signal_counts = narrow_signals(compute_signals(conn), shown)["counts"]
+                fresh = next((t for t in _recurring_signal_tasks(conn, signal_counts) if t["id"] == task["id"]), None)
+                task = _keep_dismissal(task, fresh)
+            if task:
+                narrowed.append(task)
+    return narrowed
+
+
+def _keep_dismissal(original: dict, rebuilt: dict | None) -> dict | None:
+    return {**rebuilt, "dismiss_key": original.get("dismiss_key")} if rebuilt else None
+
+
 @router.get("")
-def get_tasks(request: Request = None):
+def get_tasks(
+    request: Request = None,
+    owner_lens: Optional[str] = Query(None, description="comma-separated owner IDs ('unassigned' for none) the Tasks page's owner lens shows"),
+):
+    """The shown tasks and the dismissed ones. Under the owner lens the shown tasks that link to a lensed
+    page are recounted for its owners (`_narrow_to_lens`); the dismissed list stays whole, since it is the
+    way back to a reminder whoever's rows it counts."""
     tasks = _build_tasks(request)
     visible, hidden = _apply_dismissals(tasks, _dismissal_scope(request))
+    lens = split_ids(owner_lens, ",")
+    if lens:
+        visible = _narrow_to_lens(visible, lens)
     return {
         "tasks":       visible,
         "total_count": sum(t["count"] for t in visible),
@@ -914,7 +979,7 @@ def get_tasks(request: Request = None):
 
 
 @router.post("/dismiss/{dismiss_key}")
-def dismiss_task(dismiss_key: str, request: Request = None):
+def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
     """Put a task away at its current count. It returns when the count rises above that mark — and the
     mark falls with the count, so work that arrives after some has been cleared still surfaces."""
     scope_id = _dismissal_scope(request)
@@ -926,11 +991,11 @@ def dismiss_task(dismiss_key: str, request: Request = None):
     marks = _read_dismissals(scope_id)
     marks[dismiss_key] = task["count"]
     _write_dismissals(scope_id, marks)
-    return get_tasks(request)
+    return get_tasks(request, owner_lens)
 
 
 @router.delete("/dismiss/{dismiss_key}")
-def restore_task(dismiss_key: str, request: Request = None):
+def restore_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
     """Bring a dismissed task back — the undo behind the toast and the dismissed list."""
     scope_id = _dismissal_scope(request)
     if not scope_id:
@@ -938,4 +1003,4 @@ def restore_task(dismiss_key: str, request: Request = None):
     marks = _read_dismissals(scope_id)
     marks.pop(dismiss_key, None)
     _write_dismissals(scope_id, marks)
-    return get_tasks(request)
+    return get_tasks(request, owner_lens)

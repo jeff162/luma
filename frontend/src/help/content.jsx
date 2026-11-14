@@ -1840,6 +1840,36 @@ export const HELP_TOPICS = [
           than one owner exists, <em>shared</em> becomes available as a choice. Owner can be filtered
           and reported on and used in the selection criteria for rules. Each owner also chooses whether its new
           transactions arrive flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
+          Each user can also <HelpLink to="/help/owner-lens">show only their own owners</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'owner-lens',
+    section: 'accounts',
+    title: 'Showing only some owners',
+    surfaces: ['Owner view (top-right corner)'],
+    summary: 'A setting, kept for each user, that limits the Dashboard, Transactions, Accounts, Rules, Recurring and Tasks pages to chosen owners.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          The <strong>Owner view</strong> switch in the top-right corner of the Dashboard, Transactions,
+          Accounts, Rules, Recurring and Tasks pages limits them to the transactions, accounts, rules and
+          recurring series that belong to the chosen owners. The &#9662; opens the list of owners, hovering
+          shows who is included, and &rsaquo; folds the tab down to the switch. Each user has their own choice.
+        </p>
+        <p>
+          A rule or recurring series belongs to every owner whose transactions it matches, so a rule two people
+          share shows for both. One that has not matched anything yet shows for everyone. <em>Unassigned</em>
+          stands for accounts with no owner and can be included or left out. On the Tasks page the counts for
+          uncategorized transactions, reimbursements and recurring findings follow the view; the other tasks
+          are about the whole ledger.
+        </p>
+        <p>
+          The owner view only changes what is shown. A rule created while it is on still applies to everyone's
+          transactions unless the rule is given an owner.
         </p>
       </>
     ),

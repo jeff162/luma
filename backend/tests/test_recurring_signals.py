@@ -156,6 +156,17 @@ class RecurringSignalsTests(unittest.TestCase):
                 self.assertIsNotNone(signal.get("series_id"), "the action needs a series to open")
                 self.assertIsNotNone(signal.get("series_name"))
 
+    def test_the_owner_lens_keeps_the_signals_of_series_holding_its_rows_and_recounts(self):
+        from backend.routers.recurring import list_signals
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6 + [19.99])
+        self._scan()
+        with self._use_db_path():
+            whole = list_signals(horizon_days=30, include_dismissed=False, owner_lens=None)
+            self.assertTrue(whole["counts"].get("price_change"), "precondition: a finding to narrow")
+            self.assertEqual(list_signals(horizon_days=30, include_dismissed=False, owner_lens=SHARED_OWNER_ID), whole)
+            other = list_signals(horizon_days=30, include_dismissed=False, owner_lens="unassigned")
+        self.assertEqual((other["signals"], other["counts"], other["anomaly_count"]), ([], {}, 0))
+
     def test_a_price_change_carries_the_gate_it_would_have_to_move(self):
         # The finding offers to widen the series' matching range, so it has to say what that range is
         # and whether it is the user's pin or the scan's derived one — a proposal against the derived

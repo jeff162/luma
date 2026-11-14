@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useFilters } from '../lib/FilterContext.jsx'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { Card, PageHeader, Spinner, Button } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
@@ -191,11 +192,14 @@ export default function Tasks() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
   const [undo, setUndo] = useState(null)  // { dismiss_key, title } of the last dismissal
+  // The owner lens recounts the tasks whose page it narrows; dismissal still judges the whole count on the
+  // server, so dismissing here hides the reminder for every view (`routers/tasks.py` → `_narrow_to_lens`).
+  const { params: ownerLensParams } = useOwnerLens()
 
   useEffect(() => {
     let cancelled = false
     function fetchTasks() {
-      api.getTasks().then(r => {
+      api.getTasks(ownerLensParams).then(r => {
         if (cancelled) return
         setResult(r)
         setLoading(false)
@@ -210,18 +214,18 @@ export default function Tasks() {
       cancelled = true
       window.removeEventListener('luma:data-mutated', fetchTasks)
     }
-  }, [])
+  }, [ownerLensParams])
 
   // Both calls return the recomputed list, so the page never has to guess what dismissing changed.
   const dismiss = useCallback(async (task) => {
-    setResult(await api.dismissTask(task.dismiss_key))
+    setResult(await api.dismissTask(task.dismiss_key, ownerLensParams))
     setUndo({ dismiss_key: task.dismiss_key, title: task.title })
-  }, [])
+  }, [ownerLensParams])
 
   const restore = useCallback(async (task) => {
-    setResult(await api.restoreTask(task.dismiss_key))
+    setResult(await api.restoreTask(task.dismiss_key, ownerLensParams))
     setUndo(null)
-  }, [])
+  }, [ownerLensParams])
 
   // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
   const closeUndo = useCallback(() => setUndo(null), [])

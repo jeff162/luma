@@ -19,6 +19,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
+import { ownerLensAdmits } from '../lib/ownerLens.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
   PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, AppConfirmDialog, SegmentedToggle,
@@ -131,6 +133,8 @@ function seriesComparator(sortOrder) {
 function orderBucket(items, sortOrder) {
   return [...items].sort(seriesComparator(sortOrder)).map(s => s.id)
 }
+
+const lensedSeries = (list, lens) => list.filter(s => ownerLensAdmits(s.owner_ids, lens))
 
 function buildLayout(list, selected, sortOrder) {
   const counts = { suggested: 0, confirmed: 0, ended: 0, suppressed: 0 }
@@ -703,13 +707,18 @@ export default function Recurring() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [adoptBusy, setAdoptBusy] = useState(null)
 
+  // The owner lens keeps the series holding a lens owner's rows (`lib/ownerLens.js`). It narrows what the
+  // layout is built from, so the status counts and sections agree with the cards shown, and the
+  // all-series report. A single series' report is left whole, because its count is a fact about the series.
+  const { lens: ownerLens, params: ownerLensParams } = useOwnerLens()
+
   // The drill-down serves two shapes through one paged list: a single series (recurring_series_id) and
   // the all-series report (recurring_only — every row linked to any series). The second is flagged by a
   // synthetic marker on `openSeries` rather than a separate panel, so both land in the same report with
   // the same row editing.
   const membersLoadPage = useCallback((offset, limit, sort) => {
     const base = { limit, offset, sort_by: sort.key, sort_dir: sort.dir }
-    if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...base })
+    if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...ownerLensParams, ...base })
     // A suppressed series owns no rows: suppress nulls their `recurring_series_id`, because that column
     // is the app-wide "is recurring" flag and a rejected series must not light up the ↻ marker or the
     // recurring filter. So the rows it was about have to come from somewhere else.
@@ -735,9 +744,9 @@ export default function Recurring() {
       })
     }
     return api.getTransactions({ recurring_series_id: openSeries?.id, ...base })
-  }, [openSeries])
+  }, [openSeries, ownerLensParams])
   const membersPaged = usePagedTransactions({
-    activeKey: openSeries ? `recurring:${openSeries.id}` : null,
+    activeKey: openSeries ? `recurring:${openSeries.id}${openSeries._all ? `|${ownerLensParams.owner_lens || ''}` : ''}` : null,
     loadPage: membersLoadPage,
   })
   const reloadMembers = membersPaged.reload
@@ -806,12 +815,13 @@ export default function Recurring() {
   const selectedRef = useRef(selected); selectedRef.current = selected
   const sortRef = useRef(sortOrder); sortRef.current = sortOrder
   const allSeriesRef = useRef(allSeries); allSeriesRef.current = allSeries
+  const lensRef = useRef(ownerLens); lensRef.current = ownerLens
 
   const load = useCallback(() =>
     api.getRecurringSeries(true).then(r => {
       const list = r.series || []
       setAllSeries(list)
-      setLayout(buildLayout(list, selectedRef.current, sortRef.current))
+      setLayout(buildLayout(lensedSeries(list, lensRef.current), selectedRef.current, sortRef.current))
     }), [])
 
   useEffect(() => { load() }, [load])
@@ -824,8 +834,8 @@ export default function Recurring() {
   // Signals recompute from the ledger on every read, so anything that could change one — an action on a
   // series, a scan, a rule edit — just re-fetches rather than trying to patch a row in place.
   const loadSignals = useCallback(
-    () => api.getRecurringSignals().then(setSignalData).catch(() => {}),
-    [],
+    () => api.getRecurringSignals(undefined, ownerLensParams).then(setSignalData).catch(() => {}),
+    [ownerLensParams],
   )
   useEffect(() => { loadSignals() }, [loadSignals])
 
@@ -868,8 +878,8 @@ export default function Recurring() {
   // the persisted values once preferences finish loading). Keyed on selection/sort, NOT allSeries, so an
   // in-place card update never triggers a re-sort. Reads current data via a ref.
   useEffect(() => {
-    if (allSeriesRef.current) setLayout(buildLayout(allSeriesRef.current, selected, sortOrder))
-  }, [selected, sortOrder])
+    if (allSeriesRef.current) setLayout(buildLayout(lensedSeries(allSeriesRef.current, ownerLens), selected, sortOrder))
+  }, [selected, sortOrder, ownerLens])
 
   function togglePill(cat) {
     const next = new Set(selected)
@@ -1205,6 +1215,7 @@ export default function Recurring() {
           <PageHeader
             title="Recurring Transactions"
             help={<FeatureExplainer topic="recurring-transactions" placement="bottom-left" />}
+           
             refresh={<RefreshButton onRefresh={refreshAll} title="Refresh — reload everything on this page" />}
             titleAdornment={allSeries && allSeries.length > 0 && (
               // The standard report ↗ next to the title opens a transaction report of every recurring row

@@ -59,7 +59,7 @@ describe('Tasks dismissal', () => {
     await screen.findByText('Uncategorized transactions')
 
     await userEvent.click(screen.getByText('Dismiss'))
-    await waitFor(() => expect(api.dismissTask).toHaveBeenCalledWith('uncategorized_txns'))
+    await waitFor(() => expect(api.dismissTask).toHaveBeenCalledWith('uncategorized_txns', {}))
 
     expect(screen.queryByText('4 transactions have no category.')).toBeNull()
     expect(screen.getByText('Task dismissed')).toBeTruthy()   // the undo toast
@@ -75,7 +75,7 @@ describe('Tasks dismissal', () => {
 
     await userEvent.click(await screen.findByText('1 dismissed'))
     await userEvent.click(screen.getByText('Restore'))
-    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledWith('uncategorized_txns'))
+    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledWith('uncategorized_txns', {}))
     expect(await screen.findByText('4 transactions have no category.')).toBeTruthy()
   })
 })

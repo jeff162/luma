@@ -17,6 +17,7 @@ import TagDetail from '../components/TagDetail.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, monthLabel, lastNMonths, formatDateRange } from '../lib/utils.js'
@@ -1869,7 +1870,12 @@ export default function Dashboard() {
   // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), which
   // splits each facet by mode so an exclude chip can never leak into an include list and invert its
   // own meaning.
-  const facetParams = useMemo(() => selectionsToParams(filters.selections), [filters.selections])
+  // The owner lens rides with them, so it reaches every total, trend and drill list the chips do.
+  const { params: ownerLensParams } = useOwnerLens()
+  const facetParams = useMemo(
+    () => ({ ...selectionsToParams(filters.selections), ...ownerLensParams }),
+    [filters.selections, ownerLensParams],
+  )
   // A single account selection also fills the singular `account_id` some endpoints take; two or more
   // has no singular form, so those fall back to `account_ids` alone. So does one account beside an
   // account-type chip: the two widen each other, and the account alone would narrow to it.

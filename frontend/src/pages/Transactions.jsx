@@ -24,6 +24,7 @@ import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/us
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
+import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
 import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
@@ -215,16 +216,18 @@ export default function Transactions() {
   // Bulk edit. The filter params below mirror the list fetch exactly so "select all matching" resolves
   // the same rows server-side. The ledger is the paginated source of truth, so Apply re-fetches (via
   // onReload) rather than patching rows in place.
-  // The FilterBar's part of the list's filters (date, chips, amount), which the reimbursements count and
+  // The FilterBar's part of the list's filters (date, chips, amount, and the owner lens beside them), which the reimbursements count and
   // report are narrowed by as well. The chip row becomes parameters through the shared facet registry
   // (lib/filterParams.js), so a bulk "select all matching" resolves the exact same rows the list shows
   // (exclusions and all).
+  const { params: ownerLensParams } = useOwnerLens()
   const filterBarParams = useMemo(() => ({
     date_start: getRawDate()?.start || undefined,
     date_end: getRawDate()?.end || undefined,
     ...selectionsToParams(filters.selections),
     ...amountFilterParams(filters.amount),
-  }), [filters, getRawDate])
+    ...ownerLensParams,
+  }), [filters, getRawDate, ownerLensParams])
   const reimbursements = useReimbursementCount(filterBarParams)
   const currentFilterParams = useMemo(() => {
     return {

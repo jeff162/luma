@@ -47,6 +47,41 @@ in the same write, which is what keeps the stored axis and the account in step; 
 that every filter, summary and task reads one place rather than joining, and so a correction has one
 site to make.
 
+### Owner lens
+
+Each user can narrow the scoped pages (Dashboard, Transactions, Accounts, Rules, Recurring, Tasks) to
+chosen owners with the Owner view switch. It is a view filter and not a permission: anyone can switch it
+off, and it never changes what a write does. A rule created under the lens gets no owner scope from it.
+
+- **Stored per user** as the `ui.ownerLens` preference: on or off, and the chosen owner ids, where
+  `unassigned` stands for rows with no owner, as in the owner facet. The view needs at least one real
+  owner; Unassigned on its own narrows nothing. The set is kept to owners that still exist.
+- **Only the scoped pages read it** (`OWNER_LENS_ROUTES`). Categories, imports and settings are not
+  scoped by owner, so a report opened from one of them is not narrowed, and the Settings CSV export
+  ignores it.
+- **A transaction read sends it as `owner_lens`**, which rides the facet dependency
+  (`services/transaction_facets.py`). It ANDs with the owner chip instead of ORing into it, so a chip can
+  narrow inside the lens and never widen past it. It is in `FACET_PARAM_NAMES`, so a bulk "select all
+  matching" resolves the same lensed rows the list showed.
+- **A list held whole is narrowed by what each item reaches.** An account reaches its owner. A recurring
+  series reaches the owners of its rows, or for a suppressed series, of the rows it held when suppressed.
+  A rule reaches its owner scope, its scoped account's owner, or otherwise the owners of the rows it
+  matches now (`services/rule_owner_reach.py`). That is a ledger scan, so its answer is cached in
+  `db_meta` against `rule_reach_epoch`, which triggers move on a write to the rules, to an account's
+  owner, group or type, or to a transaction field a rule compares. Categorizing or tagging a row leaves
+  it alone. An item
+  shows when it reaches a lens owner, and an item that reaches no one yet (an empty series, a rule that
+  matches nothing) shows to everyone, since it could apply to anyone.
+- **Recurring signals are narrowed on the server**, by their series, and counted again over what is
+  left, so the Needs attention badge counts only findings the list shows.
+- A single series' own report is not narrowed: its count is a fact about the series.
+- **Tasks are recounted only where the page they link to is narrowed**: uncategorized transactions,
+  reimbursements to chase, and the recurring findings. The rest link to unscoped pages (Import, the rule
+  checkup, account setup) or are about the installation, and stay whole. Dismissal runs first, on the
+  whole count, because a dismissal mark ratchets down to the lowest count it sees: a narrowed count would
+  lower it, and the task would come back as soon as the view was switched off. The navigation badge is
+  never narrowed, since it is on every page.
+
 ## Accounts
 
 An account is a bank, card, wallet or marketplace account, created by mapping a connection, by a CSV

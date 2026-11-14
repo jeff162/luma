@@ -153,6 +153,12 @@ function summaryFilterParams(opts = {}) {
   return out
 }
 
+// A params object as a query string, `?` included, or '' when nothing is set.
+function queryOf(params = {}) {
+  const q = new URLSearchParams(summaryFilterParams(params))
+  return q.size ? `?${q}` : ''
+}
+
 function ruleSuggestionScopePath({ batchId, profileId } = {}) {
   if (batchId) return `/import-export/batches/${batchId}/rule-suggestions`
   if (profileId) return `/import-export/profiles/${profileId}/rule-suggestions`
@@ -479,8 +485,8 @@ export const api = {
     })
     return request(`/transactions/summary/monthly-cash-flow?${q}`)
   },
-  getPayeeTrend: (payee, date_start, date_end, tag_ids) => {
-    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...csvParam('tag_ids', tag_ids) })
+  getPayeeTrend: (payee, date_start, date_end, tag_ids, opts = {}) => {
+    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...csvParam('tag_ids', tag_ids), ...summaryFilterParams(opts) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
   getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids, view, owner_ids, opts = {}) => {
@@ -748,6 +754,7 @@ export const api = {
   getMatchingRuleForTransaction: (txnId) => request(`/rules/match/transaction/${txnId}`),
   // Existing transactions a rule's matcher currently matches: { count (true total), transactions (capped) }.
   // Drives the per-rule hover count + report on the Rules page.
+  getRuleOwnerReach: () => request('/rules/owner-reach'),
   getRuleMatches: (id) => request(`/rules/${id}/matches`),
   // Stale-rule cleanup + trash.
   getRuleTrash: () => request('/rules/trash'),
@@ -849,11 +856,12 @@ export const api = {
       method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
     }),
 
-  getTasks:    () => request('/tasks'),
+  // `ownerLens` is the Tasks page's owner lens params (`lib/OwnerLensContext.jsx`); the nav badge omits it.
+  getTasks:    (ownerLens = {}) => request(`/tasks${queryOf(ownerLens)}`),
   // Task dismissal is a ratcheting high-water mark on the task's count (see routers/tasks.py), so both
   // calls return the freshly recomputed task list rather than just an ack.
-  dismissTask: (key) => request(`/tasks/dismiss/${encodeURIComponent(key)}`, { method: 'POST' }),
-  restoreTask: (key) => request(`/tasks/dismiss/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  dismissTask: (key, ownerLens = {}) => request(`/tasks/dismiss/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'POST' }),
+  restoreTask: (key, ownerLens = {}) => request(`/tasks/dismiss/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'DELETE' }),
 
   // Recurring series: detection is an on-demand scan; the rest curate the recurring_series records.
   getRecurringSeries: (includeSuppressed = false) =>
@@ -888,8 +896,10 @@ export const api = {
     request(`/recurring/${id}/membership`, { method: 'POST', body: JSON.stringify({ transaction_id, state }) }),
   // Anomaly/forecast signals. Derived on read from the series and the ledger — nothing is stored but the
   // user's dismissals, which are keyed by each signal's own fingerprint so they survive a rescan.
-  getRecurringSignals: (horizonDays) =>
-    request(`/recurring/signals${horizonDays ? `?horizon_days=${horizonDays}` : ''}`),
+  // `ownerLens` is the owner lens's params (`lib/OwnerLensContext.jsx`), narrowing to the series it shows.
+  getRecurringSignals: (horizonDays, ownerLens = {}) => {
+    return request(`/recurring/signals${queryOf({ horizon_days: horizonDays, ...ownerLens })}`)
+  },
   getDismissedRecurringSignals: () => request('/recurring/signals/dismissed'),
   // `oneOff` (Amount changed only): fine this time, but the usual amount is still expected.
   dismissRecurringSignal: (key, kind, { oneOff = false } = {}) =>

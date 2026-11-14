@@ -173,7 +173,8 @@ moved, has those pages re-query in place (`useAfterLedgerChange`), then raises t
 server-computed counts refresh. The page's own writes are absorbed by re-reading the epoch after each one
 (`lib/ledgerEpoch.js`), so it never reloads to show its own edit. The epoch is separate from
 `recon_epoch`, which watches fewer tables because each of its moves recomputes the reconciliation
-reports.
+reports. A third, `rule_reach_epoch`, keeps the owner lens's rule reach
+cached (`data-model.md` → *Owner lens*).
 
 **Preferences are re-read on the same catch-up**, except on mount, where they were just loaded
 (`refreshPreferences` in `lib/UserPreferencesContext.jsx`). They are not part of the epoch: the read is
@@ -276,6 +277,14 @@ preferences. `lib/savedFilters.js` holds the rules:
   values within one facet OR. The FilterBar's amount filter reaches the same endpoints through
   `AmountFilter` / `append_amount_filter`. Rationale and invariants: `data-model.md` → *One facet registry, both
   halves* and *Attributes — filtering by what a row is*.
+
+- **Owner lens:** a per-user "show only these owners" setting over the scoped pages. The frontend holds
+  it in `OwnerLensContext` (the preference, the owner list, and whether the current route is scoped) and
+  draws its control once, as a collapsible tab in the top-right corner of the page area (`OwnerLensTab`).
+  Transaction reads carry it as `owner_lens` on the facet dependency. Lists a page holds whole are
+  narrowed client-side by `ownerLensAdmits` against the owners each item reaches: `owner_ids` on a
+  recurring series, `GET /rules/owner-reach` for rules. `GET /recurring/signals` and `GET /tasks` narrow
+  on the server so their counts follow. See `data-model.md` → *Owner lens*.
 
 - **Scope by account type:** besides a single owner or account, a rule can scope by account type
   (`category_rule.account_type`), matching through the row's *effective* account type

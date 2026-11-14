@@ -304,13 +304,27 @@ FACETS: tuple[Facet, ...] = (
 # Every query-parameter name the registry owns, for callers that need the set as data rather than as
 # code — the bulk endpoint's allowlist derives from this, so a facet cannot be added to the list feed
 # and forgotten there (a missing key made bulk resolve a *wider* set than the count on screen).
+# The owner lens: the viewer's own "show me these owners" setting, which narrows every scoped page
+# (`data-model.md` → *Owner lens*). It rides beside the facets rather than in the registry because it is
+# not a chip axis: it has no exclude form, and it ANDs with the owner facet instead of ORing into it, so
+# an owner chip narrows inside the lens and never widens past it. It is still a filter of the same rows,
+# so it is in `FACET_PARAM_NAMES`: bulk "select all matching" then resolves the lensed set it was shown.
+OWNER_LENS_PARAM = "owner_lens"
+
 FACET_PARAM_NAMES: frozenset[str] = frozenset(
     name
     for facet in FACETS
     for kind in (facet, *facet.variants)
     for name in (kind.include_param, kind.exclude_param)
     if name
-)
+) | {OWNER_LENS_PARAM}
+
+
+def owner_lens_admits(owner_ids, lens) -> bool:
+    """Whether something reaching these owners shows under the lens, for a list narrowed item by item
+    rather than in SQL. Something that reaches no one yet shows to everyone, as `ownerLensAdmits` does in
+    `frontend/src/lib/ownerLens.js`."""
+    return not lens or not owner_ids or bool(set(owner_ids) & set(lens))
 
 
 @dataclass
@@ -340,6 +354,7 @@ class TransactionFacets:
     exclude_payee_contains: Optional[str] = Query(None, description="payee-name fragments to exclude ('is not')")
     exclude_tag_ids: Optional[str] = Query(None, description="tag IDs to exclude ('is not')")
     exclude_attribute_ids: Optional[str] = Query(None, description="attribute keys to exclude ('is not')")
+    owner_lens: Optional[str] = Query(None, description="comma-separated owner IDs ('unassigned' for none) the viewer's owner lens shows; ANDs with owner_ids")
 
     def as_params(self) -> dict:
         """The set as a plain dict, for callers that pass facets around as keyword arguments."""
@@ -406,6 +421,10 @@ def append_facets(clauses: list, params: list, facets: TransactionFacets | dict 
             if member:
                 clauses.append(facet.negate(member[0]) if exclude else member[0])
                 params.extend(member[1])
+    lens = owner_membership(split_ids(values.get(OWNER_LENS_PARAM), ','))
+    if lens:
+        clauses.append(lens[0])
+        params.extend(lens[1])
 
 
 # --- Amount ----------------------------------------------------------------------------------------

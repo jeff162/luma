@@ -7,6 +7,8 @@ import { useState, useEffect, useRef, Component, useMemo, useCallback } from 're
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
+import OwnerLensTab from './components/OwnerLensTab.jsx'
+import { OwnerLensProvider } from './lib/OwnerLensContext.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api, SESSION_LOST_EVENT, signalDataMutated } from './lib/api.js'
 import { useOnForeground } from './lib/useOnForeground.js'
@@ -266,6 +268,7 @@ const s = {
     overflow: 'hidden', clip: 'rect(0 0 0 0)', border: 0,
   },
   main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 },
+  pageArea: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' },
   content: { flex: 1, overflow: 'hidden', minHeight: 0 },
   navFooter: { marginTop: 'auto', padding: '18px 16px 0', borderTop: '1px solid var(--border)' },
   navFooterCollapsed: {
@@ -1919,7 +1922,8 @@ export default function App() {
    *     AppSessionProvider       — current user/profile identity for the rest of the tree
    *       UserPreferencesProvider — keyed by identity; resets cached prefs on switch
    *         DisplayFormatScope   — applies the viewer's date/number format before anything formats
-   *           FilterProvider     — shared date/account/owner filter state across pages
+   *           FilterProvider + OwnerLensProvider — shared date/account/owner filter state across
+   *                                pages, and the per-user owner lens (it reads the route)
    *             PanelStackProvider — click-to-focus z-index registry for floating panels
    *               UnifiedDuplicatesViewerProvider — App-level duplicate-detection dialog state
    *                 UnifiedDuplicatesViewerRenderer — renders the floating dialog above all
@@ -1944,7 +1948,7 @@ export default function App() {
           <DisplayFormatScope>
             {/* No seeded date: the filter starts unset (all-time). The Dashboard reinterprets "unset" as
                 its own configurable default period; other pages treat unset as all-time. */}
-            <FilterProvider>
+            <FilterProvider><OwnerLensProvider>
               <PanelStackProvider>
                 <TransactionShareProvider>
                   <UnifiedDuplicatesViewerProvider>
@@ -2243,9 +2247,14 @@ export default function App() {
                                       </span>
                                     </div>
                                   ) : null}
-                                  {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
-                                  <div style={s.content}>
-                                    <AppRoutes />
+                                  {/* The owner lens's corner tab is anchored to this area, over the FilterBar where
+                                      there is one and above the page title where there is not. */}
+                                  <div style={s.pageArea}>
+                                    <OwnerLensTab />
+                                    {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
+                                    <div style={s.content}>
+                                      <AppRoutes />
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -2270,7 +2279,7 @@ export default function App() {
                   </UnifiedDuplicatesViewerProvider>
                 </TransactionShareProvider>
               </PanelStackProvider>
-            </FilterProvider>
+            </OwnerLensProvider></FilterProvider>
           </DisplayFormatScope>
         </UserPreferencesProvider>
       </AppSessionProvider>

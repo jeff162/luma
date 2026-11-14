@@ -30,6 +30,7 @@ from backend.services.categorizer import (
     RULE_PRIORITY_NORMAL,
 )
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
+from backend.services.rule_owner_reach import rule_owner_reach
 from backend.services.rule_range_drift import find_range_drift
 from backend.services import rule_conflicts, signal_dismissals
 from backend.services.recurring_detection import (
@@ -614,6 +615,15 @@ def restore_rule_range_drift(body: RuleFindingDismissBody):
     with get_db() as conn:
         signal_dismissals.restore(conn, (body.key or "").strip())
     return {"ok": True}
+
+
+@router.get("/owner-reach")
+def rule_owner_reach_map():
+    """Whose transactions each live rule reaches, `{rule_id: [owner ids]}` with `unassigned` for rows that
+    have no owner. Read by the Rules page only while the owner lens is on, since it scans the ledger
+    (`services/rule_owner_reach.py`)."""
+    with get_db() as conn:
+        return {"owners": rule_owner_reach(conn)}
 
 
 @router.get("/{rule_id}/matches")
