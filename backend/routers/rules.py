@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
+from backend.services.link_held_rows import held_txn_ids_sql
 from backend.services.categorizer import (
     _amount_rule_matches,
     normalize_clean_name,
@@ -199,9 +200,23 @@ def _rule_matches_txn(rule, txn) -> bool:
     return rule_matches_row(rule, txn)
 
 
-# The feature-owned category sources no rule apply reaches (see `_apply_rule_to_existing`). The third,
-# `split`, is reached for its rename and tags and declines only the category.
+# The feature-owned category sources no rule apply reaches. The third, `split`, is reached for its rename
+# and tags and declines only the category.
 _APPLY_SPARED_SOURCES = tuple(source for source in FEATURE_OWNED_CATEGORY_SOURCES if source != "split")
+
+
+def _apply_reach_clause() -> tuple[str, list]:
+    """A WHERE clause over `t` admitting the rows a rule apply may reach, full-force included, with its
+    parameters. It leaves out a feature-owned source (`_APPLY_SPARED_SOURCES`) and a row a link holds out
+    of the totals (`services/link_held_rows.py`): taking an excluded Amazon charge, funding leg or PayPal
+    pair row into a rule's category un-excludes it and counts the money twice, and a refund follows the
+    payment it returns. The link test does not read the source, so a hand edit that files a linked charge
+    in an excluded category keeps it held. The apply and the preview both use it, so the rows offered are
+    the rows written."""
+    held_sql, held_params = held_txn_ids_sql()
+    spared = ",".join("?" * len(_APPLY_SPARED_SOURCES))
+    return (f"COALESCE(t.category_source, '') NOT IN ({spared}) AND t.id NOT IN ({held_sql})",
+            [*_APPLY_SPARED_SOURCES, *held_params])
 
 
 def _rule_visibly_changes_txn(rule, rule_tag_ids: set, txn, visible_tag_ids: set) -> bool:
@@ -210,10 +225,9 @@ def _rule_visibly_changes_txn(rule, rule_tag_ids: set, txn, visible_tag_ids: set
     the number reported. A provenance-only write — a `manual` row already in the rule's category becoming
     `rule`, or a clean name stored over an identical shown name — is not a change. Nor is anything on a
     trashed row, which no list shows. A split row's category is never changed (see
-    `_apply_rule_to_existing`), and a row whose source is in `_APPLY_SPARED_SOURCES` is not reached at all.
-    `visible_tag_ids` are the row's effective tags before the apply; every rule tag is visible afterwards,
-    since the apply clears a block on it."""
-    if txn["trashed_at"] is not None or txn["category_source"] in _APPLY_SPARED_SOURCES:
+    `_apply_rule_to_existing`). `visible_tag_ids` are the row's effective tags before the apply; every
+    rule tag is visible afterwards, since the apply clears a block on it."""
+    if txn["trashed_at"] is not None:
         return False
     if rule["category_id"] is not None and not txn["is_split"] and txn["category_id"] != rule["category_id"]:
         return True
@@ -274,12 +288,11 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    # Every apply, full-force included, spares the rows a feature owns (`_APPLY_SPARED_SOURCES`): taking an
-    # excluded Amazon charge or funding leg into a rule's category un-excludes it and counts the spend twice,
-    # and a refund follows the payment it returns. A split, the third feature-owned source, is reached so its
-    # rename and tags apply, and declines the category below.
-    where_clauses = [f"COALESCE(t.category_source, '') NOT IN ({','.join('?' * len(_APPLY_SPARED_SOURCES))})"]
-    where_params: list = list(_APPLY_SPARED_SOURCES)
+    # Every apply, full-force included, stays out of the rows a feature or a link owns
+    # (`_apply_reach_clause`). A split is reached so its rename and tags apply, and declines the category
+    # below.
+    reach_sql, where_params = _apply_reach_clause()
+    where_clauses = [reach_sql]
     if preserve_manual:
         # Preserve-manual reclaims trusted-import rows but spares a deliberate manual edit.
         where_clauses.append("t.category_source IS NOT 'manual'")
@@ -302,7 +315,6 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.account_id,
                t.import_evidence_json,
                t.category_id,
-               t.category_source,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
                t.is_split,
@@ -429,8 +441,7 @@ class RulePreview(BaseModel):
 _RULE_PREVIEW_ROW_SQL = """
     SELECT
         t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.category_source, t.notes,
-        t.import_evidence_json,
+        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.notes, t.import_evidence_json,
         COALESCE(a.parent_account_id, a.id) AS account_id,
         t.owner_id,
         COALESCE(a.display_name, a.name) AS account_name,
@@ -480,7 +491,9 @@ def preview_rule(body: RulePreview):
 
     with get_db() as conn:
         rows = conn.execute(_RULE_PREVIEW_ROW_SQL).fetchall()
-        matched = [txn for txn in map(dict, rows) if _rule_matches_txn(rule, txn)]
+        reach_sql, reach_params = _apply_reach_clause()
+        unreachable = {r["id"] for r in conn.execute(f"SELECT t.id FROM txn t WHERE NOT ({reach_sql})", reach_params)}
+        matched = [txn for txn in map(dict, rows) if txn["id"] not in unreachable and _rule_matches_txn(rule, txn)]
         # The rows' tags as they stand: needed for every match when the rule adds tags, else only for the
         # report's tag column on the rows that change.
         tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in matched]) if rule_tag_ids and matched else {}

@@ -926,6 +926,12 @@ What remains is two people writing the same field of the same row within seconds
 `enrichment`, `split` and `refund` are `FEATURE_OWNED_CATEGORY_SOURCES` (`services/categorizer.py`),
 which every automatic pass skips by source.
 
+**A row a link holds out of the totals is locked against every rule apply, whatever its source**
+(`held_txn_ids_sql`, `services/link_held_rows.py`): an Amazon order's charge, a wallet funding leg, or a
+PayPal pair row, while it sits in an excluded category. The source alone cannot carry this, because a
+hand edit that files such a row back in an excluded category makes it `manual`, which the full-force
+apply takes. Filing it in a counted category, or unlinking it, is the user's own decision and releases it.
+
 - **A trusted import is not locked.** A rule beats a file's label at import, so a rule created later
   has to beat it too, or the ledger's categories would depend on which arrived first.
 - **Every write-back of a stashed categorization derives the lock through `category_lock_for`.** Link
@@ -959,11 +965,12 @@ The operations:
   cleared row falls back to what import would have given it with no rule in the way: its file label's
   category as `import` when its batch is trusted (through `adopt_file_categories`), else uncategorized.
   A no-match `import` row is left as it is.
-- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match that is not feature-owned,
-  `manual` included, to `rule` and unlocked. An explicit apply is the user asking the rule to own those
-  rows. It does not reach `enrichment` or `refund` rows, and a split declines the category while taking
-  the rename and tags: taking an excluded charge or leg would count its spend twice, and nothing the
-  apply could intend needs that, since unlinking is what puts the row back in a counted category.
+- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match that is not feature-owned
+  or link-held, `manual` included, to `rule` and unlocked. An explicit apply is the user asking the rule
+  to own those rows. It does not reach `enrichment` or `refund` rows or a link-held row, and a split
+  declines the category while taking the rename and tags: taking an excluded charge or leg would count
+  its spend twice, and nothing the apply could intend needs that, since unlinking is what puts the row
+  back in a counted category. The preview offers the same rows (`_apply_reach_clause`).
 - **Preserve-manual apply** (`?preserve_manual=true`, or `_apply_rule_to_existing` over a row list)
   also skips `manual` rows, and reclaims `import` rows.
 - **Manual edits** write `manual` and the lock.
@@ -1048,10 +1055,12 @@ manually created series are always `variable`; for a rule-backed one the rule ow
 - **An auto candidate is skipped when a user-owned series covers it**: same payee and category with an
   overlapping account scope, where NULL covers every account.
 - **A row a link set aside as a second record of counted money is not a member of anything**
-  (`_SHADOWED_TXN_IDS_SQL`): an Amazon order's card charge, and the excluded card or bank side of a PayPal
-  payment pair. The counted row carries the series; the charge would surface the same obligation again
-  as money movement, and transfer pairing cannot absorb it because both rows go the same direction. A
-  PayPal transfer pair's legs stay in the pool, since they are the movement.
+  (`second_record_txn_ids_sql`, `services/link_held_rows.py`): an Amazon order's card charge, and the
+  excluded card or bank side of a PayPal payment pair. The counted row carries the series; the charge
+  would surface the same obligation again as money movement, and transfer pairing cannot absorb it
+  because both rows go the same direction. A PayPal transfer pair's legs and a wallet funding leg stay in
+  the pool: they are held out of the totals but are not second records, and the transfer legs are the
+  movement.
 - **One charge per occurrence date.** When several share a date, the one closest to the series' typical
   amount is the member and the rest are left for other series. This is why there is no
   duplicated-charge signal: a real double charge is import dedupe's question.

@@ -19,6 +19,8 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.rules import RulePreview, _apply_rule_to_existing, preview_rule
+from backend.services import txn_links
+from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.routers.transactions import (
     list_transactions,
     restore_categorization_rows,
@@ -224,6 +226,31 @@ class RuleApplyReconcileTests(unittest.TestCase):
             self.assertEqual(affected, [])
             self.assertEqual({r["id"]: (r["category_id"], r["category_source"]) for r in rows},
                              {txn_id: (excluded_leaf, source) for source, txn_id in owned.items()})
+
+    def test_a_linked_charge_filed_by_hand_in_an_excluded_category_stays_held(self):
+        # The reported case: a charge re-filed by hand into the excluded leaf after a rule had pulled it out.
+        # The link, not the source, is what holds it, so even the full-force apply (which takes manual rows)
+        # leaves it where it is.
+        account_id = self._account()
+        books = self._expense_leaf("Books")
+        rule_id = self._rule(category_id=books, keyword="kindle")
+        order = self._txn(account_id=account_id, merchant="Kindle Unlimited;")
+        charge = self._txn(account_id=account_id, merchant="Kindle")
+        with self._use_db_path(), get_db() as conn:
+            funding = ensure_excluded_transfers_leaf(conn, "Amazon Funding")
+            conn.execute("UPDATE txn SET category_id = ?, category_source = 'manual', category_overridden = 1 "
+                         "WHERE id = ?", (funding, charge))
+            txn_links.create_link(conn, "amazon_order", [(order, "order"), (charge, "charge")])
+
+        with self._use_db_path():
+            preview = preview_rule(RulePreview(keyword="kindle", category_id=books))
+        self.assertEqual([t["id"] for t in preview["transactions"]], [order])
+
+        with self._use_db_path(), get_db() as conn:
+            affected = _apply_rule_to_existing(conn, rule_id)
+            held = conn.execute("SELECT category_id FROM txn WHERE id = ?", (charge,)).fetchone()
+        self.assertEqual(affected, [order])
+        self.assertEqual(held["category_id"], funding)
 
 
 if __name__ == "__main__":
