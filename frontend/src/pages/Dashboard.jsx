@@ -54,7 +54,7 @@ import TransactionListToolbar from '../components/TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
-import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreference, useDeferredDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
@@ -1239,7 +1239,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
   const [sortDir, setSortDir] = useState('desc')
 
   // Draggable divider between "Total per month" (left) and "Annual totals" (right): a persisted
-  // left-panel width fraction. The continuous drag goes through useDeferredPreference so it only
+  // left-panel width fraction. The continuous drag goes through useDeferredDeviceLayoutPreference so it only
   // persists once on release (setPreference writes on every call); we wire the cursor→fraction math
   // and the window listeners here.
   const clampSplit = useCallback(
@@ -1247,7 +1247,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     [],
   )
   const { value: splitValue, dragging: draggingSplit, setLive: setSplitLive, commit: commitSplit, reset: resetSplit } =
-    useDeferredPreference(DASHBOARD_TRENDS_SPLIT_PREF_KEY, TRENDS_SPLIT_DEFAULT)
+    useDeferredDeviceLayoutPreference(DASHBOARD_TRENDS_SPLIT_PREF_KEY, TRENDS_SPLIT_DEFAULT)
   const splitRowRef = useRef(null)
   const coarsePointer = useCoarsePointer()
   useEffect(() => {

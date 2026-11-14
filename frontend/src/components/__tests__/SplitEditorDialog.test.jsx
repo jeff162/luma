@@ -21,7 +21,7 @@ import { BUSY_INDICATOR_DELAY_MS, PAINT_GATE_DELAY_MS } from '../../lib/useBusyI
 // app's provider.
 vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
   const { useState } = await import('react')
-  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial), useDeviceLayoutPreference: (_key, initial) => useState(initial) }
 })
 
 vi.mock('../../lib/txnMutations.js', async importOriginal => ({

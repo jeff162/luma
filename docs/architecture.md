@@ -1233,7 +1233,9 @@ the WAL. That is why the sync path commits per page.
 
 `localStorage` (survives reloads on one browser profile) and `sessionStorage` (one tab) hold the
 remembered identity selection (a convenience; the session cookie is the source of truth), import draft
-state, and other browser-local UI state that is not shared preference data.
+state, and other browser-local UI state that is not shared preference data. A preference should be cached
+in the browser for efficiency, so it is not fetched on every read, but each change is written back to the
+server.
 
 #### Frontend session state
 

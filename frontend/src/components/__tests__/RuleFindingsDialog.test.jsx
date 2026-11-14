@@ -48,6 +48,7 @@ vi.mock('../../lib/api.js', () => ({
 // Panel geometry is remembered as a user preference; nothing here exercises that.
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: (_key, fallback) => [fallback, () => {}],
+  useDeviceLayoutPreference: (_key, fallback) => [fallback, () => {}],
 }))
 vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn(), updateRule: vi.fn(), deleteRule: vi.fn() } }))
 

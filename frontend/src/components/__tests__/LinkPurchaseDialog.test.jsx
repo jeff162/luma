@@ -21,7 +21,7 @@ import { api } from '../../lib/api.js'
 // app's provider.
 vi.mock('../../lib/UserPreferencesContext.jsx', async (importOriginal) => {
   const { useState } = await import('react')
-  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial) }
+  return { ...(await importOriginal()), useUserPreference: (_key, initial) => useState(initial), useDeviceLayoutPreference: (_key, initial) => useState(initial) }
 })
 
 vi.mock('../../lib/api.js', () => ({

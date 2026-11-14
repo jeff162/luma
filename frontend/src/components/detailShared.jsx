@@ -29,7 +29,7 @@ import {
 } from 'recharts'
 import { CLICKABLE_CHART_EVENTS } from '../lib/chartInteraction.js'
 import { monthLabel } from '../lib/utils.js'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { DialogActions, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
@@ -351,7 +351,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
   return { pos, size, panelRef, onDragStart, onResizeStart }
 }
 
-// Restore + persist a floating panel's geometry across opens, keyed by a per-user preference. Returns
+// Restore + persist a floating panel's geometry across opens, kept per user and per kind of screen. Returns
 // the `{ initialPosition, initialSize }` to seed `useDetailPanelChrome` with and the `onGestureEnd`
 // that saves the final pos/size after each drag/resize. Saved geometry is shape { pos, size, viewport }:
 // the viewport is snapshotted at save time so a restore on a different-sized browser scales pos/size
@@ -360,7 +360,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
 // the chrome hook's own clamp pass is the final safety net. Shared by every detached report dialog.
 // `fallbackHeight: null` opens the panel at its content's height until the user resizes it.
 export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fallbackHeight = 720, edgeGutter = 48, topGutter = 160 } = {}) {
-  const [savedPanel, setSavedPanel] = useUserPreference(prefKey, null)
+  const [savedPanel, setSavedPanel] = useDeviceLayoutPreference(prefKey, null)
   const { initialPosition, initialSize } = useMemo(() => {
     const hasWindow = typeof window !== 'undefined'
     const view = hasWindow ? readViewport() : { width: fallbackWidth, height: fallbackHeight ?? 720 }

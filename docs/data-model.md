@@ -2458,8 +2458,10 @@ They are read from the store and not sent with a request, so the list, the CSV e
 over everything matching all read a search the same way. A `2026-02-01` date is read the same in every
 order.
 
-**Column layouts are also per kind of screen**, because widths that fit a desktop do not fit a tablet. A
-table's order and widths are saved under `<key>@<device>`, where the device is the primary pointer and
+**A preference about how the app fits the screen is also per kind of screen**, because a layout that fits
+a desktop does not fit a tablet: column order and widths, the display size, a pane's width or whether it
+is collapsed, a splitter's position, a floating panel's place and size. Each is saved under
+`<key>@<device>`, where the device is the primary pointer and
 the screen size, shorter side first, plus the orientation on a touch screen (`@mouse-1080x1920`,
 `@touch-810x1080-portrait`). It is the screen and not the window, so resizing a window keeps its layout.
 Each save also writes the plain `<key>`, the latest layout from any device, which a screen with no layout

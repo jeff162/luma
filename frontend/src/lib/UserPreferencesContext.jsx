@@ -278,10 +278,12 @@ export function useUserPreference(key, defaultValue) {
   return [value, setValue]
 }
 
-// Per-device variant for what is tuned to a screen: table column geometry (order and widths) and the
-// display size, so a layout tuned on a desktop does not reach a tablet. The value is saved under `baseKey@<device>` (see `lib/deviceLayout.js`) and also
-// under `baseKey`, which keeps the most recent layout saved on any device. A device with no saved layout
-// of its own starts from that one, so a new screen never starts from the defaults when a layout exists.
+// Per-device variant for a preference about how the app fits the screen, such as column geometry, the
+// display size, a pane's width or whether it is collapsed, and a floating panel's place. A layout tuned on
+// a desktop does not reach a tablet.
+// The value is saved under `baseKey@<device>` (see `lib/deviceLayout.js`) and also under `baseKey`, which
+// keeps the most recent layout saved on any device. A device with no saved layout of its own starts from
+// that one, so a new screen never starts from the defaults when a layout exists.
 export function useDeviceLayoutPreference(baseKey, defaultValue) {
   const { preferences, setPreference } = useUserPreferences()
   const deviceKey = deviceLayoutPreferenceKey(baseKey, useDeviceLayoutKey())
@@ -300,15 +302,16 @@ export function useDeviceLayoutPreference(baseKey, defaultValue) {
   return [value, setValue]
 }
 
-// Commit-on-end variant for *continuous* controls (dragging a splitter, a slider). `setPreference`
-// persists on every call (see its comment), so driving it per frame would spam the backend. This
-// holds a local `live` value during the gesture and persists exactly once via `commit()`. The
-// consumer wires its own pointer/keyboard events — the cursor→value math is interaction-specific —
-// and calls `setLive(next)` on each change, then `commit()` when the gesture ends. `value` is the
-// live value mid-gesture and the persisted value otherwise; `dragging` is true while a gesture is in
-// progress; `reset()` restores and persists the default. Clamp/format in the consumer before setLive.
-export function useDeferredPreference(key, defaultValue) {
-  const [persisted, setPersisted] = useUserPreference(key, defaultValue)
+// Commit-on-end variant of `useDeviceLayoutPreference` for a layout set by a *continuous* gesture
+// (dragging a splitter). `setPreference` persists on every call (see its comment), so driving it per
+// frame would spam the backend. This holds a local `live` value during the gesture and persists exactly
+// once via `commit()`. The consumer wires its own pointer/keyboard events — the cursor→value math is
+// interaction-specific — and calls `setLive(next)` on each change, then `commit()` when the gesture
+// ends. `value` is the live value mid-gesture and the persisted value otherwise; `dragging` is true
+// while a gesture is in progress; `reset()` restores and persists the default. Clamp/format in the
+// consumer before setLive.
+export function useDeferredDeviceLayoutPreference(key, defaultValue) {
+  const [persisted, setPersisted] = useDeviceLayoutPreference(key, defaultValue)
   const [live, setLive] = useState(null)
   const commit = useCallback(
     () => setLive(current => { if (current != null) setPersisted(current); return null }),

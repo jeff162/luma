@@ -9,19 +9,18 @@
  * who is included. It sits under floating panels, which open over the page.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { UNASSIGNED_OWNER_ID } from '../lib/ownerLens.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
-import { localStore } from '../lib/browserStorage.js'
+import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import { ownerChipLabels } from './OwnerChip.jsx'
 import { FloatingPanel, Toggle, Tooltip } from './ui.jsx'
 
 const UNASSIGNED_LABEL = 'Unassigned'
 
-// Collapsed or not, per browser, as the navigation pane is: it is about this screen's room, not the user.
-const COLLAPSED_STORAGE_KEY = 'luma.ui.ownerLensTabCollapsed'
+const COLLAPSED_PREF_KEY = 'ui.ownerLensTab.collapsed'
 
 // The custom property the tab sets on its host to its own width while it is shown, so the FilterBar under
 // it can keep its right end clear of the tab.
@@ -90,10 +89,8 @@ export default function OwnerLensTab() {
   // Drawn once the owner list is known, so it never shows for a household that turns out to have one owner.
   const applies = lensApplies && ready
   const [open, setOpen] = useState(false)
-  const [collapsed, setCollapsed] = useState(() => localStore.get(COLLAPSED_STORAGE_KEY) === '1')
+  const [collapsed, setCollapsed] = useDeviceLayoutPreference(COLLAPSED_PREF_KEY, false)
   const tabRef = useRef(null)
-
-  useEffect(() => { localStore.set(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0') }, [collapsed])
 
   useLayoutEffect(() => {
     const tab = tabRef.current

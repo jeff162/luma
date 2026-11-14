@@ -17,7 +17,6 @@ import {
   SectionEndDropZone,
   normalizeCategoryType,
 } from '../components/CategoryTreePrimitives.jsx'
-import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
@@ -28,9 +27,8 @@ import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
-import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useDeferredDeviceLayoutPreference, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
-import { localStore } from '../lib/browserStorage.js'
 import { preventPressDefaults, trackPointer, useDropZone } from '../lib/pointerDrag.js'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
@@ -49,7 +47,6 @@ const SECTION_META = {
   expense: { label: 'Expense' },
 }
 
-const LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX = 'luma.categories.left-panel-width'
 const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
 const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
 // Stable default so the preference value keeps a constant identity when nothing is stored yet.
@@ -74,10 +71,6 @@ const EMPTY_USAGE_SUMMARY = {
   profile_mapping_count: 0,
   batch_mapping_count: 0,
   is_in_use: false,
-}
-
-function getLeftPanelWidthStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
 
 function getFullCategoryRecord(cat, flatCats) {
@@ -438,8 +431,6 @@ function ScrollFade({ top, bottom }) {
  */
 export default function Categories() {
   const navigate = useNavigate()
-  const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences, setPreference } = useUserPreferences()
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [inactiveCategories, setInactiveCategories] = useState([])
@@ -473,7 +464,9 @@ export default function Categories() {
   const [storedCollapsedSections, setStoredCollapsedSections] = useUserPreference(SECTION_PREF_KEY, EMPTY_COLLAPSE_STATE)
   const [storedCollapsedGroups, setStoredCollapsedGroups] = useUserPreference(GROUP_PREF_KEY, EMPTY_COLLAPSE_STATE)
   const [categorySearch, setCategorySearch] = useState('')
-  const [leftPanelWidth, setLeftPanelWidth] = useState(null)
+  const { value: storedLeftPanelWidth, setLive: setLeftPanelWidthLive, commit: commitLeftPanelWidth } =
+    useDeferredDeviceLayoutPreference(LEFT_PANEL_WIDTH_PREF_KEY, DEFAULT_LEFT_PANEL_WIDTH)
+  const leftPanelWidth = Number(storedLeftPanelWidth) > 0 ? Number(storedLeftPanelWidth) : DEFAULT_LEFT_PANEL_WIDTH
   const coarsePointer = useCoarsePointer()
   // The same column-layout preference every other transaction table uses (its own key, so this list is
   // tuned separately). Single-source-of-truth by construction: no local mirror or load/save effects,
@@ -521,17 +514,6 @@ export default function Categories() {
     selectedRef.current = selected
   }, [selected])
 
-
-  // Left-panel width is seeded from the saved preference (with localStorage as a legacy fallback).
-  useEffect(() => {
-    const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
-    if (Number.isFinite(widthPref) && widthPref > 0) {
-      setLeftPanelWidth(widthPref)
-    } else {
-      const savedWidth = Number(localStore.getJson(getLeftPanelWidthStorageKey(dbInstanceId, userId)))
-      if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
-    }
-  }, [dbInstanceId, preferences, userId])
 
   // Re-run after every category change, so two loads overlap routinely; only the newest call may land, or an
   // older answer arriving last would put back the tree and counts from before the change.
@@ -685,29 +667,20 @@ export default function Categories() {
     return Math.round(Math.min(Math.max(value, MIN_LEFT_PANEL_WIDTH), maxWidth))
   }
 
-  // Persist only on drag-end (not on every move) so a resize is one preference write, not hundreds.
-  function persistLeftPanelWidth(width) {
-    localStore.setJson(getLeftPanelWidthStorageKey(dbInstanceId, userId), width)
-    setPreference(LEFT_PANEL_WIDTH_PREF_KEY, width)
-  }
-
+  // Persisted only on drag-end, so a resize is one preference write, not hundreds.
   function startResizeDivider(event) {
     preventPressDefaults(event)
     const layoutRect = contentLayoutRef.current?.getBoundingClientRect?.()
     if (!layoutRect) return
-    let nextWidth = leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH
 
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     trackPointer(event, {
-      onMove: moveEvent => {
-        nextWidth = clampLeftPanelWidth(toCssPx(moveEvent.clientX - layoutRect.left))
-        setLeftPanelWidth(nextWidth)
-      },
+      onMove: moveEvent => setLeftPanelWidthLive(clampLeftPanelWidth(toCssPx(moveEvent.clientX - layoutRect.left))),
       onEnd: () => {
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        persistLeftPanelWidth(nextWidth)
+        commitLeftPanelWidth()
       },
     })
   }
@@ -1590,7 +1563,7 @@ export default function Categories() {
           </Button>
         </Tooltip>
       </PageHeader>
-      <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
+      <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <SearchInput
