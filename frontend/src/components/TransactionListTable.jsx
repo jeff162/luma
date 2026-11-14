@@ -360,6 +360,7 @@ export default function TransactionListTable({
     return (
       <div
         onContextMenu={rowMenuEnabled ? e => rowActions.onContextMenu(e, txn) : undefined}
+        className={rowMenuEnabled ? 'ui-context-menu-target' : undefined}
         style={{
           display: 'grid',
           gridTemplateColumns,

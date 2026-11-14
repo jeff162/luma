@@ -60,6 +60,23 @@
          pressed, so this hover fill shows and a pressed toggle keeps its own. */
       .ui-icon-button { background: transparent; }
       .ui-icon-button:not(:disabled):hover { background: color-mix(in srgb, currentColor 14%, transparent); }
+      /* IconButton's padding per size. A finger lands less precisely than a pointer, so on a touch screen
+         the sides widen and icons sitting side by side in a row stop sharing their edges; only the sides,
+         so no row grows taller. */
+      .ui-icon-button-regular { padding: 3px 6px; }
+      .ui-icon-button-compact { padding: 1px 4px; }
+      .ui-icon-button-large { padding: 0 5px; }
+      @media (pointer: coarse) {
+        .ui-icon-button-regular { padding-inline: 9px; }
+        .ui-icon-button-compact { padding-inline: 8px; }
+      }
+      /* Press-and-hold opens this element's right-click menu on a touch screen (lib/touchContextMenu.js),
+         so the same hold must not also start a text selection or Safari's callout. Fields inside keep
+         selection, which Safari otherwise inherits away and leaves them untypeable. */
+      @media (pointer: coarse) {
+        .ui-context-menu-target { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+        .ui-context-menu-target :is(input, textarea, [contenteditable]) { -webkit-user-select: text; user-select: text; }
+      }
       .ui-link-button:not(:disabled):hover { text-decoration: underline; }
       /* A clickable pill's outline darkens toward its text colour under the pointer, so a pill that does
          something stands apart from one that only labels. Every pill sets its border inline, which only

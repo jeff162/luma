@@ -124,7 +124,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A toggle shows its state.** A button that switches something on and off takes `pressed`, which draws
   the accent and sets `aria-pressed`.
 - **A control that is only a glyph is an `IconButton`**: bare until hovered, and named by its
-  `aria-label`, which is all a screen reader gets.
+  `aria-label`, which is all a screen reader gets. On a touch screen its sides widen, so icons side by side
+  in a row stay far enough apart for a finger.
 - **Other button shapes have one component each.** A chip that narrows a list is a `FilterChip`, a choice
   among peer views is a `SegmentedToggle`, an action that reads as text is a `LinkButton`, and a common
   action with its alternatives behind a caret is a `SplitButton`.
@@ -194,6 +195,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   something on screen, such as a button or the `⋯` menu, because a right-click menu is invisible and the
   visible control is what tells the user the action exists. A selection convenience, such as Select all
   scoped to one group, can live only in the right-click menu.
+- **On a touch screen, press-and-hold opens the right-click menu** (`lib/touchContextMenu.js`, installed
+  once for the whole app), because iPad Safari fires no `contextmenu` for a long press. A surface needs no
+  code of its own; one whose menu sits on text adds the `ui-context-menu-target` class so the hold does
+  not also start a text selection.
 
 ## Transaction lists
 

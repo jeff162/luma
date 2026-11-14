@@ -599,7 +599,7 @@ export const HELP_TOPICS = [
           remembered separately for each kind of screen.
         </p>
         <p>
-          The individual transaction rows support a right-click menu and &#128393; at the
+          The individual transaction rows support a right-click menu (press and hold on a touch screen) and &#128393; at the
           end of the row opens the transaction editor. The transaction editor also supports adding external documentation in the
           form of attachments.
         </p>

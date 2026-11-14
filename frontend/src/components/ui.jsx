@@ -1060,11 +1060,12 @@ export function RefreshButton({ onRefresh, loading = false, disabled = false, ti
 // would otherwise get, and it doubles as the hover hint unless `title` says more.
 // `tone="danger"` is for what cannot be undone, as on `Button`; `tone="accent"` is the `↗` that opens a
 // report (`ui-patterns.md` → Status, badges and timestamps); `pressed` makes it a toggle.
+// The padding is in `index.html` (`ui-icon-button-<size>`), because a touch screen widens it there.
 const ICON_BUTTON_SIZES = {
-  regular: { padding: '3px 6px', fontSize: 14, borderRadius: 6 },
-  compact: { padding: '1px 4px', fontSize: 12, borderRadius: 5 },
+  regular: { fontSize: 14, borderRadius: 6 },
+  compact: { fontSize: 12, borderRadius: 5 },
   // The × that closes a panel or dialog from its header.
-  large: { padding: '0 5px', fontSize: 21, borderRadius: 6 },
+  large: { fontSize: 21, borderRadius: 6 },
 }
 
 export function IconButton({ children, onClick, onMouseDown, onPointerDown, 'aria-label': ariaLabel, title, size = 'regular',
@@ -1072,7 +1073,7 @@ export function IconButton({ children, onClick, onMouseDown, onPointerDown, 'ari
   return (
     <button
       {...rest}
-      className="ui-button ui-icon-button"
+      className={`ui-button ui-icon-button ui-icon-button-${size}`}
       type={type}
       aria-label={ariaLabel}
       aria-pressed={pressed === undefined ? undefined : !!pressed}
