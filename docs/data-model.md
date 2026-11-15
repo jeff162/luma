@@ -1248,8 +1248,12 @@ membership is the rule's matches, through the same predicate rule apply uses
 
 ### Money movement and transfer pairs
 
-A series whose category or group is `exclude_from_totals` is money movement. That is derived at read
-time and shown as a badge.
+A series whose category or group is `exclude_from_totals` is money movement, unless the category is a
+Reimbursable leaf (`excluded_categories.money_movement_sql`). That is derived at read time and shown as a
+badge. A receivable is excluded but its money did leave or arrive, so read as movement a repayment paired
+with the expense it repays as a transfer between the two accounts. Transfer pairing, this badge and
+[wallet funding pairs](#wallet-funding-pairs) all ask the question through that one helper; the reports,
+which ask whether a row counts, read the exclusion alone.
 
 A movement between two tracked accounts is **one series that owns both legs**
 (`services/transfer_pairs.py`). `account_id` is the paying side, `counterpart_account_id` the receiving
@@ -2186,10 +2190,9 @@ of the movement and links them (`wallet_pair`).
 - **A payment pair** (a wallet payment a card or bank paid directly) counts once. The wallet row records
   what was bought, so the card row is excluded, unless the wallet row is already money movement, in which
   case nothing changes.
-- **Money movement here means excluded from totals, other than under Reimbursable.** A Reimbursable leaf
-  is excluded too, but as a receivable whose balance is read
-  ([Reimbursable expenses](#reimbursable-expenses)): a cash-out left there counts the repayment a second
-  time, so it is moved like a counted row.
+- **Money movement is what [Money movement and transfer pairs](#money-movement-and-transfer-pairs)
+  defines**: excluded from totals, other than under Reimbursable. A cash-out left in a Reimbursable leaf
+  counts the repayment a second time, so it is moved like a counted row.
 - **A row the pairing may not move stays where it is**: one already money movement; a split row, whose
   `category_id` is the stashed prior its parts replaced rather than a category it is filed under; and a
   row a reimbursement claims, since the claim counts on its category (`receivable_change_refusal`

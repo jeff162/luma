@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db, single_runner
 from backend.routers.rules import _trash_rule
+from backend.services.excluded_categories import money_movement_sql
 from backend.services.recurring_detection import (
     AMOUNT_MODE_FIXED,
     AMOUNT_MODE_VARIABLE,
@@ -122,10 +123,10 @@ def _serialize(row: sqlite3.Row) -> dict:
         # suppressed before this was recorded, both of which fall back to matching.
         "suppressed_member_ids": _member_ids(row),
         "confirmed": bool(row["confirmed"]),
-        # A series whose category (or its parent group) is exclude_from_totals is "money movement" — a
-        # transfer or a credit-card payment, not spending/income. Surfaced with a marker and clustered
-        # together rather than mixed in with bills.
-        "money_movement": bool(row["excluded_from_totals"]) if "excluded_from_totals" in row.keys() else False,
+        # A series filed as money movement (excluded_categories.money_movement_sql) — a transfer or a
+        # credit-card payment, not spending/income — is surfaced with a marker and clustered together
+        # rather than mixed in with bills.
+        "money_movement": bool(row["money_movement"]) if "money_movement" in row.keys() else False,
     }
 
 
@@ -135,7 +136,7 @@ def _fetch(conn: sqlite3.Connection, series_id: str) -> sqlite3.Row:
         SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL}, {SERIES_OWNERS_SQL},
                c.name AS category_name, a.display_name AS account_name,
                cp.display_name AS counterpart_account_name,
-               COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
+               {money_movement_sql(conn, 'c', 'pc')} AS money_movement
         FROM   recurring_series s
         LEFT   JOIN category c  ON c.id = s.category_id
         LEFT   JOIN category pc ON pc.id = c.parent_id
@@ -161,7 +162,7 @@ def list_series(include_suppressed: bool = False):
             SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL}, {SERIES_OWNERS_SQL},
                    c.name AS category_name, a.display_name AS account_name,
                    cp.display_name AS counterpart_account_name,
-                   COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
+                   {money_movement_sql(conn, 'c', 'pc')} AS money_movement
             FROM   recurring_series s
             LEFT   JOIN category c  ON c.id = s.category_id
             LEFT   JOIN category pc ON pc.id = c.parent_id

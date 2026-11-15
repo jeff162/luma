@@ -23,10 +23,10 @@ because the wallet row it belongs to is in the ledger: a blanket "PAYPAL → exc
 since for anyone not tracking the wallet the bank row *is* the only record. This is the same conditional
 exclusion the Amazon importer applies to its card charges.
 
-**A row already filed as money movement is left where it is, and only that.** Money movement is a
-category excluded from totals, with one exception: a Reimbursable leaf is excluded for another reason, as
-a receivable whose balance is meant to be read, so a cash-out left there counts the repayment a second
-time and the receivable reads as over-repaid. Such a row is moved like any counted one. What a row
+**A row already filed as money movement is left where it is, and only that.** Money movement is what
+`excluded_categories.money_movement_sql` says: excluded from totals, other than under Reimbursable. A
+Reimbursable leaf holds a receivable whose balance is meant to be read, so a cash-out left there counts the
+repayment a second time and the receivable reads as over-repaid. Such a row is moved like any counted one. What a row
 must not lose is a **reimbursement claim** (`docs/data-model.md` → *Reimbursement records*): a claimed
 row is never changed, so a claimed bank or card row is not offered at all, and a claimed wallet row pairs
 and keeps its category, as a split row does.
@@ -86,7 +86,7 @@ from backend.db.database import get_shared_owner_id
 from backend.services import txn_links
 from backend.services.categorizer import category_lock_for
 from backend.services.duplicate_detection import clear_flag_between
-from backend.services.excluded_categories import ensure_excluded_transfers_leaf, find_reimbursable_group_id
+from backend.services.excluded_categories import ensure_excluded_transfers_leaf, money_movement_sql
 from backend.services.money_movement import (
     MONEY_MOVEMENT_CATEGORY,
     captured_type,
@@ -162,10 +162,7 @@ class _Ledger:
 
     def __init__(self, conn: sqlite3.Connection):
         self.shared_owner_id = get_shared_owner_id(conn)
-        reimbursable_id = find_reimbursable_group_id(conn) or ""
-        # Filed as money movement: excluded from totals, other than as a receivable (see the module docstring).
-        movement_sql = ("(COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) <> 0 "
-                        "AND COALESCE(cc.parent_id, '') <> :reimbursable)")
+        movement_sql = money_movement_sql(conn, "cc", "pc")
         self.wallet_rows = [dict(r) for r in conn.execute(f"""
             SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split, t.import_batch_id,
                    t.import_evidence_json, t.category_id, t.category_source, t.category_overridden,
@@ -180,7 +177,7 @@ class _Ledger:
             LEFT   JOIN category cc ON cc.id = t.category_id
             LEFT   JOIN category pc ON pc.id = cc.parent_id
             WHERE  t.trashed_at IS NULL AND {wallet_account_clause('a', 'pa')}
-        """, {"reimbursable": reimbursable_id}).fetchall()]
+        """).fetchall()]
         texts = sorted({r["match_text"] for r in self.wallet_rows if r["match_text"]})
         self.other_rows = []
         if texts:
@@ -200,7 +197,7 @@ class _Ledger:
                 WHERE  t.trashed_at IS NULL
                   AND  NOT {wallet_account_clause('a', 'pa')}
                   AND  ({reads_as})
-            """, {"reimbursable": reimbursable_id, **{f"t{i}": _like_pattern(t) for i, t in enumerate(texts)}}).fetchall()]
+            """, {**{f"t{i}": _like_pattern(t) for i, t in enumerate(texts)}}).fetchall()]
         for row in self.other_rows:
             # Which wallets' text the row contains; a candidate must read as its own wallet.
             haystack = row.pop("haystack")

@@ -28,6 +28,8 @@ already used for the duplicate report's cross-account transfer twin.
 637 unambiguous pairs on the reference ledger, **634 were already in an excluded category**. The three
 that were not are one-off coincidences — a shared meal, a refund — where two people's rows offset by
 chance. Pairing those would invent a relationship; the gate costs nothing and removes the whole class.
+"Money movement" is `excluded_categories.money_movement_sql`, not the exclusion alone: a shared meal filed
+under Reimbursable is excluded too, and its repayment would otherwise pair with it here.
 
 **Ambiguity refuses, and asks.** Where one row's best candidate is a tie, no pairing is recorded and the
 case is surfaced for the user to settle — the app cannot tell which of two identical rows is the other

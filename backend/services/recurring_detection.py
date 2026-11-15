@@ -44,6 +44,7 @@ from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql, rule_specificity_order_sql
+from backend.services.excluded_categories import money_movement_sql
 from backend.services.link_held_rows import second_record_txn_ids_sql
 from backend.services.transaction_facets import UNASSIGNED_OWNER_ID, owner_lens_admits
 from backend.services.transfer_pairs import (
@@ -194,11 +195,11 @@ _POOL_SQL = """
            t.category_id, t.category_source, t.amount, t.date,
            t.merchant_name, t.display_name, t.raw_name,
            t.owner_id, t.import_evidence_json,
-           -- Whether the row is money movement rather than spending or income, read through the
-           -- category's group exactly as the reports read it. Carried on the pool because transfer
-           -- pairing is gated on it (services/transfer_pairs.py) and re-querying per row would turn
-           -- one scan into thousands of lookups.
-           COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS money_movement
+           -- Whether the row is money movement rather than spending or income
+           -- (excluded_categories.money_movement_sql). Carried on the pool because transfer pairing is
+           -- gated on it (services/transfer_pairs.py) and re-querying per row would turn one scan into
+           -- thousands of lookups.
+           {money_movement} AS money_movement
     FROM   txn t
     JOIN   account a ON a.id = t.account_id
     LEFT   JOIN account p ON p.id = a.parent_account_id
@@ -211,22 +212,24 @@ _POOL_SQL = """
 """
 
 
-def _pool_sql() -> tuple[str, tuple]:
+def _pool_sql(conn: sqlite3.Connection) -> tuple[str, tuple]:
     """`_POOL_SQL` with its clause binding the rows a link set aside as a second record of money another
     row counts (`services/link_held_rows.py`): the counted row carries the series, and the second record
     would surface the same obligation again as money movement. Its parameters follow the cutoff."""
     second_records, params = second_record_txn_ids_sql()
-    return _POOL_SQL.format(second_records=second_records), params
+    return _POOL_SQL.format(second_records=second_records, money_movement=money_movement_sql(conn, "c", "pc")), params
 
-# Narrows the pool to money-movement rows, the only ones transfer pairing reads.
-_MONEY_MOVEMENT_SQL = " AND COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) <> 0"
+
+def _money_movement_where(conn: sqlite3.Connection) -> str:
+    """Narrows the pool to money-movement rows, the only ones transfer pairing reads."""
+    return f" AND {money_movement_sql(conn, 'c', 'pc')}"
 
 
 def _pool_rows(conn: sqlite3.Connection, window_months: int, where: str = "", params=()) -> list[dict]:
     """The detection pool, optionally narrowed by `where` (an `AND …` clause over `_POOL_SQL`'s aliases).
     A row with no date or no payee key is not a candidate for anything and is left out."""
     pool: list[dict] = []
-    pool_sql, pool_params = _pool_sql()
+    pool_sql, pool_params = _pool_sql(conn)
     for r in conn.execute(pool_sql + where, (_pool_cutoff(window_months), *pool_params, *params)).fetchall():
         d = _parse_date(r["date"])
         if d is None:
@@ -279,7 +282,7 @@ def _reference_now(conn: sqlite3.Connection, window_months: int) -> date:
     """The reference "now": the newest live, posted date in the window, robust to imported/demo data that
     lags real today. Read with its own query so a scan that loads only part of the pool measures every
     series against the same date a full scan does."""
-    pool_sql, pool_params = _pool_sql()
+    pool_sql, pool_params = _pool_sql(conn)
     row = conn.execute(
         "SELECT MAX(t.date) AS newest FROM (" + pool_sql + ") t", (_pool_cutoff(window_months), *pool_params)
     ).fetchone()
@@ -1246,7 +1249,7 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # in the window: a movement's identity is its two accounts, not a payee, so a pool scoped to one payee
     # holds only part of it and would pair the halves it happens to contain.
     movement_pool = ([r for r in full_pool if r["money_movement"]] if full_pool is not None
-                     else _pool_rows(conn, window_months, _MONEY_MOVEMENT_SQL))
+                     else _pool_rows(conn, window_months, _money_movement_where(conn)))
     chosen, dismissed = load_transfer_decisions(conn)
     transfer_candidates, paired = detect_transfer_series(
         movement_pool, ref_now, chosen=chosen, dismissed=dismissed)

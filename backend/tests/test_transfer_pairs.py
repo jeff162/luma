@@ -22,6 +22,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.recurring import list_series
+from backend.services.excluded_categories import find_reimbursable_group_id
 from backend.services.recurring_detection import scan_and_store, transfer_review
 from backend.services.transfer_pairs import pair_money_movements
 
@@ -166,6 +168,23 @@ class TransferSeriesTests(unittest.TestCase):
         self._movement(category=self.spending_cat)
         self._scan()
         self.assertEqual(self._transfers(), [])
+
+    def test_a_repaid_receivable_is_not_a_movement(self):
+        """A bill paid on one account and repaid to the cent on another, both filed under Reimbursable, is
+        excluded from totals like a transfer but is not one: the money left and came back. Read as
+        movement, it became a transfer series between the two accounts, and its rows were lost to the
+        payee pass and the series wore the money-movement badge."""
+        with self._use_db_path(), get_db() as conn:
+            leaf = str(uuid.uuid4())
+            conn.execute("INSERT INTO category (id, parent_id, name) VALUES (?, ?, 'Shared utilities')",
+                         (leaf, find_reimbursable_group_id(conn)))
+        self._movement(out_payee="Lakeside Power", in_payee="Housemate repayment", amount=60.0, category=leaf)
+        self._scan()
+        self.assertEqual(self._transfers(), [])
+        with self._use_db_path():
+            series = list_series()["series"]
+        self.assertTrue(series)
+        self.assertFalse(any(s["money_movement"] for s in series))
 
     def test_rows_on_one_account_never_pair(self):
         for i in range(8):

@@ -143,6 +143,24 @@ def find_reimbursable_group_id(conn: sqlite3.Connection) -> Optional[str]:
     return _find_group_id(conn, REIMBURSABLE_GROUP, REIMBURSABLE_SYSTEM_KEY)
 
 
+def money_movement_sql(conn: sqlite3.Connection, leaf_alias: str, group_alias: str) -> str:
+    """A SQL condition, over a category joined as `leaf_alias` and its parent as `group_alias`, that holds
+    when a row filed there is **money movement**: money that did not enter or leave the household, such as
+    a transfer between own accounts or a card payment.
+
+    Excluded from totals is not enough. The ``Reimbursable`` group is excluded too, but its money did leave
+    or arrive: it is held aside as a receivable whose balance is read. Read as movement, a repayment would
+    pair with the expense it repays as a transfer between the two accounts, and a cash-out filed there
+    would count the repayment twice. Every reader that asks "is this movement?" uses this, so the answer
+    cannot differ between them; the reports, which ask "does this count?", read the exclusion alone.
+
+    The group is resolved here (it may have been renamed) and written into the condition, so the fragment
+    binds no parameters and drops into any query whatever its placeholders."""
+    reimbursable = (find_reimbursable_group_id(conn) or "").replace("'", "''")
+    return (f"(COALESCE({group_alias}.exclude_from_totals, {leaf_alias}.exclude_from_totals, 0) <> 0 "
+            f"AND COALESCE({leaf_alias}.parent_id, '') <> '{reimbursable}')")
+
+
 def reimbursable_leaf_ids(conn: sqlite3.Connection) -> list[str]:
     """Every leaf under the receivable group, which is what "a receivable allocation" means.
 
