@@ -104,13 +104,13 @@ describe('a collapsed data-source row', () => {
     expect(screen.getByRole('button', { name: '2 duplicates' })).toBeTruthy()
   })
 
-  it('totals what its cards\' PayPal reconciliations need, counting a row listed by two cards once', async () => {
+  it('totals what its cards\' wallet reconciliations need, counting a row listed by two cards once', async () => {
     const setExpanded = vi.fn()
     render(
       <ImportHistorySection
         dataSourceRows={[connectionRow([
-          { ...card('August 2026', 0), paypal_recon_rows: 4, paypal_recon_attention_ids: ['p1', 'bank1'] },
-          { ...card('September 2026', 0), paypal_recon_rows: 2, paypal_recon_attention_ids: ['bank1'] },
+          { ...card('August 2026', 0), wallet_recon_rows: 4, wallet_recon_attention_ids: ['p1', 'bank1'] },
+          { ...card('September 2026', 0), wallet_recon_rows: 2, wallet_recon_attention_ids: ['bank1'] },
         ])]}
         profiles={[]}
         expandedSourceRows={{}}

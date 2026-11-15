@@ -51,7 +51,7 @@ export const NOT_IMPORTED_ROWS_COLUMNS_PREF_KEY = 'ui.import.notImportedRows.col
 // each remember their own geometry.
 export const DUPLICATE_REPORT_COLUMNS_PREF_KEY = 'ui.import.duplicateReport.columns'
 export const AMAZON_RECONCILIATION_COLUMNS_PREF_KEY = 'ui.import.amazonReconciliation.columns'
-export const PAYPAL_FUNDING_COLUMNS_PREF_KEY = 'ui.import.paypalFunding.columns'
+export const WALLET_PAIR_COLUMNS_PREF_KEY = 'ui.import.walletPairs.columns'
 export const AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY = 'ui.import.amazonImportDetail.columns'
 export const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
 export const IMPORTED_CATEGORY_SCOPE_ALL = 'all'

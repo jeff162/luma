@@ -12,7 +12,7 @@ concerns are split out as leaf modules that depend on `core` (never the reverse)
 - `preview`  — the CSV preview entry point
 - `watch`    — watched import folders: the unattended scan and the settings behind it
 - `rule_suggestion_actions` — the transactional Generate Rules review actions and their undo
-- `paypal_funding` — the PayPal reconciliation (the pairing itself is `services/paypal_funding.py`)
+- `wallet_pairs` — the wallet reconciliation (the pairing itself is `services/wallet_pairs.py`)
 - `paypal_statement` — PayPal statement (PDF) import, a front end over `core`'s import
 
 This package preserves the original `backend.routers.import_export` import surface: every name
@@ -23,7 +23,7 @@ and `router` is the combined router registered by `backend/main.py`.
 from fastapi import APIRouter
 
 # `amazon` imports from `core`, so it must be imported after it (core is listed first).
-from . import backup, core, preview, profiles, amazon, rule_suggestion_actions, paypal_funding, paypal_statement, watch
+from . import backup, core, preview, profiles, amazon, rule_suggestion_actions, wallet_pairs, paypal_statement, watch
 
 # Re-export the public surface so `from backend.routers.import_export import X` keeps working
 # for callers and tests exactly as it did when this was a single module.
@@ -50,5 +50,5 @@ router.include_router(preview.router)
 router.include_router(watch.router)
 router.include_router(amazon.router)
 router.include_router(rule_suggestion_actions.router)
-router.include_router(paypal_funding.router)
+router.include_router(wallet_pairs.router)
 router.include_router(paypal_statement.router)

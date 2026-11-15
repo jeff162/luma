@@ -44,6 +44,7 @@ from typing import Optional
 from backend.services.account_groups import effective_account_id, set_account_parent
 from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
+from backend.services.wallet_accounts import fill_wallet_match_text
 from backend.time_utils import utcnow_iso
 
 # The mapping decisions a provider account can carry. NULL/absent means "not yet decided" — the
@@ -236,6 +237,7 @@ def _create_local_account(conn, *, name: str, account_type: Optional[str], subty
         (account_id, external_account_id, connection_id, provider, name, name, institution,
          account_type, subtype, mask, owner_id, parent_account_id),
     )
+    fill_wallet_match_text(conn, [account_id])
     return account_id
 
 

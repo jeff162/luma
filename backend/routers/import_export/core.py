@@ -139,7 +139,8 @@ from backend.services.connection_dedupe import build_connection_dedupe
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.paypal_conversions import CONVERSION_EVIDENCE_HEADER, fold_activity_conversions
 from backend.services.account_settings_followups import settle_account_change
-from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
+from backend.services.wallet_accounts import fill_wallet_match_text
+from backend.services.wallet_pairs import pair_after_ingest, reverse_batch_wallet_pairs
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
 from backend.services.review_flagging import owners_not_flagging
 from backend.services.rule_suggestion_review import (
@@ -148,7 +149,7 @@ from backend.services.rule_suggestion_review import (
     release_rule_suggestion_rows,
     summarize_rule_suggestion_review,
 )
-from backend.services.paypal_funding import card_counts as paypal_card_counts
+from backend.services.wallet_pairs import card_counts as wallet_card_counts
 from backend.services.money_movement import (
     suppress_batch_funding_legs,
     reverse_batch_money_movement_links,
@@ -828,6 +829,7 @@ def insert_csv_account(conn, name: str, account_type: str, owner_id: Optional[st
           (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
         VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
     """, (account_id, f"csv_{account_id}", name, name, account_type, "checking", owner_id))
+    fill_wallet_match_text(conn, [account_id])
     return account_id
 
 def _owners_are_group_compatible(source_owner_id: Optional[str], target_owner_id: Optional[str]) -> bool:
@@ -5218,16 +5220,16 @@ def list_batches():
                     d["amazon_account_name"] = row["n"] if row else None
             result.append(d)
 
-        # A card with a share of the PayPal reconciliation — a PayPal file, or a sync of a connection that
-        # includes a PayPal account — carries how many rows that share lists and which of them need a look,
+        # A card with a share of the wallet reconciliation — a PayPal file, or a sync of a connection that
+        # includes a wallet account — carries how many rows that share lists and which of them need a look,
         # so it can offer the review, and warn, without opening it; a data source's collapsed header totals
         # the ids across its cards. A card with nothing to show gets neither.
-        paypal_cards = paypal_card_counts(conn)
+        wallet_cards = wallet_card_counts(conn)
         for d in result:
-            card = paypal_cards.get(d["id"])
+            card = wallet_cards.get(d["id"])
             if card:
-                d["paypal_recon_rows"] = card["rows"]
-                d["paypal_recon_attention_ids"] = card["attention_ids"]
+                d["wallet_recon_rows"] = card["rows"]
+                d["wallet_recon_attention_ids"] = card["attention_ids"]
         return result
 
 
@@ -5874,7 +5876,7 @@ def undo_batches(conn, batch_ids) -> dict:
     from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
     for batch_id in ids:
         reverse_batch_enrichments(conn, batch_id)
-        reverse_batch_paypal_funding(conn, batch_id)
+        reverse_batch_wallet_pairs(conn, batch_id)
         reverse_batch_money_movement_links(conn, batch_id)
         reverse_batch_refund_links(conn, batch_id)
         reverse_batch_amazon_links(conn, batch_id)

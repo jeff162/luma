@@ -705,8 +705,8 @@ class RecurringDetectionTests(unittest.TestCase):
         self._scan()
         self.assertEqual([s["display_name"] for s in self._series()], ["Audiobook Club Plus;"])
 
-    def test_the_excluded_side_of_a_paypal_payment_pair_is_not_a_second_series(self):
-        self._add_shadowed_pairs(kind="paypal_funding", roles=("paypal", "counterpart"),
+    def test_the_excluded_side_of_a_wallet_payment_pair_is_not_a_second_series(self):
+        self._add_shadowed_pairs(kind="wallet_pair", roles=("wallet", "counterpart"),
                                  counted_payee="Streamly", shadow_payee="PAYPAL *STREAMLY")
         self._scan()
         self.assertEqual([s["display_name"] for s in self._series()], ["Streamly"])

@@ -434,12 +434,12 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     if (sourceBatch) onShowHistory({ batchIds: [targetBatchId] })
   }, [location.search, batches, navigate, openBatchDetail, onShowHistory])
 
-  // `?review=paypal` is the Tasks entry's way into the PayPal reconciliation, which is about the whole
+  // `?review=wallet` is the Tasks entry's way into the wallet reconciliation, which is about the whole
   // ledger rather than one file. Honored once on arrival, then cleaned from the URL like the one above.
   const openReconciliation = reconciliationViewer.open
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('review') !== 'paypal') return
-    openReconciliation({ vendor: 'paypal', title: '' })
+    if (new URLSearchParams(location.search).get('review') !== 'wallet') return
+    openReconciliation({ vendor: 'wallet', title: '' })
     navigate('/import-export', { replace: true })
   }, [location.search, navigate, openReconciliation])
 

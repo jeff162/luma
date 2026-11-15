@@ -184,9 +184,9 @@ is on, the rule reach. Readers that find the same cache stale together share one
 (`services/cache_fill.py`), so a page asking during the warm-up waits for it instead of repeating it.
 
 **What an account's settings decided at ingest is re-derived when they change.** A rule category (rules
-scope by owner and account type) and a PayPal pairing (account type and owner) are worked out when a row
-arrives and stored, so an edit to the account would leave them stale with no ingest to revisit them. Every
-write that changes an account's type or owner calls `settle_account_change`
+scope by owner and account type) and a wallet pairing (account type, owner and wallet match text) are worked
+out when a row arrives and stored, so an edit to the account would leave them stale with no ingest to revisit
+them. Every write that changes an account's type, owner or match text calls `settle_account_change`
 (`services/account_settings_followups.py`) after its commit, and anything stored that reads account settings
 is either re-derived there or worked out when read, as account groups and the owner lens are. One write
 does not call it: merging or detaching an account whose own owner is empty changes the owner it resolves to
@@ -1202,7 +1202,7 @@ wait or fail for its duration. In particular:
 - **No provider call inside a write transaction.** Sync fetches with nothing open, applies, commits, and
   repeats per page.
 - **A write and the analysis after it are separate stages, divided at the commit.** The duplicate
-  sweep, the recurring rescan and the PayPal funding pairing each run after the ingest commit, in their
+  sweep, the recurring rescan and the wallet funding pairing each run after the ingest commit, in their
   own connections, guarded so a failure cannot fail the ingest. A transaction edit or rule apply and its
   recurring rescan are divided the same way, with the debt recorded inside the write so a failed rescan
   is not lost. A long read inside a write transaction blocks writers too, because the lock is held from

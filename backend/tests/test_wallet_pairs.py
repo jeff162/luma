@@ -1,6 +1,6 @@
 """
-PayPal funding pairs: a tracked PayPal account's rows paired with the bank and card rows on the other side
-of the same movement, so the money counts once (services/paypal_funding.py).
+Wallet funding pairs: a tracked wallet account's rows paired with the bank and card rows on the other side
+of the same movement, so the money counts once (services/wallet_pairs.py).
 
 The fixtures are miniatures of the shapes a real household ledger showed: a payment a card paid directly,
 counted on both sides; one the user had already fixed by excluding the PayPal side; a withdrawal to the bank
@@ -17,13 +17,18 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.accounts import AccountUpdate, update_account
 from backend.routers.import_export import list_batches, run_import
 from backend.routers.import_export.core import undo_batch
-from backend.routers.import_export.paypal_funding import PairRequest, paypal_funding_pair_endpoint
-from backend.services import paypal_funding as pf
+from backend.routers.import_export.wallet_pairs import PairRequest, wallet_pair_endpoint
+from backend.services import wallet_pairs as pf
 from backend.services.money_movement import money_movement_category_id_if_exists
+from backend.services.excluded_categories import find_reimbursable_group_id
+from backend.services.reimbursements import create_reimbursement
+from backend.services.wallet_accounts import fill_wallet_match_text
 
 
 class FakeUploadFile:
@@ -43,10 +48,10 @@ def paypal_line(day, name, type_value, amount, txn_id):
     return f'"{day}","10:00:00","EDT","{name}","{type_value}","Completed","USD","{amount}","0.00","{amount}","","","0.00","{txn_id}",""'
 
 
-class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
+class WalletPairTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tempdir.name) / "paypal-funding.db"
+        self.db_path = Path(self.tempdir.name) / "wallet-pairs.db"
         init_db(str(self.db_path))
         with self._db() as conn:
             self.owner = self._owner(conn, "Robin")
@@ -86,15 +91,22 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
                VALUES (?, ?, 'fixture', ?, ?, ?, ?)""",
             (account_id, f"x_{account_id}", name, name, type_, owner_id),
         )
+        fill_wallet_match_text(conn, [account_id])
         return account_id
 
-    def _category(self, conn, name, excluded=False):
+    def _category(self, conn, name, excluded=False, parent=None):
         category_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO category (id, name, category_type, exclude_from_totals) VALUES (?, ?, 'expense', ?)",
-            (category_id, name, 1 if excluded else 0),
+            "INSERT INTO category (id, name, category_type, exclude_from_totals, parent_id) VALUES (?, ?, 'expense', ?, ?)",
+            (category_id, name, 1 if excluded else 0, parent),
         )
         return category_id
+
+    def _receivable_leaf(self, name):
+        with self._db() as conn:
+            group = find_reimbursable_group_id(conn)
+            self.assertIsNotNone(group)
+            return self._category(conn, name, parent=group)
 
     def _txn(self, account, day, amount, raw, *, category=None, source="manual", type_value=None, pending=False):
         txn_id = str(uuid.uuid4())
@@ -113,11 +125,11 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
 
     def _pass(self):
         with self._db() as conn:
-            return pf.pair_paypal_funding(conn)
+            return pf.pair_wallet_rows(conn)
 
     def _report(self, batch_id=None):
         with self._db() as conn:
-            return pf.paypal_funding_report(conn, batch_id)
+            return pf.wallet_pair_report(conn, batch_id)
 
     def _category_of(self, txn_id):
         with self._db() as conn:
@@ -159,7 +171,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._category_of(payment), (self.charity, "manual"))
 
         report = self._report()
-        self.assertEqual([(m["paypal"]["id"], m["counterpart"]["id"], m["matched_by"]) for m in report["matched"]],
+        self.assertEqual([(m["wallet"]["id"], m["counterpart"]["id"], m["matched_by"]) for m in report["matched"]],
                          [(payment, charge, "auto")])
 
     def test_unpairing_restores_the_card_row_and_is_not_redone(self):
@@ -257,6 +269,84 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._category_of(outgoing)[0], self._money_movement())
         self.assertEqual(self._category_of(deposit), (self.transfers, "manual"))
 
+    # --- wallets other than PayPal, and receivables ---------------------------------------------------
+
+    def _payment_app(self, match_text=None):
+        wallet = self._account_in_db("Pocketpay", "p2p")
+        if match_text is not None:
+            self._edit(wallet, wallet_match_text=match_text)
+        return wallet
+
+    def test_a_payment_app_cash_out_filed_as_a_receivable_pairs_and_leaves_it(self):
+        # A friend repays a shared dinner on the app, and the app cashes it out to the bank. Filed under the
+        # receivable as well, the cash-out counted the repayment twice; it is the other side of the
+        # app's transfer, so it moves to money movement and the repayment counts once, on the app.
+        app = self._payment_app()
+        meal = self._receivable_leaf("Shared dinner")
+        repayment = self._txn(app, "2026-11-09", -32.0, 'Rowan Hale "Dinner"', category=meal)
+        out = self._txn(app, "2026-11-09", 32.0, "Standard transfer", category=self.transfers, source="rule")
+        cash_out = self._txn(self.checking, "2026-11-10", -32.0, "Deposit - ACH POCKETPAY - CASHOUT", category=meal)
+        with self._db() as conn:
+            create_reimbursement(conn, [{"txn_id": repayment, "amount": -32.0}], counterparty="Rowan")
+        self.assertEqual(self._pass()["paired"], 1)
+        self.assertEqual({(m["wallet"]["id"], m["counterpart"]["id"]) for m in self._report()["matched"]},
+                         {(out, cash_out)})
+        self.assertEqual(self._category_of(cash_out), (self._money_movement(), "enrichment"))
+        self.assertEqual(self._category_of(out), (self.transfers, "rule"))
+        self.assertEqual(self._category_of(repayment), (meal, "manual"))
+        self.assertEqual(self._report()["wallet_names"], ["Pocketpay"])
+
+    def test_a_cash_out_a_reimbursement_claims_is_not_offered(self):
+        app = self._payment_app()
+        meal = self._receivable_leaf("Shared dinner")
+        self._txn(app, "2026-11-09", 32.0, "Standard transfer", category=self.transfers)
+        cash_out = self._txn(self.checking, "2026-11-10", -32.0, "Deposit - ACH POCKETPAY - CASHOUT", category=meal)
+        with self._db() as conn:
+            create_reimbursement(conn, [{"txn_id": cash_out, "amount": -32.0}], counterparty="Rowan")
+        self.assertEqual(self._pass()["paired"], 0)
+        self.assertEqual(self._category_of(cash_out), (meal, "manual"))
+        self.assertEqual(self._report()["choice"], [])
+
+    def test_a_payment_filed_as_a_receivable_still_excludes_the_card_charge(self):
+        # The dinner was paid on the app from the card and is owed back. The app row is the record and the
+        # receivable; the card charge is the same money a second time.
+        app = self._payment_app()
+        meal = self._receivable_leaf("Shared dinner")
+        dinner = self._txn(app, "2026-11-08", 128.0, "Bistro Lune", category=meal)
+        charge = self._txn(self.card, "2026-11-08", 128.0, "POCKETPAY *BISTRO LUNE", category=self.fun)
+        with self._db() as conn:
+            create_reimbursement(conn, [{"txn_id": dinner, "amount": 96.0}], counterparty="Rowan")
+        self.assertEqual(self._pass()["paired"], 1)
+        self.assertEqual(self._category_of(charge), (self._money_movement(), "enrichment"))
+        self.assertEqual(self._category_of(dinner), (meal, "manual"))
+
+    def test_a_bank_row_pairs_only_with_the_wallet_it_names(self):
+        app = self._payment_app()
+        app_payment = self._txn(app, "2026-11-08", 40.0, "Bistro Lune", category=self.fun)
+        paypal_payment = self._txn(self.paypal, "2026-11-08", 40.0, "Harbor Relief Fund", category=self.charity)
+        charge = self._txn(self.card, "2026-11-08", 40.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
+        self.assertEqual(self._pass()["paired"], 1)
+        self.assertEqual({(m["wallet"]["id"], m["counterpart"]["id"]) for m in self._report()["matched"]},
+                         {(paypal_payment, charge)})
+        with self._db() as conn:
+            self.assertEqual(pf.picker_candidates(conn, app_payment), [])
+            with self.assertRaises(pf.PairingError):
+                pf.pair_rows(conn, app_payment, charge)
+
+    def test_a_wallet_with_no_match_text_finds_nothing_until_given_some(self):
+        app = self._payment_app(match_text="")
+        self._txn(app, "2026-11-08", 40.0, "Bistro Lune", category=self.fun)
+        charge = self._txn(self.card, "2026-11-08", 40.0, "POCKETPAY *BISTRO LUNE", category=self.fun)
+        self.assertEqual(self._pass()["paired"], 0)
+        self._edit(app, wallet_match_text="pocketpay")    # an account edit runs the pass
+        self.assertEqual(self._category_of(charge), (self._money_movement(), "enrichment"))
+
+    def test_match_text_too_short_to_be_distinctive_is_refused(self):
+        app = self._payment_app()
+        with self.assertRaises(HTTPException) as caught:
+            self._edit(app, wallet_match_text="pp")
+        self.assertEqual(caught.exception.status_code, 400)
+
     async def test_a_wallet_funding_leg_pairs_with_the_card_charge_and_the_purchase_still_counts(self):
         csv_text = "\n".join([
             PAYPAL_HEADER,
@@ -281,7 +371,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         second = self._txn(self.checking, "2026-03-06", 75.0, "PAYPAL TRAILCLUB")
         self.assertEqual(self._pass()["paired"], 0)
         report = self._report()
-        self.assertEqual([c["paypal"]["id"] for c in report["choice"]], [payment])
+        self.assertEqual([c["wallet"]["id"] for c in report["choice"]], [payment])
         self.assertEqual({c["id"] for c in report["choice"][0]["candidates"]}, {first, second})
         with self._db() as conn:
             self.assertEqual(pf.ledger_attention_count(conn), 1)
@@ -306,7 +396,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         charges = [self._txn(self.card, "2026-06-16", 12.99, "PAYPAL *STREAM") for _ in range(2)]
         self.assertEqual(self._pass()["paired"], 2)
         report = self._report()
-        self.assertEqual({m["paypal"]["id"] for m in report["matched"]}, set(payments))
+        self.assertEqual({m["wallet"]["id"] for m in report["matched"]}, set(payments))
         self.assertEqual({m["counterpart"]["id"] for m in report["matched"]}, set(charges))
 
     def test_a_cornered_row_claims_its_only_candidate_and_the_rest_pairs_itself(self):
@@ -318,7 +408,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         second = self._txn(self.checking, "2026-03-13", 10.0, "PAYPAL INST XFER")
         self.assertEqual(self._pass()["paired"], 2)
         self.assertEqual(self._report()["choice"], [])
-        paired = {m["paypal"]["id"]: m["counterpart"]["id"] for m in self._report()["matched"]}
+        paired = {m["wallet"]["id"]: m["counterpart"]["id"] for m in self._report()["matched"]}
         self.assertEqual(paired, {early: first, late: second})
 
     def test_two_rows_cornered_on_one_transaction_are_left_for_the_user(self):
@@ -328,7 +418,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         charge = self._txn(self.checking, "2026-04-03", 40.0, "PAYPAL INST XFER")
         self.assertEqual(self._pass()["paired"], 0)
         choice = self._report()["choice"]
-        self.assertEqual({c["paypal"]["id"] for c in choice}, set(payments))
+        self.assertEqual({c["wallet"]["id"] for c in choice}, set(payments))
         self.assertEqual([[x["id"] for x in c["candidates"]] for c in choice], [[charge], [charge]])
         # One decision, not two: settling either one settles both, and the review lists them as one row.
         with self._db() as conn:
@@ -348,12 +438,12 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         near = self._txn(self.checking, "2026-05-06", 60.0, "PAYPAL INST XFER")
         far = self._txn(self.checking, "2026-05-10", 60.0, "PAYPAL INST XFER")
         self.assertEqual(self._pass()["paired"], 0)
-        self.assertEqual({c["paypal"]["id"] for c in self._report()["choice"]}, {first, second, third})
+        self.assertEqual({c["wallet"]["id"] for c in self._report()["choice"]}, {first, second, third})
 
         token = set_current_db_path(str(self.db_path))
         try:
-            answer = await paypal_funding_pair_endpoint(
-                PairRequest(paypal_txn_id=first, counterpart_txn_id=near))
+            answer = await wallet_pair_endpoint(
+                PairRequest(wallet_txn_id=first, counterpart_txn_id=near))
         finally:
             reset_current_db_path(token)
 
@@ -361,7 +451,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         # The second row is left with nothing to pair with, which is what a balance-funded payment looks
         # like, so nothing is asked about it either.
         self.assertEqual(self._report()["choice"], [])
-        self.assertEqual({(m["paypal"]["id"], m["counterpart"]["id"]) for m in self._report()["matched"]},
+        self.assertEqual({(m["wallet"]["id"], m["counterpart"]["id"]) for m in self._report()["matched"]},
                          {(first, near), (third, far)})
 
     def test_another_members_bank_row_never_pairs_but_a_shared_account_does(self):
@@ -392,7 +482,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
     def test_a_withdrawal_with_no_bank_row_is_unmatched_until_acknowledged(self):
         withdrawal = self._txn(self.paypal, "2026-03-27", 2100.0, "Withdrawal", type_value="User Initiated Withdrawal")
         report = self._report()
-        self.assertEqual([(u["paypal"]["id"], u["reviewed"]) for u in report["unmatched"]], [(withdrawal, False)])
+        self.assertEqual([(u["wallet"]["id"], u["reviewed"]) for u in report["unmatched"]], [(withdrawal, False)])
         with self._db() as conn:
             self.assertEqual(pf.ledger_attention_count(conn), 1)
             pf.set_reviewed(conn, [withdrawal], reviewed=True)
@@ -481,7 +571,7 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._category_of(charge), (self.charity, "manual"))
         with self._db() as conn:
             self.assertEqual(conn.execute(
-                "SELECT COUNT(*) FROM txn_link WHERE kind LIKE 'paypal_funding%'").fetchone()[0], 0)
+                "SELECT COUNT(*) FROM txn_link WHERE kind LIKE 'wallet_pair%'").fetchone()[0], 0)
 
     async def test_a_paypal_import_card_carries_its_attention_count(self):
         result = await self._import_paypal("\n".join([
@@ -493,8 +583,8 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             reset_current_db_path(token)
         card = next(b for b in batches if b["id"] == result["batch_id"])
-        self.assertEqual(card["paypal_recon_rows"], 1)
-        self.assertEqual(len(card["paypal_recon_attention_ids"]), 1)
+        self.assertEqual(card["wallet_recon_rows"], 1)
+        self.assertEqual(len(card["wallet_recon_attention_ids"]), 1)
 
     def test_a_sync_card_offers_the_review_only_when_its_share_lists_something(self):
         withdrawal_sync, balance_sync = self._sync_batch("July sync"), self._sync_batch("August sync")
@@ -509,9 +599,9 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
             cards = {b["id"]: b for b in list_batches()}
         finally:
             reset_current_db_path(token)
-        self.assertEqual(cards[withdrawal_sync]["paypal_recon_rows"], 1)
-        self.assertEqual(cards[withdrawal_sync]["paypal_recon_attention_ids"], [withdrawal])
-        self.assertNotIn("paypal_recon_rows", cards[balance_sync])
+        self.assertEqual(cards[withdrawal_sync]["wallet_recon_rows"], 1)
+        self.assertEqual(cards[withdrawal_sync]["wallet_recon_attention_ids"], [withdrawal])
+        self.assertNotIn("wallet_recon_rows", cards[balance_sync])
 
     def _sync_batch(self, label):
         batch_id = str(uuid.uuid4())

@@ -74,8 +74,8 @@ candidates to accounts of the same currency:
 
 - transfer pairing (`transfer_pairs.py`: same absolute amount on different accounts)
 - duplicate detection and soft-flagging (`duplicate_detection.py`, `connection_dedupe.py`)
-- refund links, purchase links, Amazon and PayPal funding (`refund_links.py`, `purchase_links.py`,
-  `amazon_funding.py`, `paypal_funding.py`)
+- refund links, purchase links, Amazon and wallet funding (`refund_links.py`, `purchase_links.py`,
+  `amazon_funding.py`, `wallet_pairs.py`)
 - reimbursements (`reimbursements.py`)
 - recurring detection (`recurring_detection.py`): a series lives in one currency
 - the rule checks: conflicts, overlaps, range drift, suggestions

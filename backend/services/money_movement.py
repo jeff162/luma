@@ -54,6 +54,9 @@ MONEY_MOVEMENT_CATEGORY = "Money movement"
 # Money-movement rules are scoped by account *type* — one rule per Type covers every PayPal account,
 # rather than one rule per (Type, account). See docs/data-model.md -> "The matcher".
 PAYPAL_ACCOUNT_TYPE = "paypal"
+# What a bank or card row says when it is the other side of a PayPal account's row: the wallet match text
+# every PayPal account carries (services/wallet_accounts.py).
+PAYPAL_MATCH_TEXT = "PayPal"
 
 # The seed vocabulary of PayPal money-movement `Type` values (casefolded). Corroborating only — an
 # unrecognized value never blocks a structurally-clear pair, it is surfaced instead (see module docstring).
@@ -206,7 +209,9 @@ def ensure_paypal_account_type(conn: sqlite3.Connection, account_ids: list[str])
               AND (type IS NULL OR type IN ('depository', 'other', 'p2p'))""",
         tuple(account_ids),
     ).fetchall()]
-    conn.executemany("UPDATE account SET type = ? WHERE id = ?", [(PAYPAL_ACCOUNT_TYPE, i) for i in generic])
+    # The retype declares the account PayPal, so its match text is PayPal's whatever a `p2p` type left.
+    conn.executemany("UPDATE account SET type = ?, wallet_match_text = ? WHERE id = ?",
+                     [(PAYPAL_ACCOUNT_TYPE, PAYPAL_MATCH_TEXT, i) for i in generic])
     return generic
 
 

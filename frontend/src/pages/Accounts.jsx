@@ -17,7 +17,7 @@ import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
-import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
+import { ACCOUNT_TYPES, isWalletAccountType } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
@@ -1472,6 +1472,8 @@ export default function Accounts() {
   const [promoteTagsDialog, setPromoteTagsDialog] = useState(null)
   const [pendingOwnerDelete, setPendingOwnerDelete] = useState(null)
   const [ownerRenameDialog, setOwnerRenameDialog] = useState(null)
+  // A wallet's match text being edited: { accountId, name, value }.
+  const [matchTextDialog, setMatchTextDialog] = useState(null)
   const [showCreateAccount, setShowCreateAccount] = useState(false)
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
@@ -1809,6 +1811,8 @@ export default function Accounts() {
     if (patch.name !== undefined || patch.type !== undefined || patch.owner_id !== undefined) {
       setSortIndicatorActive(false)
     }
+    // A new type can give the account wallet match text the server chose, which the row does not hold yet.
+    if (patch.type !== undefined) await reloadAccounts()
     notifyAccountsChanged()
   }
 
@@ -2187,6 +2191,17 @@ export default function Accounts() {
     }
   }
 
+  async function confirmMatchText() {
+    if (!matchTextDialog) return
+    const { accountId, value } = matchTextDialog
+    setMatchTextDialog(null)
+    try {
+      await saveAccount(accountId, { wallet_match_text: value.trim() })
+    } catch (error) {
+      showAsyncNotice('Could not save the match text', error)
+    }
+  }
+
   async function confirmOwnerDelete() {
     if (!pendingOwnerDelete) return
     const owner = pendingOwnerDelete
@@ -2249,6 +2264,23 @@ export default function Accounts() {
         />
       ) : null}
 
+      {matchTextDialog ? (
+        <AppTextEntryDialog
+          title="Wallet match text"
+          description={`Bank and card transactions containing this text are matched with ${matchTextDialog.name}’s transactions, so the money counts once. Leave it empty to match nothing.`}
+          label="Match text"
+          value={matchTextDialog.value}
+          onChange={value => setMatchTextDialog(prev => prev ? { ...prev, value } : prev)}
+          placeholder="Text on the bank or card transaction"
+          confirmLabel="Save"
+          confirmDisabled={matchTextDialog.value.trim().length > 0 && matchTextDialog.value.trim().length < 3}
+          helpText="At least 3 characters, so it does not match unrelated transactions."
+          onConfirm={confirmMatchText}
+          onCancel={() => setMatchTextDialog(null)}
+          width="min(480px, 100%)"
+        />
+      ) : null}
+
       {pendingOwnerDelete ? (
         <AppConfirmDialog
           title="Delete owner?"
@@ -2288,6 +2320,15 @@ export default function Accounts() {
               title: 'Choose the tags attached to this account.',
               onClick: () => setTagPickerAccountId(rowMenu.account.id),
             },
+            ...(isWalletAccountType(rowMenu.account.type) && !rowMenu.account.parent_account_id ? [{
+              label: 'Wallet match text…',
+              title: 'The text a bank or card transaction contains when it is the other side of this wallet’s transaction.',
+              onClick: () => setMatchTextDialog({
+                accountId: rowMenu.account.id,
+                name: rowMenu.account.display_name || rowMenu.account.name,
+                value: rowMenu.account.wallet_match_text || '',
+              }),
+            }] : []),
             {
               label: 'Remove account…',
               danger: true,

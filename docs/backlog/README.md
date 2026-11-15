@@ -36,9 +36,6 @@ one file, not scan a monolith for the paragraph that applies.
   service to add next. One change to the SimpleFIN connector would open several of them at once.
 - [Connecting straight to the bank](ofx-direct-connect.md) — OFX Direct Connect, with no service in the
   middle. Parked: few banks still support it, and it needs the user's bank login.
-- [Pairing Venmo and other wallets with the bank and card side](wallet-funding-pairs.md) — PayPal's
-  funding pairs for every wallet account, and a Reimbursable row no longer read as already excluded.
-  Three decisions owed, each with a recommendation.
 - [Amazon, PayPal and import-mapping improvements](amazon-paypal-improvements.md) — five small, independent
   items, such as pasting Amazon orders instead of saving a file.
 - [Duplicate detection improvements](duplicate-detection-improvements.md) — a history of duplicate decisions with

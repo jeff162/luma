@@ -35,7 +35,7 @@ from backend.runtime_config import (
     APP_VERSION, build_stamp, bundled_license_path, checkout_commit, distribution_form, runs_in_container,
     third_party_notices,
 )
-from backend.services import paypal_funding, proxy_certificate, security_checklist, update_check
+from backend.services import proxy_certificate, security_checklist, update_check, wallet_pairs
 from backend.services.rule_owner_reach import rule_owner_reach
 from backend.services.storage_summary import storage_summary
 
@@ -254,8 +254,8 @@ def warm_derived_caches(rule_reach: bool = False):
         ).fetchall()
         for row in amazon_batches:
             reconciliation_attention_count(conn, row["id"])
-        paypal_funding.ledger_attention_count(conn)
-        paypal_funding.card_counts(conn)
+        wallet_pairs.ledger_attention_count(conn)
+        wallet_pairs.card_counts(conn)
         if rule_reach:
             rule_owner_reach(conn)
     return {"ok": True}

@@ -137,9 +137,9 @@ export function summarizeBatchAttention(batches) {
     unresolvedDuplicates: sum('suspect_duplicate_count') + sum('advisory_review_count'),
     needsReview: sum('needs_review_count'),
     reconAttention: sum('recon_attention_count'),
-    // Counted by row rather than summed: a bank charge with no PayPal record is listed by every card
+    // Counted by row rather than summed: a bank charge with no wallet record is listed by every card
     // whose dates cover it.
-    paypalAttention: new Set(list.flatMap(batch => batch?.paypal_recon_attention_ids || [])).size,
+    walletAttention: new Set(list.flatMap(batch => batch?.wallet_recon_attention_ids || [])).size,
   }
 }
 

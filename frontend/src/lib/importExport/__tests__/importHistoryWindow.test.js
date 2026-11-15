@@ -189,13 +189,13 @@ describe('what an archived set still wants done', () => {
   // duplicates pill. Counting only the suspects is what left a PayPal source of amber cards silent.
   it('counts rejections still flagged amber alongside the suspects', () => {
     expect(summarizeBatchAttention([
-      { suspect_duplicate_count: 1, advisory_review_count: 5, needs_review_count: 3, paypal_recon_attention_ids: ['p1', 'bank1'] },
-      { advisory_review_count: 2, needs_review_count: 2, recon_attention_count: 4, paypal_recon_attention_ids: ['bank1'] },
-    ])).toEqual({ unresolvedDuplicates: 8, needsReview: 5, reconAttention: 4, paypalAttention: 2 })
+      { suspect_duplicate_count: 1, advisory_review_count: 5, needs_review_count: 3, wallet_recon_attention_ids: ['p1', 'bank1'] },
+      { advisory_review_count: 2, needs_review_count: 2, recon_attention_count: 4, wallet_recon_attention_ids: ['bank1'] },
+    ])).toEqual({ unresolvedDuplicates: 8, needsReview: 5, reconAttention: 4, walletAttention: 2 })
   })
 
   it('reports nothing for cards that are all settled', () => {
     expect(summarizeBatchAttention([{ needs_review_count: 0, deduped_count: 12 }, {}]))
-      .toEqual({ unresolvedDuplicates: 0, needsReview: 0, reconAttention: 0, paypalAttention: 0 })
+      .toEqual({ unresolvedDuplicates: 0, needsReview: 0, reconAttention: 0, walletAttention: 0 })
   })
 })

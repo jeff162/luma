@@ -2,51 +2,62 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Pair a PayPal account's rows with the bank and card rows on the other side of the same movement.
+Pair a wallet account's rows with the bank and card rows on the other side of the same movement.
 
-A tracked PayPal account holds the real transaction — the purchase, the payment received — because money
-can sit in a PayPal balance, and then the PayPal row is the only record there is. What PayPal took from a
-card or bank, or sent back to one, also lands on that card or bank account, where it is only money moving
-into or out of PayPal. Counted there as well, the purchase is counted twice. This pass finds those rows
-and moves them into the excluded "Money movement" category, linked to the PayPal row they belong to.
+A wallet — a PayPal account, a person-to-person app (`services/wallet_accounts.py`) — holds the real
+transaction: the purchase, the payment received. Money can sit in its balance, and then the wallet row is
+the only record there is. What the wallet took from a card or bank, or sent back to one, also lands on
+that card or bank account, where it is only money moving into or out of the wallet. Counted there as
+well, the purchase is counted twice, and money received on the wallet and cashed out is received twice.
+This pass finds those rows and moves them into the excluded "Money movement" category, linked to the
+wallet row they belong to.
 
-**What a pair changes depends on which way the money went.** A *transfer* pair — money into PayPal
-from a card or bank, or out of PayPal to one — is money moving on both sides, so both rows end up in
-"Money movement", whatever they were filed under; a user who had categorized both halves alike so they
-cancelled gets the same net, now without a phantom expense and income. A *payment* pair — a payment the
-card or bank paid directly — must count exactly once, and the PayPal row is the record of what was
-bought, so the bank or card row is excluded; but where the user has already excluded the PayPal row and
-counts the bank side instead, that choice already counts it once, and nothing is changed. Excluding the
-bank row is safe only because the PayPal row it belongs to is in the ledger: a blanket "PAYPAL →
-excluded" rule would be wrong, since for anyone not tracking the PayPal account the bank row *is* the
-only record. This is the same conditional exclusion the Amazon importer applies to its card charges.
+**What a pair changes depends on which way the money went.** A *transfer* pair — money into the wallet
+from a card or bank, or out of it to one — is money moving on both sides, so both rows end up in
+"Money movement"; a user who had categorized both halves alike so they cancelled gets the same net, now
+without a phantom expense and income. A *payment* pair — a payment the card or bank paid directly — must
+count exactly once, and the wallet row is the record of what was bought, so the bank or card row is
+excluded; but where the user has already filed the wallet row as money movement and counts the bank side
+instead, that choice already counts it once, and nothing is changed. Excluding the bank row is safe only
+because the wallet row it belongs to is in the ledger: a blanket "PAYPAL → excluded" rule would be wrong,
+since for anyone not tracking the wallet the bank row *is* the only record. This is the same conditional
+exclusion the Amazon importer applies to its card charges.
 
-**Which PayPal rows have a counterpart, and which way it points.** Signed as the ledger signs (positive is
+**A row already filed as money movement is left where it is, and only that.** Money movement is a
+category excluded from totals, with one exception: a Reimbursable leaf is excluded for another reason, as
+a receivable whose balance is meant to be read, so a cash-out left there counts the repayment a second
+time and the receivable reads as over-repaid. Such a row is moved like any counted one. What a row
+must not lose is a **reimbursement claim** (`docs/data-model.md` → *Reimbursement records*): a claimed
+row is never changed, so a claimed bank or card row is not offered at all, and a claimed wallet row pairs
+and keeps its category, as a split row does.
+
+**Which wallet rows have a counterpart, and which way it points.** Signed as the ledger signs (positive is
 money out of the account):
 
-  * money **into** PayPal from outside — a funding leg (the `wallet_funding` suppression's `leg`), or a
-    row whose captured `Type` is a deposit — is the mirror of a bank or card charge: opposite sign;
-  * money **out of** PayPal to a bank or card — a `Type` naming a withdrawal — is the mirror of a
+  * money **into** the wallet from outside — a funding leg (the `wallet_funding` suppression's `leg`), or
+    a row whose captured `Type` is a deposit — is the mirror of a bank or card charge: opposite sign;
+  * money **out of** the wallet to a bank or card — a `Type` naming a withdrawal — is the mirror of a
     deposit there: opposite sign;
-  * a **payment** out of PayPal with no funding leg of its own may have been paid from a card or bank
+  * a **payment** out of the wallet with no funding leg of its own may have been paid from a card or bank
     directly — the same amount charged there: same sign. It may equally have been paid from the balance,
     so its counterpart is optional. A row with no captured `Type` at all (a synced account) could be a
-    payment or a withdrawal, so it is offered both.
+    payment or a cash-out, so it is offered both.
 
 The first two carry an explicit statement that money crossed to another account, so one with no
 counterpart is surfaced for review; a payment with none is not, since a balance-funded payment has none
 to find.
 
-**What makes a candidate.** A row on a non-PayPal account that reads as PayPal (its name, raw text or
-captured detail says so), of the matching amount to the cent, within `PAIR_WINDOW_DAYS` either side, on
-an account whose owner is compatible with the PayPal account's (the same owner, the shared owner, or
-none recorded) — a household's two PayPal accounts are funded from different accounts, and a coincidence
-of amount between them must not pair. Pending rows wait until they post, a split row is already divided
-by hand, and a row an Amazon order or a wallet leg already claims is not offered.
+**What makes a candidate.** A row on an account that is not a wallet, whose name, raw text or captured
+detail contains the wallet's match text, of the matching amount to the cent, within `PAIR_WINDOW_DAYS`
+either side, on an account whose owner is compatible with the wallet's (the same owner, the shared owner,
+or none recorded) — a household's two PayPal accounts are funded from different accounts, and a
+coincidence of amount between them must not pair. Pending rows wait until they post, a split row is
+already divided by hand, and a row an Amazon order, a wallet leg or a reimbursement already claims is not
+offered.
 
-**Only an unambiguous pairing applies itself.** A PayPal row with exactly one candidate that no other
-PayPal row also wants is paired. So is a cluster of interchangeable rows — the same amount on both sides,
-every PayPal row wanting every candidate, as many of each — where any assignment has the same effect. A
+**Only an unambiguous pairing applies itself.** A wallet row with exactly one candidate that no other
+wallet row also wants is paired. So is a cluster of interchangeable rows — the same amount on both sides,
+every wallet row wanting every candidate, as many of each — where any assignment has the same effect. A
 row with a single candidate also **claims** it, taking it out of the lists of rows that have alternatives
 — which often leaves one of those unambiguous in turn, so the rounds repeat until nothing more is
 claimed. Anything else is left for the user to choose.
@@ -54,9 +65,9 @@ claimed. Anything else is left for the user to choose.
 **What the user decides is kept, as links of their own kinds.** Unpairing records the pair as declined,
 so the pass never offers it again; "none of these" declines each candidate shown; and acknowledging a row
 with nothing to pair records it as reviewed. A decision that changes what is there to pair runs the pass
-again (`pair_after_decision`), since settling one row can leave another with a single candidate. Storing these as `txn_link` kinds rather than tables means
-they ride in backups, cascade with their rows, and invalidate the reconciliation attention cache through
-the triggers that already watch `txn_link`.
+again (`pair_after_decision`), since settling one row can leave another with a single candidate. Storing
+these as `txn_link` kinds rather than tables means they ride in backups, cascade with their rows, and
+invalidate the reconciliation attention cache through the triggers that already watch `txn_link`.
 
 **Reversal restores only what is still the pairing's.** Unpairing — or undoing the import that brought
 either row in — puts a row's category back only while it still holds the category the pairing set with the
@@ -75,10 +86,9 @@ from backend.db.database import get_shared_owner_id
 from backend.services import txn_links
 from backend.services.categorizer import category_lock_for
 from backend.services.duplicate_detection import clear_flag_between
-from backend.services.excluded_categories import ensure_excluded_transfers_leaf
+from backend.services.excluded_categories import ensure_excluded_transfers_leaf, find_reimbursable_group_id
 from backend.services.money_movement import (
     MONEY_MOVEMENT_CATEGORY,
-    PAYPAL_ACCOUNT_TYPE,
     captured_type,
     is_money_movement_type,
     is_wallet_funding_type,
@@ -87,27 +97,33 @@ from backend.services.money_movement import (
 )
 from backend.services.money_movement import LINK_KIND as WALLET_FUNDING_KIND
 from backend.services.reconciliation_attention import ledger_attention, ledger_cached
+from backend.services.reimbursements import REIMBURSEMENT_LINK_KIND, claimed_txn_ids
 from backend.services.review_flagging import REVIEW_PRIOR_KEY, restore_review_flag
 from backend.services.txn_summaries import txn_summaries
+from backend.services.wallet_accounts import match_text_sql, wallet_account_clause
 
-LINK_KIND = "paypal_funding"
-DECLINED_KIND = "paypal_funding_declined"
-REVIEWED_KIND = "paypal_funding_reviewed"
-PAYPAL_ROLE = "paypal"
+LINK_KIND = "wallet_pair"
+DECLINED_KIND = "wallet_pair_declined"
+REVIEWED_KIND = "wallet_pair_reviewed"
+WALLET_ROLE = "wallet"
 COUNTERPART_ROLE = "counterpart"
 REVIEWED_ROLE = "row"
 
-# How far apart the PayPal row and its bank or card row may be dated, either way. A card can date the
+# How far apart the wallet row and its bank or card row may be dated, either way. A card can date the
 # charge before PayPal dates the payment, and a bank transfer posts after it; see the measurement cited on
-# docs/data-model.md → PayPal funding pairs.
+# docs/data-model.md → Wallet funding pairs.
 PAIR_WINDOW_DAYS = 4
 
-# How far from a PayPal row the manual picker looks, whatever the amount — wide enough for a transfer
+# How far from a wallet row the manual picker looks, whatever the amount — wide enough for a transfer
 # that sat pending over a weekend, or a sum the user knows is right when the amounts differ.
 PICKER_WINDOW_DAYS = 14
 
 # A bank or card row claimed by one of these is already accounted for by that feature.
 _CLAIMING_KINDS = ("amazon_order", WALLET_FUNDING_KIND)
+
+# The text of a row that a wallet's match text is looked for in.
+_HAYSTACK_SQL = ("LOWER(COALESCE(t.raw_name, '') || ' ' || COALESCE(t.merchant_name, '') || ' ' "
+                 "|| COALESCE(t.display_name, '') || ' ' || COALESCE(t.import_evidence_json, ''))")
 
 
 def _cents(amount) -> int:
@@ -121,17 +137,15 @@ def _day(value) -> Optional[date]:
         return None
 
 
-def _paypal_account_clause(alias: str, parent_alias: str) -> str:
-    """A row's account is a PayPal account when it, or the account it is merged into, is of the PayPal
-    type — a merged child keeps its rows under its own id."""
-    return (f"(COALESCE({alias}.type, '') = '{PAYPAL_ACCOUNT_TYPE}' "
-            f"OR COALESCE({parent_alias}.type, '') = '{PAYPAL_ACCOUNT_TYPE}')")
+def _like_pattern(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
-def has_paypal_account(conn: sqlite3.Connection) -> bool:
+def has_wallet_account(conn: sqlite3.Connection) -> bool:
     return conn.execute(
         f"""SELECT 1 FROM account a LEFT JOIN account pa ON pa.id = a.parent_account_id
-            WHERE a.trashed_at IS NULL AND {_paypal_account_clause('a', 'pa')} LIMIT 1"""
+            WHERE a.trashed_at IS NULL AND {wallet_account_clause('a', 'pa')} LIMIT 1"""
     ).fetchone() is not None
 
 
@@ -142,17 +156,22 @@ def _owners_compatible(shared_owner_id: Optional[str], a: Optional[str], b: Opti
 
 
 class _Ledger:
-    """Everything the pairing reads, loaded once: the PayPal rows, the PayPal-looking rows elsewhere, and
-    the links that record pairings and decisions. Matching then runs in memory — the candidate sets are
-    small, and one pass over the ledger is cheaper than a query per PayPal row."""
+    """Everything the pairing reads, loaded once: the wallet rows, the rows elsewhere that read as one of
+    the wallets, and the links that record pairings and decisions. Matching then runs in memory — the
+    candidate sets are small, and one pass over the ledger is cheaper than a query per wallet row."""
 
     def __init__(self, conn: sqlite3.Connection):
         self.shared_owner_id = get_shared_owner_id(conn)
-        self.paypal_rows = [dict(r) for r in conn.execute(f"""
+        reimbursable_id = find_reimbursable_group_id(conn) or ""
+        # Filed as money movement: excluded from totals, other than as a receivable (see the module docstring).
+        movement_sql = ("(COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) <> 0 "
+                        "AND COALESCE(cc.parent_id, '') <> :reimbursable)")
+        self.wallet_rows = [dict(r) for r in conn.execute(f"""
             SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split, t.import_batch_id,
                    t.import_evidence_json, t.category_id, t.category_source, t.category_overridden,
                    t.needs_review,
-                   COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) AS excluded,
+                   {movement_sql} AS movement,
+                   LOWER(TRIM(COALESCE({match_text_sql('a', 'pa')}, ''))) AS match_text,
                    COALESCE(a.parent_account_id, a.id) AS root_id,
                    COALESCE(a.owner_id, pa.owner_id)   AS owner_id
             FROM   txn t
@@ -160,27 +179,41 @@ class _Ledger:
             LEFT   JOIN account pa ON pa.id = a.parent_account_id
             LEFT   JOIN category cc ON cc.id = t.category_id
             LEFT   JOIN category pc ON pc.id = cc.parent_id
-            WHERE  t.trashed_at IS NULL AND {_paypal_account_clause('a', 'pa')}
-        """).fetchall()]
-        self.other_rows = [dict(r) for r in conn.execute(f"""
-            SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split,
-                   t.category_id, t.category_source, t.category_overridden, t.needs_review,
-                   COALESCE(pc.exclude_from_totals, cc.exclude_from_totals, 0) AS excluded,
-                   COALESCE(a.parent_account_id, a.id) AS root_id,
-                   COALESCE(a.owner_id, pa.owner_id)   AS owner_id
-            FROM   txn t
-            JOIN   account a ON a.id = t.account_id
-            LEFT   JOIN account pa ON pa.id = a.parent_account_id
-            LEFT   JOIN category cc ON cc.id = t.category_id
-            LEFT   JOIN category pc ON pc.id = cc.parent_id
-            WHERE  t.trashed_at IS NULL
-              AND  NOT {_paypal_account_clause('a', 'pa')}
-              AND  LOWER(COALESCE(t.raw_name, '') || ' ' || COALESCE(t.merchant_name, '') || ' '
-                         || COALESCE(t.display_name, '') || ' ' || COALESCE(t.import_evidence_json, ''))
-                   LIKE '%paypal%'
-        """).fetchall()]
-        self.paypal_by_id = {r["id"]: r for r in self.paypal_rows}
+            WHERE  t.trashed_at IS NULL AND {wallet_account_clause('a', 'pa')}
+        """, {"reimbursable": reimbursable_id}).fetchall()]
+        texts = sorted({r["match_text"] for r in self.wallet_rows if r["match_text"]})
+        self.other_rows = []
+        if texts:
+            reads_as = " OR ".join(f"{_HAYSTACK_SQL} LIKE :t{i} ESCAPE '\\'" for i in range(len(texts)))
+            self.other_rows = [dict(r) for r in conn.execute(f"""
+                SELECT t.id, t.account_id, t.date, t.amount, t.is_pending, t.is_split,
+                       t.category_id, t.category_source, t.category_overridden, t.needs_review,
+                       {movement_sql} AS movement,
+                       {_HAYSTACK_SQL} AS haystack,
+                       COALESCE(a.parent_account_id, a.id) AS root_id,
+                       COALESCE(a.owner_id, pa.owner_id)   AS owner_id
+                FROM   txn t
+                JOIN   account a ON a.id = t.account_id
+                LEFT   JOIN account pa ON pa.id = a.parent_account_id
+                LEFT   JOIN category cc ON cc.id = t.category_id
+                LEFT   JOIN category pc ON pc.id = cc.parent_id
+                WHERE  t.trashed_at IS NULL
+                  AND  NOT {wallet_account_clause('a', 'pa')}
+                  AND  ({reads_as})
+            """, {"reimbursable": reimbursable_id, **{f"t{i}": _like_pattern(t) for i, t in enumerate(texts)}}).fetchall()]
+        for row in self.other_rows:
+            # Which wallets' text the row contains; a candidate must read as its own wallet.
+            haystack = row.pop("haystack")
+            row["reads_as"] = {t for t in texts if t in haystack}
+        self.wallet_by_id = {r["id"]: r for r in self.wallet_rows}
         self.other_by_id = {r["id"]: r for r in self.other_rows}
+        # Asked only about rows some reimbursement holds as a member, which are few, rather than the ledger.
+        held = {r["txn_id"] for r in conn.execute(
+            """SELECT DISTINCT m.txn_id FROM txn_link l JOIN txn_link_member m ON m.link_id = l.id
+               WHERE l.kind = ?""", (REIMBURSEMENT_LINK_KIND,))}
+        reimbursed = claimed_txn_ids(conn, [i for i in (*self.wallet_by_id, *self.other_by_id) if i in held])
+        for row in (*self.wallet_rows, *self.other_rows):
+            row["reimbursed"] = row["id"] in reimbursed
 
         kinds = (LINK_KIND, DECLINED_KIND, REVIEWED_KIND, *_CLAIMING_KINDS)
         members: dict[str, dict] = defaultdict(lambda: {"kind": None, "meta": None, "roles": {}})
@@ -195,24 +228,24 @@ class _Ledger:
             entry["meta"] = r["metadata_json"]
             entry["roles"].setdefault(r["role"], []).append(r["txn_id"])
 
-        self.pairs: dict[str, dict] = {}             # link id → {paypal, counterpart}
-        self.paired_paypal: dict[str, str] = {}      # paypal txn → link id
+        self.pairs: dict[str, dict] = {}             # link id → {wallet, counterpart}
+        self.paired_wallet: dict[str, str] = {}      # wallet txn → link id
         self.paired_other: dict[str, str] = {}       # counterpart txn → link id
         self.declined: set[tuple[str, str]] = set()
         self.reviewed: set[str] = set()
-        self.claimed: set[str] = set()
-        self.funding_leg: set[str] = set()           # wallet legs: money into PayPal
+        self.claimed: set[str] = set(reimbursed)
+        self.funding_leg: set[str] = set()           # wallet legs: money into the wallet
         self.has_leg: set[str] = set()               # payments a wallet leg already funds
         for link_id, entry in members.items():
             roles = entry["roles"]
             if entry["kind"] == LINK_KIND:
-                paypal_ids, other_ids = roles.get(PAYPAL_ROLE, []), roles.get(COUNTERPART_ROLE, [])
-                if paypal_ids and other_ids:
-                    self.pairs[link_id] = {"paypal": paypal_ids[0], "counterpart": other_ids[0]}
-                    self.paired_paypal[paypal_ids[0]] = link_id
+                wallet_ids, other_ids = roles.get(WALLET_ROLE, []), roles.get(COUNTERPART_ROLE, [])
+                if wallet_ids and other_ids:
+                    self.pairs[link_id] = {"wallet": wallet_ids[0], "counterpart": other_ids[0]}
+                    self.paired_wallet[wallet_ids[0]] = link_id
                     self.paired_other[other_ids[0]] = link_id
             elif entry["kind"] == DECLINED_KIND:
-                for p in roles.get(PAYPAL_ROLE, []):
+                for p in roles.get(WALLET_ROLE, []):
                     for c in roles.get(COUNTERPART_ROLE, []):
                         self.declined.add((p, c))
             elif entry["kind"] == REVIEWED_KIND:
@@ -228,7 +261,7 @@ class _Ledger:
         return _owners_compatible(self.shared_owner_id, a, b)
 
     def targets(self, row: dict) -> tuple[list[int], bool]:
-        """The counterpart amounts (in cents, signed as the counterpart row is) a PayPal row could have,
+        """The counterpart amounts (in cents, signed as the counterpart row is) a wallet row could have,
         and whether it states that money crossed to another account (so a missing counterpart is worth a
         look). An empty list means the row has no counterpart to find."""
         cents = _cents(row["amount"])
@@ -247,31 +280,38 @@ class _Ledger:
         return (not row["is_pending"] and not row["is_split"]
                 and row["id"] not in self.claimed and row["id"] not in self.paired_other)
 
-    def candidates(self, paypal: dict, window_days: int = PAIR_WINDOW_DAYS) -> list[str]:
-        targets, _ = self.targets(paypal)
-        day = _day(paypal["date"])
+    def reads_as(self, other: dict, wallet: dict) -> bool:
+        """Whether a bank or card row names this wallet — what makes it a candidate for that wallet's rows
+        and not another's."""
+        return bool(wallet["match_text"]) and wallet["match_text"] in other["reads_as"]
+
+    def candidates(self, wallet: dict, window_days: int = PAIR_WINDOW_DAYS) -> list[str]:
+        targets, _ = self.targets(wallet)
+        day = _day(wallet["date"])
         if not targets or day is None:
             return []
         out = []
         for other in self.other_rows:
             if _cents(other["amount"]) not in targets or not self.pairable_other(other):
                 continue
+            if not self.reads_as(other, wallet):
+                continue
             other_day = _day(other["date"])
             if other_day is None or abs((other_day - day).days) > window_days:
                 continue
-            if (paypal["id"], other["id"]) in self.declined:
+            if (wallet["id"], other["id"]) in self.declined:
                 continue
-            if not self.owners_compatible(paypal["owner_id"], other["owner_id"]):
+            if not self.owners_compatible(wallet["owner_id"], other["owner_id"]):
                 continue
             out.append(other["id"])
         return out
 
-    def open_paypal_rows(self) -> list[dict]:
-        return [r for r in self.paypal_rows if not r["is_pending"] and r["id"] not in self.paired_paypal]
+    def open_wallet_rows(self) -> list[dict]:
+        return [r for r in self.wallet_rows if not r["is_pending"] and r["id"] not in self.paired_wallet]
 
 
 def _claim_cornered(wants: dict[str, list[str]]) -> list[str]:
-    """Let a PayPal row with one candidate claim it, and take it out of every other row's list.
+    """Let a wallet row with one candidate claim it, and take it out of every other row's list.
 
     A row with a single candidate can pair with that one or with nothing, so offering it to a row that
     could equally take something else is what strands the first row. Two same-amount payments days apart
@@ -291,33 +331,33 @@ def _claim_cornered(wants: dict[str, list[str]]) -> list[str]:
     stranded: list[str] = []
     while True:
         cornered: dict[str, list[str]] = defaultdict(list)
-        for paypal_id, found in wants.items():
+        for wallet_id, found in wants.items():
             if len(found) == 1:
-                cornered[found[0]].append(paypal_id)
+                cornered[found[0]].append(wallet_id)
         claims = {other_id: owners[0] for other_id, owners in cornered.items() if len(owners) == 1}
         taken = False
-        for paypal_id, found in wants.items():
-            left = [c for c in found if claims.get(c, paypal_id) == paypal_id]
+        for wallet_id, found in wants.items():
+            left = [c for c in found if claims.get(c, wallet_id) == wallet_id]
             if len(left) != len(found):
-                wants[paypal_id] = left
+                wants[wallet_id] = left
                 taken = True
         if not taken:
             return stranded
-        for paypal_id in [p for p, found in wants.items() if not found]:
-            del wants[paypal_id]
-            stranded.append(paypal_id)
+        for wallet_id in [p for p, found in wants.items() if not found]:
+            del wants[wallet_id]
+            stranded.append(wallet_id)
 
 
 def _analyze(ledger: _Ledger) -> dict:
-    """Split the unpaired PayPal rows into what pairs itself and what needs a person.
+    """Split the unpaired wallet rows into what pairs itself and what needs a person.
 
-    Returns ``{"auto": [(paypal_id, counterpart_id)], "choice": {paypal_id: [counterpart_id]},
-    "unmatched": [paypal_id], "wanted": {counterpart_id}}`` — `unmatched` holds only the rows that state a
-    counterpart exists, and `wanted` every counterpart some open PayPal row could take (before any claim,
+    Returns ``{"auto": [(wallet_id, counterpart_id)], "choice": {wallet_id: [counterpart_id]},
+    "unmatched": [wallet_id], "wanted": {counterpart_id}}`` — `unmatched` holds only the rows that state a
+    counterpart exists, and `wanted` every counterpart some open wallet row could take (before any claim,
     since a claimed row is accounted for by whoever claimed it)."""
     wants: dict[str, list[str]] = {}
     unmatched: list[str] = []
-    for row in ledger.open_paypal_rows():
+    for row in ledger.open_wallet_rows():
         found = ledger.candidates(row)
         if found:
             wants[row["id"]] = found
@@ -325,44 +365,44 @@ def _analyze(ledger: _Ledger) -> dict:
             unmatched.append(row["id"])
 
     wanted = {other_id for found in wants.values() for other_id in found}
-    unmatched.extend(p for p in _claim_cornered(wants) if ledger.targets(ledger.paypal_by_id[p])[1])
+    unmatched.extend(p for p in _claim_cornered(wants) if ledger.targets(ledger.wallet_by_id[p])[1])
 
     wanted_by: dict[str, list[str]] = defaultdict(list)
-    for paypal_id, found in wants.items():
+    for wallet_id, found in wants.items():
         for other_id in found:
-            wanted_by[other_id].append(paypal_id)
+            wanted_by[other_id].append(wallet_id)
 
-    # Connected clusters of PayPal rows and the candidates between them.
+    # Connected clusters of wallet rows and the candidates between them.
     seen: set[str] = set()
     auto: list[tuple[str, str]] = []
     choice: dict[str, list[str]] = {}
     for start in wants:
         if start in seen:
             continue
-        paypal_ids, other_ids, stack = set(), set(), [start]
+        wallet_ids, other_ids, stack = set(), set(), [start]
         while stack:
-            paypal_id = stack.pop()
-            if paypal_id in paypal_ids:
+            wallet_id = stack.pop()
+            if wallet_id in wallet_ids:
                 continue
-            paypal_ids.add(paypal_id)
-            for other_id in wants[paypal_id]:
+            wallet_ids.add(wallet_id)
+            for other_id in wants[wallet_id]:
                 other_ids.add(other_id)
-                stack.extend(p for p in wanted_by[other_id] if p not in paypal_ids)
-        seen |= paypal_ids
+                stack.extend(p for p in wanted_by[other_id] if p not in wallet_ids)
+        seen |= wallet_ids
 
         by_date = lambda ids, rows: sorted(ids, key=lambda i: (str(rows[i]["date"]), i))  # noqa: E731
-        amounts = {_cents(ledger.paypal_by_id[p]["amount"]) for p in paypal_ids}
+        amounts = {_cents(ledger.wallet_by_id[p]["amount"]) for p in wallet_ids}
         other_amounts = {_cents(ledger.other_by_id[c]["amount"]) for c in other_ids}
         interchangeable = (
-            len(paypal_ids) == len(other_ids)
+            len(wallet_ids) == len(other_ids)
             and len(amounts) == 1 and len(other_amounts) == 1
-            and all(set(wants[p]) == other_ids for p in paypal_ids)
+            and all(set(wants[p]) == other_ids for p in wallet_ids)
         )
         if interchangeable:
-            auto.extend(zip(by_date(paypal_ids, ledger.paypal_by_id), by_date(other_ids, ledger.other_by_id)))
+            auto.extend(zip(by_date(wallet_ids, ledger.wallet_by_id), by_date(other_ids, ledger.other_by_id)))
         else:
-            for paypal_id in paypal_ids:
-                choice[paypal_id] = wants[paypal_id]
+            for wallet_id in wallet_ids:
+                choice[wallet_id] = wants[wallet_id]
     return {"auto": auto, "choice": choice, "unmatched": unmatched, "wanted": wanted}
 
 
@@ -383,36 +423,43 @@ def _exclude(conn: sqlite3.Connection, row: dict) -> dict:
     return prior
 
 
-def _attach(conn: sqlite3.Connection, paypal: dict, other: dict, *, matched_by: str) -> str:
+def _changeable(row: dict) -> bool:
+    """Whether the pairing may move this row. Not when it is already money movement, nor when its category
+    is not what decides it: a split row's parts do, and a claimed row's category is what a reimbursement
+    record counts on."""
+    return not row["movement"] and not row["is_split"] and not row["reimbursed"]
+
+
+def _attach(conn: sqlite3.Connection, wallet: dict, other: dict, *, matched_by: str) -> str:
     """Record the pair and make its money count the way the pair says (see the module docstring): both
     rows excluded for a transfer, one side counted for a payment. What each changed row held is kept on
     the link for the reversal."""
     priors: dict[str, dict] = {}
-    transfer = (_cents(paypal["amount"]) > 0) != (_cents(other["amount"]) > 0)
+    transfer = (_cents(wallet["amount"]) > 0) != (_cents(other["amount"]) > 0)
     if transfer:
-        for row in (paypal, other):
-            if not row["excluded"] and not row["is_split"]:
+        for row in (wallet, other):
+            if _changeable(row):
                 priors[row["id"]] = _exclude(conn, row)
-    elif not paypal["excluded"] and not other["excluded"]:
+    elif not wallet["movement"] and _changeable(other):
         priors[other["id"]] = _exclude(conn, other)
     # The pair is one movement on two accounts, so a duplicate flag between its rows is answered.
-    clear_flag_between(conn, paypal["id"], other["id"])
+    clear_flag_between(conn, wallet["id"], other["id"])
     return txn_links.create_link(
         conn, LINK_KIND,
-        [(paypal["id"], PAYPAL_ROLE), (other["id"], COUNTERPART_ROLE)],
+        [(wallet["id"], WALLET_ROLE), (other["id"], COUNTERPART_ROLE)],
         metadata={"priors": priors, "matched_by": matched_by},
     )
 
 
 def funding_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
-    """Every paired (PayPal row, counterpart row), as id pairs sorted low to high."""
+    """Every paired (wallet row, counterpart row), as id pairs sorted low to high."""
     rows = conn.execute(
         """SELECT MIN(p.txn_id, c.txn_id) AS low, MAX(p.txn_id, c.txn_id) AS high
            FROM   txn_link l
            JOIN   txn_link_member p ON p.link_id = l.id AND p.role = ?
            JOIN   txn_link_member c ON c.link_id = l.id AND c.role = ?
            WHERE  l.kind = ?""",
-        (PAYPAL_ROLE, COUNTERPART_ROLE, LINK_KIND),
+        (WALLET_ROLE, COUNTERPART_ROLE, LINK_KIND),
     ).fetchall()
     return {(r["low"], r["high"]) for r in rows}
 
@@ -450,14 +497,15 @@ def _heal(conn: sqlite3.Connection) -> int:
     longer allow. Returns the number of links removed.
 
     A member row cascades away with its transaction, but the link itself has no foreign key, so a pairing
-    whose PayPal row was hard-deleted (emptied from Trash, removed with an account merge) would otherwise go
+    whose wallet row was hard-deleted (emptied from Trash, removed with an account merge) would otherwise go
     on excluding its bank row with nothing left to count the money.
 
-    What may pair is read from the accounts, which the user can edit: the PayPal row on a PayPal-type
+    What may pair is read from the accounts, which the user can edit: the wallet row on a wallet-type
     account, the counterpart on one that is not, and owners compatible as a candidate's must be. A pairing
     an edit has put outside that is released as an unpairing would be, since the exclusion it applied no
-    longer has a PayPal record behind it. Decisions are kept: they act on nothing meanwhile, and apply again
-    if the account is set back."""
+    longer has a wallet record behind it. Decisions are kept: they act on nothing meanwhile, and apply again
+    if the account is set back. A change of match text releases nothing: it decides what is offered, and a
+    pair already made was made on its own evidence or by the user."""
     stale = conn.execute(
         """SELECT l.id, l.kind, COUNT(m.txn_id) AS members
            FROM   txn_link l LEFT JOIN txn_link_member m ON m.link_id = l.id
@@ -476,9 +524,9 @@ def _heal(conn: sqlite3.Connection) -> int:
     disallowed = [
         r["id"] for r in conn.execute(
             f"""SELECT l.id,
-                       {_paypal_account_clause('pa', 'ppa')} AS paypal_on_paypal,
-                       {_paypal_account_clause('ca', 'cpa')} AS counterpart_on_paypal,
-                       COALESCE(pa.owner_id, ppa.owner_id) AS paypal_owner,
+                       {wallet_account_clause('pa', 'ppa')} AS wallet_on_wallet,
+                       {wallet_account_clause('ca', 'cpa')} AS counterpart_on_wallet,
+                       COALESCE(pa.owner_id, ppa.owner_id) AS wallet_owner,
                        COALESCE(ca.owner_id, cpa.owner_id) AS counterpart_owner
                 FROM   txn_link l
                 JOIN   txn_link_member pm ON pm.link_id = l.id AND pm.role = ?
@@ -490,27 +538,27 @@ def _heal(conn: sqlite3.Connection) -> int:
                 JOIN   account ca ON ca.id = ct.account_id
                 LEFT   JOIN account cpa ON cpa.id = ca.parent_account_id
                 WHERE  l.kind = ?""",
-            (PAYPAL_ROLE, COUNTERPART_ROLE, LINK_KIND),
+            (WALLET_ROLE, COUNTERPART_ROLE, LINK_KIND),
         ).fetchall()
-        if not r["paypal_on_paypal"] or r["counterpart_on_paypal"]
-        or not _owners_compatible(shared_owner_id, r["paypal_owner"], r["counterpart_owner"])
+        if not r["wallet_on_wallet"] or r["counterpart_on_wallet"]
+        or not _owners_compatible(shared_owner_id, r["wallet_owner"], r["counterpart_owner"])
     ]
     for link_id in disallowed:
         _release(conn, link_id)
     return len(stale) + len(disallowed)
 
 
-def pair_paypal_funding(conn: sqlite3.Connection) -> dict:
+def pair_wallet_rows(conn: sqlite3.Connection) -> dict:
     """The pass run after every import and sync: heal what lost its rows, then apply every unambiguous
-    pairing. Returns ``{"paired": n, "healed": n}``. Healing runs even with no PayPal account left, since
+    pairing. Returns ``{"paired": n, "healed": n}``. Healing runs even with no wallet account left, since
     retyping the last one is what leaves its pairings to release."""
     healed = _heal(conn)
-    if not has_paypal_account(conn):
+    if not has_wallet_account(conn):
         return {"paired": 0, "healed": healed}
     ledger = _Ledger(conn)
     analysis = _analyze(ledger)
-    for paypal_id, other_id in analysis["auto"]:
-        _attach(conn, ledger.paypal_by_id[paypal_id], ledger.other_by_id[other_id], matched_by="auto")
+    for wallet_id, other_id in analysis["auto"]:
+        _attach(conn, ledger.wallet_by_id[wallet_id], ledger.other_by_id[other_id], matched_by="auto")
     return {"paired": len(analysis["auto"]), "healed": healed}
 
 
@@ -521,41 +569,42 @@ def pair_after_decision(conn: sqlite3.Connection) -> int:
     could have been, and declining one releases it. The pass otherwise runs only after an import, a sync or
     an account change, so a row that a decision had just made unambiguous dropped out of the review —
     there is nothing left to ask about it — while nothing actually paired it, and its bank row went on
-    counting beside the PayPal row until the next ingest happened to run the pass. Claiming makes that reachable from more decisions than
-    it used to be, since settling one row can now cascade through the rows it was cornered against.
+    counting beside the wallet row until the next ingest happened to run the pass. Claiming makes that
+    reachable from more decisions than it used to be, since settling one row can now cascade through the
+    rows it was cornered against.
 
     Best-effort and deliberately *after* the decision's own write: the decision is what the user asked for
     and stands whatever this finds, so a failure here is logged rather than allowed to undo it.
     """
     try:
-        return pair_paypal_funding(conn)["paired"]
+        return pair_wallet_rows(conn)["paired"]
     except Exception as e:
-        log_error(f"[paypal-funding] pairing after a review decision failed: {e}", exc_info=e)
+        log_error(f"[wallet-funding] pairing after a review decision failed: {e}", exc_info=e)
         return 0
 
 
 def pair_after_ingest(connection) -> None:
     """Run the pass once new rows are committed, in the connection context manager given. An import or a
-    sync can bring either side of a pair — the PayPal row or the bank row that arrives days later — so both
+    sync can bring either side of a pair — the wallet row or the bank row that arrives days later — so both
     run it. Like the duplicate sweep it runs after the ingest transaction, never inside it, and a failure
     is logged rather than allowed to fail the import or sync that already landed its rows. An account
     settings change runs the pass through `services/account_settings_followups.py`."""
     try:
         with connection as conn:
-            pair_paypal_funding(conn)
+            pair_wallet_rows(conn)
     except Exception as e:
-        log_error(f"[paypal-funding] pairing pass failed: {e}", exc_info=e)
+        log_error(f"[wallet-funding] pairing pass failed: {e}", exc_info=e)
 
 
 # --- The review ------------------------------------------------------------------------------------------
 
 def _scoped(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> dict:
-    """The review's rows as ids, over the whole ledger or one import's PayPal rows."""
-    def in_scope(paypal_id: str) -> bool:
-        return batch_id is None or ledger.paypal_by_id.get(paypal_id, {}).get("import_batch_id") == batch_id
+    """The review's rows as ids, over the whole ledger or one import's wallet rows."""
+    def in_scope(wallet_id: str) -> bool:
+        return batch_id is None or ledger.wallet_by_id.get(wallet_id, {}).get("import_batch_id") == batch_id
 
     return {
-        "matched": [(link_id, pair) for link_id, pair in ledger.pairs.items() if in_scope(pair["paypal"])],
+        "matched": [(link_id, pair) for link_id, pair in ledger.pairs.items() if in_scope(pair["wallet"])],
         "choice": {p: cands for p, cands in analysis["choice"].items() if in_scope(p)},
         "unmatched": [p for p in analysis["unmatched"] if in_scope(p)],
         "unaccounted": _unaccounted(ledger, analysis, batch_id),
@@ -563,8 +612,8 @@ def _scoped(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> dict:
 
 
 def _attention_ids(ledger: _Ledger, scoped: dict) -> list[str]:
-    """What needs the user, as the rows it is about: a PayPal row with a choice of candidates, the one bank
-    or card row that several PayPal rows are cornered on, and each unmatched or unaccounted row not yet
+    """What needs the user, as the rows it is about: a wallet row with a choice of candidates, the one bank
+    or card row that several wallet rows are cornered on, and each unmatched or unaccounted row not yet
     acknowledged.
 
     A shortage is **one** decision however many rows it settles — giving the transaction to one of them
@@ -572,7 +621,7 @@ def _attention_ids(ledger: _Ledger, scoped: dict) -> list[str]:
     cornered row would have the card promise twice the work it lists. Naming it by the contested row also
     counts it once across cards when the rows cornered on it arrived with different files, the same way an
     unaccounted row listed by several cards is counted once."""
-    choices = [paypal_id if len(cands) > 1 else cands[0] for paypal_id, cands in scoped["choice"].items()]
+    choices = [wallet_id if len(cands) > 1 else cands[0] for wallet_id, cands in scoped["choice"].items()]
     return (list(dict.fromkeys(choices))
             + [p for p in scoped["unmatched"] if p not in ledger.reviewed]
             + [c for c in scoped["unaccounted"] if c not in ledger.reviewed])
@@ -582,23 +631,24 @@ def _attention(ledger: _Ledger, scoped: dict) -> int:
     return len(_attention_ids(ledger, scoped))
 
 
-def paypal_funding_report(conn: sqlite3.Connection, batch_id: Optional[str] = None) -> dict:
-    """The review of every PayPal row's pairing, or — with `batch_id` — of the rows one import brought in.
+def wallet_pair_report(conn: sqlite3.Connection, batch_id: Optional[str] = None) -> dict:
+    """The review of every wallet row's pairing, or — with `batch_id` — of the rows one import brought in.
 
-      * matched          — a PayPal row and the bank or card row paired with it
-      * choice           — a PayPal row with several candidates, none preferred
-      * unmatched        — a PayPal row that says money crossed to another account, with no candidate
-      * unaccounted      — a PayPal-looking bank or card row nothing pairs with, on an account that funds
-                           a PayPal account, within the dates that account's rows cover
+      * matched          — a wallet row and the bank or card row paired with it
+      * choice           — a wallet row with several candidates, none preferred
+      * unmatched        — a wallet row that says money crossed to another account, with no candidate
+      * unaccounted      — a bank or card row naming a wallet that nothing pairs with, on an account that
+                           funds that wallet, within the dates the wallet's rows cover
+      * wallet_names     — the wallets the review covers, which is what the review is called by
 
     Read-only: the pairing itself runs after imports and syncs, never from a report."""
-    if not has_paypal_account(conn):
-        return {"matched": [], "choice": [], "unmatched": [], "unaccounted": []}
+    if not has_wallet_account(conn):
+        return {"matched": [], "choice": [], "unmatched": [], "unaccounted": [], "wallet_names": []}
     ledger = _Ledger(conn)
     scoped = _scoped(ledger, _analyze(ledger), batch_id)
     matched, choice = scoped["matched"], scoped["choice"]
 
-    ids = {pair["paypal"] for _, pair in matched} | {pair["counterpart"] for _, pair in matched}
+    ids = {pair["wallet"] for _, pair in matched} | {pair["counterpart"] for _, pair in matched}
     ids |= set(choice) | {c for cands in choice.values() for c in cands}
     ids |= set(scoped["unmatched"]) | set(scoped["unaccounted"])
     summaries = txn_summaries(conn, ids)
@@ -606,31 +656,46 @@ def paypal_funding_report(conn: sqlite3.Connection, batch_id: Optional[str] = No
 
     return {
         "matched": [
-            {"link_id": link_id, "paypal": summaries.get(pair["paypal"]), "counterpart": summaries.get(pair["counterpart"]),
+            {"link_id": link_id, "wallet": summaries.get(pair["wallet"]), "counterpart": summaries.get(pair["counterpart"]),
              "matched_by": link_meta[link_id].get("matched_by")}
             for link_id, pair in matched
         ],
         "choice": [
-            {"paypal": summaries.get(p), "candidates": [summaries.get(c) for c in cands]}
+            {"wallet": summaries.get(p), "candidates": [summaries.get(c) for c in cands]}
             for p, cands in choice.items()
         ],
-        "unmatched": [{"paypal": summaries.get(p), "reviewed": p in ledger.reviewed} for p in scoped["unmatched"]],
+        "unmatched": [{"wallet": summaries.get(p), "reviewed": p in ledger.reviewed} for p in scoped["unmatched"]],
         "unaccounted": [{**summaries.get(c, {}), "reviewed": c in ledger.reviewed} for c in scoped["unaccounted"]],
+        "wallet_names": _wallet_names(conn, ledger, batch_id),
     }
 
 
+def _wallet_names(conn: sqlite3.Connection, ledger: _Ledger, batch_id: Optional[str]) -> list[str]:
+    """The display names of the wallets whose rows the review covers, by name."""
+    roots = sorted({r["root_id"] for r in ledger.wallet_rows if batch_id is None or r["import_batch_id"] == batch_id})
+    if not roots:
+        return []
+    rows = conn.execute(
+        f"SELECT DISTINCT COALESCE(display_name, name) AS label FROM account WHERE id IN ({','.join('?' * len(roots))})",
+        roots,
+    ).fetchall()
+    return sorted({r["label"] for r in rows if r["label"]}, key=str.casefold)
+
+
 def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> list[str]:
-    """PayPal-looking bank and card rows nothing pairs with. Only accounts already paired with a PayPal
-    account are looked at, and only within the dates that PayPal account's rows cover: a PayPal-looking
-    charge elsewhere belongs to a PayPal account the ledger does not track, where it is the only record and
-    is counted correctly as it is. Scoped to one import, the dates are that import's."""
-    funds: dict[str, set[str]] = defaultdict(set)   # funding account root → PayPal account roots
+    """Bank and card rows naming a wallet that nothing pairs with. Only accounts already paired with that
+    wallet are looked at, and only within the dates the wallet's rows cover: such a charge elsewhere
+    belongs to a wallet the ledger does not track, where it is the only record and is counted correctly as
+    it is. Scoped to one import, the dates are that import's."""
+    funds: dict[str, set[str]] = defaultdict(set)   # funding account root → wallet account roots
     for pair in ledger.pairs.values():
-        paypal, other = ledger.paypal_by_id.get(pair["paypal"]), ledger.other_by_id.get(pair["counterpart"])
-        if paypal and other:
-            funds[other["root_id"]].add(paypal["root_id"])
+        wallet, other = ledger.wallet_by_id.get(pair["wallet"]), ledger.other_by_id.get(pair["counterpart"])
+        if wallet and other:
+            funds[other["root_id"]].add(wallet["root_id"])
     spans: dict[str, tuple[str, str]] = {}
-    for row in ledger.paypal_rows:
+    wallet_of_root: dict[str, dict] = {}
+    for row in ledger.wallet_rows:
+        wallet_of_root.setdefault(row["root_id"], row)
         if batch_id is not None and row["import_batch_id"] != batch_id:
             continue
         lo, hi = spans.get(row["root_id"], (row["date"], row["date"]))
@@ -639,45 +704,45 @@ def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> li
     for other in ledger.other_rows:
         if other["id"] in analysis["wanted"] or not ledger.pairable_other(other):
             continue
-        for paypal_root in funds.get(other["root_id"], ()):
-            span = spans.get(paypal_root)
-            if span and span[0] <= other["date"] <= span[1]:
+        for wallet_root in funds.get(other["root_id"], ()):
+            span = spans.get(wallet_root)
+            if span and span[0] <= other["date"] <= span[1] and ledger.reads_as(other, wallet_of_root[wallet_root]):
                 out.append(other["id"])
                 break
     return sorted(out, key=lambda i: ledger.other_by_id[i]["date"])
 
 
-LEDGER_ATTENTION_KEY = "paypal_funding_attention"
+LEDGER_ATTENTION_KEY = "wallet_pair_attention"
 
 
 def ledger_attention_count(conn: sqlite3.Connection) -> int:
     """The whole review's attention count — the Tasks nag — cached against the reconciliation epoch."""
     def compute(c: sqlite3.Connection) -> int:
-        if not has_paypal_account(c):
+        if not has_wallet_account(c):
             return 0
         ledger = _Ledger(c)
         return _attention(ledger, _scoped(ledger, _analyze(ledger), None))
     return ledger_attention(conn, LEDGER_ATTENTION_KEY, compute)
 
 
-CARDS_KEY = "paypal_funding_cards"
+CARDS_KEY = "wallet_pair_cards"
 
 
 def card_counts(conn: sqlite3.Connection) -> dict[str, dict]:
     """Each import or sync card whose share of the review has anything in it, as
     `{batch_id: {"rows": n, "attention_ids": [...]}}` — how many rows its review lists, and the rows that
-    need the user. A card whose PayPal rows have no other side (a payment from the balance, a hold) has
+    need the user. A card whose wallet rows have no other side (a payment from the balance, a hold) has
     nothing to show and is left out, so it offers no way into an empty review. The attention is ids rather
-    than a count so a total over several cards can count each row once: a bank row with no PayPal record is
+    than a count so a total over several cards can count each row once: a bank row with no wallet record is
     listed by every card whose dates cover it. One analysis serves every card, cached against the
     reconciliation epoch."""
     def compute(c: sqlite3.Connection) -> dict:
-        if not has_paypal_account(c):
+        if not has_wallet_account(c):
             return {}
         ledger = _Ledger(c)
         analysis = _analyze(ledger)
         out = {}
-        for batch_id in sorted({r["import_batch_id"] for r in ledger.paypal_rows if r["import_batch_id"]}):
+        for batch_id in sorted({r["import_batch_id"] for r in ledger.wallet_rows if r["import_batch_id"]}):
             scoped = _scoped(ledger, analysis, batch_id)
             rows = sum(len(scoped[k]) for k in ("matched", "choice", "unmatched", "unaccounted"))
             if rows:
@@ -692,23 +757,23 @@ class PairingError(ValueError):
     pass
 
 
-def pair_rows(conn: sqlite3.Connection, paypal_txn_id: str, counterpart_txn_id: str) -> str:
-    """Pair a PayPal row with a bank or card row the user picked. Refused when either side is already
-    paired or claimed, or the rows are on the wrong kinds of account; an amount that differs is the
-    user's call and is allowed."""
+def pair_rows(conn: sqlite3.Connection, wallet_txn_id: str, counterpart_txn_id: str) -> str:
+    """Pair a wallet row with a bank or card row the user picked. Refused when either side is already
+    paired or claimed, the rows are on the wrong kinds of account, or the bank or card row does not name
+    the wallet; an amount that differs is the user's call and is allowed."""
     ledger = _Ledger(conn)
-    paypal = ledger.paypal_by_id.get(paypal_txn_id)
+    wallet = ledger.wallet_by_id.get(wallet_txn_id)
     other = ledger.other_by_id.get(counterpart_txn_id)
-    if not paypal:
-        raise PairingError("That is not a PayPal transaction.")
-    if not other:
-        raise PairingError("That transaction is not a PayPal charge or deposit on another account.")
-    if paypal_txn_id in ledger.paired_paypal:
-        raise PairingError("That PayPal transaction is already matched.")
+    if not wallet:
+        raise PairingError("That is not a wallet transaction.")
+    if not other or not ledger.reads_as(other, wallet):
+        raise PairingError("That transaction is not a charge or deposit from this wallet on another account.")
+    if wallet_txn_id in ledger.paired_wallet:
+        raise PairingError("That wallet transaction is already matched.")
     if not ledger.pairable_other(other):
         raise PairingError("That transaction is already accounted for.")
-    _release_verdicts(conn, [paypal_txn_id, counterpart_txn_id], pair=(paypal_txn_id, counterpart_txn_id))
-    return _attach(conn, paypal, other, matched_by="user")
+    _release_verdicts(conn, [wallet_txn_id, counterpart_txn_id], pair=(wallet_txn_id, counterpart_txn_id))
+    return _attach(conn, wallet, other, matched_by="user")
 
 
 def unpair(conn: sqlite3.Connection, link_ids: Iterable[str]) -> int:
@@ -720,31 +785,31 @@ def unpair(conn: sqlite3.Connection, link_ids: Iterable[str]) -> int:
         if not link:
             continue
         roles = {m["role"]: m["txn_id"] for m in link["members"]}
-        if roles.get(PAYPAL_ROLE) and roles.get(COUNTERPART_ROLE):
-            decline(conn, roles[PAYPAL_ROLE], [roles[COUNTERPART_ROLE]])
+        if roles.get(WALLET_ROLE) and roles.get(COUNTERPART_ROLE):
+            decline(conn, roles[WALLET_ROLE], [roles[COUNTERPART_ROLE]])
         done += 1
     return done
 
 
-def decline(conn: sqlite3.Connection, paypal_txn_id: str, counterpart_txn_ids: Iterable[str]) -> int:
-    """Record that none of these rows is this PayPal row's counterpart."""
+def decline(conn: sqlite3.Connection, wallet_txn_id: str, counterpart_txn_ids: Iterable[str]) -> int:
+    """Record that none of these rows is this wallet row's counterpart."""
     count = 0
-    existing = set(_declined_pairs(conn, paypal_txn_id))
+    existing = set(_declined_pairs(conn, wallet_txn_id))
     for counterpart_id in counterpart_txn_ids:
         if counterpart_id in existing:
             continue
-        txn_links.create_link(conn, DECLINED_KIND, [(paypal_txn_id, PAYPAL_ROLE), (counterpart_id, COUNTERPART_ROLE)])
+        txn_links.create_link(conn, DECLINED_KIND, [(wallet_txn_id, WALLET_ROLE), (counterpart_id, COUNTERPART_ROLE)])
         count += 1
     return count
 
 
-def _declined_pairs(conn: sqlite3.Connection, paypal_txn_id: str) -> list[str]:
+def _declined_pairs(conn: sqlite3.Connection, wallet_txn_id: str) -> list[str]:
     rows = conn.execute(
         """SELECT c.txn_id FROM txn_link l
            JOIN txn_link_member p ON p.link_id = l.id AND p.role = ? AND p.txn_id = ?
            JOIN txn_link_member c ON c.link_id = l.id AND c.role = ?
            WHERE l.kind = ?""",
-        (PAYPAL_ROLE, paypal_txn_id, COUNTERPART_ROLE, DECLINED_KIND),
+        (WALLET_ROLE, wallet_txn_id, COUNTERPART_ROLE, DECLINED_KIND),
     ).fetchall()
     return [r["txn_id"] for r in rows]
 
@@ -760,7 +825,7 @@ def _release_verdicts(conn: sqlite3.Connection, txn_ids: list[str], *, pair: Opt
                    JOIN txn_link_member p ON p.link_id = l.id AND p.role = ? AND p.txn_id = ?
                    JOIN txn_link_member c ON c.link_id = l.id AND c.role = ? AND c.txn_id = ?
                    WHERE l.kind = ?""",
-                (PAYPAL_ROLE, pair[0], COUNTERPART_ROLE, pair[1], DECLINED_KIND),
+                (WALLET_ROLE, pair[0], COUNTERPART_ROLE, pair[1], DECLINED_KIND),
             ).fetchall()
         ]:
             txn_links.delete_link(conn, link_id)
@@ -788,26 +853,28 @@ def set_reviewed(conn: sqlite3.Connection, txn_ids: Iterable[str], *, reviewed: 
     return changed
 
 
-def picker_candidates(conn: sqlite3.Connection, paypal_txn_id: str) -> list[dict]:
-    """What the manual picker offers for one PayPal row: every PayPal-looking bank or card row within
+def picker_candidates(conn: sqlite3.Connection, wallet_txn_id: str) -> list[dict]:
+    """What the manual picker offers for one wallet row: every bank or card row naming that wallet within
     `PICKER_WINDOW_DAYS` that is free to pair, whatever its amount, nearest first."""
     ledger = _Ledger(conn)
-    paypal = ledger.paypal_by_id.get(paypal_txn_id)
-    day = _day(paypal["date"]) if paypal else None
+    wallet = ledger.wallet_by_id.get(wallet_txn_id)
+    day = _day(wallet["date"]) if wallet else None
     if day is None:
         return []
-    ids = []
+    near: list[tuple[int, str, str]] = []
     for other in ledger.other_rows:
         other_day = _day(other["date"])
         if other_day is None or abs((other_day - day).days) > PICKER_WINDOW_DAYS:
             continue
-        if ledger.pairable_other(other) and ledger.owners_compatible(paypal["owner_id"], other["owner_id"]):
-            ids.append(other["id"])
+        if (ledger.pairable_other(other) and ledger.reads_as(other, wallet)
+                and ledger.owners_compatible(wallet["owner_id"], other["owner_id"])):
+            near.append((abs((other_day - day).days), str(other["date"]), other["id"]))
+    ids = [txn_id for _, _, txn_id in sorted(near)]
     summaries = txn_summaries(conn, ids)
     return [summaries[i] for i in ids if i in summaries]
 
 
-def reverse_batch_paypal_funding(conn: sqlite3.Connection, batch_id: str) -> int:
+def reverse_batch_wallet_pairs(conn: sqlite3.Connection, batch_id: str) -> int:
     """Undo the pairings that involve a batch's rows, before those rows are deleted: a bank or card row
     outside the batch gets its category back, and the link goes. Decisions about the batch's rows go with
     them. Returns the number of pairings reversed."""

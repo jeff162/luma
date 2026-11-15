@@ -23,9 +23,9 @@ effect. Do not add a row because two things are merely adjacent.
 | **Multi-payment purchase** | **N payments** → one purchase | Several real movements of money — a deposit and a balance, an instalment plan — together bought one thing. Each is already recorded correctly; only the *relationship* is missing. | `data-model.md` → *Multi-payment purchases*; `services/purchase_links.py` |
 | **Recurring series** | an **open-ended cadence** | The payments repeat on a schedule with no known end and no total — a subscription, a bill, a mortgage. Carries a next-due date, an amount band and a lifecycle. | `data-model.md` → *Recurring series* |
 | **Reimbursable expense** | an **offset crossing a period boundary** | Money went out and is expected back, and the two sides may land in different reporting periods — which is what makes the untreated numbers *wrong* rather than merely unrelated. | `data-model.md` → *Reimbursable expenses* |
-| **PayPal funding pair** | **one movement, two accounts** — PayPal and the card or bank on the other side | A tracked PayPal account's row and the "PAYPAL…" row the same money left on a card or bank. Made automatically after imports and syncs; decides which side counts. Not a duplicate (two different accounts really did move money) and not a split. | `data-model.md` → *PayPal funding pairs*; `services/paypal_funding.py` |
+| **Wallet funding pair** | **one movement, two accounts** — a wallet (PayPal, a payment app) and the card or bank on the other side | A tracked wallet's row and the row naming the wallet that the same money left on, or arrived at, a card or bank. Made automatically after imports and syncs; decides which side counts. Not a duplicate (two different accounts really did move money) and not a split. | `data-model.md` → *Wallet funding pairs*; `services/wallet_pairs.py` |
 | **Refund pair** | **money back → the payment it returns** | A source states which payment a refund returns (a PayPal statement's `Ref ID`). Made automatically after imports; the refund takes and follows the payment's category so the two net inside it. | `data-model.md` → *Refunds*; `services/refund_links.py` |
-| **`txn_link`** | the general **association primitive** | You need to say "these transactions belong together" under some new `kind`. Purchases, reimbursements, marketplace order itemization, wallet funding-leg suppression, PayPal funding pairs and refund pairs are its clients. | `data-model.md` → *Transaction links and Amazon order import* |
+| **`txn_link`** | the general **association primitive** | You need to say "these transactions belong together" under some new `kind`. Purchases, reimbursements, marketplace order itemization, wallet funding-leg suppression, wallet funding pairs and refund pairs are its clients. | `data-model.md` → *Transaction links and Amazon order import* |
 | **`exclude_from_totals`** | **money movement, not activity** | The money did not enter or leave the household — a transfer between own accounts, a credit-card payment. Set on the category (or its group), never per transaction. | `data-model.md` → *Categories*, *Reporting assumptions* |
 
 ## The pairs that actually get confused
@@ -58,7 +58,7 @@ infers one from amounts.
 **A `txn_link` is pure association by default, and several of its clients are not.** Creating or
 deleting a link never mutates the transactions it links — no category change, no exclusion, no amount
 change. That is what makes grouping a purchase incapable of breaking a total that was already right.
-But marketplace itemization, wallet funding-leg suppression and PayPal funding pairs exist to stop the
+But marketplace itemization, wallet funding-leg suppression and wallet funding pairs exist to stop the
 *same* money counting twice, and a refund pair to make money back net against its payment, so each
 **recategorizes a row and must stash the prior in `metadata_json` to reverse it**. A new client must
 decide which of those two shapes it is, and say so.

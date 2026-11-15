@@ -1591,7 +1591,7 @@ def release_contested_candidates(matched_entries: list[dict]) -> int:
     card leg of the same amount, and each leg found the *other* day's purchase or refund — the only
     same-amount row in reach — while that row's own same-day, same-wording twin was claiming it too.
     Auto-enrich then folded the leg's `Type` into the wrong row, and a refund that reads as a card
-    deposit is what the PayPal reconciliation went looking for a counterpart for.
+    deposit is what the wallet reconciliation went looking for a counterpart for.
 
     Only a **sole**, **worded**, **strictly stronger** claim releases a candidate (`_sole_claims`), and
     only a same-account one (`_outclaimed`): a row naming several candidates might be any of them, two
@@ -2897,10 +2897,10 @@ def account_types_can_match(type_a: Optional[str], type_b: Optional[str]) -> boo
 
 def _never_duplicates(conn: sqlite3.Connection) -> Callable[[str, Optional[str], str, Optional[str]], bool]:
     """A test, for both sweeps, of whether two rows (each with its account's effective type) can never be
-    a duplicate pair: their account types cannot be one account, the rows are a PayPal funding pair, or
+    a duplicate pair: their account types cannot be one account, the rows are a wallet funding pair, or
     they are the charges of two different Amazon orders."""
-    # Imported here: `services.paypal_funding` imports this module.
-    from backend.services.paypal_funding import funding_pairs
+    # Imported here: `services.wallet_pairs` imports this module.
+    from backend.services.wallet_pairs import funding_pairs
     paired = funding_pairs(conn)
     order_of = amazon_order_of_charge(conn)
 

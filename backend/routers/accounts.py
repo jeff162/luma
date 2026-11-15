@@ -53,6 +53,12 @@ from backend.services.account_references import (
 from backend.services.account_groups import set_account_parent
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_settings_followups import settle_account_change
+from backend.services.wallet_accounts import (
+    MatchTextError,
+    clean_match_text,
+    fill_wallet_match_text,
+    match_text_after_retype,
+)
 from backend.services.recurring_detection import settle_owed_rescans
 
 router = APIRouter()
@@ -68,6 +74,8 @@ class AccountUpdate(BaseModel):
     owner_id: Optional[str] = None
     name: Optional[str] = None
     type: Optional[str] = None
+    # A wallet's text to find its other side by (services/wallet_accounts.py); "" is none.
+    wallet_match_text: Optional[str] = None
 
 
 class AccountAttachRequest(BaseModel):
@@ -119,6 +127,7 @@ def _get_account_row(conn, account_id: str):
             a.institution,
             a.type,
             a.subtype,
+            a.wallet_match_text,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -157,6 +166,7 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.institution,
             a.type,
             a.subtype,
+            a.wallet_match_text,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -339,6 +349,7 @@ def create_account(body: AccountCreate):
             """,
             (account_id, name, name, account_type, owner_id),
         )
+        fill_wallet_match_text(conn, [account_id])
         row = _get_account_row(conn, account_id)
     return _serialize_account(row)
 
@@ -372,6 +383,16 @@ def update_account(account_id: str, body: AccountUpdate):
                 "UPDATE account SET type = ? WHERE id = ?",
                 (next_type, account_id),
             )
+            if settings_changed:
+                match_text_after_retype(conn, account_id, next_type)
+
+        if body.wallet_match_text is not None:
+            try:
+                next_text = clean_match_text(body.wallet_match_text)
+            except MatchTextError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            settings_changed = settings_changed or next_text != (acc["wallet_match_text"] or "")
+            conn.execute("UPDATE account SET wallet_match_text = ? WHERE id = ?", (next_text, account_id))
 
         if body.owner_id is not None:
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)

@@ -135,8 +135,8 @@ lands until the user says what each provider account is.
 
 ### Type
 
-`account.type` is one of `depository`, `credit`, `savings`, `loan`, `investment`, `p2p`, `other`, the
-marketplace `amazon`, or the wallet `paypal`. It is user-editable, and it is what the account-type rule
+`account.type` is one of `depository`, `credit`, `savings`, `loan`, `investment`, `other`, the
+marketplace `amazon`, or one of the two wallets, `paypal` and `p2p`. It is user-editable, and it is what the account-type rule
 scope and the account-type filter match (see [Rules](#rules) and *One facet registry, both halves*). Both
 read the type of the row's *effective* account, so a merged child counts as its group's type.
 
@@ -146,6 +146,22 @@ read the type of the row's *effective* account, so a merged child counts as its 
   account type. A non-generic type the user set is never overwritten.
 - `amazon` is a marketplace kind and is hidden from the generic CSV importer. `paypal` is not; PayPal
   files use the generic importer.
+
+**A wallet is what the type says, never a separate switch** (`services/wallet_accounts.py`): an account
+that pays from a bank or card and cashes out to one, whose rows form
+[wallet funding pairs](#wallet-funding-pairs). Credit, loan and the deposit types are not wallets: a card
+purchase has no same-time mirror on another account, and its later payment is an ordinary transfer.
+
+- **`account.wallet_match_text`** is the text a bank or card row contains when it is this wallet's other
+  side; the type does not name the service. NULL is never set, and is filled the moment an account becomes
+  a wallet (`fill_wallet_match_text`, from every write that creates or retypes an account): `PayPal` for a
+  `paypal` account, else the account's name, else its institution. The name comes first because a
+  provider's institution label carries suffixes no bank descriptor repeats.
+- **Becoming `paypal` sets `PayPal`** whatever the text was, since the type names the service. Any other
+  retype keeps the text.
+- **`''` is the user saying this wallet has nothing to find**, and is kept. Text is otherwise at least
+  three characters, since shorter text matches inside unrelated descriptors.
+- It is read from the group root when that has a value, else from the row's own account, the way type is.
 
 ### Names and labels
 
@@ -390,7 +406,7 @@ uncategorized.
   saving a split or a reimbursement's allocations — the row has plainly been looked at — or by an
   explicit mark-reviewed, per row or over a whole import card. Automatic categorization never clears it.
 - **Cleared on a row a pairing moves into the background**: an Amazon card charge linked to its order, and
-  whatever a PayPal funding pair excludes. The row that counts carries the review, and there is nothing
+  whatever a wallet funding pair excludes. The row that counts carries the review, and there is nothing
   left to decide about the excluded one. The pairing keeps the old value with the prior category it already
   keeps, and undoing the pairing raises the flag again only if it was raised before
   (`services/review_flagging.py`).
@@ -1460,7 +1476,7 @@ never blocked.
     Deposit-like types (`depository`, `savings`, `p2p`, `paypal`) count as one, because a wallet sits as
     `depository` until it is typed and a savings account can arrive typed `depository`. `other` and a
     missing type match anything.
-  - rows linked as a [PayPal funding pair](#paypal-funding-pairs).
+  - rows linked as a [wallet funding pair](#wallet-funding-pairs).
   - charges of two different [Amazon orders](#amazon-orders): two orders paid, so two payments, however
     the orders were paired with them. Two charges of one order are still compared, since two copies of a
     charge can add up to the order's total and be accepted as its split shipments. Linking a charge clears
@@ -1973,8 +1989,8 @@ kind-specific data.
 | --- | --- | --- |
 | `amazon_order` | `order`, `charge` | the charge moves to the excluded *Amazon Funding* leaf |
 | `wallet_funding` | `leg`, `purchase` (or `refund`) | the leg moves to the excluded *Money movement* leaf |
-| `paypal_funding` | `paypal`, `counterpart` | one or both rows are excluded (see [PayPal funding pairs](#paypal-funding-pairs)) |
-| `paypal_funding_declined`, `paypal_funding_reviewed` | — | nothing; they record a decision |
+| `wallet_pair` | `wallet`, `counterpart` | one or both rows are excluded (see [Wallet funding pairs](#wallet-funding-pairs)) |
+| `wallet_pair_declined`, `wallet_pair_reviewed` | — | nothing; they record a decision |
 | `refund` | `payment`, `refund` | the refund takes the payment's category (see [Refunds](#refunds)) |
 | `purchase` | `payment` | nothing (see [Multi-payment purchases](#multi-payment-purchases)) |
 | `reimbursement` | derived | nothing (see [Reimbursable expenses](#reimbursable-expenses)) |
@@ -2157,54 +2173,69 @@ equal, opposite, nameless deposit into the balance. `suppress_batch_funding_legs
   hold) and only pre-checks the review. The review covers the source's types across all its imports
   (`money_movement_type_proposals_for_profile`), and applying runs `recategorize_all`.
 
-### PayPal funding pairs
+### Wallet funding pairs
 
-A tracked PayPal account holds the real transaction. What PayPal took from a card or bank, or sent back,
-also appears on that other account, and counted in both places the purchase counts twice. After every
-import and sync, `services/paypal_funding.py` pairs each PayPal row with the row on the other side of
-the movement and links them (`paypal_funding`).
+A wallet account (type `paypal` or `p2p`, see [Type](#type)) holds the real transaction. What the wallet
+took from a card or bank, or sent back, also appears on that other account, and counted in both places
+the purchase counts twice, and money received in the wallet and cashed out is received twice. After
+every import and sync, `services/wallet_pairs.py` pairs each wallet row with the row on the other side
+of the movement and links them (`wallet_pair`).
 
-- **A transfer pair** (money into or out of PayPal) is movement on both sides, so both rows move to the
-  *Money movement* leaf. A row already excluded is left where it is, and so is a split row, whose
-  `category_id` is the stashed prior its parts replaced rather than a category it is filed under.
-- **A payment pair** (a PayPal payment a card or bank paid directly) counts once. The PayPal row records
-  what was bought, so the card row is excluded, unless the PayPal row is already excluded, in which case
-  nothing changes.
-- The card row is excluded only because its PayPal row is in the ledger. A blanket rule would drop
-  spending for anyone not tracking the PayPal account.
+- **A transfer pair** (money into or out of the wallet) is movement on both sides, so both rows move to
+  the *Money movement* leaf.
+- **A payment pair** (a wallet payment a card or bank paid directly) counts once. The wallet row records
+  what was bought, so the card row is excluded, unless the wallet row is already money movement, in which
+  case nothing changes.
+- **Money movement here means excluded from totals, other than under Reimbursable.** A Reimbursable leaf
+  is excluded too, but as a receivable whose balance is read
+  ([Reimbursable expenses](#reimbursable-expenses)): a cash-out left there counts the repayment a second
+  time, so it is moved like a counted row.
+- **A row the pairing may not move stays where it is**: one already money movement; a split row, whose
+  `category_id` is the stashed prior its parts replaced rather than a category it is filed under; and a
+  row a reimbursement claims, since the claim counts on its category (`receivable_change_refusal`
+  guards every other write the same way). A claimed bank or card row is not offered at all.
+- The card row is excluded only because its wallet row is in the ledger. A blanket rule would drop
+  spending for anyone not tracking the wallet.
 - Changed rows get `category_source = 'enrichment'` and their priors are stashed on the link (`priors`).
-- A PayPal row with no captured `Type` could be either kind; the candidate's sign settles it.
+- A wallet row with no captured `Type` (a synced account) could be either kind; the candidate's sign
+  settles it. A money-in row with no `Type` and no funding leg has no target, because a payment received
+  looks the same, so a top-up from a bank into a synced wallet is not paired; its bank row is listed as
+  having no wallet record and counts as filed.
 - **Pairing clears a duplicate flag between the two rows**, and the duplicate sweeps never pair them
   afterwards ([Soft duplicates](#soft-duplicates)). The post-ingest duplicate sweep runs before this pass,
-  so it can flag the PayPal row against its own funding leg first.
+  so it can flag the wallet row against its own funding leg first.
 
-**A candidate** is a row on a non-PayPal account that reads as PayPal in its name, raw text or evidence,
-with the same amount to the cent, within that module's `PAIR_WINDOW_DAYS`, on an account whose owner is
-compatible (same owner, the shared owner, or none). Pending rows wait until they post. Split rows and
-rows an Amazon order or wallet leg already claims are not offered.
+**A candidate** is a row on an account that is not a wallet whose name, raw text or evidence contains the
+wallet's match text, with the same amount to the cent, within that module's `PAIR_WINDOW_DAYS`, on an
+account whose owner is compatible (same owner, the shared owner, or none). Pending rows wait until they
+post. Split rows and rows an Amazon order, wallet leg or reimbursement already claims are not offered.
+Two copies of one wallet row (a duplicate inside a merged wallet group) both want the same bank row, so
+neither pairs by itself; dedupe is the fix.
 
 **Only an unambiguous pairing applies itself**: a row with exactly one candidate no other row wants, or
 a cluster of interchangeable rows where every assignment has the same effect. A row with a single
 candidate claims it, which can leave another row with one uncontested candidate, so the rounds repeat
 until one claims nothing. Two rows cornered on one candidate are a shortage, and both go to the user.
 
-- **Decisions are links.** Unpairing writes `paypal_funding_declined`, so the pass does not repeat the
-  pair; acknowledging a row with nothing to pair writes `paypal_funding_reviewed`. As link kinds they
+- **Decisions are links.** Unpairing writes `wallet_pair_declined`, so the pass does not repeat the
+  pair; acknowledging a row with nothing to pair writes `wallet_pair_reviewed`. As link kinds they
   ride backups, cascade with their rows, and invalidate the attention cache.
 - **The pass runs after ingestion, after each pair, unpair or decline** (`pair_after_decision`), **and after
-  an account's type or owner changes** (`architecture.md` → *Data flow*: the account edit, the
+  an account's type, owner or match text changes** (`architecture.md` → *Data flow*: the account edit, the
   money-movement approvals that retype accounts, and an owner's deletion). It never runs from a report
-  read. A decision can make another row unambiguous, and
-  which rows may pair is read from the accounts.
+  read. A decision can make another row unambiguous, and which rows may pair is read from the accounts.
 - **Reversal restores only what is still the pairing's.** Unpairing, or undoing either row's import
-  (`reverse_batch_paypal_funding`), puts a category back only while the row still holds the category
+  (`reverse_batch_wallet_pairs`), puts a category back only while the row still holds the category
   and source the pairing set.
-- **A pair whose PayPal row was hard-deleted is healed at the start of the next pass**: the surviving
+- **A pair whose wallet row was hard-deleted is healed at the start of the next pass**: the surviving
   row is restored and the link dropped.
-- **A pair holds only while its accounts still allow it**: the PayPal row on a `paypal` account, the
+- **A pair holds only while its accounts still allow it**: the wallet row on a wallet account, the
   counterpart on one that is not, and their owners compatible as a candidate's must be. Once an edit breaks
   that, the next pass releases it as an unpairing would, restoring what the pairing changed. Declines and
-  reviews are kept, inert until the account is set back.
+  reviews are kept, inert until the account is set back. A change of match text releases nothing: it
+  decides what is offered, not whether a pair already made stands.
+- **The review is named for its wallet** when it covers one (`wallet_names`), and "Wallet reconciliation"
+  otherwise.
 - **Attention** counts each row with a choice of candidates, each contested bank or card row once, and
   each unreviewed row of the other kinds. It is cached in `db_meta` against `recon_epoch`
   (`services/reconciliation_attention.py`). `card_counts` gives per batch the rows its review lists.

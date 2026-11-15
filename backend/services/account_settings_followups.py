@@ -5,14 +5,14 @@
 Bring stored results up to date after an account's settings change.
 
 Some results are worked out once, when a row arrives, from the settings of the account it lands on, and
-then stored: a rule category (rules can be scoped by owner and account type) and a PayPal pairing (which
-reads account type and owner). A later edit to those settings leaves them stale, and no ingest will revisit
-the rows. Every write that changes an account's type or owner calls `settle_account_change` once it has
+then stored: a rule category (rules can be scoped by owner and account type) and a wallet pairing (which
+reads account type, owner and wallet match text). A later edit to those settings leaves them stale, and no
+ingest will revisit the rows. Every write that changes an account's type, owner or match text calls `settle_account_change` once it has
 committed, and every stored result that reads those settings is brought up to date here — so a new one is
 added in this one place rather than at each settings write. A result worked out when read (account groups,
 the owner lens) needs nothing here.
 
-**PayPal pairing runs first**, so a pairing the change releases has its row's category restored before the
+**Wallet pairing runs first**, so a pairing the change releases has its row's category restored before the
 rules see it, and a pairing the change makes has its bank row excluded before the rules would recategorize
 it (the rules leave a row a feature excluded alone).
 
@@ -31,7 +31,7 @@ from typing import Iterable
 from backend.app_logging import log_error
 from backend.db.database import get_db
 from backend.services.categorizer import recategorize_all
-from backend.services.paypal_funding import pair_paypal_funding
+from backend.services.wallet_pairs import pair_wallet_rows
 from backend.services.recurring_detection import owe_full_recurring_scan, settle_owed_rescans
 
 
@@ -42,9 +42,9 @@ def settle_account_change(account_ids: Iterable[str]) -> None:
         return
     try:
         with get_db() as conn:
-            pair_paypal_funding(conn)
+            pair_wallet_rows(conn)
     except Exception as e:
-        log_error(f"[account-change] PayPal pairing failed: {e}", exc_info=e)
+        log_error(f"[account-change] wallet pairing failed: {e}", exc_info=e)
     try:
         with get_db() as conn:
             placeholders = ",".join("?" * len(ids))

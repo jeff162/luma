@@ -26,7 +26,8 @@ from backend.routers.import_export.core import PAYPAL_SOURCE_KIND, run_import_co
 from backend.routers.transactions import CategoryOverride, override_category
 from backend.routers.import_export.paypal_statement import import_paypal_statements, scan_paypal_statements
 from backend.routers.import_export.profiles import list_profiles
-from backend.services import paypal_funding
+from backend.services import wallet_pairs
+from backend.services.wallet_accounts import fill_wallet_match_text
 from backend.services.categorizer import recategorize_all
 from backend.services.money_movement import money_movement_category_id_if_exists
 from backend.services.paypal_statement import StatementError, read_statement
@@ -181,6 +182,7 @@ class StatementImportTests(unittest.IsolatedAsyncioTestCase):
                VALUES (?, ?, 'fixture', ?, ?, ?, ?)""",
             (account_id, f"x_{account_id}", name, name, type_, self.owner),
         )
+        fill_wallet_match_text(conn, [account_id])
         return account_id
 
     async def _call(self, endpoint, *args):
@@ -403,7 +405,7 @@ class StatementImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r["amount"] for r in self._rows(self.paypal)], [54.95])
         self.assertIsNone(self._category(charge))
         with self._db() as conn:
-            self.assertEqual(paypal_funding.paypal_funding_report(conn)["matched"], [])
+            self.assertEqual(wallet_pairs.wallet_pair_report(conn)["matched"], [])
 
     async def test_a_payment_paypal_converted_currency_to_pay_is_imported_at_what_it_cost(self):
         # Restated in dollars from the conversion printed under it, the payment is an ordinary one: the

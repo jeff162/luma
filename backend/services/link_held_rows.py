@@ -4,8 +4,8 @@
 """
 The rows a link keeps out of the totals so that the same money counts once.
 
-An Amazon order's card charge, a wallet funding leg, and the excluded side of a PayPal funding pair each
-record money another row already counts (or, for a PayPal transfer, money that never left the
+An Amazon order's card charge, a wallet funding leg, and the excluded side of a wallet funding pair each
+record money another row already counts (or, for a wallet transfer, money that never left the
 household). The owning feature moves the row into an excluded category when it links it. Two readers
 need to know which rows those are, and they ask different questions:
 
@@ -15,7 +15,7 @@ need to know which rows those are, and they ask different questions:
   excluded category leaves it just as held, and a row the user has filed in a counted category is their
   decision, which the user makes by editing or unlinking it.
 - **`second_record_txn_ids_sql`: which rows are a second record of money another row counts.** Recurring
-  detection leaves these out, since the counted row carries the series. A PayPal transfer pair's legs are
+  detection leaves these out, since the counted row carries the series. A wallet transfer pair's legs are
   held but are not second records: the two opposite legs are the movement transfer pairing reads. A
   wallet leg is neither the counted purchase nor a duplicate of it, so it stays in the pool as well.
 
@@ -31,15 +31,15 @@ AMAZON_CHARGE_ROLE = "charge"
 WALLET_LEG_ROLE = "leg"
 
 
-def _paypal():
-    # Imported here because paypal_funding reaches recurring_detection, a caller of this module, through
+def _wallet_pairs():
+    # Imported here because wallet_pairs reaches recurring_detection, a caller of this module, through
     # txn_trash.
-    from backend.services import paypal_funding
-    return paypal_funding
+    from backend.services import wallet_pairs
+    return wallet_pairs
 
 
 def held_txn_ids_sql() -> tuple[str, tuple]:
-    paypal = _paypal()
+    pairs = _wallet_pairs()
     sql = """
         SELECT m.txn_id
         FROM   txn_link l
@@ -51,14 +51,14 @@ def held_txn_ids_sql() -> tuple[str, tuple]:
           AND  COALESCE(hpc.exclude_from_totals, hc.exclude_from_totals, 0) <> 0
     """
     return sql, (AMAZON_ORDER_KIND, AMAZON_CHARGE_ROLE, WALLET_FUNDING_KIND, WALLET_LEG_ROLE,
-                 paypal.LINK_KIND, paypal.PAYPAL_ROLE, paypal.COUNTERPART_ROLE)
+                 pairs.LINK_KIND, pairs.WALLET_ROLE, pairs.COUNTERPART_ROLE)
 
 
 def second_record_txn_ids_sql() -> tuple[str, tuple]:
-    # A PayPal payment pair has its two rows in the same direction; the card or bank side is the second
-    # record only when the pairing excluded it (`enrichment`), since a pair whose PayPal row was already
-    # excluded leaves the card row as the one that counts.
-    paypal = _paypal()
+    # A wallet payment pair has its two rows in the same direction; the card or bank side is the second
+    # record only when the pairing excluded it (`enrichment`), since a pair whose wallet row was already
+    # money movement leaves the card row as the one that counts.
+    pairs = _wallet_pairs()
     sql = """
         SELECT m.txn_id
         FROM   txn_link l
@@ -75,5 +75,5 @@ def second_record_txn_ids_sql() -> tuple[str, tuple]:
           AND  (ct.amount > 0) = (pt.amount > 0)
           AND  ct.category_source = 'enrichment'
     """
-    return sql, (AMAZON_CHARGE_ROLE, AMAZON_ORDER_KIND, paypal.COUNTERPART_ROLE, paypal.PAYPAL_ROLE,
-                 paypal.LINK_KIND)
+    return sql, (AMAZON_CHARGE_ROLE, AMAZON_ORDER_KIND, pairs.COUNTERPART_ROLE, pairs.WALLET_ROLE,
+                 pairs.LINK_KIND)

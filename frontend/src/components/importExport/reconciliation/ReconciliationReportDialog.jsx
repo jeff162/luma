@@ -251,7 +251,7 @@ export function ReconciliationReportDialog({
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
-          {report.title}
+          {report.title(data)}
           {onReload ? (
             <RefreshButton onRefresh={onReload} loading={loading} disabled={busy}
               onPointerDown={e => e.stopPropagation()} />

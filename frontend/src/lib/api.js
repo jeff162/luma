@@ -1095,13 +1095,13 @@ export const api = {
   unlinkAmazonOrderCharges: (body) => request('/import-export/amazon/unlink-charges', { method: 'POST', body: JSON.stringify(body) }),
   addAmazonOrderCharge:     (body) => request('/import-export/amazon/add-order-charge', { method: 'POST', body: JSON.stringify(body) }),
   removeAmazonOrderCharge:  (body) => request('/import-export/amazon/remove-order-charge', { method: 'POST', body: JSON.stringify(body) }),
-  // The PayPal reconciliation (docs/data-model.md → PayPal funding pairs): the whole ledger, or one import's rows.
-  getPaypalFundingReport:     (batchId) => request(`/import-export/paypal-funding/report${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ''}`),
-  getPaypalFundingCandidates: (paypalTxnId) => request(`/import-export/paypal-funding/candidates/${paypalTxnId}`),
-  pairPaypalFunding:          (body) => request('/import-export/paypal-funding/pair', { method: 'POST', body: JSON.stringify(body) }),
-  unpairPaypalFunding:        (body) => request('/import-export/paypal-funding/unpair', { method: 'POST', body: JSON.stringify(body) }),
-  declinePaypalFunding:       (body) => request('/import-export/paypal-funding/decline', { method: 'POST', body: JSON.stringify(body) }),
-  markPaypalFundingReviewed:  (body) => request('/import-export/paypal-funding/mark-reviewed', { method: 'POST', body: JSON.stringify(body) }),
+  // The wallet reconciliation (docs/data-model.md → Wallet funding pairs): the whole ledger, or one import's rows.
+  getWalletPairReport:        (batchId) => request(`/import-export/wallet-pairs/report${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ''}`),
+  getWalletPairCandidates:    (walletTxnId) => request(`/import-export/wallet-pairs/candidates/${walletTxnId}`),
+  pairWalletRows:             (body) => request('/import-export/wallet-pairs/pair', { method: 'POST', body: JSON.stringify(body) }),
+  unpairWalletRows:           (body) => request('/import-export/wallet-pairs/unpair', { method: 'POST', body: JSON.stringify(body) }),
+  declineWalletPair:          (body) => request('/import-export/wallet-pairs/decline', { method: 'POST', body: JSON.stringify(body) }),
+  markWalletPairReviewed:     (body) => request('/import-export/wallet-pairs/mark-reviewed', { method: 'POST', body: JSON.stringify(body) }),
   // The ledger's currency — tenant-wide, not a per-user preference: everyone is reading the same numbers.
   // `setLedgerCurrency` answers 409 when the ledger already holds transactions and `confirm` was not sent;
   // the caller shows what the 409 says and retries verbatim with confirm: true.

@@ -79,12 +79,13 @@ export function MinimizedReconciliationNavItem({ collapsed = false }) {
   if (!viewer || !viewer.minimized) return null
   const report = RECONCILIATION_REPORTS[viewer.params.vendor]
   const title = viewer.params.title || ''
+  const reportTitle = report.title(viewer.data)
   const problemCount = report.problemCount(viewer.data)
   return (
     <MinimizedReportPill
-      label={title ? `${report.title} — ${title}` : report.title}
+      label={title ? `${reportTitle} — ${title}` : reportTitle}
       badgeCount={problemCount}
-      title={`Restore ${report.title} report${title ? ` — ${title}` : ''} (${problemCount} to resolve)`}
+      title={`Restore ${reportTitle} report${title ? ` — ${title}` : ''} (${problemCount} to resolve)`}
       navIcon="reconciliation"
       collapsed={collapsed}
       onRestore={restore}

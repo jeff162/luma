@@ -357,13 +357,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # v88 gives every user their own copy of the shared saved tag reports and saved filters, which became
 # per-user preferences. v89 adds `connection.provider_request_budget_at`, when the request budget was last
 # written, which a restore compares. v91 adds rule alerts: `category_rule.alert` and `.alert_message`, and
-# `rule_alert_hit`, the transactions an alert caught as they arrived.
+# `rule_alert_hit`, the transactions an alert caught as they arrived. v92 adds `account.wallet_match_text`
+# and carries the PayPal pairing's links, review layout and Tasks dismissal over to the wallet pairing.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 91
+CURRENT_VERSION = 92
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2749,6 +2750,74 @@ def _add_rule_alerts(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_alert_hit_txn ON rule_alert_hit(txn_id)")
 
 
+# The wallet pairing's stored names before it covered every wallet: (old, new) link kinds, and the per-user
+# preference keys its review saved under.
+_WALLET_PAIR_KIND_RENAMES = (
+    ("paypal_funding", "wallet_pair"),
+    ("paypal_funding_declined", "wallet_pair_declined"),
+    ("paypal_funding_reviewed", "wallet_pair_reviewed"),
+)
+_WALLET_PAIR_PREF_RENAMES = (
+    ("ui.import.paypalFunding.columns", "ui.import.walletPairs.columns"),
+    ("ui.paypalFunding.panel", "ui.walletPairs.panel"),
+    ("ui.paypalFunding.sort", "ui.walletPairs.sort"),
+)
+
+
+def _adopt_wallet_pairs(conn):
+    """Carry the PayPal pairing's data over to the wallet pairing (`services/wallet_pairs.py`): give every
+    wallet account its match text, rename the pairing's link kinds and its PayPal member role, move its
+    review's saved layout and its Tasks entry's dismissal to the new keys, and drop its cached counts.
+    Registered in `POST_RESTORE_DATA_INIT`, so a restored backup older than this comes across the same way.
+    Each step is skipped on the partial schemas of the older migration tests."""
+    from backend.services.wallet_accounts import fill_wallet_match_text
+
+    tables = _table_names(conn)
+    account_columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if {"name", "institution", "type", "wallet_match_text"} <= account_columns:
+        fill_wallet_match_text(conn)
+    if "txn_link" in tables and "txn_link_member" in tables:
+        for old, new in _WALLET_PAIR_KIND_RENAMES:
+            conn.execute(
+                "UPDATE txn_link_member SET role = 'wallet' WHERE role = 'paypal' "
+                "AND link_id IN (SELECT id FROM txn_link WHERE kind = ?)", (old,))
+            conn.execute("UPDATE txn_link SET kind = ? WHERE kind = ?", (new, old))
+    if "ui_preference" in tables:
+        for old, new in _WALLET_PAIR_PREF_RENAMES:
+            conn.execute(
+                """UPDATE ui_preference SET pref_key = ? WHERE pref_key = ? AND NOT EXISTS (
+                       SELECT 1 FROM ui_preference p WHERE p.scope_id = ui_preference.scope_id AND p.pref_key = ?)""",
+                (new, old, new))
+            conn.execute("DELETE FROM ui_preference WHERE pref_key = ?", (old,))
+        for row in conn.execute(
+                "SELECT scope_id, pref_key, pref_value FROM ui_preference WHERE pref_key IN (?, ?)",
+                ("ui.tasks.dismissed", "ui.tasks.muted")).fetchall():
+            try:
+                value = json.loads(row["pref_value"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict) and "paypal_funding" in value:
+                value.setdefault("wallet_pairs", value.pop("paypal_funding"))
+            elif isinstance(value, list) and "paypal_funding" in value:
+                value = sorted({("wallet_pairs" if k == "paypal_funding" else k) for k in value})
+            else:
+                continue
+            conn.execute("UPDATE ui_preference SET pref_value = ? WHERE scope_id = ? AND pref_key = ?",
+                         (json.dumps(value), row["scope_id"], row["pref_key"]))
+    if "db_meta" in tables:
+        conn.execute("DELETE FROM db_meta WHERE key IN ('paypal_funding_attention', 'paypal_funding_cards')")
+
+
+@migration(92)
+def _add_wallet_match_text(conn):
+    # See the baseline CREATE, then `_adopt_wallet_pairs`. NULL on every existing account until the data
+    # step fills the wallets; nothing else reads the column.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if columns and "wallet_match_text" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN wallet_match_text TEXT")
+    _adopt_wallet_pairs(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2795,6 +2864,7 @@ POST_RESTORE_DATA_INIT = {
     80: _backfill_amazon_batch_account,
     88: _copy_shared_views_to_users,
     90: _backfill_amazon_charge_text,
+    92: _adopt_wallet_pairs,
 }
 
 
@@ -3316,7 +3386,10 @@ def init_db(db_path: str | None = None):
                 mask                TEXT,
                 owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 parent_account_id   TEXT REFERENCES account(id) ON DELETE SET NULL,
-                trashed_at          TEXT
+                trashed_at          TEXT,
+                -- A wallet account's text to find its other side by on a bank or card row
+                -- (services/wallet_accounts.py). NULL = never set; '' = the user says none.
+                wallet_match_text   TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).

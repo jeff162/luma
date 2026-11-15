@@ -86,9 +86,9 @@ function AttentionPills({ batches, noun }) {
           {attention.needsReview} to review
         </HistoryAttentionPill>
       ) : null}
-      {attention.reconAttention + attention.paypalAttention > 0 ? (
-        <HistoryAttentionPill title={`${attention.reconAttention + attention.paypalAttention} reconciliation item${attention.reconAttention + attention.paypalAttention === 1 ? '' : 's'} among ${scope} need a look`}>
-          ⚠ {attention.reconAttention + attention.paypalAttention} to resolve
+      {attention.reconAttention + attention.walletAttention > 0 ? (
+        <HistoryAttentionPill title={`${attention.reconAttention + attention.walletAttention} reconciliation item${attention.reconAttention + attention.walletAttention === 1 ? '' : 's'} among ${scope} need a look`}>
+          ⚠ {attention.reconAttention + attention.walletAttention} to resolve
         </HistoryAttentionPill>
       ) : null}
     </>

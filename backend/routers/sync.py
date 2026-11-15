@@ -44,7 +44,7 @@ from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
 )
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
-from backend.services.paypal_funding import pair_after_ingest
+from backend.services.wallet_pairs import pair_after_ingest
 from backend.services.pending_supersession import oldest_held_pending_date, settle_vanished_pending
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
@@ -1893,8 +1893,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         from backend.routers.import_export.amazon import match_orders_after_ingest
         match_orders_after_ingest(get_db(), txn_ids=touched_ids)
 
-    # PayPal pairing: either side of a pair can arrive by sync, and a pending row that just posted becomes
-    # pairable, so rows advanced count as well as rows added (services/paypal_funding.py).
+    # Wallet pairing: either side of a pair can arrive by sync, and a pending row that just posted becomes
+    # pairable, so rows advanced count as well as rows added (services/wallet_pairs.py).
     if cards_touched or touched_ids:
         pair_after_ingest(get_db())
 

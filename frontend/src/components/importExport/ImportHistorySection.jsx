@@ -186,7 +186,7 @@ export function ImportHistorySection({
                   const attention = summarizeBatchAttention(row.batches)
                   const unresolvedDuplicateCount = attention.unresolvedDuplicates
                   const needsReviewCount = attention.needsReview
-                  const paypalAttentionCount = openReconciliationViewer ? attention.paypalAttention : 0
+                  const walletAttentionCount = openReconciliationViewer ? attention.walletAttention : 0
 
                   // Only the recent cards are listed; the rest stay reachable through the year archive
                   // below them, which renders them with this same card renderer.
@@ -211,11 +211,11 @@ export function ImportHistorySection({
                     const settledDuplicates = (b.detail_cleared_at ? 0 : summary.dedupedCount)
                       + Number(b.removed_duplicate_count || 0)
                     const duplicateTotal = settledDuplicates + suspectDuplicates
-                    // The card's share of the PayPal reconciliation (a PayPal file, or a sync that
-                    // includes a PayPal account), offered only when it lists something and tinted
+                    // The card's share of the wallet reconciliation (a PayPal file, or a sync that
+                    // includes a wallet account), offered only when it lists something and tinted
                     // when something in it needs a look.
-                    const hasPaypalRecon = Number(b.paypal_recon_rows || 0) > 0 && !!openReconciliationViewer
-                    const paypalAttention = (b.paypal_recon_attention_ids || []).length
+                    const hasWalletRecon = Number(b.wallet_recon_rows || 0) > 0 && !!openReconciliationViewer
+                    const walletAttention = (b.wallet_recon_attention_ids || []).length
                     const batchImportedCategoryChoices = buildBatchImportedCategoryChoices(b)
                     const batchImportedCategorySummary = summarizeImportedCategorySettings(
                       extractImportedCategorySettings(b),
@@ -416,7 +416,7 @@ export function ImportHistorySection({
                             ) : null}
                           </div>
                         </div>
-                        {(b.accounts?.length > 0 || hasPaypalRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) && (
+                        {(b.accounts?.length > 0 || hasWalletRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) && (
                           <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                             {/* Descriptive account chips (how many rows came from each account) wrap on
                                 their own row; the clickable action pills are split out into the labeled
@@ -435,23 +435,23 @@ export function ImportHistorySection({
                             ))}
                               </div>
                             ) : null}
-                            {(hasPaypalRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) ? (
+                            {(hasWalletRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) ? (
                               <div style={{
                                 marginTop: b.accounts?.length > 0 ? 8 : 0,
                                 display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                                 border: '1px dashed color-mix(in srgb, var(--border) 80%, transparent)',
                                 borderRadius: 10, padding: '6px 10px',
                               }}>
-                            {hasPaypalRecon ? (
+                            {hasWalletRecon ? (
                               <StatusPill
                                 mark="report"
-                                tone={paypalAttention > 0 ? 'warning' : 'muted'}
-                                onClick={() => openReconciliationViewer({ vendor: 'paypal', batchId: b.id, title: b.filename })}
-                                title={paypalAttention > 0
-                                  ? `${paypalAttention} PayPal reconciliation item${paypalAttention === 1 ? '' : 's'} in ${batchNoun} need${paypalAttention === 1 ? 's' : ''} a look — open the PayPal reconciliation`
-                                  : `How the PayPal transactions in ${batchNoun} match card and bank transactions`}
+                                tone={walletAttention > 0 ? 'warning' : 'muted'}
+                                onClick={() => openReconciliationViewer({ vendor: 'wallet', batchId: b.id, title: b.filename })}
+                                title={walletAttention > 0
+                                  ? `${walletAttention} wallet reconciliation item${walletAttention === 1 ? '' : 's'} in ${batchNoun} need${walletAttention === 1 ? 's' : ''} a look — open the wallet reconciliation`
+                                  : `How the wallet transactions in ${batchNoun} match card and bank transactions`}
                               >
-                                {paypalAttention > 0 ? `⚠ ${paypalAttention} to resolve` : 'Reconciliation'}
+                                {walletAttention > 0 ? `⚠ ${walletAttention} to resolve` : 'Reconciliation'}
                               </StatusPill>
                             ) : null}
                             {summary.rejectedCount > 0 ? (
@@ -603,15 +603,15 @@ export function ImportHistorySection({
                                       {needsReviewCount} to review
                                     </HistoryAttentionPill>
                                   ) : null}
-                                  {paypalAttentionCount > 0 ? (
+                                  {walletAttentionCount > 0 ? (
                                     <HistoryAttentionPill
                                       onClick={() => setExpandedSourceRows(prev => {
                                         const nextState = prev && typeof prev === 'object' ? prev : {}
                                         return { ...nextState, [row.key]: true }
                                       })}
-                                      title={`${paypalAttentionCount} PayPal reconciliation item${paypalAttentionCount === 1 ? '' : 's'} across ${rowScopeNoun} need${paypalAttentionCount === 1 ? 's' : ''} a look — expand to open the per-${isConnection ? 'card' : 'file'} reconciliation`}
+                                      title={`${walletAttentionCount} wallet reconciliation item${walletAttentionCount === 1 ? '' : 's'} across ${rowScopeNoun} need${walletAttentionCount === 1 ? 's' : ''} a look — expand to open the per-${isConnection ? 'card' : 'file'} reconciliation`}
                                     >
-                                      ⚠ {paypalAttentionCount} to resolve
+                                      ⚠ {walletAttentionCount} to resolve
                                     </HistoryAttentionPill>
                                   ) : null}
                                 </>

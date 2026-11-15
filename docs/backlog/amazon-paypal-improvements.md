@@ -9,7 +9,7 @@ transactions already in the ledger:
   and paste or drag it into Luma.
 - **Find out what a plain AZAD install exports**, so the import does not depend on AZAD's preview
   features.
-- **Undo one PayPal funding pairing** the user disagrees with.
+- **Undo one wallet funding pairing** the user disagrees with.
 - **Add newly chosen detail columns to old rows** without re-importing the file.
 - **A simpler column-mapping screen**: one row per column in the file, each with a dropdown for what it
   means.

@@ -657,21 +657,21 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "severity":    SEVERITY_WARNING,
             })
 
-        # The PayPal reconciliation is about the whole ledger rather than one file — matches are made after
+        # The wallet reconciliation is about the whole ledger rather than one file — matches are made after
         # syncs as well as imports — so it has one entry, and its link opens the review itself.
-        from backend.services.paypal_funding import ledger_attention_count
-        paypal_attention = ledger_attention_count(conn)
-        if paypal_attention:
+        from backend.services.wallet_pairs import ledger_attention_count
+        wallet_attention = ledger_attention_count(conn)
+        if wallet_attention:
             tasks.append({
-                "id":          "paypal_funding",
-                "title":       "PayPal transactions to reconcile",
-                "description": f"{paypal_attention} item{'s need' if paypal_attention != 1 else ' needs'} a look: a "
-                               "PayPal transaction with more than one possible bank or card match, one that moved "
-                               "money with no matching transaction found, or a PayPal charge on a bank or card "
-                               "account with no PayPal record.",
-                "count":       paypal_attention,
-                "link":        "/import-export?review=paypal",
-                "link_label":  "Open the PayPal review",
+                "id":          "wallet_pairs",
+                "title":       "Wallet transactions to reconcile",
+                "description": f"{wallet_attention} item{'s need' if wallet_attention != 1 else ' needs'} a look: a "
+                               "wallet transaction (PayPal, or a payment app) with more than one possible bank or "
+                               "card match, one that moved money with no matching transaction found, or a "
+                               "wallet charge on a bank or card account with no wallet record.",
+                "count":       wallet_attention,
+                "link":        "/import-export?review=wallet",
+                "link_label":  "Open the wallet review",
                 "severity":    SEVERITY_WARNING,
             })
 
