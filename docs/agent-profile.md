@@ -148,7 +148,8 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   theme from a short Playwright script, cropped: a few thousand tokens, where each devtools snapshot
   costs 5–20k. A label or one control's color does not need it. The script passes Playwright's own
   `~/.cache/ms-playwright/chromium-*` binary as `executablePath`, since the build number in that path
-  changes with each Playwright update.
+  changes with each Playwright update. Headless Chromium hides scrollbars by default, so a check of how a
+  scrollbar affects layout launches with `ignoreDefaultArgs: ['--hide-scrollbars']`.
 
 - Judge a run by its exit status, not by its pass count. Vitest exits 1 when it catches unhandled
   errors even though every test passes, and prints them apart from the counts, so a missing provider

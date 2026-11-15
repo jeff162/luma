@@ -18,7 +18,7 @@ Before any non-trivial change, read `docs/collaboration-notes.md` for the projec
 
 For workflow changes that touch generated state, persisted review state, imports, rules, categorization, or undo/return paths, follow the design-pass guidance in `docs/collaboration-notes.md` before implementation: map affected surfaces and lifecycle states first, then code.
 
-Before building or changing shared UI, read `docs/ui-patterns.md` for the conventions that apply across surfaces. It does not specify any one surface: what a page, dialog or card looks like is the code's to say and is free to change, so the document is never a reason not to change one. Update it only when a convention itself changes.
+Before building or changing shared UI, read `docs/ui-patterns.md` for the conventions that apply across surfaces. It does not specify any one surface: what a page, dialog or card looks like is the code's to say and is free to change, so the document is never a reason not to change one. Update it only when a convention itself changes. An entry can be too narrow or simply describe what the code did; when a fix shows that, update the entry as part of the fix.
 
 Before working on anything that touches provider credentials, the login perimeter, transport, or backups — including adding a data source — read `docs/security-model.md` first. It carries the assumptions the design rests on and the conditions under which one has to be reopened; `architecture.md` carries only the mechanism, which is not enough to tell whether a change is safe.
 

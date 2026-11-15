@@ -160,8 +160,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A paged list sorts on the server.** A client-side sort over a partly loaded list orders only the rows
   that happen to be loaded. `usePagedTransactions` owns paging and sort for transaction lists; a one-shot
   capped fetch silently drops rows.
-- **In a dialog, one outer container scrolls both axes** with the header pinned by `position: sticky`.
-  A nested vertical scroll clips the last column when its scrollbar appears.
+- **A table's header row scrolls in the same container as its rows**, pinned by `position: sticky`,
+  on a page as well as in a dialog. A header left outside the rows' scroll box keeps its width when the
+  scrollbar appears and the rows lose it, so every fixed column slides out from under its heading and
+  the last one is clipped.
 - **Two-line rows suit content that is variable-length on both sides.** Keep a table only when the
   columns genuinely align.
 
