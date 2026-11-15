@@ -2457,14 +2457,18 @@ export default function Accounts() {
                           No accounts match this owner filter.
                         </div>
                       ) : (
-                        <>
-                          <div
-                            onContextMenu={e => {
-                              if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
-                              e.preventDefault()
-                              setListContextMenu(cssPoint(e))
-                            }}
-                            style={{ background: 'var(--surface2)' }}>
+                        // One scroll box holds the header (pinned by `position: sticky`) and the rows, so a
+                        // scrollbar narrows both alike; with the header outside it, the scrollbar shifted
+                        // every fixed column out from under its heading.
+                        <div
+                          onContextMenu={e => {
+                            if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                            e.preventDefault()
+                            setListContextMenu(cssPoint(e))
+                          }}
+                          style={{ maxHeight: 640, overflowY: 'auto' }}
+                        >
+                          <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface2)' }}>
                             <PillTableHeader
                               columns={[
                                 { key: 'drag', kind: 'spacer', cellPadding: 0 },
@@ -2546,15 +2550,7 @@ export default function Accounts() {
                               }}
                             />
                           </div>
-                          <div
-                            ref={attachList}
-                            onContextMenu={e => {
-                              if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
-                              e.preventDefault()
-                              setListContextMenu(cssPoint(e))
-                            }}
-                            style={{ maxHeight: 640, overflowY: 'auto', position: 'relative' }}
-                          >
+                          <div ref={attachList} style={{ position: 'relative' }}>
                             {draggingAccount?.parent_account_id ? (
                               <div
                                 aria-hidden="true"
@@ -2703,7 +2699,7 @@ export default function Accounts() {
                               />
                             )}
                           </div>
-                        </>
+                        </div>
                       )}
                     </SectionCard>
                   </div>
