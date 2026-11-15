@@ -20,7 +20,7 @@ import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { ActionMenu } from './ActionMenu.jsx'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton, HighlightedText, MatchExcerpt } from './ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle, IconButton, HighlightedText, MatchExcerpt, PencilGlyph } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
@@ -369,26 +369,6 @@ function DocumentGlyph({ size = 13, color = 'currentColor' }) {
         strokeLinejoin="round"
       />
       <path d="M5.5 4.75h5M5.5 7.25h5M5.5 9.75h2" stroke={color} strokeWidth="1.15" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function PencilGlyph({ size = 13, color = 'currentColor' }) {
-  return (
-    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
-      <path
-        d="M2.5 13.5l.9-2.8L10 4.1l1.9 1.9-6.6 6.6-2.8.9z"
-        stroke={color}
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path d="M9 5l2 2" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
-      <path
-        d="M10 4.1l1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4L11.9 6"
-        stroke={color}
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
     </svg>
   )
 }

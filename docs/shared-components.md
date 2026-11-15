@@ -91,7 +91,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `AppDialog` / `AppConfirmDialog` / `AppNoticeDialog` / `AppTextEntryDialog` | A dialog that is opened, answered and closed. The body scrolls with the header and actions pinned, so a caller does not cap its own content height. Opened from inside a row or a list, portal it to `<body>`, because it renders where it is mounted. | `components/ui.jsx` |
 | `Button` | Every labelled action. `size="compact"` for one repeated on every row or card, `pressed` for a toggle. | `components/ui.jsx` |
 | `Button`'s `progress` | A long action reporting progress on the button that started it. | `components/ui.jsx` |
-| `IconButton` | A control that is only a glyph: trash, edit, copy, the `↗` that opens a report (`tone="accent"`), and a panel's or dialog's close × (`size="large"`). | `components/ui.jsx` |
+| `IconButton` | A control that is only a glyph: trash, edit (drawn with `PencilGlyph`, not the `✎` character, which points the other way), copy, the `↗` that opens a report (`tone="accent"`), and a panel's or dialog's close × (`size="large"`). | `components/ui.jsx` |
 | `FilterChip` | A rounded chip that narrows a list, optionally with a count, and the dashed chip that adds another (a tag, a filter, an owner). | `components/ui.jsx` |
 | `PillMark` + `ui-pill` | Marking a clickable pill: the glyph for what a stand-alone pill's click does, and the hover every clickable pill shows. `LABEL_PILL_COLORS` is the look of a pill that only labels. | `components/ui.jsx`, `components/pillStyles.js` |
 | `LinkButton` | An action that reads as text, sized by the text around it. | `components/ui.jsx` |

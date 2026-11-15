@@ -1061,6 +1061,28 @@ export function RefreshButton({ onRefresh, loading = false, disabled = false, ti
   )
 }
 
+// The edit pencil, tip down-left as a pencil is usually drawn (the ✎ character points the other way).
+// Sized in `em` by default so it follows the font size of the control it sits in.
+export function PencilGlyph({ size = '1em', color = 'currentColor' }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
+      <path
+        d="M2.5 13.5l.9-2.8L10 4.1l1.9 1.9-6.6 6.6-2.8.9z"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M9 5l2 2" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
+      <path
+        d="M10 4.1l1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4L11.9 6"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 // A glyph with no label: trash, edit, close, copy, open-report. Bare until hovered, so a row of them
 // stays quieter than the data beside it; the hover fill and the press live in `index.html`, since an
 // inline style cannot express either. The name is required because the glyph is all a screen reader

@@ -82,17 +82,17 @@ describe('TransactionAmountEditor', () => {
   })
 
   it('explains itself on a hand-entered row that cannot be edited', () => {
-    render(<TransactionAmountEditor txn={{ ...HAND_ENTERED, is_split: true }} onSave={vi.fn()} />)
+    const { container } = render(<TransactionAmountEditor txn={{ ...HAND_ENTERED, is_split: true }} onSave={vi.fn()} />)
     // No way in, but the marker is still there to hang the reason off — the user has seen it work on
     // their other hand-entered rows, so silence here would be the mystery.
     expect(screen.queryByTitle('Edit amount')).toBeNull()
-    expect(screen.getByText('✎').getAttribute('aria-disabled')).toBe('true')
+    expect(container.querySelector('[aria-disabled="true"] svg')).toBeTruthy()
   })
 
   it('says nothing about editing an imported row', () => {
-    render(<TransactionAmountEditor txn={{ ...HAND_ENTERED, import_batch_id: 'b1' }} onSave={vi.fn()} />)
+    const { container } = render(<TransactionAmountEditor txn={{ ...HAND_ENTERED, import_batch_id: 'b1' }} onSave={vi.fn()} />)
     expect(screen.queryByTitle('Edit amount')).toBeNull()
-    expect(screen.queryByText('✎')).toBeNull()
+    expect(container.querySelector('[aria-disabled="true"]')).toBeNull()
     // The amount itself still renders — this is the panel's header figure, not an optional extra.
     expect(screen.getByText('$12.50')).toBeTruthy()
   })

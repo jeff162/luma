@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { ownerLensAdmits } from '../lib/ownerLens.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle } from '../components/ui.jsx'
+import { Card, PageHeader, Button, IconButton, SearchInput, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, VISUALLY_HIDDEN_STYLE, getFormControlStyle, SegmentedToggle, PencilGlyph } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
@@ -188,7 +188,7 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
             title=""
           >↗</IconButton>
         </Tooltip>
-        <IconButton size="compact" onClick={() => onEdit(rule.id)} aria-label="Edit rule">✎</IconButton>
+        <IconButton size="compact" onClick={() => onEdit(rule.id)} aria-label="Edit rule"><PencilGlyph /></IconButton>
         {confirmDel ? (
           <span ref={confirmRef} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <label

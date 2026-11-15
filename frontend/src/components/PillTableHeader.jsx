@@ -17,6 +17,9 @@ import { ActionMenu } from './ActionMenu.jsx'
 // of the fields, picked through `onSortField(columnKey, fieldKey)`. The caret is a visible control rather
 // than a right-click, which a touch screen has no way to make, and it is a segment rather than a glyph
 // inside the body because a glyph is too small to aim at.
+//
+// A column's `badge` is a node pinned to its pill's top-right corner — a control that acts on the column
+// as a whole (the Accounts Tags column's edit pencil) rather than on sorting.
 export default function PillTableHeader({
   columns,
   gridTemplateColumns,
@@ -169,7 +172,7 @@ export default function PillTableHeader({
               justifyContent: alignment,
               minWidth: 0,
             }}>
-              <span style={{ display: 'inline-flex', alignItems: 'stretch', minWidth: 0, maxWidth: maxPillWidth }}>
+              <span style={{ display: 'inline-flex', alignItems: 'stretch', minWidth: 0, maxWidth: maxPillWidth, position: col.badge ? 'relative' : undefined }}>
               <button
                 type="button"
                 onClick={() => { setFieldMenu(null); if (canSort) onSort(col.key) }}
@@ -257,6 +260,11 @@ export default function PillTableHeader({
                 >
                   ▾
                 </button>
+              ) : null}
+              {col.badge ? (
+                <span style={{ position: 'absolute', top: -6, right: -10, display: 'inline-flex' }}>
+                  {col.badge}
+                </span>
               ) : null}
               </span>
             </div>

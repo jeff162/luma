@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
-import { AppConfirmDialog, IconButton, LinkButton } from './ui.jsx'
+import { AppConfirmDialog, IconButton, LinkButton, PencilGlyph } from './ui.jsx'
 import { formatDecimal } from '../lib/displayFormat.js'
 
 /*
@@ -153,7 +153,7 @@ function DocumentRow({ doc, startRenaming, onView, onEdit, onRename, onDetach, o
       ) : null}
       <span style={{ fontSize: 11, color: 'var(--muted)' }}>{formatSize(doc.byte_size)}</span>
       <IconButton size="compact" onClick={() => name.beginEdit()} title="Rename" aria-label={`Rename ${doc.filename}`}>
-        ✎
+        <PencilGlyph />
       </IconButton>
       {onEdit ? (
         <LinkButton tone="muted" onClick={onEdit} title="Edit the text" aria-label={`Edit the text of ${doc.filename}`} style={{ fontSize: 12 }}>

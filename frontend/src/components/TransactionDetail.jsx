@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
-import { AppConfirmDialog, AppNoticeDialog, Button, IconButton, Spinner, LinkButton } from './ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, Button, IconButton, Spinner, LinkButton, PencilGlyph } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, NamelessMerchant, getTxnMerchantLabel, getTxnName } from './TransactionRow.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
@@ -428,7 +428,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName || <NamelessMerchant txn={detailTxn} />}</div>
-          <IconButton size="compact" onClick={() => beginEditingName(displayName)} aria-label="Edit merchant name">✎</IconButton>
+          <IconButton size="compact" onClick={() => beginEditingName(displayName)} aria-label="Edit merchant name"><PencilGlyph /></IconButton>
           {/* Copy + trash target the single entry-point transaction, so they only belong in editor mode.
               In the merchant-activity report there is no one "this transaction" (the entry row may not
               even be in the visible window), so both would be ambiguous — the report offers a list-level

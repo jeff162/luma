@@ -24,7 +24,7 @@ import { ownerLensAdmits } from '../lib/ownerLens.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
   PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, AppConfirmDialog, SegmentedToggle,
-  RefreshButton, FilterChip, IconButton, LinkButton} from '../components/ui.jsx'
+  RefreshButton, FilterChip, IconButton, LinkButton, PencilGlyph} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
@@ -284,7 +284,7 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
                   title="Rename"
                   style={{ opacity: hover ? 0.7 : 0, transition: 'opacity 0.15s' }}
                 >
-                  ✎
+                  <PencilGlyph />
                 </IconButton>
               </>
             )}

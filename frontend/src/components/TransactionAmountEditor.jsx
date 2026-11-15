@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'react'
-import { Button, Input, SegmentedToggle, Tooltip, IconButton } from './ui.jsx'
+import { Button, Input, SegmentedToggle, Tooltip, IconButton, PencilGlyph } from './ui.jsx'
 import { DIRECTIONS, round2, signedAmount } from '../lib/manualTransaction.js'
 import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
@@ -83,7 +83,7 @@ export default function TransactionAmountEditor({ txn, onSave }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {amountText}
           {offered && editable ? (
-            <IconButton size="compact" onClick={begin} aria-label="Edit amount">✎</IconButton>
+            <IconButton size="compact" onClick={begin} aria-label="Edit amount"><PencilGlyph /></IconButton>
           ) : null}
           {offered && !editable ? (
             // A span rather than a disabled <button>: an inert control receives no pointer events, so
@@ -95,7 +95,7 @@ export default function TransactionAmountEditor({ txn, onSave }) {
                   color: 'var(--muted)', opacity: 0.45, fontSize: 13,
                   padding: '2px 4px', cursor: 'not-allowed',
                 }}
-              >✎</span>
+              ><PencilGlyph /></span>
             </Tooltip>
           ) : null}
         </div>

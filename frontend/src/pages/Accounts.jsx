@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { ownerKey, ownerLensAdmits } from '../lib/ownerLens.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
+import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, PencilGlyph, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
@@ -2445,17 +2445,6 @@ export default function Accounts() {
                           <span style={{ whiteSpace: 'nowrap' }}>{ownerWarning}</span>
                         </span>
                       ) : null}
-                      headerActions={rootAccounts.length > 0 ? (
-                        <Button
-                          size="compact"
-                          variant="secondary"
-                          pressed={tagsEditMode}
-                          onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
-                          title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
-                        >
-                          {tagsEditMode ? 'Done' : 'Edit tags'}
-                        </Button>
-                      ) : null}
                       width="100%"
                       style={{ overflow: 'hidden', alignSelf: 'flex-start' }}
                     >
@@ -2523,6 +2512,26 @@ export default function Accounts() {
                                   trailingInset: 0,
                                   resizable: accountDividerDraggable('tags'),
                                   draggable: false,
+                                  badge: (
+                                    <IconButton
+                                      size="compact"
+                                      pressed={tagsEditMode}
+                                      onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
+                                      aria-label={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags'}
+                                      title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
+                                      // Sits on the pill's corner, so it carries its own surface and border
+                                      // instead of the bare-until-hovered look of an inline glyph.
+                                      style={{
+                                        width: 16,
+                                        height: 16,
+                                        fontSize: 10,
+                                        borderRadius: 999,
+                                        ...(tagsEditMode ? null : { background: 'var(--surface)', border: '1px solid var(--border)' }),
+                                      }}
+                                    >
+                                      <PencilGlyph />
+                                    </IconButton>
+                                  ),
                                 },
                                 { key: 'actions', kind: 'spacer', cellPadding: 0 },
                               ]}
