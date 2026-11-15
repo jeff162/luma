@@ -191,22 +191,23 @@ def profile_account_ids(conn: sqlite3.Connection, profile_id: str) -> list[str]:
     return [row["account_id"] for row in rows]
 
 
-def ensure_paypal_account_type(conn: sqlite3.Connection, account_ids: list[str]) -> int:
+def ensure_paypal_account_type(conn: sqlite3.Connection, account_ids: list[str]) -> list[str]:
     """Mark each given account as the PayPal account *type* when its current type is generic — so the
     now-type-scoped money-movement rules actually cover its rows. Called when the user **approves** PayPal
     money-movement types, which is itself a declaration that these are PayPal accounts. Only generic types
     (`depository`/`other`/`p2p`/NULL) are changed, so a deliberately-set type is never clobbered. Returns
-    the number of accounts retyped."""
+    the ids of the accounts retyped."""
     if not account_ids:
-        return 0
+        return []
     placeholders = ",".join("?" for _ in account_ids)
-    cursor = conn.execute(
-        f"""UPDATE account SET type = ?
+    generic = [r[0] for r in conn.execute(
+        f"""SELECT id FROM account
             WHERE id IN ({placeholders})
               AND (type IS NULL OR type IN ('depository', 'other', 'p2p'))""",
-        (PAYPAL_ACCOUNT_TYPE, *account_ids),
-    )
-    return cursor.rowcount or 0
+        tuple(account_ids),
+    ).fetchall()]
+    conn.executemany("UPDATE account SET type = ? WHERE id = ?", [(PAYPAL_ACCOUNT_TYPE, i) for i in generic])
+    return generic
 
 
 def money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:

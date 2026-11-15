@@ -725,6 +725,9 @@ category, a rename (`clean_name`), tags, a recurring series, or any combination.
 - The type scope is the account's type and not the batch's `source_kind`, because a type applies to
   every row on the account, while `source_kind` is stamped only on batches imported after that field
   existed.
+- **Changing an account's owner or type re-applies the rules to its rows** (`settle_account_change`), as
+  "Run categorization" does: hand-set categories, names and tags are kept, and so is a rule category
+  nothing matches any more, so flipping an owner away and back loses nothing.
 
 ### One rule per matcher
 
@@ -2116,9 +2119,9 @@ until one claims nothing. Two rows cornered on one candidate are a shortage, and
   pair; acknowledging a row with nothing to pair writes `paypal_funding_reviewed`. As link kinds they
   ride backups, cascade with their rows, and invalidate the attention cache.
 - **The pass runs after ingestion, after each pair, unpair or decline** (`pair_after_decision`), **and after
-  an edit to what decides pairing** (`pair_after_account_change`): an account's type to or from `paypal`
-  (the account edit, and the money-movement approvals that retype accounts), an account's owner, or an
-  owner's deletion. It never runs from a report read. A decision can make another row unambiguous, and
+  an account's type or owner changes** (`architecture.md` → *Data flow*: the account edit, the
+  money-movement approvals that retype accounts, and an owner's deletion). It never runs from a report
+  read. A decision can make another row unambiguous, and
   which rows may pair is read from the accounts.
 - **Reversal restores only what is still the pairing's.** Unpairing, or undoing either row's import
   (`reverse_batch_paypal_funding`), puts a category back only while the row still holds the category

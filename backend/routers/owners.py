@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from typing import Optional
 import uuid
 from backend.db.database import SHARED_OWNER_NAME, ensure_shared_owner, get_db, get_shared_owner_id
-from backend.services.paypal_funding import pair_after_account_change
+from backend.services.account_settings_followups import settle_account_change
 
 router = APIRouter()
 
@@ -93,6 +93,9 @@ def delete_owner(owner_id: str):
             raise HTTPException(status_code=404, detail="Owner not found")
         if row["name"].strip().lower() == SHARED_OWNER_NAME.lower():
             raise HTTPException(status_code=400, detail="Shared is a built-in owner")
+        # The owner's accounts are left with none (the foreign key clears it), which changes what their
+        # owner-scoped rules and PayPal pairings see.
+        orphaned = [r["id"] for r in conn.execute("SELECT id FROM account WHERE owner_id = ?", (owner_id,))]
         conn.execute("DELETE FROM owner WHERE id = ?", (owner_id,))
         shared_owner_id = get_shared_owner_id(conn)
         remaining_personal_owner_count = conn.execute(
@@ -102,11 +105,11 @@ def delete_owner(owner_id: str):
         if shared_owner_id and remaining_personal_owner_count <= 1:
             # "Shared" only has meaning when more than one personal owner exists. Once
             # the household collapses back to one person, shared assignments become noise.
+            orphaned += [r["id"] for r in conn.execute("SELECT id FROM account WHERE owner_id = ?", (shared_owner_id,))]
             conn.execute("UPDATE account SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
             conn.execute("UPDATE txn SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
             # Categories no longer carry an owner (column dropped in m19_drop_category_owner_id);
             # owner-style category attribution now lives in tags, so there is nothing to clear here.
             conn.execute("UPDATE category_rule SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
-    # The owner's accounts are left with none, which pairs with any owner (services/paypal_funding.py).
-    pair_after_account_change(get_db())
+    settle_account_change(orphaned)
     return {"ok": True}

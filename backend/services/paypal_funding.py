@@ -534,28 +534,17 @@ def pair_after_decision(conn: sqlite3.Connection) -> int:
         return 0
 
 
-def _pass_after_commit(connection, what: str) -> None:
-    """Run the pass in the connection context manager given, after the write that called for it committed.
-    A failure is logged rather than allowed to fail that write, which already stands."""
+def pair_after_ingest(connection) -> None:
+    """Run the pass once new rows are committed, in the connection context manager given. An import or a
+    sync can bring either side of a pair — the PayPal row or the bank row that arrives days later — so both
+    run it. Like the duplicate sweep it runs after the ingest transaction, never inside it, and a failure
+    is logged rather than allowed to fail the import or sync that already landed its rows. An account
+    settings change runs the pass through `services/account_settings_followups.py`."""
     try:
         with connection as conn:
             pair_paypal_funding(conn)
     except Exception as e:
-        log_error(f"[paypal-funding] pairing pass after {what} failed: {e}", exc_info=e)
-
-
-def pair_after_ingest(connection) -> None:
-    """Run the pass once new rows are committed. An import or a sync can bring either side of a pair — the
-    PayPal row or the bank row that arrives days later — so both run it. Like the duplicate sweep it runs
-    after the ingest transaction, never inside it."""
-    _pass_after_commit(connection, "ingest")
-
-
-def pair_after_account_change(connection) -> None:
-    """Run the pass once an edit to what decides pairing is committed: an account's type to or from PayPal,
-    or an owner. Either can make rows pairable that no ingest will revisit, or leave pairings standing that
-    the accounts no longer allow (released by `_heal`)."""
-    _pass_after_commit(connection, "an account change")
+        log_error(f"[paypal-funding] pairing pass failed: {e}", exc_info=e)
 
 
 # --- The review ------------------------------------------------------------------------------------------

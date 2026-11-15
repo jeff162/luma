@@ -183,6 +183,13 @@ the whole computation (seconds at ledger scale). The catch-up therefore ends wit
 is on, the rule reach. Readers that find the same cache stale together share one computation
 (`services/cache_fill.py`), so a page asking during the warm-up waits for it instead of repeating it.
 
+**What an account's settings decided at ingest is re-derived when they change.** A rule category (rules
+scope by owner and account type) and a PayPal pairing (account type and owner) are worked out when a row
+arrives and stored, so an edit to the account would leave them stale with no ingest to revisit them. Every
+write that changes an account's type or owner calls `settle_account_change`
+(`services/account_settings_followups.py`) after its commit, and anything stored that reads account settings
+is either re-derived there or worked out when read, as account groups and the owner lens are.
+
 **Preferences are re-read on the same catch-up**, except on mount, where they were just loaded
 (`refreshPreferences` in `lib/UserPreferencesContext.jsx`). They are not part of the epoch: the read is
 small, and a preference change has no page to re-query. A key this page is still saving, or wrote while the
