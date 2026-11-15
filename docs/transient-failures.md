@@ -203,6 +203,60 @@ the measurement, starting with any test-local `sqlite3.connect` not closed.
 
 ---
 
+## 5. A trend tooltip never appears after a single hover
+
+**Status: fixed in the test (2026-11-15). Sunset: 2027-01-10.** Seen once, so how often it fired is
+unknown, and the sunset is set long for that reason. The fix waits for something the failure needed to be
+missing; it was not reproduced on demand, and part of the evidence is unexplained (below). If it has not
+fired by then, delete this entry and the citation in `trackDashboardTotals`'s comment, and add the lesson
+below to `agent-profile.md`.
+
+**Last seen: 2026-11-15.**
+
+### Symptom
+
+`frontend/tests/ui/dashboard.spec.js` → *single-period trend tooltips stay inside the visible part of a
+narrowed scroll area* fails at the first hover: `.recharts-default-tooltip` is never visible in 20 seconds.
+Seen in a run of the a11y lane together with the projects it depends on; the same spec passed in a full
+gate run minutes earlier and in the a11y lane alone afterwards.
+
+### What the trace showed
+
+- The test narrowed the trend's scroll area and waited for its width and scroll to read the same twice,
+  250ms apart. Both readings were `420:100`: the plot at its minimum width, so 7 buckets or fewer.
+- The hover's single pointer move landed at about 2.92s, and the action took 416ms.
+- The next DOM snapshot (3.34s) had the plot at 840px (14 buckets at 60px), with its tooltip hidden and
+  empty.
+- The only summary response to land in that window was the slowest of the dashboard's three
+  (`/summary/by-category`, 1.5s; idle it takes a few hundred ms). `loadSingleTotals` stores all three
+  together, so the trend rows changed at that moment.
+
+A test moves the pointer once and waits; a person moves it again, which brings the tooltip back. That is
+why this is a test artifact rather than something seen in use.
+
+### Unexplained
+
+What drew the 420px plot before the data landed. Holding back every category-totals request, or only the
+second of the two loads (`useLatestRequest` discards the first), draws no bars at all, so the scroll area
+is not even found. One candidate: a spec running alongside changed the shared demo ledger between the two
+loads, so the two responses differed. The trace does not keep response bodies, so this is unconfirmed.
+
+### Fix
+
+`trackDashboardTotals` waits until the page's `/summary/` requests have finished, and none is in flight,
+before the scroll area is narrowed and hovered. The same wait guards *single-period trend keeps its pan
+through a refresh that changes nothing*, which sets a pan that a late load would re-centre. If it fires
+again, check first whether a summary request started after `loaded()` returned: a refresh triggered by
+another spec's ledger change is the one case the wait does not cover.
+
+### Lesson for `agent-profile.md` when this entry closes
+
+Wait for the data a test acts on, not for the page to look settled: a chart drawn from incomplete data can
+hold still. A hover in Playwright is a single pointer move, so anything that redraws under it after the
+move leaves no tooltip and no second chance.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

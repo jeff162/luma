@@ -19,6 +19,26 @@ test('dashboard renders and switches chart modes with demo data', async ({ page 
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
 })
 
+// Waits until the dashboard's totals have arrived, which is when its charts are drawn from real data. The
+// trend is drawn before that from no rows at all, and that placeholder looks settled: under load the real
+// rows landed after a hover, redrew the plot under a pointer that never moved again, and the tooltip never
+// showed. Only `/summary/` requests are counted, since the app's own polling (ledger epoch, tasks) never
+// goes quiet. Start it before navigating, so the first requests are seen (`docs/transient-failures.md`
+// entry 5).
+function trackDashboardTotals(page) {
+  const pending = new Set()
+  let finished = 0
+  page.on('request', request => {
+    if (request.url().includes('/api/transactions/summary/')) pending.add(request)
+  })
+  const done = request => { if (pending.delete(request)) finished += 1 }
+  page.on('requestfinished', done)
+  page.on('requestfailed', done)
+  return {
+    loaded: () => expect.poll(() => finished > 0 && pending.size === 0).toBe(true),
+  }
+}
+
 // The single-period trend pans by scrolling, and its hover card is PanningChartTooltip, placed against what
 // can be seen rather than against the whole scrolled canvas. This is the in-page check of that wiring: the
 // card appears for a hover near either end of a narrowed scroll area and stays inside it. Near the right end
@@ -31,10 +51,12 @@ test('dashboard renders and switches chart modes with demo data', async ({ page 
 // components/__tests__/PanningChartTooltip.test.jsx. The scroll area is narrowed directly because a window
 // narrow enough to overflow the plot also overflows the page around it.
 test('single-period trend tooltips stay inside the visible part of a narrowed scroll area', async ({ page }) => {
+  const totals = trackDashboardTotals(page)
   await page.goto('/')
   await page.getByRole('link', { name: 'Dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   await page.getByRole('button', { name: 'Single period' }).click()
+  await totals.loaded()
 
   // Found by computed style: Chrome writes an element with both overflow axes set as the `overflow`
   // shorthand, so an attribute selector on `overflow-x` matches nothing. The innermost match (the last in
@@ -47,9 +69,9 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
   await scroller.evaluate(el => { el.style.maxWidth = '220px' })
   await expect.poll(() => scroller.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(180)
   // The page answers the narrowing by re-centring the trend, and a tooltip gives way to any scroll. That
-  // scroll has to land before the hover, and the overflow above is there before it does. The trend can
-  // also be redrawn after its first paint (under load, its data was seen landing after the hover), so
-  // wait for the plot's width and scroll to read the same twice running.
+  // scroll has to land before the hover, and the overflow above is there before it does, so wait for the
+  // plot's width and scroll to read the same twice running. That covers a render landing just after the
+  // totals; it cannot tell the placeholder from the real plot, which is what `totals.loaded` is for.
   let lastReading = null
   await expect.poll(async () => {
     const reading = await scroller.evaluate(el => `${el.scrollWidth}:${el.scrollLeft}`)
@@ -77,10 +99,13 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
 // on every ledger change, and re-centring on each reload moved the plot under the reader and dropped an
 // open tooltip. The scroll area is narrowed as above so the demo's few months overflow it.
 test('single-period trend keeps its pan through a refresh that changes nothing', async ({ page }) => {
+  const totals = trackDashboardTotals(page)
   await page.goto('/')
   await page.getByRole('link', { name: 'Dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   await page.getByRole('button', { name: 'Single period' }).click()
+  // The first totals must be in before the pan is set, or their arrival re-centres it.
+  await totals.loaded()
 
   const findScroller = `[...document.querySelectorAll('div')].filter(el => (
     getComputedStyle(el).overflowX === 'auto' && el.querySelector('.recharts-bar-rectangle')
