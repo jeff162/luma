@@ -7,14 +7,16 @@
  * Backup finds it with the rest of the data.
  *
  * Who may change it still decides what is listed. A section behind `require_admin_or_local` is listed
- * only for someone who may use it (`canAdminister`), so a member is not shown controls that would all be
- * refused; the server refuses them either way. About's update check is the one item that straddles the
+ * only for someone who may use it, so a member is not shown controls that would all be refused; the server
+ * refuses them either way. With sign-in protection off everyone may, and a personal preference can still
+ * keep them out of sight (`useShowsAdminFeatures`). About's update check is the one item that straddles the
  * line, and hides its admin half in place.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
+import { useShowsAdminFeatures } from '../lib/adminFeatures.js'
 import { useErrorLog } from '../lib/useErrorLog.js'
 import { useDatabaseState } from '../lib/useDatabaseState.js'
 import { useServerCertificate } from '../lib/serverCertificate.js'
@@ -42,6 +44,7 @@ import {
   BackupHistoryTrashSection, RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection,
 } from '../components/settings/TrashSections.jsx'
 import AboutSection from '../components/settings/AboutSection.jsx'
+import AdminFeaturesSection from '../components/settings/AdminFeaturesSection.jsx'
 import { formatCount } from '../lib/displayFormat.js'
 
 const ERROR_LOG_SECTION = 'errorLog'
@@ -50,7 +53,6 @@ const DATABASE_SECTION = 'database'
 export default function Settings() {
   const {
     authEnabled,
-    canAdminister,
     currentUser,
     passwordPolicy,
     setPasswordPolicy,
@@ -61,12 +63,13 @@ export default function Settings() {
     buildStamp,
     thirdPartyNoticesScope,
   } = useAppSession()
+  const showsAdminFeatures = useShowsAdminFeatures()
 
   // Read here rather than inside the section so its refresh can sit on the section's title, where every
   // refresh control goes. It still reads only while the section is open.
   const requestedSection = useSectionParam()
-  const errorLog = useErrorLog(canAdminister && requestedSection === ERROR_LOG_SECTION)
-  const databaseState = useDatabaseState(canAdminister && requestedSection === DATABASE_SECTION)
+  const errorLog = useErrorLog(showsAdminFeatures && requestedSection === ERROR_LOG_SECTION)
+  const databaseState = useDatabaseState(showsAdminFeatures && requestedSection === DATABASE_SECTION)
   const [serverCertificate, setServerCertificate] = useServerCertificate()
 
   // What the trash holds and how large the database is, read once here so the list can say it before either
@@ -104,12 +107,19 @@ export default function Settings() {
           help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
           content: <SignInFactorsSection passwordPolicy={passwordPolicy} />,
         },
+        // Once sign-in is on, being shown them follows the role instead.
+        !authEnabled && {
+          key: 'administration',
+          title: 'Administration',
+          description: 'Whether the settings and reminders that manage this installation are shown.',
+          content: <AdminFeaturesSection />,
+        },
       ],
     },
     {
       title: 'Data',
       sections: [
-        canAdminister && {
+        showsAdminFeatures && {
           key: 'backup',
           title: 'Backup / Restore',
           help: <FeatureExplainer topic="backup-restore" placement="bottom-left" />,
@@ -137,7 +147,7 @@ export default function Settings() {
                 <RulesTrashSection onChanged={loadStorage} />
               </Subsection>
               {/* The backup history is an administrator's, so only they are shown or counted its trash. */}
-              {canAdminister ? (
+              {showsAdminFeatures ? (
                 <Subsection title={counted('Backup history', trash?.backup_history ?? 0)}>
                   <BackupHistoryTrashSection onChanged={loadStorage} />
                 </Subsection>
@@ -166,7 +176,7 @@ export default function Settings() {
       ],
     },
     // The install and the network perimeter (`security-model.md` → *Identity and the network perimeter*).
-    canAdminister && {
+    showsAdminFeatures && {
       title: 'Server',
       sections: [
         // With sign-in protection off there are no users to manage, only the local profiles.
@@ -230,7 +240,7 @@ export default function Settings() {
     },
     {
       sections: [
-        canAdminister && developerOptionsEnabled && {
+        showsAdminFeatures && developerOptionsEnabled && {
           key: 'developerOptions',
           title: 'Developer options',
           description: 'Useful tools for developers and testing workflows.',
@@ -252,7 +262,7 @@ export default function Settings() {
           bundledLicenseAvailable={bundledLicenseAvailable}
           buildStamp={buildStamp}
           thirdPartyNoticesScope={thirdPartyNoticesScope}
-          canManageEnvironment={canAdminister}
+          canManageEnvironment={showsAdminFeatures}
         />
       ),
     },

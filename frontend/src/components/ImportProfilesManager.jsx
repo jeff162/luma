@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
 import {
   analyzeImportColumns,
   computeEvidenceColumnOptions,
@@ -1017,7 +1018,7 @@ export default function ImportProfilesManager({
   // Pointing a source at a server folder needs an admin once sign-in protection is on; everything else
   // about a data source does not. Assumed allowed until the status says otherwise, so an admin never
   // sees the refusal flash past on load — the server enforces it either way.
-  const [canSetWatchFolder, setCanSetWatchFolder] = useState(true)
+  const { canAdminister: canSetWatchFolder } = useAppSession()
   const activeFormKey = showAdd ? 'new' : (editId ? `edit:${editId}` : '')
 
   function clampFormPanelPosition(pos, size = { width: ADD_PANEL_WIDTH, height: 740 }) {
@@ -1092,11 +1093,6 @@ export default function ImportProfilesManager({
   useEffect(() => { if (hostAccounts) setAccounts(hostAccounts) }, [hostAccounts])
   useEffect(() => { if (hostBatches) setBatches(hostBatches) }, [hostBatches])
 
-  useEffect(() => {
-    api.getAuthStatus()
-      .then(status => setCanSetWatchFolder(!status?.auth_enabled || status?.user?.role === 'admin'))
-      .catch(() => { })
-  }, [])
 
   useEffect(() => {
     onEditingChange?.(showAdd || !!editId)

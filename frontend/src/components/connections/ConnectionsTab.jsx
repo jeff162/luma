@@ -26,6 +26,7 @@ import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { formatTimestamp } from '../../lib/utils.js'
 import { connectionsAllowanceLines } from '../../lib/requestAllowance.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
+import { useShowsAdminFeatures } from '../../lib/adminFeatures.js'
 import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { useConnectionOperations } from '../../lib/useConnectionOperations.js'
@@ -500,7 +501,8 @@ function loadPlaidScript() {
 // `onShowHistory({ connectionIds })` opens the Data Import tab's history on those connections' cards, which
 // are what a sync writes to.
 export default function ConnectionsTab({ onShowHistory }) {
-  const { currentUser, authEnabled } = useAppSession()
+  const { currentUser } = useAppSession()
+  const showsAdminFeatures = useShowsAdminFeatures()
   const [accounts, setAccounts] = useState([])
   // For the import-card ledger a connection card opens in place: its rows are categorizable, which is
   // the whole reason to open it here rather than send the user to find the card.
@@ -632,7 +634,6 @@ export default function ConnectionsTab({ onShowHistory }) {
     return () => window.removeEventListener('beforeunload', warn)
   }, [linkInProgress])
 
-  const isAdmin = !authEnabled || currentUser?.role === 'admin'
   // From another device the app secret and bank tokens cross the network, so connecting needs HTTPS.
   const httpsBlocked = !!(transport && !transport.is_loopback && !transport.is_https)
 
@@ -1298,7 +1299,7 @@ export default function ConnectionsTab({ onShowHistory }) {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* Configure only where there is something to configure — a provider with no app-level
                     credential would open a dialog with no fields in it. */}
-                {isAdmin && p.requires_app_config !== false
+                {showsAdminFeatures && p.requires_app_config !== false
                   ? <Button variant="secondary" onClick={() => openConfig(p)}>Configure</Button> : null}
                 {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
                     because it differs in kind: Plaid's widget authorizes one institution, while a
@@ -1600,11 +1601,11 @@ export default function ConnectionsTab({ onShowHistory }) {
           provider that has them, and connecting straight away for one that has none — for which a
           Configure dialog would open with nothing in it. Providers needing credentials stay admin-only;
           one that needs none is gated on the vault like any other connect. */}
-      {unconfigured.length && unconfigured.some(p => isAdmin || p.requires_app_config === false) ? (
+      {unconfigured.length && unconfigured.some(p => showsAdminFeatures || p.requires_app_config === false) ? (
         <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data provider:</span>
           {unconfigured
-            .filter(p => isAdmin || p.requires_app_config === false)
+            .filter(p => showsAdminFeatures || p.requires_app_config === false)
             .map(p => (
               <Button key={p.provider} variant="secondary"
                 onClick={() => (p.requires_app_config === false ? connect(p) : openConfig(p))}>
@@ -1641,7 +1642,7 @@ export default function ConnectionsTab({ onShowHistory }) {
       {vaultSettingsOpen ? (
         <VaultSettingsDialog
           currentUserId={currentUser?.id}
-          isAdmin={isAdmin}
+          isAdmin={showsAdminFeatures}
           onChangePassphrase={() => { setVaultSettingsOpen(false); changePassphrase() }}
           onChanged={refresh}
           onClose={() => setVaultSettingsOpen(false)}

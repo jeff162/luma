@@ -197,6 +197,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | Help registry + `FeatureExplainer` / `ContextualExplainer` / `HelpLink` | In-app help: a topic in the registry, a `?` beside what it explains, and a tip for a recognized situation. | `help/content.jsx`, `help/FeatureExplainer.jsx`, `help/ContextualExplainer.jsx`, `help/HelpLink.jsx` |
 | `useUserPreference` | A UI preference kept per user. | `lib/UserPreferencesContext.jsx` |
+| `useShowsAdminFeatures` | Whether to list a control that manages the installation (an administrator's section, button or reminder). Display only; the server's guard is unaffected. | `lib/adminFeatures.js` |
 | `useDeviceLayoutPreference` | Any display preference (column geometry, a pane's width or collapse, a floating panel's place), kept per user and per kind of screen. `useColumnPreference` and `useTransactionTableLayout` are built on it; `useDeferredDeviceLayoutPreference` is its form for a dragged splitter, saved once on release. | `lib/UserPreferencesContext.jsx`, `lib/deviceLayout.js` |
 | `localStore` / `sessionStore` | Browser storage, because a bare `window.localStorage` throws where the browser blocks site data. | `lib/browserStorage.js` |
 | `downloadUrl` | Saving a file the server generates, so an error status reaches a handler. | `lib/api.js` |

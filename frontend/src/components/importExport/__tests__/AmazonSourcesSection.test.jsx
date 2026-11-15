@@ -12,7 +12,6 @@ import userEvent from '@testing-library/user-event'
 const api = vi.hoisted(() => ({
   getAmazonProfiles: vi.fn(),
   getAccounts: vi.fn(),
-  getAuthStatus: vi.fn(),
   createAccount: vi.fn(),
   createAmazonProfile: vi.fn(),
   updateAmazonProfile: vi.fn(),
@@ -20,18 +19,18 @@ const api = vi.hoisted(() => ({
 vi.mock('../../../lib/api.js', () => ({ api }))
 
 const AmazonSourcesSection = (await import('../AmazonSourcesSection.jsx')).default
+const { AppSessionProvider } = await import('../../../lib/AppSessionContext.jsx')
 
 const AMAZON_ACCOUNT = { id: 'acct-1', name: 'Amazon — household', type: 'amazon' }
 
 function mockApi({ accounts = [] } = {}) {
   api.getAmazonProfiles.mockResolvedValue({ profiles: [] })
   api.getAccounts.mockResolvedValue(accounts)
-  api.getAuthStatus.mockResolvedValue({ auth_enabled: false })
   api.createAmazonProfile.mockResolvedValue({ ok: true })
 }
 
 async function openEditor() {
-  render(<AmazonSourcesSection />)
+  render(<AppSessionProvider value={{ canAdminister: true }}><AmazonSourcesSection /></AppSessionProvider>)
   await userEvent.click(await screen.findByRole('button', { name: '+ New Amazon source' }))
   return screen.findByLabelText('Name')
 }

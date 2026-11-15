@@ -1306,8 +1306,9 @@ export default function App() {
   const preferenceSubjectId = authEnabled
     ? (currentUser?.id || currentUser?.user_id || '')
     : (activeLocalProfile?.id || '')
-  // Who the administrator's Settings sections are for — the client's reading of the server's `require_admin_or_local`.
-  // With sign-in protection off there is no role to hold, so everyone here qualifies.
+  // Whether the administrator's controls would work — the client's reading of the server's `require_admin_or_local`.
+  // With sign-in protection off there is no role to hold, so everyone here qualifies. Whether they are shown is
+  // `useShowsAdminFeatures`, which can hide them from someone who qualifies.
   const canAdminister = !authEnabled || currentUser?.role === 'admin'
   // Setters are exposed alongside getters so the Settings security forms can persist a change to
   // the backend and immediately reflect it in shell-level session state without a reload. (useState

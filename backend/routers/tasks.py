@@ -42,7 +42,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from backend.authorization import is_admin_or_local
+from backend.authorization import is_admin_or_local, shows_admin_features
 from backend.db.database import get_db
 from backend.db.control_database import (
     auth_required,
@@ -83,7 +83,7 @@ def _https_setup_task(request: Request | None) -> dict | None:
     # business.
     if request is None or not transport.https_expected(request, perimeter_on=auth_required()):
         return None
-    if transport.request_is_https(request) or not is_admin_or_local(request):
+    if transport.request_is_https(request) or not shows_admin_features(request):
         return None
     if get_https_warning_suppressed():
         return None
@@ -210,7 +210,7 @@ def _backup_due_task(request: Request | None) -> dict | None:
     another, and shown to whoever can take a backup. Dismissed for the event that raised it, by the
     retirement's date, the reissue's date or the wrapping in force, so the next event raises it again;
     a backup taken since clears it, since its export then matches."""
-    if request is None or not is_admin_or_local(request):
+    if request is None or not shows_admin_features(request):
         return None
     user = getattr(request.state, "user", None) or {}
     exports = credentials_exports_detail()
@@ -256,7 +256,7 @@ def _server_error_task(request: Request | None) -> dict | None:
     it links to — the same predicate that page's endpoint enforces. Opening that page acknowledges the
     count for the whole install, which takes this away; dismissing it here hides it until the next error.
     """
-    if request is None or not is_admin_or_local(request):
+    if request is None or not shows_admin_features(request):
         return None
     unseen = app_log_file.error_counts()["unacknowledged"]
     if not unseen:
@@ -281,7 +281,7 @@ def _proxy_certificate_task(request: Request | None) -> dict | None:
     Without this the only sign is every device refusing the server at once. Not dismissible: it stands
     until an administrator accepts the new certificate, which is the statement that the change was
     theirs, and each device still has to install it."""
-    if request is None or not is_admin_or_local(request):
+    if request is None or not shows_admin_features(request):
         return None
     if not proxy_certificate.changed_from_record():
         return None
@@ -303,7 +303,7 @@ def _update_available_task(request: Request | None) -> dict | None:
     """A newer release than the running copy, when the install has opted in to checking for one
     (`services/update_check.py`). Shown to whoever could install it. The dismissal key carries the
     version, so putting the reminder away covers that release only and the next one raises it again."""
-    if request is None or not is_admin_or_local(request) or not update_check.is_enabled():
+    if request is None or not shows_admin_features(request) or not update_check.is_enabled():
         return None
     version = update_check.available_version()
     if not version:
@@ -324,7 +324,8 @@ def _update_available_task(request: Request | None) -> dict | None:
 def _watched_folder_task(request: Request | None) -> dict | None:
     """Watched folders the last scan could not list (`watch.unreadable_folders`). Nothing in one is
     imported until it can be, which a note beside the source on the File Sources tab does not make
-    plain. Shown to who can change the folder: the watch settings are an administrator's."""
+    plain. Shown to who can change the folder: the watch settings are an administrator's. Not withdrawn by
+    `shows_admin_features`, because the folder is set beside its source, which no one is spared."""
     if request is None or not is_admin_or_local(request):
         return None
     from backend.routers.import_export.watch import unreadable_folders

@@ -257,7 +257,10 @@ authorization check at the data layer would have no scoping model behind it to e
 
 **The same gate decides what the interface lists.** Settings groups its sections by subject, not by
 role, and a section behind `require_admin_or_local` is listed only for someone who passes it, so a member
-is never shown controls that would all be refused.
+is never shown controls that would all be refused. With sign-in protection off everyone passes, and a
+per-user preference (Settings → Administration) can still hide those controls and their reminders. It is a
+display choice and defends nothing: the routes enforce the gate whatever it says, and it is read only while
+sign-in is off, so it can never hide anything from an administrator once roles exist.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity
 has a password and another does not, anyone on the LAN picks the passwordless one and reads the same

@@ -8,6 +8,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AppSessionProvider } from '../../lib/AppSessionContext.jsx'
+import { UserPreferencesProvider } from '../../lib/UserPreferencesContext.jsx'
+import { SHOW_ADMIN_FEATURES_PREF_KEY } from '../../lib/adminFeatures.js'
 
 const section = name => ({ default: () => <div>{`${name} body`}</div> })
 vi.mock('../../components/administration/ConfigurationSection.jsx', () => section('configuration'))
@@ -47,14 +49,16 @@ const { default: Settings } = await import('../Settings.jsx')
 
 afterEach(cleanup)
 
-function mountAt(path, session) {
+function mountAt(path, session, preferences = {}) {
   return render(
     <AppSessionProvider value={session}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </MemoryRouter>
+      <UserPreferencesProvider initialPreferences={preferences}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </MemoryRouter>
+      </UserPreferencesProvider>
     </AppSessionProvider>,
   )
 }
@@ -83,5 +87,19 @@ describe('the Settings page', () => {
     mountAt('/settings?section=userManagement', { authEnabled: false, canAdminister: true })
     expect(screen.getByText('appearance body')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'User management' })).toBeNull()
+  })
+
+  it('keeps the administrator sections out of sight for someone who chose that while sign-in is off', () => {
+    const hidden = { [SHOW_ADMIN_FEATURES_PREF_KEY]: false }
+    mountAt('/settings?section=backup', { authEnabled: false, canAdminister: true }, hidden)
+    expect(screen.getByRole('button', { name: 'Administration' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Backup / Restore' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Server' })).toBeNull()
+    cleanup()
+
+    // Once sign-in is on the role decides, whatever was chosen before.
+    mountAt('/settings?section=backup', { authEnabled: true, canAdminister: true }, hidden)
+    expect(screen.queryByRole('button', { name: 'Administration' })).toBeNull()
+    expect(screen.getByText('backup body')).toBeTruthy()
   })
 })

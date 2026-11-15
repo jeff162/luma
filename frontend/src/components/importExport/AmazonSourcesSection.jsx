@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useId, useState } from 'react'
 import { api } from '../../lib/api.js'
+import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { formatTimestamp } from '../../lib/utils.js'
 import { AppConfirmDialog, AppDialog, Button, Input, Toggle, IconButton } from '../ui.jsx'
 import { SOURCE_ROW_GRID_COLUMNS, TRUNCATED_CELL_STYLE } from '../../lib/importExport/constants.js'
@@ -114,7 +115,7 @@ export default function AmazonSourcesSection({ batches = [] }) {
   const [pendingDelete, setPendingDelete] = useState(null)
   // Naming a server folder needs an admin once sign-in protection is on; assumed allowed until the
   // status says otherwise, as the CSV manager does, so an admin never sees the refusal flash past.
-  const [canSetWatchFolder, setCanSetWatchFolder] = useState(true)
+  const { canAdminister: canSetWatchFolder } = useAppSession()
 
   const load = useCallback(async () => {
     const [profileResult, accountList] = await Promise.all([
@@ -125,11 +126,6 @@ export default function AmazonSourcesSection({ batches = [] }) {
     setAccounts((accountList || []).filter(a => (a.type || '').toLowerCase() === 'amazon'))
   }, [])
   useEffect(() => { load() }, [load])
-  useEffect(() => {
-    api.getAuthStatus()
-      .then(status => setCanSetWatchFolder(!status?.auth_enabled || status?.user?.role === 'admin'))
-      .catch(() => { })
-  }, [])
 
   const amazonBatches = batches.filter(b => b.source_kind === 'marketplace:amazon')
   const lastUsed = amazonBatches.map(b => b.imported_at || '').sort().pop() || ''

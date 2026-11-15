@@ -829,6 +829,13 @@ copied or moved. *The two databases, and what separates them* covers how the pai
 - **Admin gates the install and the perimeter, not the ledger.** The guards in
   `backend/authorization.py` cover user management, environment and provider settings, backup and
   restore, and the backup keys.
+- **Being shown the admin surfaces is asked once per side.** `useShowsAdminFeatures`
+  (`lib/adminFeatures.js`) decides what the client lists, and `shows_admin_features`
+  (`backend/authorization.py`) decides the reminders and counts the server sends. While sign-in is on
+  both follow the role; while it is off both read the user's `ui.showAdminFeatures` preference, which is
+  kept, unread, through a spell with sign-in on. Neither is a guard: `canAdminister` and
+  `require_admin_or_local` still say what works, which is why a watched folder, set beside its source,
+  stays editable and its unreadable-folder reminder stays raised.
 - **One identity concept, `user_account`, in one table.** A perimeter-off identity and an authenticated
   user are the same row; the sign-in flag decides only whether the password is verified. Perimeter off
   is local mode: passwordless identities picked from a chooser, scoping per-person UI preferences.

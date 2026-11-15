@@ -25,7 +25,7 @@ from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from backend import transport
-from backend.authorization import is_admin_or_local, require_admin_or_local
+from backend.authorization import require_admin_or_local, shows_admin_features
 from backend.db.control_database import auth_required
 from backend.db.database import get_db, ledger_epoch
 from backend.routers.import_export.amazon import BATCH_SOURCE_KIND as AMAZON_BATCH_SOURCE_KIND
@@ -266,4 +266,4 @@ def get_storage_summary(request: Request):
     """What the trash holds and how much the import records take, against the size of the database —
     read once by Settings so its section list can say so before a section is opened."""
     with get_db() as conn:
-        return storage_summary(conn, backup_history=is_admin_or_local(request))
+        return storage_summary(conn, backup_history=shows_admin_features(request))

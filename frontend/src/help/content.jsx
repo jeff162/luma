@@ -3825,6 +3825,13 @@ export const HELP_TOPICS = [
             changing the password, adding passkeys and enabling 2FA as part of password access.
             See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
+          <li>
+            <strong>Administration</strong> (only visible when sign-in protection is off) shows or
+            hides the features that manage the installation: the Server settings, Backup / Restore,
+            provider setup and their reminders on the Tasks page. Hidden features still work; this is a
+            display choice for each profile, not protection. When sign-in protection is turned on, only
+            administrators see them, whatever was chosen here.
+          </li>
         </ul>
         <HelpHeading anchor="data">Data</HelpHeading>
         <ul>

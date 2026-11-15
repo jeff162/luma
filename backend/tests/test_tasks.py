@@ -10,6 +10,7 @@ drift back to over-reporting work that can never reach zero.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -20,10 +21,12 @@ from unittest import mock
 
 from fastapi import HTTPException
 
+from backend.authorization import SHOW_ADMIN_FEATURES_PREF_KEY
 from backend.db import control_database
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.tasks import dismiss_task, get_tasks, restore_task
 from backend.services import proxy_certificate
+from backend.services.preferences import set_preference
 
 
 class TasksFixtureTestCase(unittest.TestCase):
@@ -630,6 +633,15 @@ class ServerErrorTaskTests(TasksFixtureTestCase):
         control_database.enable_auth_mode()
         self.assertEqual(self._task(role="admin")["count"], 2)
         self.assertIsNone(self._task(role="member"))
+
+    def test_hiding_admin_features_withdraws_it_only_while_sign_in_is_off(self):
+        control_database.record_server_errors(2, busy_timeout_ms=500)
+        with self._use_db_path():
+            set_preference("test-user", SHOW_ADMIN_FEATURES_PREF_KEY, json.dumps(False))
+        self.assertIsNone(self._task())
+
+        control_database.enable_auth_mode()
+        self.assertEqual(self._task(role="admin")["count"], 2)
 
     def test_acknowledging_clears_it_until_the_next_error(self):
         control_database.record_server_errors(2, busy_timeout_ms=500)
