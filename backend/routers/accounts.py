@@ -52,6 +52,8 @@ from backend.services.account_references import (
 )
 from backend.services.account_groups import set_account_parent
 from backend.services.import_batch_totals import delete_transactions
+from backend.services.money_movement import PAYPAL_ACCOUNT_TYPE
+from backend.services.paypal_funding import pair_after_account_change
 from backend.services.recurring_detection import settle_owed_rescans
 
 router = APIRouter()
@@ -351,6 +353,7 @@ def update_account(account_id: str, body: AccountUpdate):
 
         has_children = _get_child_count(conn, account_id) > 0
         grouped = bool(acc["parent_account_id"]) or has_children
+        pairing_changed = False
 
         if body.name is not None and body.name.strip():
             next_name = body.name.strip()
@@ -364,13 +367,17 @@ def update_account(account_id: str, body: AccountUpdate):
         if body.type is not None and body.type.strip():
             if grouped:
                 raise HTTPException(status_code=400, detail="Ungroup this account before changing its type")
+            next_type = body.type.strip()
+            pairing_changed = (next_type != (acc["type"] or "")
+                               and PAYPAL_ACCOUNT_TYPE in (next_type, acc["type"]))
             conn.execute(
                 "UPDATE account SET type = ? WHERE id = ?",
-                (body.type.strip(), account_id),
+                (next_type, account_id),
             )
 
         if body.owner_id is not None:
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)
+            pairing_changed = pairing_changed or owner_val != acc["owner_id"]
             conn.execute(
                 "UPDATE account SET owner_id = ? WHERE id = ?",
                 (owner_val, account_id),
@@ -381,6 +388,9 @@ def update_account(account_id: str, body: AccountUpdate):
                 "UPDATE txn SET owner_id = ? WHERE account_id = ?",
                 (owner_val, account_id),
             )
+    # PayPal pairing reads which rows may pair from account type and owner (services/paypal_funding.py).
+    if pairing_changed:
+        pair_after_account_change(get_db())
     return {"ok": True}
 
 

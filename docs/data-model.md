@@ -2115,13 +2115,20 @@ until one claims nothing. Two rows cornered on one candidate are a shortage, and
 - **Decisions are links.** Unpairing writes `paypal_funding_declined`, so the pass does not repeat the
   pair; acknowledging a row with nothing to pair writes `paypal_funding_reviewed`. As link kinds they
   ride backups, cascade with their rows, and invalidate the attention cache.
-- **The pass runs after ingestion and after each pair, unpair or decline** (`pair_after_decision`),
-  never from a report read, because a decision can make another row unambiguous.
+- **The pass runs after ingestion, after each pair, unpair or decline** (`pair_after_decision`), **and after
+  an edit to what decides pairing** (`pair_after_account_change`): an account's type to or from `paypal`
+  (the account edit, and the money-movement approvals that retype accounts), an account's owner, or an
+  owner's deletion. It never runs from a report read. A decision can make another row unambiguous, and
+  which rows may pair is read from the accounts.
 - **Reversal restores only what is still the pairing's.** Unpairing, or undoing either row's import
   (`reverse_batch_paypal_funding`), puts a category back only while the row still holds the category
   and source the pairing set.
 - **A pair whose PayPal row was hard-deleted is healed at the start of the next pass**: the surviving
   row is restored and the link dropped.
+- **A pair holds only while its accounts still allow it**: the PayPal row on a `paypal` account, the
+  counterpart on one that is not, and their owners compatible as a candidate's must be. Once an edit breaks
+  that, the next pass releases it as an unpairing would, restoring what the pairing changed. Declines and
+  reviews are kept, inert until the account is set back.
 - **Attention** counts each row with a choice of candidates, each contested bank or card row once, and
   each unreviewed row of the other kinds. It is cached in `db_meta` against `recon_epoch`
   (`services/reconciliation_attention.py`). `card_counts` gives per batch the rows its review lists.

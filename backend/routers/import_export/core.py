@@ -136,7 +136,9 @@ from backend.services.source_capabilities import (
 from backend.services.connection_dedupe import build_connection_dedupe
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.paypal_conversions import CONVERSION_EVIDENCE_HEADER, fold_activity_conversions
-from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
+from backend.services.paypal_funding import (
+    pair_after_account_change, pair_after_ingest, reverse_batch_paypal_funding,
+)
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
 from backend.services.review_flagging import owners_not_flagging
 from backend.services.rule_suggestion_review import (
@@ -4198,11 +4200,12 @@ def apply_money_movement_rules(batch_id: str, body: MoneyMovementRulesRequest):
             raise HTTPException(status_code=404, detail="Batch not found")
         # Approving PayPal money-movement types declares the batch's accounts PayPal, so type them (when
         # generic) — the now-type-scoped rules match by account type.
-        if body.add:
-            ensure_paypal_account_type(conn, batch_account_ids(conn, batch_id))
+        retyped = ensure_paypal_account_type(conn, batch_account_ids(conn, batch_id)) if body.add else 0
         created = create_money_movement_rules(conn, body.add)
         deleted = delete_money_movement_rules(conn, body.remove)
         recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
+    if retyped:
+        pair_after_account_change(get_db())
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
 
@@ -4237,11 +4240,12 @@ def apply_profile_money_movement_rules(profile_id: str, body: MoneyMovementRules
             raise HTTPException(status_code=404, detail="Data source not found")
         # Approving PayPal money-movement types declares the source's accounts PayPal, so type them (when
         # generic) — the now-type-scoped rules match by account type.
-        if body.add:
-            ensure_paypal_account_type(conn, profile_account_ids(conn, profile_id))
+        retyped = ensure_paypal_account_type(conn, profile_account_ids(conn, profile_id)) if body.add else 0
         created = create_money_movement_rules(conn, body.add)
         deleted = delete_money_movement_rules(conn, body.remove)
         recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
+    if retyped:
+        pair_after_account_change(get_db())
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
 

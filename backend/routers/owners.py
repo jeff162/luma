@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from typing import Optional
 import uuid
 from backend.db.database import SHARED_OWNER_NAME, ensure_shared_owner, get_db, get_shared_owner_id
+from backend.services.paypal_funding import pair_after_account_change
 
 router = APIRouter()
 
@@ -106,4 +107,6 @@ def delete_owner(owner_id: str):
             # Categories no longer carry an owner (column dropped in m19_drop_category_owner_id);
             # owner-style category attribution now lives in tags, so there is nothing to clear here.
             conn.execute("UPDATE category_rule SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
+    # The owner's accounts are left with none, which pairs with any owner (services/paypal_funding.py).
+    pair_after_account_change(get_db())
     return {"ok": True}

@@ -135,6 +135,12 @@ def has_paypal_account(conn: sqlite3.Connection) -> bool:
     ).fetchone() is not None
 
 
+def _owners_compatible(shared_owner_id: Optional[str], a: Optional[str], b: Optional[str]) -> bool:
+    if a is None or b is None or a == b:
+        return True
+    return shared_owner_id is not None and shared_owner_id in (a, b)
+
+
 class _Ledger:
     """Everything the pairing reads, loaded once: the PayPal rows, the PayPal-looking rows elsewhere, and
     the links that record pairings and decisions. Matching then runs in memory — the candidate sets are
@@ -219,9 +225,7 @@ class _Ledger:
                     self.has_leg.update(roles.get("purchase", []))
 
     def owners_compatible(self, a: Optional[str], b: Optional[str]) -> bool:
-        if a is None or b is None or a == b:
-            return True
-        return self.shared_owner_id is not None and self.shared_owner_id in (a, b)
+        return _owners_compatible(self.shared_owner_id, a, b)
 
     def targets(self, row: dict) -> tuple[list[int], bool]:
         """The counterpart amounts (in cents, signed as the counterpart row is) a PayPal row could have,
@@ -442,10 +446,18 @@ def _release(conn: sqlite3.Connection, link_id: str) -> Optional[dict]:
 
 
 def _heal(conn: sqlite3.Connection) -> int:
-    """Drop the pairings and decisions whose rows are gone. A member row cascades away with its
-    transaction, but the link itself has no foreign key, so a pairing whose PayPal row was hard-deleted
-    (emptied from Trash, removed with an account merge) would otherwise go on excluding its bank row with
-    nothing left to count the money. Returns the number of links removed."""
+    """Drop the pairings and decisions whose rows are gone, and release the pairings their accounts no
+    longer allow. Returns the number of links removed.
+
+    A member row cascades away with its transaction, but the link itself has no foreign key, so a pairing
+    whose PayPal row was hard-deleted (emptied from Trash, removed with an account merge) would otherwise go
+    on excluding its bank row with nothing left to count the money.
+
+    What may pair is read from the accounts, which the user can edit: the PayPal row on a PayPal-type
+    account, the counterpart on one that is not, and owners compatible as a candidate's must be. A pairing
+    an edit has put outside that is released as an unpairing would be, since the exclusion it applied no
+    longer has a PayPal record behind it. Decisions are kept: they act on nothing meanwhile, and apply again
+    if the account is set back."""
     stale = conn.execute(
         """SELECT l.id, l.kind, COUNT(m.txn_id) AS members
            FROM   txn_link l LEFT JOIN txn_link_member m ON m.link_id = l.id
@@ -459,15 +471,42 @@ def _heal(conn: sqlite3.Connection) -> int:
             _release(conn, row["id"])
         else:
             txn_links.delete_link(conn, row["id"])
-    return len(stale)
+
+    shared_owner_id = get_shared_owner_id(conn)
+    disallowed = [
+        r["id"] for r in conn.execute(
+            f"""SELECT l.id,
+                       {_paypal_account_clause('pa', 'ppa')} AS paypal_on_paypal,
+                       {_paypal_account_clause('ca', 'cpa')} AS counterpart_on_paypal,
+                       COALESCE(pa.owner_id, ppa.owner_id) AS paypal_owner,
+                       COALESCE(ca.owner_id, cpa.owner_id) AS counterpart_owner
+                FROM   txn_link l
+                JOIN   txn_link_member pm ON pm.link_id = l.id AND pm.role = ?
+                JOIN   txn pt ON pt.id = pm.txn_id
+                JOIN   account pa ON pa.id = pt.account_id
+                LEFT   JOIN account ppa ON ppa.id = pa.parent_account_id
+                JOIN   txn_link_member cm ON cm.link_id = l.id AND cm.role = ?
+                JOIN   txn ct ON ct.id = cm.txn_id
+                JOIN   account ca ON ca.id = ct.account_id
+                LEFT   JOIN account cpa ON cpa.id = ca.parent_account_id
+                WHERE  l.kind = ?""",
+            (PAYPAL_ROLE, COUNTERPART_ROLE, LINK_KIND),
+        ).fetchall()
+        if not r["paypal_on_paypal"] or r["counterpart_on_paypal"]
+        or not _owners_compatible(shared_owner_id, r["paypal_owner"], r["counterpart_owner"])
+    ]
+    for link_id in disallowed:
+        _release(conn, link_id)
+    return len(stale) + len(disallowed)
 
 
 def pair_paypal_funding(conn: sqlite3.Connection) -> dict:
     """The pass run after every import and sync: heal what lost its rows, then apply every unambiguous
-    pairing. Returns ``{"paired": n, "healed": n}``."""
-    if not has_paypal_account(conn):
-        return {"paired": 0, "healed": 0}
+    pairing. Returns ``{"paired": n, "healed": n}``. Healing runs even with no PayPal account left, since
+    retyping the last one is what leaves its pairings to release."""
     healed = _heal(conn)
+    if not has_paypal_account(conn):
+        return {"paired": 0, "healed": healed}
     ledger = _Ledger(conn)
     analysis = _analyze(ledger)
     for paypal_id, other_id in analysis["auto"]:
@@ -479,10 +518,10 @@ def pair_after_decision(conn: sqlite3.Connection) -> int:
     """Run the pass again once a decision in the review has changed what is there to pair.
 
     A decision is never only about its own row: taking a transaction settles what every row cornered on it
-    could have been, and declining one releases it. The pass otherwise runs only after an import or a sync,
-    so a row that a decision had just made unambiguous dropped out of the review — there is nothing left to
-    ask about it — while nothing actually paired it, and its bank row went on counting beside the PayPal row
-    until the next ingest happened to run the pass. Claiming makes that reachable from more decisions than
+    could have been, and declining one releases it. The pass otherwise runs only after an import, a sync or
+    an account change, so a row that a decision had just made unambiguous dropped out of the review —
+    there is nothing left to ask about it — while nothing actually paired it, and its bank row went on
+    counting beside the PayPal row until the next ingest happened to run the pass. Claiming makes that reachable from more decisions than
     it used to be, since settling one row can now cascade through the rows it was cornered against.
 
     Best-effort and deliberately *after* the decision's own write: the decision is what the user asked for
@@ -495,16 +534,28 @@ def pair_after_decision(conn: sqlite3.Connection) -> int:
         return 0
 
 
-def pair_after_ingest(connection) -> None:
-    """Run the pass once new rows are committed, in the connection context manager given. An import or a
-    sync can bring either side of a pair — the PayPal row or the bank row that arrives days later — so both
-    run it. Like the duplicate sweep it runs after the ingest transaction, never inside it, and a failure
-    is logged rather than allowed to fail the import or sync that already landed its rows."""
+def _pass_after_commit(connection, what: str) -> None:
+    """Run the pass in the connection context manager given, after the write that called for it committed.
+    A failure is logged rather than allowed to fail that write, which already stands."""
     try:
         with connection as conn:
             pair_paypal_funding(conn)
     except Exception as e:
-        log_error(f"[paypal-funding] pairing pass failed: {e}", exc_info=e)
+        log_error(f"[paypal-funding] pairing pass after {what} failed: {e}", exc_info=e)
+
+
+def pair_after_ingest(connection) -> None:
+    """Run the pass once new rows are committed. An import or a sync can bring either side of a pair — the
+    PayPal row or the bank row that arrives days later — so both run it. Like the duplicate sweep it runs
+    after the ingest transaction, never inside it."""
+    _pass_after_commit(connection, "ingest")
+
+
+def pair_after_account_change(connection) -> None:
+    """Run the pass once an edit to what decides pairing is committed: an account's type to or from PayPal,
+    or an owner. Either can make rows pairable that no ingest will revisit, or leave pairings standing that
+    the accounts no longer allow (released by `_heal`)."""
+    _pass_after_commit(connection, "an account change")
 
 
 # --- The review ------------------------------------------------------------------------------------------

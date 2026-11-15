@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.accounts import AccountUpdate, update_account
 from backend.routers.import_export import list_batches, run_import
 from backend.routers.import_export.core import undo_batch
 from backend.routers.import_export.paypal_funding import PairRequest, paypal_funding_pair_endpoint
@@ -419,6 +420,52 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._pass()["healed"], 1)
         self.assertEqual(self._category_of(charge), (self.charity, "manual"))
         self.assertEqual(self._pair_links(), [])
+
+    def test_retyping_an_account_pairs_or_releases_its_rows_and_keeps_decisions(self):
+        wallet = self._account_in_db("Wallet", "p2p")
+        payment = self._txn(wallet, "2026-08-25", 50.0, "Harbor Relief Fund", category=self.charity)
+        declined = self._txn(self.checking, "2026-08-24", 50.0, "PAYPAL HARBOR RELIEF")
+        charge = self._txn(self.card, "2026-08-23", 50.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
+        with self._db() as conn:
+            pf.decline(conn, payment, [declined])
+
+        self._retype(wallet, "paypal")
+        self.assertEqual(self._category_of(charge), (self._money_movement(), "enrichment"))
+        self.assertEqual(len(self._pair_links()), 1)
+
+        self._retype(wallet, "depository")
+        self.assertEqual(self._category_of(charge), (self.charity, "manual"))
+        self.assertEqual(self._pair_links(), [])
+
+        self._retype(wallet, "paypal")    # the decline still holds, so the card row pairs again
+        self.assertEqual(self._category_of(charge), (self._money_movement(), "enrichment"))
+        self.assertEqual(self._category_of(declined), (None, "manual"))
+
+    def test_changing_an_owner_pairs_or_releases_its_rows(self):
+        self._txn(self.paypal, "2026-08-25", 50.0, "Harbor Relief Fund", category=self.charity)
+        charge = self._txn(self.sams_checking, "2026-08-23", 50.0, "PAYPAL HARBOR RELIEF", category=self.charity)
+        self.assertEqual(self._pass()["paired"], 0)
+
+        self._edit(self.sams_checking, owner_id=self.owner)
+        self.assertEqual(self._category_of(charge), (self._money_movement(), "enrichment"))
+
+        self._edit(self.sams_checking, owner_id=self.other_owner)
+        self.assertEqual(self._category_of(charge), (self.charity, "manual"))
+        self.assertEqual(self._pair_links(), [])
+
+    def _account_in_db(self, name, type_):
+        with self._db() as conn:
+            return self._account(conn, name, type_, self.owner)
+
+    def _retype(self, account_id, type_):
+        self._edit(account_id, type=type_)
+
+    def _edit(self, account_id, **fields):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            update_account(account_id, AccountUpdate(**fields))
+        finally:
+            reset_current_db_path(token)
 
     async def test_undoing_the_paypal_import_restores_the_card_row(self):
         charge = self._txn(self.card, "2026-08-23", 50.0, "PAYPAL *HARBOR RELIEF", category=self.charity)
