@@ -188,7 +188,9 @@ scope by owner and account type) and a PayPal pairing (account type and owner) a
 arrives and stored, so an edit to the account would leave them stale with no ingest to revisit them. Every
 write that changes an account's type or owner calls `settle_account_change`
 (`services/account_settings_followups.py`) after its commit, and anything stored that reads account settings
-is either re-derived there or worked out when read, as account groups and the owner lens are.
+is either re-derived there or worked out when read, as account groups and the owner lens are. One write
+does not call it: merging or detaching an account whose own owner is empty changes the owner it resolves to
+(`COALESCE(child, parent)`). That case is rare and is left until it matters.
 
 **Preferences are re-read on the same catch-up**, except on mount, where they were just loaded
 (`refreshPreferences` in `lib/UserPreferencesContext.jsx`). They are not part of the epoch: the read is

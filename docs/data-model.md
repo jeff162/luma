@@ -352,8 +352,8 @@ What each source allows is in
 - `display_name_source`: `manual` (a deliberate rename), `rule` (a rule's `clean_name`), `import`, or
   `enrichment` (filled from a richer source by enrich-on-import). NULL is treated as not manual
 
-Automatic name-setting never overwrites `manual`; only the explicit full-force rule apply may.
-`recategorize_all` leaves a manual name alone while still recategorizing the row.
+Automatic name-setting never overwrites `manual`; only the explicit full-force rule apply may (see
+[Rules and hand edits](#rules-and-hand-edits)).
 
 A paper-check row whose file carries a separate check-number column gets `"Check #<n>"` folded into
 `merchant_name` and `display_name`. `raw_name` and `content_hash` are untouched, so duplicate detection
@@ -806,6 +806,38 @@ Deleting a rule is a different question from which rule wins: its tags, rename a
 even where it never decided anything, which is why the checkup offers a delete only when both rules
 carry the same actions (`_actions_agree`).
 
+### Rules and hand edits
+
+**A rule never overwrites a field set by hand, and everything else it does still applies.** The winner
+for each action is chosen as above, with no regard to hand edits; a field holding a hand-set value is
+then left alone. A hand-set category is kept even when the rule's category is the same, so the row stays
+`manual`. A name typed by hand (`display_name_source = 'manual'`) is kept. A category a feature owns
+(split, refund, `enrichment`) or a link holds is protected the same way. **Tags are outside it**: every
+matching rule's tags apply, and a tag removed from a row by hand stays removed. A full-force apply is the
+exception the user asks for: it overrides a hand-set category, a typed name and a removed tag, but never a
+category a feature owns or a link holds.
+
+The decision is made in one place, `decide_rule_effects` (`services/categorizer.py`), from the row's
+protection (`hand_edit_protection`) and the matching rules in precedence order; every apply path —
+import, sync, *Run categorization*, a single-rule apply and their previews — writes only what it returns.
+
+Three policies were weighed, and each has a fair case:
+
+- **Skip the field** (in force). Mistakes show and correct themselves: an unwanted rename or tag appears
+  on the row, and removing it by hand protects it from then on. The cost is that a row someone reviewed
+  can still gain a rename or tag they did not anticipate.
+- **Skip the row on any hand edit.** A hand edit says the user has looked at the row and may have
+  settled other fields too, so rules leave it alone entirely. Predictable, but a rule written later never
+  reaches the row, and the omission shows nowhere — a tag report quietly comes up short. "Any hand edit"
+  also needs a definition (category, name, tags, notes, a split, a duplicate decision), and each field
+  counted widens what rules silently stop reaching.
+- **Skip the rule** whose actions touch a hand-set field. Whether a rule reaches a row then depends on
+  what else the rule does: adding a category to a tag-only rule would stop it tagging hand-categorized
+  rows. And a skipped rule hands its other fields to a lower-precedence rule, so editing a row's name
+  could change its category, unless the skipped rule still wins and writes nothing.
+
+Adopting another replaces the body of `decide_rule_effects`; its inputs carry what each policy needs.
+
 ### Rule checkup
 
 - **Range drift** (`GET /rules/range-drift`, `services/rule_range_drift.py`). An amount range is a
@@ -927,13 +959,17 @@ What remains is two people writing the same field of the same row within seconds
 | NULL | no | any automatic pass |
 
 `enrichment`, `split` and `refund` are `FEATURE_OWNED_CATEGORY_SOURCES` (`services/categorizer.py`),
-which every automatic pass skips by source.
+whose category every automatic pass keeps by source. A locked or feature-owned category stops only the
+category: the row still takes a rule's rename and tags ([Rules and hand edits](#rules-and-hand-edits)).
 
-**A row a link holds out of the totals is locked against every rule apply, whatever its source**
+**A row a link holds out of the totals has its category protected from every single-rule apply, whatever
+its source**
 (`held_txn_ids_sql`, `services/link_held_rows.py`): an Amazon order's charge, a wallet funding leg, or a
 PayPal pair row, while it sits in an excluded category. The source alone cannot carry this, because a
 hand edit that files such a row back in an excluded category makes it `manual`, which the full-force
 apply takes. Filing it in a counted category, or unlinking it, is the user's own decision and releases it.
+*Run categorization* does not test the link, only the source: a held row whose excluded category a rule
+set (a PayPal money-movement `Type` rule) must leave Money movement when that rule is removed.
 
 - **A trusted import is not locked.** A rule beats a file's label at import, so a rule created later
   has to beat it too, or the ledger's categories would depend on which arrived first.
@@ -959,23 +995,25 @@ apply takes. Filing it in a counted category, or unlinking it, is the user's own
 
 The operations:
 
-- **Run categorization** (`recategorize_all`) takes unlocked rows that are not feature-owned. It only
-  sets or changes a category and rule tags; a `rule` row that now matches nothing keeps its category,
-  so deleting or narrowing a rule does not un-categorize history. A matched `import` row becomes `rule`.
+- **Run categorization** (`recategorize_all`) reaches every row and writes what
+  [Rules and hand edits](#rules-and-hand-edits) allows. It only sets or changes a category, a rename
+  and rule tags; a `rule` row that now matches nothing keeps its category, so deleting or narrowing a
+  rule does not un-categorize history. A matched `import` row becomes `rule`.
 - **Reconcile** (`recategorize_all(retain_unmatched=False)`) clears a no-match `rule` row and removes
   its rule tags. It runs only over an explicit row set (`txn_ids`): one rule's matched rows on a rule
   delete or edit with `?reconcile=true`, or the *Money movement* leaf's rows when a type is removed. A
   cleared row falls back to what import would have given it with no rule in the way: its file label's
   category as `import` when its batch is trusted (through `adopt_file_categories`), else uncategorized.
-  A no-match `import` row is left as it is.
-- **Full-force apply** (`POST /rules/{id}/apply`) re-categorizes every match that is not feature-owned
-  or link-held, `manual` included, to `rule` and unlocked. An explicit apply is the user asking the rule
-  to own those rows. It does not reach `enrichment` or `refund` rows or a link-held row, and a split
-  declines the category while taking the rename and tags: taking an excluded charge or leg would count
-  its spend twice, and nothing the apply could intend needs that, since unlinking is what puts the row
-  back in a counted category. The preview offers the same rows (`_apply_reach_clause`).
+  A no-match `import` row is left as it is, and a protected category is never cleared.
+- **Full-force apply** (`POST /rules/{id}/apply`, the rule editor's "apply to existing") re-categorizes
+  every match whose category no feature owns and no link holds, `manual` included, to `rule` and
+  unlocked, overwrites a typed name, and clears a hand block on the rule's tags. An explicit apply is the
+  user asking the rule to own those rows. A feature-owned or link-held row keeps its category and takes
+  the rename and tags: taking an excluded charge or leg would count its spend twice, and nothing the
+  apply could intend needs that, since unlinking is what puts the row back in a counted category. A
+  split's declined category is reported. The preview judges each row the same way (`_apply_protection`).
 - **Preserve-manual apply** (`?preserve_manual=true`, or `_apply_rule_to_existing` over a row list)
-  also skips `manual` rows, and reclaims `import` rows.
+  keeps what was set by hand — category, typed name, removed tag — and reclaims `import` rows.
 - **Manual edits** write `manual` and the lock.
 
 ### Tags
@@ -992,8 +1030,8 @@ sources, most specific first:
   them.
 
 `manual_state = -1` on a `txn_tag` row **blocks** that tag on that transaction whichever source would
-contribute it. Blocks are keyed `(txn_id, tag_id)` and survive rule reruns; only the direct-rule
-`clear_manual_blocks` path, which requires `rule_present`, clears one.
+contribute it. Blocks are keyed `(txn_id, tag_id)` and survive rule reruns; only a full-force rule
+apply (`clear_manual_blocks`, which requires `rule_present`) clears one.
 `get_visible_transaction_tag_map` applies blocks last, and `get_blocked_transaction_tag_map` reports
 them.
 

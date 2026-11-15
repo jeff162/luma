@@ -10,6 +10,7 @@ transaction text, owner, account, and amount window.
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import NamedTuple, Optional
 
@@ -26,9 +27,6 @@ from backend.services.transaction_tags import (
 # returns — services/refund_links.py). See docs/data-model.md → How an existing transaction's category
 # can change.
 FEATURE_OWNED_CATEGORY_SOURCES = ("enrichment", "split", "refund")
-_NOT_FEATURE_OWNED_SQL = "COALESCE(category_source, '') NOT IN ({})".format(
-    ", ".join(f"'{source}'" for source in FEATURE_OWNED_CATEGORY_SOURCES)
-)
 
 
 def rule_scope_account_sql(alias: str = "") -> str:
@@ -542,6 +540,7 @@ def categorize_transaction(
                             resolved_effective_account_id, resolved_effective_account_type)
         ]
 
+    matched_rules = []
     matched_rule_ids = []
     winning_category_id = None
     winning_clean_name = None
@@ -549,6 +548,7 @@ def categorize_transaction(
     for rule in candidates:
         if not _amount_rule_matches(amount, rule["amount_min"], rule["amount_max"], rule["debit_credit"]):
             continue
+        matched_rules.append(rule)
         matched_rule_ids.append(rule["id"])
         if winning_category_id is None and rule["category_id"] is not None:
             winning_category_id = rule["category_id"]
@@ -573,31 +573,93 @@ def categorize_transaction(
             matched_rule_ids,
         ).fetchall()
         tag_ids = [row["tag_id"] for row in tag_rows]
+    # `category_id` and `clean_name` are what the rules say, before any hand edit on the row is weighed:
+    # attribution (`effect_rule_ids`) and conflict recording read them as such. What a pass may write is
+    # `decide_rule_effects`'s answer.
     return {
         "category_id": winning_category_id,
         "clean_name": winning_clean_name,
         "tag_ids": tag_ids,
         "matched_rule_ids": matched_rule_ids,
+        "matched_rules": matched_rules,
     }
 
 
-def rule_scalar_effects(result, *, fallback_name: str) -> dict:
-    """The transaction fields a matched rule sets through its *scalar* actions, in one place. Today that
-    is only the rename: ``display_name`` = the rule's clean_name if it set one, else ``fallback_name``
-    (the row's existing/raw name). Every rule-apply site consumes this identically — CSV import, Plaid
-    sync, ``recategorize_all`` and its preview count — so the derivation can't drift between them (the
-    CSV path once silently dropped clean_name; that class of bug ends here), and a future scalar action
-    such as a rule-set note is added *here* rather than at each site. ``result`` may be the dict
-    ``categorize_transaction`` returns, a bare category_id from its legacy shape, or ``None`` when no
-    categorization ran — the latter two carry no rename and yield just the fallback. Category assignment
-    and tags stay out of this: category_source policy differs per site, and tags already have their own
-    shared apply (``sync_rule_tags_for_transaction``).
+# --- Rules and hand edits ----------------------------------------------------------------------------
+#
+# Which of the rules' effects a pass may write onto a row that someone has edited by hand is one decision,
+# made in `decide_rule_effects` and nowhere else. Every apply path builds the row's protection with
+# `hand_edit_protection` and writes only what the decision returns. The decision in force: a rule never
+# overwrites a field set by hand, and everything else it does still applies. Tags are outside it: every
+# matching rule's tags apply, and a tag removed from a row by hand stays removed. The alternatives weighed,
+# and why this one was taken, are in docs/data-model.md → *Rules and hand edits*; adopting one replaces the
+# body of `decide_rule_effects`, whose inputs (the ranked matches and the protection) carry what each needs.
+
+
+@dataclass(frozen=True)
+class HandEditProtection:
+    """What on a row a rule may not write. `tag_blocks` is whether a tag removed by hand stays removed."""
+    category: bool
+    name: bool
+    tag_blocks: bool = True
+
+
+NOTHING_PROTECTED = HandEditProtection(category=False, name=False)
+
+
+def hand_edit_protection(category_source, category_overridden, display_name_source, *,
+                         held: bool = False, full_force: bool = False) -> HandEditProtection:
+    """The protection a row's provenance gives it. A category is protected when it was set by hand — a
+    `manual` source, or the lock as `category_lock_for` reads it (a legacy manual row carries the bit with
+    no source recorded, and a legacy `import` row's bit is void) — when a feature owns it
+    (`FEATURE_OWNED_CATEGORY_SOURCES`), or when a link holds the row out of the totals (`held`, from
+    `services/link_held_rows.py`, which the caller resolves). A name is protected when it was typed by hand.
+
+    `full_force` is the explicit "let this rule own its matches" apply: it overrides what was set by hand —
+    category, name and a hand-removed tag — but never a category a feature owns or a link holds."""
+    feature_owned = held or (category_source or "") in FEATURE_OWNED_CATEGORY_SOURCES
+    if full_force:
+        return HandEditProtection(category=feature_owned, name=False, tag_blocks=False)
+    return HandEditProtection(
+        category=(feature_owned or category_source == "manual"
+                  or bool(category_lock_for(category_source, category_overridden))),
+        name=display_name_source == "manual",
+    )
+
+
+@dataclass(frozen=True)
+class RuleEffects:
+    """The category and clean name a pass may write; None for either means leave that field alone."""
+    category_id: Optional[str]
+    clean_name: Optional[str]
+
+
+def decide_rule_effects(result, protection: HandEditProtection) -> RuleEffects:
+    """The rules' scalar effects a pass may write onto a row, given what on it was set by hand.
+
+    `result` is what `categorize_transaction` returned (None when nothing matched); its `matched_rules`
+    are the matching rules in precedence order. The policy here is per field: the winning rule for each
+    field is chosen exactly as with no hand edits, and a protected field is then left alone. A row's hand
+    edit therefore never hands a field to a lower-precedence rule."""
+    if not isinstance(result, dict):
+        return RuleEffects(None, None)
+    return RuleEffects(
+        category_id=None if protection.category else result.get("category_id"),
+        clean_name=None if protection.name else (result.get("clean_name") or None),
+    )
+
+
+def rule_scalar_effects(effects: RuleEffects, *, fallback_name: str) -> dict:
+    """The name fields a matched rule sets, in one place: ``display_name`` = the rule's clean name if the
+    decision lets it write one, else ``fallback_name`` (the row's existing or raw name). Every rule-apply
+    site consumes this identically — CSV import, sync, ``recategorize_all`` and its preview count — so the
+    derivation can't drift between them, and a future scalar action is added *here* rather than at each
+    site.
 
     ``renamed_by_rule`` reports whether the name came from a rule's clean_name (vs. the fallback) so a
     caller can stamp ``display_name_source`` consistently — ``'rule'`` when the rule authored the name,
     otherwise leave the existing provenance untouched (the fallback is not a rename)."""
-    clean_name = result.get("clean_name") if isinstance(result, dict) else None
-    return {"display_name": clean_name or fallback_name, "renamed_by_rule": bool(clean_name)}
+    return {"display_name": effects.clean_name or fallback_name, "renamed_by_rule": bool(effects.clean_name)}
 
 
 def effect_rule_ids(result, rules_by_id, rule_tags_by_id=None) -> set:
@@ -665,23 +727,23 @@ _CANDIDATE_PAGE = 500
 
 
 def _recategorize_candidates(conn: sqlite3.Connection, txn_ids: Optional[list[str]], columns: str):
-    """The rows a categorization pass may change (`category_overridden = 0`, not feature-owned), yielded a
-    page at a time: every row when `txn_ids` is None, else those of `txn_ids`. Keyset-paged on the id, which
-    no pass rewrites, so the caller may update rows between pages."""
+    """The rows a categorization pass reaches, yielded a page at a time: every row when `txn_ids` is None,
+    else those of `txn_ids`. A row with a hand-set or feature-owned category is reached too — its rename and
+    tags still apply — and `decide_rule_effects` keeps its category. Keyset-paged on the id, which no pass
+    rewrites, so the caller may update rows between pages."""
     base = f"""SELECT {columns}
                FROM   txn t
                JOIN   account a ON a.id = t.account_id
-               LEFT   JOIN account p ON p.id = a.parent_account_id
-               WHERE  t.category_overridden = 0 AND {_NOT_FEATURE_OWNED_SQL}"""
+               LEFT   JOIN account p ON p.id = a.parent_account_id"""
     if txn_ids is not None:
         ids = list(dict.fromkeys(txn_ids))
         for start in range(0, len(ids), _CANDIDATE_PAGE):
             chunk = ids[start:start + _CANDIDATE_PAGE]
-            yield from conn.execute(f"{base} AND t.id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+            yield from conn.execute(f"{base} WHERE t.id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
         return
     after = ""
     while True:
-        page = conn.execute(f"{base} AND t.id > ? ORDER BY t.id LIMIT ?", (after, _CANDIDATE_PAGE)).fetchall()
+        page = conn.execute(f"{base} WHERE t.id > ? ORDER BY t.id LIMIT ?", (after, _CANDIDATE_PAGE)).fetchall()
         yield from page
         if len(page) < _CANDIDATE_PAGE:
             return
@@ -690,12 +752,11 @@ def _recategorize_candidates(conn: sqlite3.Connection, txn_ids: Optional[list[st
 
 def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] = None,
                      retain_unmatched: bool = True) -> int:
-    """Re-run the rules over the `category_overridden = 0` rows — `rule`, uncategorized, `cleared`, and
-    **trusted `import`** rows — so a manual edit (and a split, which is locked too) is left alone, along
-    with feature-owned `enrichment` rows: an excluded Amazon funding charge or a suppressed wallet leg that
-    a feature moved into an excluded category and stashed a prior for; letting a rule reclaim or clear one
-    would un-exclude it and double-count the spend. A `refund` row is left alone too: its category is
-    the payment's it returns, and follows that payment rather than any rule.
+    """Re-run the rules over the ledger (or `txn_ids`), writing only what `decide_rule_effects` allows: a
+    hand-set category or name is kept, and so is a category a feature owns — an excluded Amazon funding
+    charge or a suppressed wallet leg, which a rule reclaiming would un-exclude and count twice; a split,
+    whose allocations are the categorization; a refund, which follows its payment. Such a row still takes
+    the rules' tags, and a rule's rename unless the name was typed by hand.
 
     Trusted-import rows are included because a file's categories rank *below* the rules: at import a rule
     beats the file's label, so a rule created after the import must beat it too, or the outcome would
@@ -722,10 +783,6 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     `txn_ids` restricts the pass to a specific row set (for the scoped reconcile); `None` is the whole
     ledger. A row already at its correct category matches identically either way — retain vs. reconcile
     only differ on the no-match case."""
-    # A split row also carries category_overridden = 1, so the lock bit alone would exclude it today —
-    # the guard is stated by source anyway because that is the actual invariant ("automatic
-    # categorization never touches a split's category"), and a guard that only holds via a second
-    # field's current value is one refactor away from being wrong.
     if txn_ids is not None and not txn_ids:
         return 0
     txns = _recategorize_candidates(conn, txn_ids, """
@@ -740,6 +797,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
                t.category_source,
+               t.category_overridden,
                t.display_name_source,
                t.import_evidence_json,
                t.imported_category,
@@ -771,24 +829,24 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
             source_text=source_text,
         )
         results.append((txn["id"], result))
-        cat_id = result["category_id"] if isinstance(result, dict) else result
+        protection = hand_edit_protection(
+            txn["category_source"], txn["category_overridden"], txn["display_name_source"])
+        effects = decide_rule_effects(result, protection)
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
-        # A manual rename is protected here, just as a manual *category* is (this is the pass that must
-        # never undo a deliberate choice): a rule may still recategorize the row, but its clean_name
-        # never overwrites a user-authored name. The explicit full-force rule apply remains the one path
-        # that can. A fallback name (no rule clean_name) is not a rename either, so it never restamps.
-        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
+        name_effects = rule_scalar_effects(effects, fallback_name=txn["merchant_name"] or txn["raw_name"])
+        # A fallback name (no rule clean_name) is not a rename, so it never restamps.
+        apply_rule_name = name_effects["renamed_by_rule"]
         current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
         display_name = name_effects["display_name"] if apply_rule_name else current_name
 
-        # Category: a rule match sets/changes it to 'rule'; on no match we retain (leave it) or, in a
-        # reconcile pass, clear it (a `cleared` row keeps its marker so a rename/tag-only match doesn't
-        # silently drop it — see settle_rejected_suggestion_rows). A reconcile never clears an
-        # `import` row: it is already the fallback a cleared row is about to be offered below.
-        if cat_id is not None:
-            next_category_id, next_source = cat_id, "rule"
-        elif retain_unmatched or txn["category_source"] == "import":
+        # Category: a rule match sets/changes it to 'rule'; a protected category is never touched; on no
+        # match we retain (leave it) or, in a reconcile pass, clear it (a `cleared` row keeps its marker so
+        # a rename/tag-only match doesn't silently drop it — see settle_rejected_suggestion_rows). A
+        # reconcile never clears an `import` row: it is already the fallback a cleared row is about to be
+        # offered below.
+        if effects.category_id is not None:
+            next_category_id, next_source = effects.category_id, "rule"
+        elif protection.category or retain_unmatched or txn["category_source"] == "import":
             next_category_id, next_source = txn["category_id"], txn["category_source"]
         else:
             next_category_id = None
@@ -847,8 +905,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
 def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     # The count on the rule-suggestions page's apply button: how many rows a run would change. It must
-    # mirror the same override-skipping, enrichment-skipping, and rule-matching contract as the real
-    # recategorize pass.
+    # mirror the real recategorize pass: the same rows, the same hand-edit decision, the same matching.
     txns = _recategorize_candidates(conn, None, """
                t.id,
                t.merchant_name,
@@ -859,6 +916,8 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                t.account_id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
+               t.category_source,
+               t.category_overridden,
                t.display_name_source,
                t.import_evidence_json,
                COALESCE(p.type, a.type) AS effective_account_type""")
@@ -881,16 +940,15 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
             rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
         )
-        cat_id = result["category_id"] if isinstance(result, dict) else result
+        effects = decide_rule_effects(result, hand_edit_protection(
+            txn["category_source"], txn["category_overridden"], txn["display_name_source"]))
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
-        # Mirror recategorize_all's manual-name protection so the count matches what the pass would do.
-        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
+        name_effects = rule_scalar_effects(effects, fallback_name=txn["merchant_name"] or txn["raw_name"])
         current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
-        display_name_changed = apply_rule_name and name_effects["display_name"] != current_name
+        display_name_changed = name_effects["renamed_by_rule"] and name_effects["display_name"] != current_name
         # Mirror the pass's default (retain): a no-match row does not change category, and rule-tags are
         # additive (a no-longer-matched tag is not removed), so only a real set/change is counted.
-        category_would_change = cat_id is not None and cat_id != txn["category_id"]
+        category_would_change = effects.category_id is not None and effects.category_id != txn["category_id"]
         existing_rule_tags = {tid for tid, row in tag_rows_by_txn.get(txn["id"], {}).items() if row["rule_present"]}
         tag_target = existing_rule_tags | {str(t) for t in matched_tag_ids if t}
         if (

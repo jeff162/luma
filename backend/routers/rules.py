@@ -27,7 +27,10 @@ from backend.services.categorizer import (
     bump_rule_effect_dates,
     rule_scope_account_sql,
     rule_specificity_order_sql,
-    FEATURE_OWNED_CATEGORY_SOURCES,
+    HandEditProtection,
+    RuleEffects,
+    decide_rule_effects,
+    hand_edit_protection,
     RULE_PRIORITY_LEVELS,
     RULE_PRIORITY_NORMAL,
 )
@@ -45,7 +48,10 @@ from backend.services.recurring_detection import (
     resolve_txn_name,
     settle_owed_rescans,
 )
-from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
+from backend.services.transaction_tags import (
+    get_blocked_transaction_tag_map, get_visible_transaction_tag_map, sync_rule_tags_for_transaction,
+    would_sync_rule_tags_change,
+)
 
 router = APIRouter()
 
@@ -200,46 +206,51 @@ def _rule_matches_txn(rule, txn) -> bool:
     return rule_matches_row(rule, txn)
 
 
-# The feature-owned category sources no rule apply reaches. The third, `split`, is reached for its rename
-# and tags and declines only the category.
-_APPLY_SPARED_SOURCES = tuple(source for source in FEATURE_OWNED_CATEGORY_SOURCES if source != "split")
-
-
-def _apply_reach_clause() -> tuple[str, list]:
-    """A WHERE clause over `t` admitting the rows a rule apply may reach, full-force included, with its
-    parameters. It leaves out a feature-owned source (`_APPLY_SPARED_SOURCES`) and a row a link holds out
-    of the totals (`services/link_held_rows.py`): taking an excluded Amazon charge, funding leg or PayPal
-    pair row into a rule's category un-excludes it and counts the money twice, and a refund follows the
-    payment it returns. The link test does not read the source, so a hand edit that files a linked charge
-    in an excluded category keeps it held. The apply and the preview both use it, so the rows offered are
-    the rows written."""
+def _held_txn_ids(conn) -> set[str]:
+    """The rows a link holds out of the totals (`services/link_held_rows.py`): a rule apply, full-force
+    included, never takes one's category, since a rule's category un-excludes an Amazon charge, funding leg
+    or PayPal pair row and counts the money twice. The link test does not read the source, so a hand edit
+    that files a linked charge in an excluded category keeps it held."""
     held_sql, held_params = held_txn_ids_sql()
-    spared = ",".join("?" * len(_APPLY_SPARED_SOURCES))
-    return (f"COALESCE(t.category_source, '') NOT IN ({spared}) AND t.id NOT IN ({held_sql})",
-            [*_APPLY_SPARED_SOURCES, *held_params])
+    return {r[0] for r in conn.execute(held_sql, held_params)}
 
 
-def _rule_visibly_changes_txn(rule, rule_tag_ids: set, txn, visible_tag_ids: set) -> bool:
-    """Whether applying `rule` to this matched row changes what the row shows: its category, its name or
-    its tags. The preview's filter and the apply's `updated` count both use it, so the number offered is
-    the number reported. A provenance-only write — a `manual` row already in the rule's category becoming
-    `rule`, or a clean name stored over an identical shown name — is not a change. Nor is anything on a
-    trashed row, which no list shows. A split row's category is never changed (see
-    `_apply_rule_to_existing`). `visible_tag_ids` are the row's effective tags before the apply; every
-    rule tag is visible afterwards, since the apply clears a block on it."""
+def _apply_protection(txn, held: set[str], *, full_force: bool) -> HandEditProtection:
+    """What a single-rule apply may not write on `txn` (`hand_edit_protection`). A split row's category is
+    its allocations, which exist nowhere else, so it is protected by `is_split` as well as by its source."""
+    return hand_edit_protection(
+        txn["category_source"], txn["category_overridden"], txn["display_name_source"],
+        held=txn["id"] in held or bool(txn["is_split"]), full_force=full_force,
+    )
+
+
+def _single_rule_effects(rule, protection: HandEditProtection) -> RuleEffects:
+    """`decide_rule_effects` for one rule applied on its own: the rule is the whole ranked match."""
+    result = {"category_id": rule["category_id"], "clean_name": rule["clean_name"], "matched_rules": [rule]}
+    return decide_rule_effects(result, protection)
+
+
+def _rule_visibly_changes_txn(effects: RuleEffects, rule_tag_ids: set, txn, visible_tag_ids: set,
+                              blocked_tag_ids: set = frozenset()) -> bool:
+    """Whether applying a rule's `effects` (`_single_rule_effects`) to this matched row changes what the row
+    shows: its category, its name or its tags. The preview's filter and the apply's `updated` count both
+    use it, so the number offered is the number reported. A provenance-only write — a `manual` row already
+    in the rule's category becoming `rule` under full force, or a clean name stored over an identical shown
+    name — is not a change. Nor is anything on a trashed row, which no list shows. `visible_tag_ids` are the
+    row's effective tags before the apply; `blocked_tag_ids` the ones removed by hand that stay removed
+    (none under full force, which clears a block on a rule tag)."""
     if txn["trashed_at"] is not None:
         return False
-    if rule["category_id"] is not None and not txn["is_split"] and txn["category_id"] != rule["category_id"]:
+    if effects.category_id is not None and txn["category_id"] != effects.category_id:
         return True
-    if rule["clean_name"] and resolve_txn_name(txn["merchant_name"], txn["display_name"], txn["raw_name"]) != rule["clean_name"]:
+    if effects.clean_name and resolve_txn_name(txn["merchant_name"], txn["display_name"], txn["raw_name"]) != effects.clean_name:
         return True
-    return bool(rule_tag_ids - visible_tag_ids)
+    return bool(rule_tag_ids - visible_tag_ids - blocked_tag_ids)
 
 
 def _rule_affected_txn_ids(conn, rule) -> list[str]:
-    """The `category_overridden = 0` transactions a rule currently matches — the candidate set for a scoped
-    reconcile when the rule is deleted or its scope narrowed with the "re-evaluate this rule's
-    transactions" opt-in. Uses the same shared matcher as apply, so "which rows a rule owns" has one
+    """The transactions a rule currently matches — the candidate set for a scoped reconcile when the rule
+    is deleted or its scope narrowed with the "re-evaluate this rule's transactions" opt-in. Uses the same shared matcher as apply, so "which rows a rule owns" has one
     definition. Gathered *before* the delete/edit so the old matcher is still in force; the reconcile then
     re-derives each row against the remaining rules (a fell-out row clears or moves to another rule; a
     still-matched row is unchanged)."""
@@ -248,8 +259,7 @@ def _rule_affected_txn_ids(conn, rule) -> list[str]:
                   t.import_evidence_json, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                   COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t JOIN account a ON a.id = t.account_id
-           LEFT   JOIN account p ON p.id = a.parent_account_id
-           WHERE  t.category_overridden = 0"""
+           LEFT   JOIN account p ON p.id = a.parent_account_id"""
     ).fetchall()
     return [r["id"] for r in rows if _rule_matches_txn(rule, r)]
 
@@ -262,9 +272,10 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # of each row whose category this apply changes is appended to it — the same snapshot shape
     # `restore_categorization_rows` consumes — so an accept can stash it for Undo and put the rows back.
     # `preserve_manual` reclaims the rows a rule should own — including trusted-import ones
-    # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
-    # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
-    # the rule's prior matches should follow it, but a manual override is the user's final say.
+    # (category_source = 'import') — while leaving what was set by hand untouched: a manual category, a
+    # typed name, a tag removed by hand (`decide_rule_effects`). Without it the apply is full-force: the
+    # user asking the rule to own its matches, which overrides those too. Neither takes a category a
+    # feature owns or a link holds.
     # `txn_ids` restricts the apply to a specific set of rows (still subject to the matcher check) — used
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
@@ -276,8 +287,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # `skipped_splits` (optional): ids of rows whose *category* this apply declined to set because the
     # transaction is split. A split's allocations are hand-built work with no stashed copy anywhere, so
     # no rule apply — not even the full-force one that overwrites a manual edit — may silently replace
-    # them; the caller reports the count instead. The refusal is scoped to the category effect only:
-    # a rule's rename and tags describe the purchase, not its allocation, so those still apply.
+    # them; the caller reports the count instead. The rename and tags still apply.
     rule = conn.execute(
         f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
                    owner_id, {rule_scope_account_sql()}, account_type, match_source_text
@@ -288,20 +298,13 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    # Every apply, full-force included, stays out of the rows a feature or a link owns
-    # (`_apply_reach_clause`). A split is reached so its rename and tags apply, and declines the category
-    # below.
-    reach_sql, where_params = _apply_reach_clause()
-    where_clauses = [reach_sql]
-    if preserve_manual:
-        # Preserve-manual reclaims trusted-import rows but spares a deliberate manual edit.
-        where_clauses.append("t.category_source IS NOT 'manual'")
+    where_sql, where_params = "", []
     if txn_ids is not None:
         if not txn_ids:
             return []
-        where_clauses.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
-        where_params.extend(txn_ids)
-    where_sql = "WHERE " + " AND ".join(where_clauses)
+        where_sql = f"WHERE t.id IN ({','.join('?' * len(txn_ids))})"
+        where_params = list(txn_ids)
+    held = _held_txn_ids(conn)
 
     txns = conn.execute(
         f"""SELECT
@@ -315,8 +318,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.account_id,
                t.import_evidence_json,
                t.category_id,
-               t.category_source      AS prior_category_source,
-               t.category_overridden  AS prior_category_overridden,
+               t.category_source,
+               t.category_overridden,
+               t.display_name_source,
                t.is_split,
                t.trashed_at,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
@@ -348,52 +352,44 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         # later should come back carrying the category its rule would have given it.
         if txn["trashed_at"] is None and txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
             effect_max_date = txn["date"]
+        protection = _apply_protection(txn, held, full_force=not preserve_manual)
+        effects = _single_rule_effects(rule, protection)
+        blocked_tag_ids = (
+            {tag["id"] for tag in get_blocked_transaction_tag_map(conn, [txn["id"]]).get(txn["id"], [])}
+            if rule_tag_ids and protection.tag_blocks else set()
+        )
         # Judged before any write, against the row as it stands.
         if visible_changes is not None:
             visible_tag_ids = (
                 {tag["id"] for tag in get_visible_transaction_tag_map(conn, [txn["id"]]).get(txn["id"], [])}
                 if rule_tag_ids else set()
             )
-            if _rule_visibly_changes_txn(rule, rule_tag_ids, txn, visible_tag_ids):
+            if _rule_visibly_changes_txn(effects, rule_tag_ids, txn, visible_tag_ids, blocked_tag_ids):
                 visible_changes.append(txn["id"])
         row_changed = False
-        # A split transaction keeps its allocations: the category half of this rule is declined and
-        # reported, while the rename half below still runs.
-        split_blocked = bool(txn["is_split"]) and rule["category_id"] is not None
-        if split_blocked and skipped_splits is not None:
+        if txn["is_split"] and rule["category_id"] is not None and skipped_splits is not None:
             skipped_splits.append(txn["id"])
-        if (rule["category_id"] is not None and not split_blocked) or rule["clean_name"]:
-            params = []
-            set_parts = []
-            if rule["category_id"] is not None and not split_blocked:
-                # An explicit apply is the user asking the rule to own these matches, so any
-                # prior auto state is replaced with the rule's category output when provided.
-                if capture_prior is not None:
-                    capture_prior.append({
-                        "id": txn["id"],
-                        "category_id": txn["category_id"],
-                        "category_source": txn["prior_category_source"],
-                        "category_overridden": txn["prior_category_overridden"],
-                    })
-                set_parts.extend(["category_id = ?", "category_overridden = 0", "category_source = 'rule'"])
-                params.append(rule["category_id"])
-            if rule["clean_name"]:
-                # This apply is the explicit "let the rule own these rows" path (the preserve-manual
-                # variant filters manual rows out upstream), so the rule's clean_name authors the name
-                # and stamps its provenance 'rule'.
-                if capture_prior_keys is not None:
-                    prior_key = _normalize_payee(
-                        resolve_txn_name(txn["merchant_name"], txn["display_name"], txn["raw_name"]))
-                    if prior_key:
-                        capture_prior_keys.add(prior_key)
-                set_parts.append("display_name = ?")
-                set_parts.append("display_name_source = 'rule'")
-                params.append(rule["clean_name"])
-            params.append(txn["id"])
-            conn.execute(
-                f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?",
-                params,
-            )
+        set_parts, params = [], []
+        if effects.category_id is not None:
+            if capture_prior is not None:
+                capture_prior.append({
+                    "id": txn["id"],
+                    "category_id": txn["category_id"],
+                    "category_source": txn["category_source"],
+                    "category_overridden": txn["category_overridden"],
+                })
+            set_parts.extend(["category_id = ?", "category_overridden = 0", "category_source = 'rule'"])
+            params.append(effects.category_id)
+        if effects.clean_name:
+            if capture_prior_keys is not None:
+                prior_key = _normalize_payee(
+                    resolve_txn_name(txn["merchant_name"], txn["display_name"], txn["raw_name"]))
+                if prior_key:
+                    capture_prior_keys.add(prior_key)
+            set_parts.extend(["display_name = ?", "display_name_source = 'rule'"])
+            params.append(effects.clean_name)
+        if set_parts:
+            conn.execute(f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?", (*params, txn["id"]))
             row_changed = True
         current_rule_tag_ids = {
             row["tag_id"]
@@ -403,8 +399,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
             ).fetchall()
         }
         merged_rule_tag_ids = current_rule_tag_ids | rule_tag_ids
-        if would_sync_rule_tags_change(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True):
-            sync_rule_tags_for_transaction(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True)
+        clear_blocks = not protection.tag_blocks
+        if would_sync_rule_tags_change(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=clear_blocks):
+            sync_rule_tags_for_transaction(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=clear_blocks)
             row_changed = True
         if row_changed:
             affected_ids.append(txn["id"])
@@ -441,7 +438,8 @@ class RulePreview(BaseModel):
 _RULE_PREVIEW_ROW_SQL = """
     SELECT
         t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.notes, t.import_evidence_json,
+        t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.category_source, t.display_name_source,
+        t.notes, t.import_evidence_json,
         COALESCE(a.parent_account_id, a.id) AS account_id,
         t.owner_id,
         COALESCE(a.display_name, a.name) AS account_name,
@@ -472,7 +470,8 @@ _RULE_MATCHES_ROW_LIMIT = 500
 
 @router.post("/preview")
 def preview_rule(body: RulePreview):
-    """Return transactions that would actually change if this rule were applied."""
+    """Return transactions that would actually change if this rule were applied, as the rule editor's
+    "apply to existing" does: full force (`_apply_rule_to_existing`)."""
     keyword, match_expr = _resolve_matcher(body.clauses, body.alternatives, body.keyword)
     rule = {
         "keyword":     keyword,
@@ -491,15 +490,16 @@ def preview_rule(body: RulePreview):
 
     with get_db() as conn:
         rows = conn.execute(_RULE_PREVIEW_ROW_SQL).fetchall()
-        reach_sql, reach_params = _apply_reach_clause()
-        unreachable = {r["id"] for r in conn.execute(f"SELECT t.id FROM txn t WHERE NOT ({reach_sql})", reach_params)}
-        matched = [txn for txn in map(dict, rows) if txn["id"] not in unreachable and _rule_matches_txn(rule, txn)]
+        held = _held_txn_ids(conn)
+        matched = [txn for txn in map(dict, rows) if _rule_matches_txn(rule, txn)]
         # The rows' tags as they stand: needed for every match when the rule adds tags, else only for the
         # report's tag column on the rows that change.
         tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in matched]) if rule_tag_ids and matched else {}
         affected = [
             txn for txn in matched
-            if _rule_visibly_changes_txn(rule, rule_tag_ids, txn, {tag["id"] for tag in tag_map.get(txn["id"], [])})
+            if _rule_visibly_changes_txn(
+                _single_rule_effects(rule, _apply_protection(txn, held, full_force=True)),
+                rule_tag_ids, txn, {tag["id"] for tag in tag_map.get(txn["id"], [])})
         ]
         if not rule_tag_ids and affected:
             tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in affected])

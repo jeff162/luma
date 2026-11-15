@@ -1524,8 +1524,8 @@ export const HELP_TOPICS = [
         </p>
         <HelpHeading anchor="applying-rules">Manually applying rules, and rule checkups</HelpHeading>
         <p>
-          <strong>Categorize</strong> re-applies the rules across the ledger, leaving any
-          transactions which were modified manually alone. <HelpLink to="/help/re-categorizing">When rules are applied</HelpLink> contains details
+          <strong>Categorize</strong> re-applies the rules across the ledger without overwriting
+          anything set by hand. <HelpLink to="/help/re-categorizing">When rules are applied</HelpLink> contains details
           regarding which rows are allowed to touch.
         </p>
         <p>
@@ -1573,15 +1573,22 @@ export const HELP_TOPICS = [
         <h4>Categorize</h4>
         <p>
           The <strong>Categorize</strong> button on the Rules page runs every rule across the whole
-          ledger. Run it after adding or changing rules. A category set by hand is left alone.
-          Categorize never removes a category, so a transaction that no longer matches any rule keeps
-          the one it has.
+          ledger. Run it after adding or changing rules. A category or name set by hand is kept, while
+          the rule&apos;s other actions still apply: a rename where the name was not typed by hand, and
+          its tags. A tag removed from a transaction by hand stays removed. Categorize never removes a
+          category, so a transaction that no longer matches any rule keeps the one it has.
         </p>
         <h4>Applying a rule when it is saved</h4>
         <p>
           Saving a rule offers <strong>Apply this rule now to N matching existing transactions</strong>.
-          Unlike Categorize, this also changes categories set by hand. A charge moved to money movement
-          by an Amazon order or a PayPal pairing keeps its category, and so does a refund.
+          Unlike Categorize, this also overrides what was set by hand: the category, the name, and a rule
+          tag removed by hand. A charge moved to money movement by an Amazon order or a PayPal pairing
+          keeps its category, and so does a refund; both still take the rename and tags.
+        </p>
+        <h4>Changing an account&apos;s owner or type</h4>
+        <p>
+          Rules can be limited to an owner or an account type, so changing either on an account re-applies
+          the rules to its transactions, the same way Categorize does.
         </p>
         <h4>Undoing a rule's categorizations</h4>
         <p>
@@ -1590,8 +1597,9 @@ export const HELP_TOPICS = [
           its imported file, or to uncategorized.
         </p>
         <p>
-          A <HelpLink to="/help/transaction-splits">split transaction</HelpLink> is never changed by a
-          rule. Its categories are the items it was divided into.
+          A <HelpLink to="/help/transaction-splits">split transaction</HelpLink>&apos;s category is never
+          changed by a rule, since its categories are the items it was divided into. A rule&apos;s rename
+          and tags still apply.
         </p>
         <p>
           A transaction's edit panel shows <strong>manual</strong> beside a category set by hand, and

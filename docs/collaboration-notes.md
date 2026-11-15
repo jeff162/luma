@@ -61,6 +61,11 @@ the import side is a saved data source.
   mean less, more or something other than its label says, do not silently narrow, broaden or reroute
   it. A conservative interim behavior is named in the summary as a product decision, with the
   alternative left out.
+- **Record a policy choice that reasonable people would make differently, with its alternatives.** Write
+  down each option weighed and its case beside the rule in force, and keep the decision in one function
+  whose inputs would serve the alternatives too, so a later reversal is a contained change rather than a
+  hunt through every caller. *Rules and hand edits* in `data-model.md` is the model; no flag or plug-in
+  framework is built until a second policy is actually wanted.
 - **Treat an agreed decision as a pattern.** Extend it to the analogous paths where it obviously applies
   and is low-risk, and name those extensions in the summary so they can be confirmed or scoped back.
 - **Do not bend a shared component to fix one page.** A new prop, overflow tweak or style override that

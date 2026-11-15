@@ -62,6 +62,8 @@ from backend.services.categorizer import (
     PreparedRules,
     categorize_transaction,
     category_lock_for,
+    decide_rule_effects,
+    hand_edit_protection,
     extract_source_match_text,
     load_categorization_rules,
     load_rule_tags_by_id,
@@ -3765,7 +3767,9 @@ def run_import_parsed(
                     cat_id = mapped_category_id
                     category_source = "manual"
                     category_overridden = 1
-            if apply_cat and not cat_id:
+            # A category the user mapped the file's label to is set by hand, so the rules keep off it
+            # (`decide_rule_effects`) while their rename and tags still apply.
+            if apply_cat:
                 rule_result = categorize_transaction(
                     raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
@@ -3774,11 +3778,12 @@ def run_import_parsed(
                     rule_tags_by_id=rule_tags_by_id,
                     source_text=extract_source_match_text(import_evidence),
                 )
-                rule_cat_id = rule_result["category_id"] if isinstance(rule_result, dict) else rule_result
                 rule_tag_ids = rule_result.get("tag_ids", []) if isinstance(rule_result, dict) else []
-                if rule_cat_id:
-                    cat_id = rule_cat_id
-                    category_source = "rule"
+            rule_effects = decide_rule_effects(
+                rule_result, hand_edit_protection(category_source, category_overridden, None))
+            if rule_effects.category_id:
+                cat_id = rule_effects.category_id
+                category_source = "rule"
             if raw_imported_category and not cat_id:
                 category_scope_token = _category_scope_token_for_import_row(csv_val, acc["id"], use_account_col, single_account_new)
                 if _row_uses_imported_categories(
@@ -3796,7 +3801,7 @@ def run_import_parsed(
                         cat_id = imported_category["id"]
                         category_source = "import"
 
-            name_effects = rule_scalar_effects(rule_result, fallback_name=display_desc)
+            name_effects = rule_scalar_effects(rule_effects, fallback_name=display_desc)
             txn_payload = {
                 "account_id": acc["id"],
                 "owner_id": acc["owner_id"],

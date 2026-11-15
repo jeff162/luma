@@ -48,8 +48,10 @@ from backend.services.paypal_funding import pair_after_ingest
 from backend.services.pending_supersession import oldest_held_pending_date, settle_vanished_pending
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
+    NOTHING_PROTECTED,
     PreparedRules,
     categorize_transaction,
+    decide_rule_effects,
     load_categorization_rules,
     source_match_text_from_json,
     load_rule_tags_by_id,
@@ -1294,9 +1296,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 owner_id=acc["owner_id"], account_id=acc["id"], rules=prepared_rules, rule_tags_by_id=rule_tags_by_id,
                 source_text=source_match_text_from_json(evidence_json) if needs_source_text else None,
             )
-            cat_id       = result["category_id"] if isinstance(result, dict) else result
+            effects      = decide_rule_effects(result, NOTHING_PROTECTED)    # a new row: nothing set by hand
+            cat_id       = effects.category_id
             rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-            name_effects = rule_scalar_effects(result, fallback_name=merchant_name or t["raw_name"])
+            name_effects = rule_scalar_effects(effects, fallback_name=merchant_name or t["raw_name"])
             display_name = name_effects["display_name"]
             display_name_source = "rule" if name_effects["renamed_by_rule"] else "import"
             txn_id = str(uuid.uuid4())
