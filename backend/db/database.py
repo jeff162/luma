@@ -356,13 +356,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # v87 adds `backup_history.database_check`, whether the databases passed their check as a backup was made.
 # v88 gives every user their own copy of the shared saved tag reports and saved filters, which became
 # per-user preferences. v89 adds `connection.provider_request_budget_at`, when the request budget was last
-# written, which a restore compares.
+# written, which a restore compares. v91 adds rule alerts: `category_rule.alert` and `.alert_message`, and
+# `rule_alert_hit`, the transactions an alert caught as they arrived.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 90
+CURRENT_VERSION = 91
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2727,6 +2728,27 @@ def _copy_amazon_charge_text(conn):
     _backfill_amazon_charge_text(conn)
 
 
+@migration(91)
+def _add_rule_alerts(conn):
+    # See the baseline CREATE. Every existing rule raises no alert, and no transaction has been caught by
+    # one. Skipped on the partial schemas of the older migration tests, as v81 is.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(category_rule)")}
+    if not columns or not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'txn'").fetchone():
+        return
+    for name, ddl in (("alert", "INTEGER NOT NULL DEFAULT 0"), ("alert_message", "TEXT")):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE category_rule ADD COLUMN {name} {ddl}")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_alert_hit (
+            rule_id TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+            txn_id  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            PRIMARY KEY (rule_id, txn_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_alert_hit_txn ON rule_alert_hit(txn_id)")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3260,7 +3282,11 @@ def init_db(db_path: str | None = None):
                 -- categorizer.RULE_PRIORITY_LEVELS). Not part of the matcher identity. Not named `priority`
                 -- because older backups still carry a column of that name with another meaning, and
                 -- restore copies any payload column the table has.
-                priority_level INTEGER NOT NULL DEFAULT 0
+                priority_level INTEGER NOT NULL DEFAULT 0,
+                -- 1 = a matching transaction that arrives raises a Task (services/rule_alerts.py), titled
+                -- with `alert_message` when one is set.
+                alert        INTEGER NOT NULL DEFAULT 0,
+                alert_message TEXT
             );
 
             -- `flag_new_for_review`: whether this owner's transactions arrive flagged `needs_review`
@@ -3953,6 +3979,14 @@ def init_db(db_path: str | None = None):
                 txn_id       TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
                 PRIMARY KEY (rule_id_low, rule_id_high)
             );
+            -- The transactions a rule's alert caught as they arrived (services/rule_alerts.py). Recorded
+            -- only for a row new to the ledger, so nothing re-derives one: it is backed up.
+            CREATE TABLE IF NOT EXISTS rule_alert_hit (
+                rule_id TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+                txn_id  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                PRIMARY KEY (rule_id, txn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_rule_alert_hit_txn ON rule_alert_hit(txn_id);
             -- The backups this system made, and the file its data was last restored from
             -- (services/backup_history.py). Sizes are bytes as stored in the archive; `key_labels` is a
             -- JSON list of the backup keys an encrypted file was sealed to. `restored_at` is set only on the
@@ -4208,7 +4242,7 @@ _LEDGER_EPOCH_SOURCE_TABLES = {
         "txn", "txn_tag", "txn_split", "txn_link", "txn_link_member",
         "account", "account_tag", "category", "category_tag", "tag", "owner",
         "recurring_series", "recurring_membership_override", "recurring_signal_dismissal",
-        "transfer_pair_decision",
+        "transfer_pair_decision", "rule_alert_hit",
     )
 }
 

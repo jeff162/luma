@@ -24,6 +24,9 @@ import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
  *
  * A task carries a `link` to the page that resolves it, or an `action` when what resolves it is a dialog
  * that opens over any page — then sending the user elsewhere would only add a step.
+ *
+ * A `mutable` task can also be muted: it stays in the dismissed list however high its count goes, until it
+ * is dismissed or restored there.
  */
 
 // The page's content column, named once so the header, the cards and the dismissed list agree.
@@ -66,7 +69,7 @@ function TaskSeverityIcon({ severity }) {
   )
 }
 
-function TaskCard({ task, onDismiss }) {
+function TaskCard({ task, onDismiss, onMute }) {
   const style = SEVERITY_COLORS[task.severity] || SEVERITY_COLORS.info
   const { clearAll } = useFilters()
   const { openVault, changePassphrase } = useVaultGateContext()
@@ -134,6 +137,16 @@ function TaskCard({ task, onDismiss }) {
               {task.link_label} {'->'}
             </Link>
           )}
+          {task.mutable ? (
+            <button
+              type="button"
+              onClick={() => onMute(task)}
+              title="Keep this with the dismissed tasks however many more arrive, until it is dismissed"
+              style={{ ...actionStyle, cursor: 'pointer' }}
+            >
+              Mute
+            </button>
+          ) : null}
         </div>
       </div>
       {task.dismiss_key ? (
@@ -153,7 +166,7 @@ function TaskCard({ task, onDismiss }) {
 
 // The dismissed ones, kept at the foot of the page. Collapsed by default: they are deliberately quiet,
 // but they must stay reachable, and each says what it is hiding so restoring one is an informed choice.
-function DismissedSection({ dismissed, onRestore }) {
+function DismissedSection({ dismissed, onRestore, onDismiss }) {
   const [open, setOpen] = useState(false)
   if (!dismissed || dismissed.length === 0) return null
   return (
@@ -177,8 +190,13 @@ function DismissedSection({ dismissed, onRestore }) {
             >
               <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{task.title}</span>
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>{task.count}</span>
+              {task.muted ? (
+                <Button size="compact" variant="secondary" onClick={() => onDismiss(task)}>
+                  Dismiss
+                </Button>
+              ) : null}
               <Button size="compact" variant="secondary" onClick={() => onRestore(task)}>
-                Restore
+                {task.muted ? 'Unmute' : 'Restore'}
               </Button>
             </div>
           ))}
@@ -191,7 +209,8 @@ function DismissedSection({ dismissed, onRestore }) {
 export default function Tasks() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [undo, setUndo] = useState(null)  // { dismiss_key, title } of the last dismissal
+  // The last dismissal or mute, for the toast: { title, description, task }.
+  const [undo, setUndo] = useState(null)
   // The owner lens recounts the tasks whose page it narrows; dismissal still judges the whole count on the
   // server, so dismissing here hides the reminder for every view (`routers/tasks.py` → `_narrow_to_lens`).
   const { params: ownerLensParams } = useOwnerLens()
@@ -216,15 +235,28 @@ export default function Tasks() {
     }
   }, [ownerLensParams])
 
-  // Both calls return the recomputed list, so the page never has to guess what dismissing changed.
-  const dismiss = useCallback(async (task) => {
-    setResult(await api.dismissTask(task.dismiss_key, ownerLensParams))
-    setUndo({ dismiss_key: task.dismiss_key, title: task.title })
-  }, [ownerLensParams])
-
+  // Every call returns the recomputed list, so the page never has to guess what dismissing changed.
   const restore = useCallback(async (task) => {
     setResult(await api.restoreTask(task.dismiss_key, ownerLensParams))
     setUndo(null)
+  }, [ownerLensParams])
+
+  const dismiss = useCallback(async (task) => {
+    setResult(await api.dismissTask(task.dismiss_key, ownerLensParams))
+    setUndo({
+      title: 'Task dismissed',
+      description: `"${task.title}" is hidden until there is more of it.`,
+      task,
+    })
+  }, [ownerLensParams])
+
+  const mute = useCallback(async (task) => {
+    setResult(await api.muteTask(task.dismiss_key, ownerLensParams))
+    setUndo({
+      title: 'Task muted',
+      description: `"${task.title}" stays with the dismissed tasks until it is dismissed.`,
+      task,
+    })
   }, [ownerLensParams])
 
   // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
@@ -266,17 +298,17 @@ export default function Tasks() {
           </Card>
         ) : (
           <div style={{ maxWidth: TASK_COLUMN }}>
-            {result?.tasks?.map(task => <TaskCard key={task.id} task={task} onDismiss={dismiss} />)}
+            {result?.tasks?.map(task => <TaskCard key={task.id} task={task} onDismiss={dismiss} onMute={mute} />)}
           </div>
         )}
-        <DismissedSection dismissed={result?.dismissed} onRestore={restore} />
+        <DismissedSection dismissed={result?.dismissed} onRestore={restore} onDismiss={dismiss} />
       </div>
 
       {undo && (
         <UndoToast
-          title="Task dismissed"
-          description={`"${undo.title}" is hidden until there is more of it.`}
-          onUndo={() => restore({ dismiss_key: undo.dismiss_key })}
+          title={undo.title}
+          description={undo.description}
+          onUndo={() => restore(undo.task)}
           onDismiss={closeUndo}
         />
       )}

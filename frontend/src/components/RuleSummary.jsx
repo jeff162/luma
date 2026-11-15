@@ -4,7 +4,7 @@
 /*
  * One rule rendered compactly, for the surfaces that list rules *about* something rather than for
  * editing them (the stale-rule cleanup, the overlap check). The matcher reads as monospace terms
- * (`RuleMatcherText`); the rule's actions — category, tags, rename, recurring — follow as badges.
+ * (`RuleMatcherText`); the rule's actions — category, tags, rename, recurring, alert — follow as badges.
  *
  * It works from a rule row alone. Both `/rules` and the rule-display SQL behind the cleanup and overlap
  * endpoints return the resolved `owner_name` / `account_name` / `account_mask` / `category_name`
@@ -38,11 +38,14 @@ function ruleConditionParts(rule) {
 const joinerStyle = { color: 'var(--muted)', fontWeight: 400 }
 
 // The matcher as monospace terms: alternatives joined by "or" (bracketed when filters follow), then
-// filters joined by "and". Shared by every surface that lists rules, so a matcher reads one way.
+// filters joined by "and". Shared by every surface that lists rules, so a matcher reads one way. A rule
+// with no merchant text matches every merchant in its scope.
 export function RuleMatcherText({ rule }) {
+  const terms = ruleMatcherTerms(rule)
+  if (!terms.length) return <span style={{ fontStyle: 'italic' }}>any merchant</span>
   return (
     <>
-      {ruleMatcherTerms(rule).map((term, i) => (
+      {terms.map((term, i) => (
         <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           {term.joiner ? <span style={joinerStyle}>{term.joiner}</span> : null}
           <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>
@@ -66,6 +69,7 @@ export default function RuleSummary({ rule, showConditions = false }) {
         {Array.isArray(rule.tags) && rule.tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
         {rule.clean_name ? <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>renames to “{rule.clean_name}”</span> : null}
         {rule.is_recurring ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title="Tracked as a recurring series">↻ recurring</span> : null}
+        {rule.alert ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title={rule.alert_message || 'Raises a task when a matching transaction arrives'}>⚑ alert</span> : null}
         {isLowPriority(rule) ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title="Gives way to normal-priority rules matching the same transaction">low priority</span> : null}
       </div>
       {conditions.length ? (

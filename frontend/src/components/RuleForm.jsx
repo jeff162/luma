@@ -71,6 +71,8 @@ export function ruleFormInitialValues(rule) {
     is_recurring: !!rule.is_recurring,
     cadence: rule.recurring_cadence || 'monthly',
     priority_level: rule.priority_level ?? RULE_PRIORITY_NORMAL,
+    alert: !!rule.alert,
+    alert_message: rule.alert_message || '',
   }
 }
 
@@ -415,6 +417,9 @@ const RuleForm = forwardRef(function RuleForm({
   const [isRecurring, setIsRecurring] = useState(!!(initialValues.isRecurring ?? initialValues.is_recurring ?? false))
   const [cadence, setCadence] = useState(initialValues.cadence ?? 'monthly')
   const [priorityLevel, setPriorityLevel] = useState(initialValues.priority_level ?? RULE_PRIORITY_NORMAL)
+  // Raise a Task when a matching transaction arrives; the message titles it.
+  const [raiseAlert, setRaiseAlert] = useState(!!initialValues.alert)
+  const [alertMessage, setAlertMessage] = useState(initialValues.alert_message ?? '')
 
   const [kwOpen, setKwOpen] = useState(initialAlternatives.length + initialFilters.length > 0)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
@@ -475,8 +480,12 @@ const RuleForm = forwardRef(function RuleForm({
 
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
   const matchOnly = mode === 'match-only'
-  const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0 || isRecurring)
-  const canSave = matchOnly ? hasMerchantMatcher : (hasMerchantMatcher && hasAction)
+  const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0 || isRecurring || raiseAlert)
+  // With no merchant text a rule matches everything in its scope, so it needs one (the backend refuses it
+  // otherwise, since it would match the whole ledger).
+  const hasScope = Boolean(ownerId || accountId || accountType)
+  const hasMatcher = hasMerchantMatcher || (!matchOnly && hasScope)
+  const canSave = matchOnly ? hasMerchantMatcher : (hasMatcher && hasAction)
 
   useEffect(() => {
     if (matchOnly) {
@@ -489,7 +498,7 @@ const RuleForm = forwardRef(function RuleForm({
     }
     const hasKeyword = [...trimmedAlternatives, ...trimmedFilters].some(c => c.length >= 2)
     const hasAmount = amtLow != null || amtHigh != null
-    if ((!hasKeyword && !hasAmount) || (!matchOnly && !hasAction)) {
+    if ((!hasKeyword && !hasAmount && !hasScope) || (!matchOnly && !hasAction)) {
       clearTimeout(changeDebounceRef.current)
       setChangeCount(0)
       setChangeTransactions([])
@@ -526,7 +535,7 @@ const RuleForm = forwardRef(function RuleForm({
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clausesKey, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly, previewNonce])
+  }, [clausesKey, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, hasScope, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly, previewNonce])
 
   const buildDraftPayload = useCallback(() => ({
     ...matcherPayload,
@@ -543,6 +552,9 @@ const RuleForm = forwardRef(function RuleForm({
     is_recurring: isRecurring,
     cadence: isRecurring ? cadence : null,
     priority_level: priorityLevel,
+    alert: raiseAlert,
+    alert_message: raiseAlert ? alertMessage.trim() || null : null,
+    clear_alert_message: !raiseAlert || !alertMessage.trim(),
     clear_amount_min: amtLow === null,
     clear_amount_max: amtHigh === null,
     clear_clean_name: !cleanName.trim(),
@@ -551,7 +563,7 @@ const RuleForm = forwardRef(function RuleForm({
     clear_account_type: !accountType,
     applyToExisting,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [clausesKey, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, priorityLevel, applyToExisting])
+  }), [clausesKey, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, priorityLevel, raiseAlert, alertMessage, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -645,6 +657,7 @@ const RuleForm = forwardRef(function RuleForm({
     catId && selectedCategoryName ? `category: ${selectedCategoryName}` : null,
     renameOpen && cleanName.trim() ? `rename to ${cleanName.trim()}` : null,
     ...selectedTags.map(tag => `tag: ${tag.name}`),
+    raiseAlert ? 'alert' : null,
     priorityLevel < RULE_PRIORITY_NORMAL ? 'low priority' : null,
   ].filter(Boolean)
   // The captured source text for this rule's example transaction (when one anchors the form): the raw
@@ -962,6 +975,41 @@ const RuleForm = forwardRef(function RuleForm({
             {/* Not offered in the suggestion review, whose save keeps only the fields a suggestion carries. */}
             {suggestionFields ? null : (
               <div>
+                <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
+                  Alert
+                </SectionEyebrow>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    name="rule-alert"
+                    checked={raiseAlert}
+                    onChange={e => setRaiseAlert(e.target.checked)}
+                    style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 12, lineHeight: 1.35 }}>
+                    Raise a task when a matching transaction arrives
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                      Only transactions imported or synced from now on raise one.
+                    </span>
+                  </span>
+                </label>
+                {raiseAlert ? (
+                  <input
+                    type="text"
+                    name="rule-alert-message"
+                    aria-label="Alert message"
+                    value={alertMessage}
+                    onChange={e => setAlertMessage(e.target.value)}
+                    placeholder="Message (optional), e.g. Closed card was used"
+                    style={{ width: '100%', boxSizing: 'border-box', marginTop: 8, ...getFormControlStyle({ size: 'md' }) }}
+                  />
+                ) : null}
+              </div>
+            )}
+
+            {/* Not offered in the suggestion review, whose save keeps only the fields a suggestion carries. */}
+            {suggestionFields ? null : (
+              <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 0 }}>
                     Priority
@@ -985,24 +1033,28 @@ const RuleForm = forwardRef(function RuleForm({
       <div style={{ padding: '14px 20px', borderBottom: hideFooter ? 'none' : '2px solid var(--border)' }}>
         <div style={sectionHeadStyle}>{matchOnly ? 'Match Summary' : 'Rule Summary'}</div>
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-          {hasMerchantMatcher ? (
+          {hasMatcher ? (
             <>
-              Merchant {matchSourceText ? 'name or source text' : 'name'} contains{' '}
-              {ruleMatcherTerms(draftMatcher).map((term, index) => (
-                <span key={index}>
-                  {term.joiner ? <span style={{ color: 'var(--muted)' }}> {term.joiner} </span> : null}
-                  {term.open ? '(' : null}
-                  <strong>&ldquo;{term.text}&rdquo;</strong>
-                  {term.close ? ')' : null}
-                </span>
-              ))}
+              {hasMerchantMatcher ? (
+                <>
+                  Merchant {matchSourceText ? 'name or source text' : 'name'} contains{' '}
+                  {ruleMatcherTerms(draftMatcher).map((term, index) => (
+                    <span key={index}>
+                      {term.joiner ? <span style={{ color: 'var(--muted)' }}> {term.joiner} </span> : null}
+                      {term.open ? '(' : null}
+                      <strong>&ldquo;{term.text}&rdquo;</strong>
+                      {term.close ? ')' : null}
+                    </span>
+                  ))}
+                </>
+              ) : 'Any merchant'}
               {amtSummary ? <span style={{ color: 'var(--muted)' }}> · {amtSummary}</span> : null}
               {ownerId ? <span style={{ color: 'var(--muted)' }}> · owner {owners.find(o => o.id === ownerId)?.name}</span> : null}
               {accountId ? <span style={{ color: 'var(--muted)' }}> · account {accounts.find(a => a.id === accountId)?.name}</span> : null}
               {accountType ? <span style={{ color: 'var(--muted)' }}> · type {ACCOUNT_TYPES.find(t => t.value === accountType)?.label ?? accountType}</span> : null}
             </>
           ) : (
-            <span style={{ color: 'var(--muted)' }}>Add a merchant keyword above to define the rule.</span>
+            <span style={{ color: 'var(--muted)' }}>Add a merchant keyword, or an owner, account or account type, to define the rule.</span>
           )}
         </div>
         {actionSummaryLabels.length > 0 ? (

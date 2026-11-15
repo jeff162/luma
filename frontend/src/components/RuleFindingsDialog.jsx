@@ -203,6 +203,11 @@ function actionDifferences(first, second, [firstLabel, secondLabel], { outcomeOn
   if (Boolean(first.is_recurring) !== Boolean(second.is_recurring)) {
     parts.push(`only ${first.is_recurring ? firstLabel : secondLabel} tracks a recurring series`)
   }
+  if (Boolean(first.alert) !== Boolean(second.alert)) {
+    parts.push(`only ${first.alert ? firstLabel : secondLabel} raises an alert`)
+  } else if (first.alert && (first.alert_message || '') !== (second.alert_message || '')) {
+    parts.push(`${firstLabel} and ${secondLabel} alert with different messages`)
+  }
   return parts
 }
 

@@ -865,6 +865,8 @@ export const api = {
   // calls return the freshly recomputed task list rather than just an ack.
   dismissTask: (key, ownerLens = {}) => request(`/tasks/dismiss/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'POST' }),
   restoreTask: (key, ownerLens = {}) => request(`/tasks/dismiss/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'DELETE' }),
+  // A `mutable` task stays hidden however high its count goes, until it is dismissed or restored.
+  muteTask: (key, ownerLens = {}) => request(`/tasks/mute/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'POST' }),
 
   // Recurring series: detection is an on-demand scan; the rest curate the recurring_series records.
   getRecurringSeries: (includeSuppressed = false) =>

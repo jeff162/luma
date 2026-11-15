@@ -284,7 +284,7 @@ preferences. `lib/savedFilters.js` holds the rules:
 - **Behavior:** rules are ordered automatically by specificity, after one term the user sets: a rule's
   priority (normal or low), which settles the pairs specificity cannot. See `data-model.md` →
   *Precedence*. A rule can assign a category, scope an
-  amount rule to debits or credits, rename a merchant, and add tags. Manually overridden categories are
+  amount rule to debits or credits, rename a merchant, add tags, and raise an alert. Manually overridden categories are
   preserved; a per-transaction tag edit overrides only that row's rule-derived tag presence.
 
 - **Shared filter facets:** every axis the FilterBar exposes — account (by id or by type), group,
@@ -315,6 +315,12 @@ preferences. `lib/savedFilters.js` holds the rules:
   rename) via `rule_scalar_effects`. One apply point per action is what keeps the paths from diverging
   and makes a new rule action a one-place change. Category *source* policy stays site-specific (import
   has mapping and file-label fallbacks; recategorize preserves a `cleared` marker).
+
+- **An alert is the one action that only arriving rows trigger.** Each ingest path (file and Amazon
+  imports, sync, a held duplicate brought in) hands the rows it added to `rule_alerts.record_arrivals`
+  inside its own transaction, beside the recurring rescan it owes. No re-apply path calls it, which is
+  what keeps a new alert rule from reporting history. The Task reads the stored hits, so the Tasks poll
+  stays one grouped query. See `data-model.md` → *Rule alerts*.
 
 - **`recategorize_all` is retain-by-default:** it sets or changes a category or rule tag but never
   strips one, so deleting or narrowing a rule does not un-categorize its history. Clearing a no-match

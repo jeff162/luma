@@ -419,7 +419,7 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     return conn.execute(
         f"""SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
                   cr.debit_credit, cr.owner_id, {rule_scope_account_sql("cr")}, cr.account_type,
-                  cr.clean_name, cr.match_source_text
+                  cr.clean_name, cr.match_source_text, cr.alert
            FROM   category_rule cr
            LEFT   JOIN category c ON c.id = cr.category_id
            -- Deactivating a category prunes its rules, but stay defensive: a rule must never

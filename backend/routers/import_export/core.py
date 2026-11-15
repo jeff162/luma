@@ -73,7 +73,7 @@ from backend.services.categorizer import (
     effect_rule_ids,
     bump_rule_effect_dates,
 )
-from backend.services import rule_conflicts
+from backend.services import rule_alerts, rule_conflicts
 from backend.services.recurring_detection import owe_recurring_rescan, settle_owed_rescans
 from backend.services.txn_trash import restore_txns
 from backend.services.account_groups import set_account_parent
@@ -4080,6 +4080,7 @@ def run_import_parsed(
             ]
             owe_recurring_rescan(conn, batch_txn_ids)
             rule_conflicts.record_for_txns(conn, batch_txn_ids)
+            rule_alerts.record_arrivals(conn, batch_txn_ids)
 
         # The replaced file's rows are gone, so rows other files rejected against them are judged again —
         # after this file's rows are in, since those are what a replacement exists to supply.
@@ -4764,8 +4765,10 @@ def import_held_rows(conn, batch_id: str, row_numbers: Optional[set[int]]) -> di
 
     if uncategorized_ids:
         recategorize_all(conn, txn_ids=uncategorized_ids)
-    # Brought-in rows are new data like any import's, so they owe their payees a rescan.
+    # Brought-in rows are new data like any import's, so they owe their payees a rescan and can set off an
+    # alert.
     owe_recurring_rescan(conn, imported_ids)
+    rule_alerts.record_arrivals(conn, imported_ids)
 
     placeholders = ",".join("?" * len(imported_rows))
     conn.execute(

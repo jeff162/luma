@@ -43,7 +43,7 @@ from pydantic import BaseModel
 from backend.app_logging import log_error
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.json_utils import safe_json_dict
-from backend.services import amazon_funding, txn_links
+from backend.services import amazon_funding, rule_alerts, txn_links
 from backend.services.duplicate_detection import clear_flags_between_amazon_orders
 from backend.services.amazon_order_amount import ADDED_CHARGES_KEY, BASE_AMOUNT_KEY, added_charge_ids
 from backend.services.amazon_order_charges import refresh_order_from_charges
@@ -859,6 +859,8 @@ def _import_group_to_batch(
 
     if apply_categorization:
         _categorize_batch_orders(conn, batch_id)
+    rule_alerts.record_arrivals(
+        conn, [r["id"] for r in conn.execute("SELECT id FROM txn WHERE import_batch_id = ?", (batch_id,))])
 
     conn.execute(
         "UPDATE import_batch SET row_count = ? WHERE id = ?",

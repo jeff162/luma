@@ -146,6 +146,7 @@ TABLE_TO_SECTION = {
     "recurring_signal_dismissal": "recurring_signal_dismissals",
     "transfer_pair_decision": "transfer_pair_decisions",
     "rule_overlap_dismissal": "rule_overlap_dismissals",
+    "rule_alert_hit": "rule_alert_hits",
     "txn_link": "txn_links",
     "txn_link_member": "txn_link_members",
     "amazon_funding_map": "amazon_funding_map",
@@ -252,6 +253,10 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (leaf, tag))
                 conn.execute("INSERT INTO account_tag (account_id, tag_id) VALUES (?, ?)", (a2, tag))
                 conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule, tag))
+                # An alerting rule (every alert column away from its default) and the row it caught.
+                conn.execute("UPDATE category_rule SET alert = 1, alert_message = 'Closed card used' WHERE id = ?",
+                             (rule,))
+                conn.execute("INSERT INTO rule_alert_hit (rule_id, txn_id) VALUES (?, ?)", (rule, txn))
                 low, high = sorted([a1, a2])
                 conn.execute("INSERT INTO account_pair_distinct (account_id_low, account_id_high, asserted_at) VALUES (?, ?, '2026-04-15')", (low, high))
                 # A confirmed duplicate: trashed, pointing at the row it duplicates, with the resolution that

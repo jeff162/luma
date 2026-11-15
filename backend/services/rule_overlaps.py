@@ -64,8 +64,8 @@ The action each kind carries follows from that split. The *ambiguous* pair offer
 there is to refine the conditions until the rules are unambiguous, and deleting one is picking a side
 rather than fixing the model. A pair whose winner changes nothing can offer one, through
 `removable_rule_id`, but only where deleting that rule changes nothing, which is the stricter test
-(`_actions_agree`): the deleted rule's tags, rename and series go with it, so both rules must carry the
-same ones. That is a nesting pair's inner rule, from the rules alone, and a benign pair's rule whose
+(`_actions_agree`): the deleted rule's tags, rename, series and alert go with it, so both rules must carry
+the same ones. That is a nesting pair's inner rule, from the rules alone, and a benign pair's rule whose
 every transaction the other rule also matches, read off the ledger scan.
 
 The kinds cannot collide. `amount_overlap` requires identical matcher text and the two nesting kinds
@@ -160,7 +160,7 @@ def eligible_rules(conn: sqlite3.Connection) -> list[dict]:
         f"""SELECT cr.id, cr.keyword, cr.match_expr, cr.match_source_text, cr.owner_id, cr.category_id,
                    {effective_account_id_sql("cr.account_id")} AS account_id,
                    cr.account_type, cr.amount_min, cr.amount_max, cr.debit_credit,
-                   cr.clean_name, cr.is_recurring, cr.priority_level
+                   cr.clean_name, cr.is_recurring, cr.priority_level, cr.alert, cr.alert_message
             FROM   category_rule cr
             LEFT   JOIN category c ON c.id = cr.category_id
             WHERE  cr.deleted_at IS NULL AND cr.is_managed = 0
@@ -198,6 +198,10 @@ def _matcher_texts(rule: dict) -> MerchantMatcher:
         tuple(sorted(t.strip() for t in matcher.alternatives if t.strip())),
         tuple(sorted(t.strip() for t in matcher.filters if t.strip())),
     )
+
+
+def _has_text(matcher: MerchantMatcher) -> bool:
+    return bool(matcher.alternatives or matcher.filters)
 
 
 def _matcher_width(matcher: MerchantMatcher) -> int:
@@ -341,7 +345,7 @@ def _outcomes_agree(a: dict, b: dict) -> bool:
 
 
 def _actions_agree(a: dict, b: dict, tags: dict[str, frozenset]) -> bool:
-    """Do the two rules carry the same actions: category, rename, tags and the recurring flag?
+    """Do the two rules carry the same actions: category, rename, tags, the recurring flag and the alert?
 
     The test for deleting one of them, which is stricter than `_outcomes_agree`. A rename or tag only one
     rule carries changes nothing about which of the two wins, but it goes when that rule is deleted.
@@ -351,6 +355,8 @@ def _actions_agree(a: dict, b: dict, tags: dict[str, frozenset]) -> bool:
     if normalize_clean_name(a["clean_name"]) != normalize_clean_name(b["clean_name"]):
         return False
     if bool(a["is_recurring"]) != bool(b["is_recurring"]):
+        return False
+    if bool(a["alert"]) != bool(b["alert"]) or (a["alert_message"] or "") != (b["alert_message"] or ""):
         return False
     return tags.get(a["id"], frozenset()) == tags.get(b["id"], frozenset())
 
@@ -560,9 +566,6 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
     tags = _rule_tag_ids(conn)
     texts = {rule["id"]: _matcher_texts(rule) for rule in rules}
     ranges = {rule["id"]: _amount_range(rule) for rule in rules}
-    # A rule with no matcher text can never fire, and would otherwise nest into every other rule (the
-    # empty clause list makes `_texts_nest` vacuously true).
-    rules = [rule for rule in rules if texts[rule["id"]].alternatives or texts[rule["id"]].filters]
     pairs, rule_counts = _co_matching_pairs(conn, rules)
 
     findings: list[dict] = []
@@ -590,6 +593,11 @@ def find_rule_overlaps(conn: sqlite3.Connection, *, include_dismissed: bool = Fa
                     )
                 )
             else:
+                # A rule with no merchant text matches everything in its scope, so it nests every rule
+                # with text that shares a row with it. Precedence settles each such pair on scope or on
+                # text length, both refinements, and listing them would bury the rest of the check.
+                if not _has_text(texts_a) or not _has_text(texts_b):
+                    continue
                 if _texts_nest(texts_a, texts_b):
                     outer, inner = first, second
                 elif _texts_nest(texts_b, texts_a):

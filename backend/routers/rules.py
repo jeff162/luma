@@ -37,7 +37,7 @@ from backend.services.categorizer import (
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.rule_owner_reach import rule_owner_reach
 from backend.services.rule_range_drift import find_range_drift
-from backend.services import rule_conflicts, signal_dismissals
+from backend.services import rule_alerts, rule_conflicts, signal_dismissals
 from backend.services.recurring_detection import (
     CADENCES,
     link_series_members,
@@ -699,6 +699,10 @@ class RuleCreate(BaseModel):
     cadence:     Optional[str]   = None
     # Precedence the user sets, read before every inferred term (`categorizer.RULE_PRIORITY_LEVELS`).
     priority_level: int          = RULE_PRIORITY_NORMAL
+    # Raise a Task when a matching transaction arrives (`services/rule_alerts.py`), titled with the
+    # message when there is one. An action on its own, as is_recurring is.
+    alert:       bool            = False
+    alert_message: Optional[str] = None
 
 
 class RuleUpdate(BaseModel):
@@ -721,12 +725,15 @@ class RuleUpdate(BaseModel):
     is_recurring:     Optional[bool] = None
     cadence:          Optional[str] = None
     priority_level:   Optional[int] = None
+    alert:            Optional[bool] = None
+    alert_message:    Optional[str] = None
     clear_amount_min: bool = False
     clear_amount_max: bool = False
     clear_clean_name: bool = False
     clear_owner:      bool = False
     clear_account:    bool = False
     clear_account_type: bool = False
+    clear_alert_message: bool = False
 
 
 @router.get("")
@@ -747,6 +754,8 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.match_source_text,
                 cr.is_recurring,
                 cr.priority_level,
+                cr.alert,
+                cr.alert_message,
                 cr.last_effect_date,
                 cr.is_managed,
                 (SELECT rs.cadence FROM recurring_series rs WHERE rs.rule_id = cr.id) AS recurring_cadence,
@@ -843,7 +852,7 @@ def _existing_rule_for_matcher(conn, keyword: str, match_expr: Optional[str], bo
     # from a single-keyword one that happens to share the derived keyword; it is a canonical JSON string
     # (clauses sorted) so clause order never forks a phantom duplicate. `IS` is SQLite's null-safe compare.
     return conn.execute(
-        """SELECT id, category_id, clean_name FROM category_rule
+        """SELECT id, category_id, clean_name, alert, alert_message FROM category_rule
            WHERE keyword = ?
              AND match_expr   IS ?
              AND owner_id     IS ?
@@ -859,13 +868,14 @@ def _existing_rule_for_matcher(conn, keyword: str, match_expr: Optional[str], bo
     ).fetchone()
 
 
-def _classify_rule_collision(existing: dict, existing_tag_ids: set, *, category_id, clean_name, tag_ids) -> str:
+def _classify_rule_collision(existing: dict, existing_tag_ids: set, *, category_id, clean_name, tag_ids,
+                             alert=False, alert_message=None) -> str:
     """Relationship of a proposed/edited rule's actions to an existing rule that shares its matcher.
 
-    - 'conflict':  the actions set a category or rename that *disagrees* with the existing one;
-                   merging would silently change behavior, so the user has to decide.
-    - 'mergeable': the actions only *add* what the existing rule lacks (a missing category/rename, or
-                   new tags), so they can fold into the existing rule.
+    - 'conflict':  the actions set a category, rename or alert message that *disagrees* with the existing
+                   one; merging would silently change behavior, so the user has to decide.
+    - 'mergeable': the actions only *add* what the existing rule lacks (a missing category/rename/alert or
+                   alert message, or new tags), so they can fold into the existing rule.
     - 'duplicate': the actions contribute nothing the existing rule does not already do.
     """
     if category_id and existing["category_id"] and category_id != existing["category_id"]:
@@ -873,27 +883,51 @@ def _classify_rule_collision(existing: dict, existing_tag_ids: set, *, category_
     if normalize_clean_name(clean_name) and normalize_clean_name(existing["clean_name"]) \
             and normalize_clean_name(clean_name) != normalize_clean_name(existing["clean_name"]):
         return "conflict"
+    message = rule_alerts.normalize_alert_message(alert_message) if alert else None
+    existing_message = rule_alerts.normalize_alert_message(existing["alert_message"]) if existing["alert"] else None
+    if message and existing_message and message != existing_message:
+        return "conflict"
     adds_category = bool(category_id) and not existing["category_id"]
     adds_clean_name = bool(normalize_clean_name(clean_name)) and not normalize_clean_name(existing["clean_name"])
     adds_tags = bool(set(tag_ids or []) - set(existing_tag_ids))
-    if adds_category or adds_clean_name or adds_tags:
+    adds_alert = bool(alert) and (not existing["alert"] or bool(message and not existing_message))
+    if adds_category or adds_clean_name or adds_tags or adds_alert:
         return "mergeable"
     return "duplicate"
 
 
-def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag_ids) -> None:
-    # Additive only: fill a category/rename the target rule is missing and union in new tags. We never
-    # overwrite an action the target already has — a disagreement is a 'conflict', surfaced instead.
+def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag_ids,
+                             alert=False, alert_message=None) -> None:
+    # Additive only: fill a category/rename/alert the target rule is missing and union in new tags. We
+    # never overwrite an action the target already has — a disagreement is a 'conflict', surfaced instead.
     fields, params = [], []
     if category_id and not target["category_id"]:
         fields.append("category_id = ?"); params.append(category_id)
     if normalize_clean_name(clean_name) and not normalize_clean_name(target["clean_name"]):
         fields.append("clean_name = ?"); params.append(clean_name)
+    if alert:
+        if not target["alert"]:
+            fields.append("alert = 1")
+        message = rule_alerts.normalize_alert_message(alert_message)
+        if message and not (target["alert"] and rule_alerts.normalize_alert_message(target["alert_message"])):
+            fields.append("alert_message = ?"); params.append(message)
     if fields:
         params.append(target["id"])
         conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
     for tag_id in (tag_ids or []):
         conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (target["id"], tag_id))
+
+
+_NO_ACTION_DETAIL = "Rules need at least one action: category, rename, tag, recurring, or alert"
+
+
+def _require_matcher_or_scope(keyword, owner_id, account_id, account_type) -> None:
+    """A rule with no merchant text matches every transaction in its scope, so it needs a scope: an owner,
+    an account or an account type. Without one it would match the whole ledger."""
+    if not keyword and not (owner_id or account_id or account_type):
+        raise HTTPException(
+            status_code=400,
+            detail="Rules need a merchant keyword, or an owner, account or account type to apply to")
 
 
 def _check_priority_level(value: Optional[int]) -> None:
@@ -926,11 +960,12 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
     writes to is appended to it (`_rule_snapshot`), so an undoable caller can put that rule back as it was.
     """
     _check_priority_level(body.priority_level)
-    if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
-        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
+    if (not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring
+            and not body.alert):
+        raise HTTPException(status_code=400, detail=_NO_ACTION_DETAIL)
+    alert_message = rule_alerts.normalize_alert_message(body.alert_message) if body.alert else None
     keyword, match_expr = _resolve_matcher(body.clauses, body.alternatives, body.keyword)
-    if not keyword:
-        raise HTTPException(status_code=400, detail="Rules need a merchant keyword or at least one match clause")
+    _require_matcher_or_scope(keyword, body.owner_id, body.account_id, body.account_type)
     existing = _existing_rule_for_matcher(conn, keyword, match_expr, body)
     if existing:
         existing_tag_ids = {
@@ -940,6 +975,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
         relation = _classify_rule_collision(
             existing, existing_tag_ids,
             category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
+            alert=body.alert, alert_message=alert_message,
         )
         # Turning an existing matcher recurring is always an additive, non-conflicting action, so a save
         # that only adds is_recurring should merge rather than be reported as a bare duplicate.
@@ -948,6 +984,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
             _merge_actions_into_rule(
                 conn, existing,
                 category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
+                alert=body.alert, alert_message=alert_message,
             )
             if body.is_recurring:
                 conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id = ?", (existing["id"],))
@@ -963,11 +1000,12 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
     rid = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO category_rule
-           (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring, priority_level)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring, priority_level, alert, alert_message)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, body.category_id, keyword, match_expr,
          body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
-         body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring)), body.priority_level),
+         body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring)), body.priority_level,
+         int(bool(body.alert)), alert_message),
     )
     for tag_id in body.tag_ids:
         conn.execute(
@@ -1014,14 +1052,28 @@ def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
         "category_id":  body.category_id  if body.category_id  is not None else current["category_id"],
         "clean_name":   None if body.clear_clean_name else (body.clean_name if body.clean_name is not None else current["clean_name"]),
         "match_source_text": int(bool(body.match_source_text)) if body.match_source_text is not None else current["match_source_text"],
+        **_resulting_alert(current, body),
     }
+
+
+def _resulting_alert(current: dict, body: RuleUpdate) -> dict:
+    """The rule's `alert` and `alert_message` after the patch. A message is kept only while the alert is
+    on, so turning one off and on again starts without the old text."""
+    alert = int(bool(body.alert)) if body.alert is not None else current["alert"]
+    if not alert or body.clear_alert_message:
+        message = None
+    elif body.alert_message is not None:
+        message = rule_alerts.normalize_alert_message(body.alert_message)
+    else:
+        message = current["alert_message"]
+    return {"alert": alert, "alert_message": message}
 
 
 def _colliding_rule(conn, rule_id: str, resulting: dict):
     """Another live rule whose matcher would be identical to `resulting` — the collision `update_rule`
     reports instead of writing, and `widen_rule_range` refuses. `IS` is null-safe."""
     return conn.execute(
-        """SELECT id, category_id, clean_name FROM category_rule
+        """SELECT id, category_id, clean_name, alert, alert_message FROM category_rule
            WHERE id != ?
              AND keyword = ?
              AND match_expr   IS ?
@@ -1082,7 +1134,8 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     _check_priority_level(body.priority_level)
     current = conn.execute(
         """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
-                  amount_min, amount_max, debit_credit, match_source_text, is_recurring, priority_level
+                  amount_min, amount_max, debit_credit, match_source_text, is_recurring, priority_level,
+                  alert, alert_message
            FROM category_rule WHERE id = ?""",
         (rule_id,),
     ).fetchone()
@@ -1094,6 +1147,8 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     affected = _rule_affected_txn_ids(conn, current) if reconcile else []
 
     resulting = _resulting_rule_state(current, body)
+    _require_matcher_or_scope(resulting["keyword"], resulting["owner_id"], resulting["account_id"],
+                              resulting["account_type"])
     resulting_tag_ids = (
         list(body.tag_ids) if body.tag_ids is not None
         else [r["tag_id"] for r in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()]
@@ -1108,6 +1163,7 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
         relation = _classify_rule_collision(
             other, other_tag_ids,
             category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+            alert=resulting["alert"], alert_message=resulting["alert_message"],
         )
         if on_existing == "merge" and relation in ("mergeable", "duplicate"):
             _capture_rule_snapshot(conn, capture_rules, rule_id)
@@ -1115,10 +1171,14 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
             _merge_actions_into_rule(
                 conn, other,
                 category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+                alert=resulting["alert"], alert_message=resulting["alert_message"],
             )
             # The edited rule is about to be deleted; drop any recurring series it backed so it doesn't
             # dangle at a now-gone rule (the surviving rule keeps its own recurring status, if any).
             _drop_recurring_series_for_rule(conn, rule_id)
+            # What its alert caught goes with the alert it folded in.
+            if resulting["alert"]:
+                conn.execute("UPDATE OR IGNORE rule_alert_hit SET rule_id = ? WHERE rule_id = ?", (other["id"], rule_id))
             conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
             conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
             return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}, [], set()
@@ -1149,6 +1209,9 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
     if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
     if body.priority_level is not None: fields.append("priority_level = ?"); params.append(body.priority_level)
+    if body.alert is not None or body.alert_message is not None or body.clear_alert_message:
+        fields.append("alert = ?");         params.append(resulting["alert"])
+        fields.append("alert_message = ?"); params.append(resulting["alert_message"])
     if body.clear_amount_min:        fields.append("amount_min = NULL")
     if body.clear_amount_max:        fields.append("amount_max = NULL")
     if body.clear_clean_name:        fields.append("clean_name = NULL")
@@ -1170,15 +1233,18 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
                 (rule_id, tag_id),
             )
     post = conn.execute(
-        "SELECT category_id, clean_name, is_recurring FROM category_rule WHERE id = ?",
+        "SELECT category_id, clean_name, is_recurring, alert FROM category_rule WHERE id = ?",
         (rule_id,),
     ).fetchone()
     post_tag_ids = [
         row["tag_id"]
         for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
     ]
-    if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids and not post["is_recurring"]:
-        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
+    if (post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids
+            and not post["is_recurring"] and not post["alert"]):
+        raise HTTPException(status_code=400, detail=_NO_ACTION_DETAIL)
+    if current["alert"] and post and not post["alert"]:
+        rule_alerts.forget(conn, rule_id)
     # Reconcile the rule's recurring series with the post-edit state: create/refresh it when the rule is
     # (now or still) recurring — picking up a cadence change or a matcher edit that shifts membership —
     # and drop it when the flag was turned off. Skipped entirely when the edit never touched recurring
@@ -1271,7 +1337,7 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
     with get_db() as conn:
         current = conn.execute(
             """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
-                      amount_min, amount_max, debit_credit, match_source_text, is_recurring
+                      amount_min, amount_max, debit_credit, match_source_text, is_recurring, alert, alert_message
                FROM category_rule WHERE id = ? AND deleted_at IS NULL""",
             (rule_id,),
         ).fetchone()
@@ -1425,7 +1491,7 @@ def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> tuple[list[st
 _TRASH_DISPLAY_SQL = """
     SELECT cr.id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
            cr.category_id, cr.owner_id, cr.account_id, cr.account_type, cr.match_source_text, cr.is_recurring,
-           cr.priority_level, cr.last_effect_date, cr.is_managed, cr.deleted_at,
+           cr.priority_level, cr.alert, cr.alert_message, cr.last_effect_date, cr.is_managed, cr.deleted_at,
            c.name AS category_name, NULL AS category_color, p.name AS parent_name,
            o.name AS owner_name, o.color AS owner_color,
            COALESCE(a.display_name, a.name) AS account_name, COALESCE(ap.mask, a.mask) AS account_mask

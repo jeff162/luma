@@ -671,6 +671,8 @@ is the row's own marker strip, so reading a row and filtering for it use the sam
   what it can still express, as a deleted tag id does.
 - **`in_filter_bar`** marks `uncategorized` as absent from the filter bar, because the Categories tab
   already offers that bucket. The ledger's quick filter and `?only=` links still use it.
+- **`rule-alert`** is not on the marker strip and not in the filter bar. It is the list a rule alert's
+  Task opens: every live row a live alert caught.
 - `GET /transactions/filter-attributes` serves the vocabulary with labels and descriptions, so the
   frontend holds no copy.
 - **`require_all_attribute_ids`** is the AND counterpart, sent by the ledger's toolbar filter. Values
@@ -683,7 +685,7 @@ together must mean both.
 ## Rules
 
 A rule (`category_rule`) matches transactions by merchant text and optional scopes, and assigns a
-category, a rename (`clean_name`), tags, a recurring series, or any combination.
+category, a rename (`clean_name`), tags, a recurring series, an alert, or any combination.
 
 ### The matcher
 
@@ -722,6 +724,10 @@ category, a rename (`clean_name`), tags, a recurring series, or any combination.
 - **Owner** scope, **account** scope (one account, resolved through its group), and **account type**
   scope (`account_type`), which matches every account whose effective account
   (`COALESCE(parent, self)`) has that type.
+- **No merchant text** (an empty `keyword`, no `match_expr`) matches every transaction in the rule's scope,
+  so such a rule must carry an owner, account or account type: without one it would match the whole
+  ledger. The rule checkup skips its pairs with rules that have text, since it nests every one of them
+  and precedence settles each pair on scope or text length.
 - The type scope is the account's type and not the batch's `source_kind`, because a type applies to
   every row on the account, while `source_kind` is stamped only on batches imported after that field
   existed.
@@ -739,9 +745,9 @@ one live rule exists per matcher, because duplicates would make
 Saving a rule whose matcher exists is classified and reconciled:
 
 - **duplicate** (adds nothing): reported, not written
-- **mergeable** (adds a category or rename the existing rule lacks, or new tags): folded into the
-  existing rule
-- **conflict** (a category or rename that disagrees): reported for the user to resolve
+- **mergeable** (adds a category, rename, alert or alert message the existing rule lacks, or new tags):
+  folded into the existing rule
+- **conflict** (a category, rename or alert message that disagrees): reported for the user to resolve
 
 `create_rule` and `update_rule` take `on_existing = reject` (classify and report, the default) or
 `merge`. When an edit makes a rule collide with a different rule, the merge folds the edited rule into
@@ -794,6 +800,7 @@ separately:
 | Category | the first matching rule, in precedence order, that sets one |
 | Rename | the first matching rule that sets one, which need not be the rule that set the category |
 | Tags | every matching rule: they are added together |
+| Alert | every matching rule with one, for a row new to the ledger only; see *Rule alerts* |
 | Recurring series | the first matching rule that is recurring, decided by the recurring scan; see *Rule-backed series* |
 
 So which of two matching rules wins changes a row only where both set a category and the categories
@@ -901,11 +908,39 @@ Adopting another replaces the body of `decide_rule_effects`; its inputs carry wh
   task and the checkup button's badge; the task is dismissed by count, as every task is, while the pair
   itself cannot be acknowledged. Not backed up, since the next pass that meets a pair records it again.
 
+### Rule alerts
+
+A rule with `alert` set raises a Task when a matching transaction arrives (`services/rule_alerts.py`).
+It is for activity that should not happen, such as charges on a closed card, where nothing written onto
+the row would get anyone's attention.
+
+- **An alert records an arrival, not a match.** `rule_alert_hit` gets a `(rule_id, txn_id)` row only for
+  a row new to the ledger: a file import, an Amazon orders import, a sync's added rows, a held duplicate
+  brought in. Each path calls `record_arrivals` inside its own transaction. Categorize, a rule's apply,
+  the re-check after a rule edit and the re-apply after an account change never record one, so saving
+  an alert rule does not report the account's history. A pending row that settles keeps its id, and the
+  primary key makes a second hand-over a no-op.
+- **A rule edit leaves what was caught.** Those rows matched when they arrived. Turning the alert off
+  deletes the rule's hits and clears its message, so turning it on again starts from the next arrival. A
+  collision merge moves the edited rule's hits to the rule it folds into.
+- **The Task counts the rule's hits on live transactions.** One Task per live alerting rule.
+  `alert_message` is its title; with none, the title describes the rule's condition. The count only
+  rises, so a dismissal, per person and by count as for every Task, returns with the next arrival.
+- **The Task is `mutable`**: a mute, kept with that person's dismissal marks (`ui.tasks.muted`), hides it
+  however high the count goes, until it is dismissed or restored.
+- **Under the owner lens the Task counts the caught rows' owners**, so a rule scoped to an account shows to
+  that account's owner, and one that applies to everyone shows each owner their own rows.
+- An alert that fires advances the rule's `last_effect_date`, so an alert-only rule is not a cleanup
+  candidate while it is catching something.
+- Backed up (`rule_alert_hits`): nothing re-derives a hit, so a restore without them would drop every
+  alert still waiting to be seen.
+
 ### Rule hygiene columns
 
 - **`last_effect_date`**: the newest transaction date the rule has applied a live effect to, kept as a
   forward-only maximum. It is the transaction's date, never wall-clock, so a re-run cannot drift it.
-  Every apply site and the seed attribute a row through `effect_rule_ids` and `bump_rule_effect_dates`.
+  Every apply site and the seed attribute a row through `effect_rule_ids` and `bump_rule_effect_dates`,
+  and a rule alert that fires counts as an effect.
   A rule is credited for a row it wins even when an import or a manual edit holds that row's category;
   a rule that always loses to a more specific one reads as never used.
 - **`deleted_at`**: the rules trash. The categorizer and the matcher-identity checks filter

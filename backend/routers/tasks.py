@@ -28,6 +28,11 @@ declares itself `required` because it blocks something until it is fixed (a prox
 not trust, a vault passphrase that has to change), which stays until it is.
 `_with_dismiss_keys` applies the rule in one place, so a new task is dismissible without opting in.
 
+**A task marked `mutable` can also be muted**, which hides it however high its count goes until it is
+dismissed or restored. It is for a count expected to keep rising while someone deals with the cause, as a
+rule alert's does (`services/rule_alerts.py`). A mute is kept with the dismissal marks, per person, and
+expires the same way.
+
 This reverses an earlier design that withheld dismissal from the connection, vault-access, recurring,
 rule-drift and reimbursement tasks, each for a reason about the underlying state. Those reasons are about
 the finding, not the reminder; don't re-impose them here.
@@ -47,7 +52,7 @@ from backend.db.control_database import (
     latest_vault_key_retirement,
 )
 from backend import app_log_file, runtime_config, transport
-from backend.services import crypto_service, proxy_certificate, rule_conflicts, update_check
+from backend.services import crypto_service, proxy_certificate, rule_alerts, rule_conflicts, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens
@@ -64,6 +69,7 @@ SEVERITY_INFO    = "info"
 # Where the per-user dismissal marks live: the data DB's `ui_preference` table, so they ride data
 # backups and stay with the ledger they describe.
 DISMISSED_PREF_KEY = "ui.tasks.dismissed"
+MUTED_PREF_KEY = "ui.tasks.muted"
 
 
 def _https_setup_task(request: Request | None) -> dict | None:
@@ -674,6 +680,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
         tasks.extend(_recurring_signal_tasks(conn))
         tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_rule_conflict_tasks(conn))
+        tasks.extend(_rule_alert_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
         tasks.extend(_connection_tasks(conn))
 
@@ -862,6 +869,31 @@ def _rule_conflict_tasks(conn) -> list[dict]:
     }]
 
 
+RULE_ALERT_TASK_PREFIX = "rule_alert_"
+
+
+def _rule_alert_tasks(conn, lens: list[str] | None = None) -> list[dict]:
+    """One task per rule whose alert has caught live transactions (`services/rule_alerts.py`). The count only
+    rises, so a dismissal returns with the next arrival, and it can be muted."""
+    tasks = []
+    for alert in rule_alerts.open_alerts(conn, lens):
+        rule, n = alert["rule"], alert["count"]
+        condition = rule_alerts.alert_condition_text(rule)
+        message = rule["alert_message"]
+        tasks.append({
+            "id":          f"{RULE_ALERT_TASK_PREFIX}{rule['id']}",
+            "title":       message or f"Rule matched: {condition}",
+            "description": f"{n} transaction{'s have' if n != 1 else ' has'} matched "
+                           + (f"the rule {condition}." if message else "this rule."),
+            "count":       n,
+            "link":        "/transactions?only=rule-alert",
+            "link_label":  "Review transactions",
+            "severity":    SEVERITY_WARNING,
+            "mutable":     True,
+        })
+    return tasks
+
+
 def _dismissal_scope(request: Request | None) -> str | None:
     """The preference scope for dismissals, or None when no identity is resolved — an unauthenticated
     caller sees the undismissed list rather than an error, since the badge is fetched early."""
@@ -887,15 +919,34 @@ def _write_dismissals(scope_id: str | None, marks: dict[str, int]) -> None:
         set_preference(scope_id, DISMISSED_PREF_KEY, json.dumps(marks))
 
 
+def _read_mutes(scope_id: str | None) -> set[str]:
+    if not scope_id:
+        return set()
+    raw = get_preferences(scope_id).get(MUTED_PREF_KEY)
+    try:
+        parsed = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        return set()
+    return {str(k) for k in parsed} if isinstance(parsed, list) else set()
+
+
+def _write_mutes(scope_id: str | None, mutes: set[str]) -> None:
+    if scope_id:
+        set_preference(scope_id, MUTED_PREF_KEY, json.dumps(sorted(mutes)))
+
+
 def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dict], list[dict]]:
     """Split the task list into what is shown and what a dismissal is hiding, ratcheting each mark down
     to the lowest count seen since it was set (see the module docstring for why that half matters). A
     mark for a task that no longer applies at all is dropped, so the dismissal expires rather than
-    silently covering the task's next appearance."""
+    silently covering the task's next appearance. A muted task is hidden whatever its count, and its mute
+    expires the same way. Each hidden task carries `muted`."""
     marks = _read_dismissals(scope_id)
-    if not marks:
-        return tasks, []
     by_key = {t["dismiss_key"]: t for t in tasks if t.get("dismiss_key")}
+    mutes = _read_mutes(scope_id)
+    live_mutes = {key for key in mutes if key in by_key}
+    if live_mutes != mutes:
+        _write_mutes(scope_id, live_mutes)
     updated = dict(marks)
     for key, mark in marks.items():
         task = by_key.get(key)
@@ -909,9 +960,12 @@ def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dic
 
     visible, hidden = [], []
     for task in tasks:
-        mark = marks.get(task.get("dismiss_key"))
-        if mark is not None and task["count"] <= mark:
-            hidden.append(task)
+        key = task.get("dismiss_key")
+        mark = marks.get(key)
+        if key in live_mutes:
+            hidden.append({**task, "muted": True})
+        elif mark is not None and task["count"] <= mark:
+            hidden.append({**task, "muted": False})
         else:
             visible.append(task)
     return visible, hidden
@@ -930,6 +984,7 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
     narrowed: list[dict] = []
     with get_db() as conn:
         signal_counts = None
+        alert_tasks = None
         for task in tasks:
             if task["id"] == "uncategorized_txns":
                 task = _keep_dismissal(task, _uncategorized_task(_uncategorized_count(conn, lens)))
@@ -947,6 +1002,12 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
                     signal_counts = narrow_signals(compute_signals(conn), shown)["counts"]
                 fresh = next((t for t in _recurring_signal_tasks(conn, signal_counts) if t["id"] == task["id"]), None)
                 task = _keep_dismissal(task, fresh)
+            elif task["id"].startswith(RULE_ALERT_TASK_PREFIX):
+                # Counted over the caught rows' owners, so a rule scoped to an account shows to that
+                # account's owner and one applying to everyone shows each owner their own rows.
+                if alert_tasks is None:
+                    alert_tasks = {t["id"]: t for t in _rule_alert_tasks(conn, lens)}
+                task = _keep_dismissal(task, alert_tasks.get(task["id"]))
             if task:
                 narrowed.append(task)
     return narrowed
@@ -973,7 +1034,8 @@ def get_tasks(
         "tasks":       visible,
         "total_count": sum(t["count"] for t in visible),
         "open_items":  len(visible),
-        "dismissed":   [{"id": t["id"], "dismiss_key": t["dismiss_key"], "title": t["title"], "count": t["count"]}
+        "dismissed":   [{"id": t["id"], "dismiss_key": t["dismiss_key"], "muted": t["muted"],
+                         "title": t["title"], "count": t["count"]}
                         for t in hidden],
     }
 
@@ -981,7 +1043,8 @@ def get_tasks(
 @router.post("/dismiss/{dismiss_key}")
 def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
     """Put a task away at its current count. It returns when the count rises above that mark — and the
-    mark falls with the count, so work that arrives after some has been cleared still surfaces."""
+    mark falls with the count, so work that arrives after some has been cleared still surfaces. Dismissing
+    a muted task ends the mute."""
     scope_id = _dismissal_scope(request)
     if not scope_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -991,16 +1054,35 @@ def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional
     marks = _read_dismissals(scope_id)
     marks[dismiss_key] = task["count"]
     _write_dismissals(scope_id, marks)
+    mutes = _read_mutes(scope_id)
+    if dismiss_key in mutes:
+        _write_mutes(scope_id, mutes - {dismiss_key})
+    return get_tasks(request, owner_lens)
+
+
+@router.post("/mute/{dismiss_key}")
+def mute_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
+    """Hide a `mutable` task however high its count goes, until it is dismissed or restored."""
+    scope_id = _dismissal_scope(request)
+    if not scope_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    task = next((t for t in _build_tasks(request) if t.get("dismiss_key") == dismiss_key), None)
+    if task is None or not task.get("mutable"):
+        raise HTTPException(status_code=404, detail="No such mutable task")
+    _write_mutes(scope_id, _read_mutes(scope_id) | {dismiss_key})
     return get_tasks(request, owner_lens)
 
 
 @router.delete("/dismiss/{dismiss_key}")
 def restore_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
-    """Bring a dismissed task back — the undo behind the toast and the dismissed list."""
+    """Bring a dismissed or muted task back — the undo behind the toast and the dismissed list."""
     scope_id = _dismissal_scope(request)
     if not scope_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     marks = _read_dismissals(scope_id)
     marks.pop(dismiss_key, None)
     _write_dismissals(scope_id, marks)
+    mutes = _read_mutes(scope_id)
+    if dismiss_key in mutes:
+        _write_mutes(scope_id, mutes - {dismiss_key})
     return get_tasks(request, owner_lens)

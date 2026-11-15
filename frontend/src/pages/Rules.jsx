@@ -134,7 +134,7 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
       : 'Show transactions this rule matches'
 
   const conditions = describeRule(rule, owners, accounts)
-  const hasAction = rule.category_name || rule.clean_name || (rule.tags && rule.tags.length) || rule.is_recurring
+  const hasAction = rule.category_name || rule.clean_name || (rule.tags && rule.tags.length) || rule.is_recurring || rule.alert
 
   return (
     <div style={{
@@ -162,6 +162,7 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
             <TagBadge key={tag.id} tag={tag} />
           ))}
           {rule.is_recurring ? <span title="Tracked as a recurring series">↻ recurring</span> : null}
+          {rule.alert ? <span title={rule.alert_message || 'Raises a task when a matching transaction arrives'}>⚑ alert</span> : null}
           {isLowPriority(rule) ? <span title="Gives way to normal-priority rules matching the same transaction">low priority</span> : null}
           {!hasAction ? <span style={{ fontStyle: 'italic' }}>no action</span> : null}
           <span
@@ -1052,7 +1053,7 @@ export default function Rules() {
         <RulePreviewDialog
           transactions={matchReport.data.transactions}
           categories={categories}
-          title={`Transactions matching “${formatRuleMatcher(matchReport.rule)}”`}
+          title={formatRuleMatcher(matchReport.rule) ? `Transactions matching “${formatRuleMatcher(matchReport.rule)}”` : 'Transactions this rule matches'}
           subtitle={
             matchReport.data.count > matchReport.data.transactions.length
               ? `${matchReport.data.count} matching · showing the ${matchReport.data.transactions.length} most recent`

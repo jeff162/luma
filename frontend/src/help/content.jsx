@@ -1475,15 +1475,15 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'The Rules page',
     surfaces: ['Rules'],
-    summary: 'Rules match incoming transactions and make changes: adding a category, adding a tag, setting a merchant name, or marking it to be included in a recurring series.',
+    summary: 'Rules match incoming transactions and make changes: adding a category, adding a tag, setting a merchant name, marking it to be included in a recurring series, or raising an alert.',
     body: () => (
       <>
         <p>
           A rule has <strong>matching conditions</strong> to select the transactions it applies to
           and <strong>actions</strong> to apply. Transactions can be selected by the merchant field,
           owner, associated account, account-type and amounts. Actions can set the merchant name,
-          assign a category or tags, or mark the transaction as part of a recurring series. Rules run
-          against newly imported data.
+          assign a category or tags, mark the transaction as part of a recurring series, or raise an
+          alert. Rules run against newly imported data.
         </p>
         <p>
           The matching on the merchant field can involve phrases as well as 'and' and 'or' conditions. Only a
@@ -1521,6 +1521,19 @@ export const HELP_TOPICS = [
           If starting fresh, with no historical data to learn from, there is a small <strong>starter
             set</strong> of common categories and rules that can be added via buttons on the Rules and Category pages.
           Rules alter the data, so the starter rules are shown as a list for approval before adding.
+        </p>
+        <HelpHeading anchor="rule-alerts">Alerts</HelpHeading>
+        <p>*needs review*</p>
+        <p>
+          An alert posts a task when a matching transaction arrives in an import or sync, which is useful
+          for activity that should not happen, such as charges on a closed card. The task shows the
+          message given in the rule, or describes the rule when there is none. Transactions already in the
+          ledger never raise an alert, so applying the rule or running <strong>Categorize</strong> does not
+          post one.
+        </p>
+        <p>
+          A rule with no merchant keyword matches every transaction on its account, owner or account type,
+          so an alert on a closed card needs only the card's account and, if wanted, debits only.
         </p>
         <HelpHeading anchor="applying-rules">Manually applying rules, and rule checkups</HelpHeading>
         <p>
@@ -3764,6 +3777,7 @@ export const HELP_TOPICS = [
           <li>a change in the amount for a suspected member of an existing recurring series</li>
           <li>recurring detection that has not caught up with changed transactions</li>
           <li>a problem fetching transactions from a data connection</li>
+          <li>a transaction matching a rule that raises an <HelpLink to="/help/page-rules#rule-alerts">alert</HelpLink></li>
           <li>an error recorded in the log file</li>
           <li>a change since the last backup that makes earlier backups less useful, such as a new vault
             passphrase, a replaced vault key or replaced data provider credentials</li>
@@ -3773,6 +3787,11 @@ export const HELP_TOPICS = [
           <strong>Dismiss</strong> hides the notification until
           something changes. For instance, if the note about uncategorized
           transactions is dismissed, the task reappears when new ones are added to the list.
+        </p>
+        <p>*needs review*</p>
+        <p>
+          A rule alert can also be muted. <strong>Mute</strong> moves it to the dismissed list, where its
+          count keeps going up without it coming back, until it is dismissed or unmuted there.
         </p>
       </>
     ),

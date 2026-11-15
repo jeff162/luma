@@ -644,6 +644,10 @@ BACKUP_SECTIONS = (
     # deliberate rule pair the user had already waved through.
     ("rule_overlap_dismissals", "rule_overlap_dismissal",
      "SELECT * FROM rule_overlap_dismissal ORDER BY rowid"),
+    # What each rule's alert caught as it arrived, and whether the alert has been dismissed since. Nothing
+    # re-derives it: an alert records only an arrival, so a restore without these would drop every alert
+    # still waiting to be seen.
+    ("rule_alert_hits", "rule_alert_hit", "SELECT * FROM rule_alert_hit ORDER BY rowid"),
     # Split allocations. txn.is_split rides along in the transactions section above, but the parts are
     # the categorization itself: without these a restore would leave rows flagged as split with nothing
     # to expand into, and every category rollup would silently drop that money.
@@ -697,12 +701,12 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
 # `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, 15 the
-# `connections` section, 16 the `import_batch_rejected_rows` section, and 17 the `backup_history` section
-# — all purely additive, which is why an older archive still restores through exactly the same path with
-# the new section simply absent. A section can also be retired: restore reads only the sections listed
+# `connections` section, 16 the `import_batch_rejected_rows` section, 17 the `backup_history` section, and 18
+# the `rule_alert_hits` section — all purely additive, which is why an older archive still restores through
+# exactly the same path with the new section simply absent. A section can also be retired: restore reads only the sections listed
 # above, so an older archive's retired section is ignored (`merchant_renames`, whose table was dropped).
-BACKUP_PAYLOAD_VERSION = 17
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+BACKUP_PAYLOAD_VERSION = 18
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
 
 # How old a backup's resume points may be and still be handed back to a provider. Plaid documents a
 # `/transactions/sync` cursor as valid for at least a year after it was issued; past that nothing vouches
@@ -1355,6 +1359,7 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM rule_overlap_dismissal")
     # Recorded rule conflicts are not backed up, and the rows they name are about to go.
     conn.execute("DELETE FROM rule_conflict")
+    conn.execute("DELETE FROM rule_alert_hit")
     # Link members reference txn (and link) via ON DELETE CASCADE; the link rows themselves have no FK
     # to txn, so they must be deleted explicitly or they'd survive the wipe as orphans.
     conn.execute("DELETE FROM txn_link_member")
@@ -1769,6 +1774,8 @@ _RESTORE_REQUIRE = (
     ("account_tag", "tag_id", "tag"),
     ("rule_tag", "rule_id", "category_rule"),
     ("rule_tag", "tag_id", "tag"),
+    ("rule_alert_hit", "rule_id", "category_rule"),
+    ("rule_alert_hit", "txn_id", "txn"),
     ("account_pair_distinct", "account_id_low", "account"),
     ("account_pair_distinct", "account_id_high", "account"),
     ("amazon_charge_distinct", "txn_id_low", "txn"),

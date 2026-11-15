@@ -38,7 +38,7 @@ from backend.app_logging import log_error, log_warning
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
-from backend.services import connection_log, crypto_service, rule_conflicts
+from backend.services import connection_log, crypto_service, rule_alerts, rule_conflicts
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
@@ -936,6 +936,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     # re-fetch of the whole history on every sync.
     added = updated = removed = skipped = deduped = discovered = 0
     touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
+    added_ids: set[str] = set()  # the rows among them new to the ledger, which alone can set off a rule alert
     cards_touched: set[str] = set()          # cards that received added rows (for the post-sync dedup sweep)
     card_added: dict[str, int] = {}          # card_id -> rows added this call
     # card_id -> the ids of the rows added this call. The duplicate sweep is told exactly these, because a
@@ -972,6 +973,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             nonlocal owed_through
             owe_recurring_rescan(conn, touched_ids[owed_through:])
             rule_conflicts.record_for_txns(conn, touched_ids[owed_through:])
+            rule_alerts.record_arrivals(conn, [i for i in touched_ids[owed_through:] if i in added_ids])
             owed_through = len(touched_ids)
 
         if connection_id:
@@ -1327,6 +1329,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             added += 1
             _bump(tally, t["external_account_id"], "added")
             touched_ids.append(txn_id)
+            added_ids.add(txn_id)
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
             card_added_ids.setdefault(card_id, []).append(txn_id)

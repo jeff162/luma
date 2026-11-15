@@ -128,6 +128,18 @@ ATTRIBUTES: tuple[Attribute, ...] = (
         description="Flagged as possibly the same transaction as another, and not yet resolved.",
         sql="t.suspect_duplicate_of IS NOT NULL",
     ),
+    # Not on the row's marker strip: it is the list a rule alert's Task opens (`services/rule_alerts.py`), so
+    # like `uncategorized` it is reached from that link and the quick filter rather than the FilterBar.
+    Attribute(
+        key="rule-alert",
+        label="Caught by a rule alert",
+        description="Matched a rule's alert as it arrived.",
+        sql=(
+            "EXISTS (SELECT 1 FROM rule_alert_hit h JOIN category_rule r ON r.id = h.rule_id "
+            "        WHERE h.txn_id = t.id AND r.alert = 1 AND r.deleted_at IS NULL)"
+        ),
+        in_filter_bar=False,
+    ),
     Attribute(
         key="pending",
         label="Pending",
