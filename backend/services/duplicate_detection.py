@@ -143,7 +143,7 @@ from typing import Callable, Iterable, NamedTuple, Optional
 
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.amazon_order_amount import LINK_KIND as AMAZON_ORDER_LINK_KIND
-from backend.services.connection_mapping import provider_account_label
+from backend.services.connection_mapping import attach_source_account_nicknames, provider_account_label
 from backend.services.import_evidence import evidence_field_feeds_text_match
 from backend.services.txn_trash import restore_txns, trash_txns
 from backend.text_utils import sanitize_rule_merchant_text
@@ -3756,7 +3756,8 @@ _ORIGIN_COLUMNS_SQL = """
            b.filename    AS import_batch_filename,
            b.imported_at AS import_batch_imported_at,
            b.provider    AS import_batch_provider,
-           (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed
+           (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed,
+           b.connection_id AS import_batch_connection_id
     FROM   txn t
     LEFT JOIN import_batch b  ON b.id  = t.import_batch_id
     WHERE  t.id IN ({placeholders})
@@ -3776,6 +3777,7 @@ def _txn_origin_map(conn: sqlite3.Connection, txn_ids) -> dict[str, dict]:
         chunk = ids[start:start + _ORIGIN_LOOKUP_CHUNK]
         for row in conn.execute(_ORIGIN_COLUMNS_SQL.format(placeholders=_placeholders(chunk)), chunk).fetchall():
             out[str(row["id"])] = dict(row)
+    attach_source_account_nicknames(conn, list(out.values()))
     return out
 
 
@@ -3831,7 +3833,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     batch_meta: dict[str, dict] = {}
     for row in conn.execute(
         "SELECT b.id, b.filename, b.imported_at, b.provider, "
-        "(b.provider IS NOT NULL AND b.connection_id IS NULL) AS connection_removed "
+        "(b.provider IS NOT NULL AND b.connection_id IS NULL) AS connection_removed, b.connection_id "
         "FROM import_batch b"
     ).fetchall():
         batch_meta[str(row["id"])] = {
@@ -3839,6 +3841,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             "source_imported_at":        row["imported_at"],
             "source_provider":           row["provider"],
             "source_connection_removed": row["connection_removed"],
+            "source_connection_id":      row["connection_id"],
         }
 
     # This report's own batch, for the hard-reject incoming side: those rows never became `txn` rows,
@@ -3849,6 +3852,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
         "import_batch_imported_at": this_batch.get("source_imported_at"),
         "import_batch_provider":    this_batch.get("source_provider"),
         "import_batch_connection_removed": this_batch.get("source_connection_removed"),
+        "import_batch_connection_id":      this_batch.get("source_connection_id"),
     }
 
     def enrich_with_source(target: dict, source_batch_id: Optional[str]) -> dict:
@@ -4160,6 +4164,9 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             })
 
     _attach_origins(conn, entries)
+    # A hard-rejected row's origin is built from its stored payload, out of `_attach_origins`' reach.
+    attach_source_account_nicknames(
+        conn, [e["incoming"]["origin"] for e in entries if e["kind"] == "hard_reject"])
     return entries
 
 

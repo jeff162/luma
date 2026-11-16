@@ -30,6 +30,7 @@ from backend.services.connection_mapping import (
     apply_account_mapping,
     captured_field_keys,
     list_connection_accounts,
+    set_account_nicknames,
     unmapped_count,
 )
 from backend.services.providers import UnknownProviderError, get_adapter
@@ -61,6 +62,9 @@ class AccountMappingChoice(BaseModel):
 
 class AccountMappingRequest(BaseModel):
     mappings: dict[str, AccountMappingChoice]
+    # External account id → its nickname, blank to clear. Separate from `mappings` because a nickname can
+    # be given to an account whose mapping is still undecided.
+    nicknames: dict[str, Optional[str]] = {}
 
 
 class CapturedFieldsRequest(BaseModel):
@@ -161,6 +165,7 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
             mappings={k: v.model_dump() for k, v in (body.mappings or {}).items()},
             default_owner_id=resolve_default_owner_id(conn, None),
         )
+        set_account_nicknames(conn, connection_id, body.nicknames or {})
         rescan = rescan_connection_duplicates(conn, connection) if result["changed"] else None
         awaiting_history = _accounts_awaiting_history(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)

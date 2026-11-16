@@ -630,10 +630,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fields }),
     }),
-  setConnectionAccountMap: (connectionId, mappings) =>
+  setConnectionAccountMap: (connectionId, mappings, nicknames = {}) =>
     request(`/connections/${connectionId}/account-map`, {
       method: 'POST',
-      body: JSON.stringify({ mappings }),
+      body: JSON.stringify({ mappings, nicknames }),
     }),
   // Removing a connection's synced transactions also resets its cursor + coverage, so a later sync
   // re-backfills them — the summary is the preflight the confirm dialog states its counts from, and

@@ -690,7 +690,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           // account receiving nothing cannot appear in any tally built from what landed.
           providerAccounts[c.id] = (res.accounts || []).map(pa => ({
             external_account_id: pa.external_account_id,
-            label: pa.source_label || pa.provider_name || pa.external_account_id,
+            label: pa.display_label || pa.provider_name || pa.external_account_id,
             mapped: !!pa.mapped,
             mapping_mode: pa.mapping_mode,
           }))
@@ -996,13 +996,13 @@ export default function ConnectionsTab({ onShowHistory }) {
     }
   }
 
-  async function saveAccountMap(mappings) {
+  async function saveAccountMap(mappings, nicknames) {
     const target = mapTarget
     if (!target) return
     setMapSaving(true)
     setMapError(null)
     try {
-      const res = await api.setConnectionAccountMap(target.connection.id, mappings)
+      const res = await api.setConnectionAccountMap(target.connection.id, mappings, nicknames)
       setUnmappedByConnection(prev => ({ ...prev, [target.connection.id]: res.unmapped || 0 }))
       setMapTarget(null)
       await onAccountsChanged?.()

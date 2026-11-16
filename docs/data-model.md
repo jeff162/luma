@@ -106,7 +106,11 @@ the counterpart of a CSV import's account step. It records
 - what the provider offers: `provider_name`, `provider_official_name`, `provider_type`,
   `provider_subtype`, `provider_mask`, `provider_currency`. These are kept apart from the local account
   so the mapping screen still shows what the bank calls an account after the local one is renamed
-- what the user decided: `mapping_mode`, `account_id`, `target_account_id`
+- what the user decided: `mapping_mode`, `account_id`, `target_account_id`, and `nickname`, a name shown
+  in place of the provider's label. Display only: the provider label stays the source value import cards
+  and synced rows' evidence carry, and duplicate detection keys on it, so a nickname changes no matching.
+  Screens look it up from that label (`source_account_nicknames`), so a card recorded under a label the
+  provider has since changed shows the old label
 - that account's coverage: `coverage_start_date`, `coverage_through_date`, `terminal_window_days`,
   `history_complete`, `history_empty_streak` (see [Coverage has two shapes](#coverage-has-two-shapes))
 

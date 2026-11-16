@@ -29,7 +29,7 @@ async function supplyConnection(page) {
   await page.route(`**/api/connections/${CONNECTION_ID}/accounts`, route => route.fulfill({
     json: {
       unmapped: 0,
-      accounts: [{ external_account_id: 'spec-account', source_label: 'Harborline Rewards', mapped: true }],
+      accounts: [{ external_account_id: 'spec-account', source_label: 'Harborline Rewards', display_label: 'Harborline Rewards', mapped: true }],
     },
   }))
   await page.route(/\/api\/accounts(\?.*)?$/, async route => {

@@ -117,10 +117,13 @@ export function getTxnOriginRows(txn) {
   const evidence = parseImportEvidence(txn)
   if (evidence) {
     if (evidence.account?.value) {
+      // A synced account the user nicknamed shows the nickname, with what the provider called it beside.
+      const nickname = txn.import_source_account_nickname
       rows.push({
         key: 'source_account',
         label: `Source account label (${evidence.account.header || 'Account'})`,
-        value: evidence.account.value,
+        value: nickname || evidence.account.value,
+        suffix: nickname ? `reported as ${evidence.account.value}` : null,
         scope: 'meta',
       })
     }

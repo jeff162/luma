@@ -57,6 +57,7 @@ from backend.services.restore_state import require_no_pending_restore
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
+from backend.services.connection_mapping import source_account_nicknames
 from backend.services.categorizer import (
     FEATURE_OWNED_CATEGORY_SOURCES,
     PreparedRules,
@@ -4398,10 +4399,13 @@ def _history_card_counts(conn) -> dict[str, dict[str, int]]:
 
 
 def _accounts_by_card(conn) -> dict[str, list[dict]]:
-    """Each completed card's per-account entries, in the order its card lists them."""
+    """Each completed card's per-account entries, in the order its card lists them. A sync card's entry
+    carries the provider account's `nickname`, when the user gave it one, for the card to show in place
+    of `csv_value`."""
+    nicknames = source_account_nicknames(conn)
     by_card: dict[str, list[dict]] = {}
     for row in conn.execute("""
-        SELECT iba.batch_id, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
+        SELECT iba.batch_id, b.connection_id, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
                COALESCE(a.name, a.display_name, iba.csv_value) AS account_name
         FROM   import_batch_account iba
         JOIN   import_batch b ON b.id = iba.batch_id AND b.status = 'completed'
@@ -4409,6 +4413,7 @@ def _accounts_by_card(conn) -> dict[str, list[dict]]:
         ORDER  BY iba.batch_id, iba.was_skipped, iba.csv_value
     """):
         entry = dict(row)
+        entry["nickname"] = nicknames.get((entry.pop("connection_id"), entry["csv_value"]))
         by_card.setdefault(entry.pop("batch_id"), []).append(entry)
     return by_card
 

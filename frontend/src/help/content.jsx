@@ -2398,6 +2398,8 @@ export const HELP_TOPICS = [
           The mapping, and the set of extra details to capture can be changed
           from <strong>Connection settings&hellip;</strong> in the card's menu. An account added at the
           provider later has to be mapped as well (see <em>When a connection needs attention</em> below).
+          Clicking a provider account's name there gives it a nickname, shown in its place on Import cards
+          and in a transaction's origin; useful when two accounts arrive with the same name.
         </p>
 
         <h4>Syncing</h4>

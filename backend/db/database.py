@@ -359,12 +359,13 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # written, which a restore compares. v91 adds rule alerts: `category_rule.alert` and `.alert_message`, and
 # `rule_alert_hit`, the transactions an alert caught as they arrived. v92 adds `account.wallet_match_text`
 # and carries the PayPal pairing's links, review layout and Tasks dismissal over to the wallet pairing.
+# v93 adds `connection_account.nickname`, a display name for a provider account.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 92
+CURRENT_VERSION = 93
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2818,6 +2819,14 @@ def _add_wallet_match_text(conn):
     _adopt_wallet_pairs(conn)
 
 
+@migration(93)
+def _add_connection_account_nickname(conn):
+    # See the baseline CREATE. NULL on every existing row: no account has a nickname yet.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+    if columns and "nickname" not in columns:
+        conn.execute("ALTER TABLE connection_account ADD COLUMN nickname TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3174,6 +3183,11 @@ def init_db(db_path: str | None = None):
                 -- NULL means "not stated", never "not the ledger's": the field is optional in the
                 -- protocols, and rejecting an account over a missing field would discard real data.
                 provider_currency      TEXT,
+                -- What the user calls this account where the provider's label is shown (the mapping
+                -- screen, import cards, a transaction's origin). Display only: the provider label stays the
+                -- source value duplicate detection keys on (`provider_account_label`), so renaming here
+                -- changes no matching. NULL when the provider's label is used as-is.
+                nickname               TEXT,
                 coverage_start_date    TEXT,
                 coverage_through_date  TEXT,
                 -- How many trailing days of the covered range are treated as SOFT (reconciled one-to-one

@@ -68,7 +68,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
     // nothing is exactly what this detail exists to surface.
     setExpandedAccounts((res.accounts || []).map(pa => ({
       external_account_id: pa.external_account_id,
-      label: pa.source_label || pa.provider_name || pa.external_account_id,
+      label: pa.display_label || pa.provider_name || pa.external_account_id,
       mapped: !!pa.mapped,
       mapping_mode: pa.mapping_mode,
     })))

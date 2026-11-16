@@ -427,7 +427,7 @@ export function ImportHistorySection({
                             {b.accounts.map((a, i) => (
                               <SourceAccountChip
                                 key={i}
-                                label={a.csv_value || a.account_name || ''}
+                                label={a.nickname || a.csv_value || a.account_name || ''}
                                 mappedLabel={a.account_name || ''}
                                 count={a.row_count}
                                 skipped={a.was_skipped}

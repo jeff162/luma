@@ -19,6 +19,7 @@ from decimal import Decimal
 import re
 import uuid
 from backend.db.database import compact_if_worthwhile, get_db
+from backend.services.connection_mapping import attach_source_account_nicknames
 from backend.services.amount_text import DECIMAL_POINT, amount_text_parts
 from backend.services.input_format import (
     DATE_ORDER_DMY, DATE_ORDER_MDY, DATE_ORDER_YMD, DEFAULT_INPUT_FORMAT, InputFormat,
@@ -1276,6 +1277,7 @@ def list_transactions(
                 -- connection, so it outlives a removed connection. NULL for CSV/manual batches.
                 b.provider    AS import_batch_provider,
                 (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed,
+                b.connection_id AS import_batch_connection_id,
                 o.name        AS owner_name,
                 o.color       AS owner_color,
                 t.suspect_duplicate_of,
@@ -1315,6 +1317,7 @@ def list_transactions(
             document_match_params + params + [sql_limit, offset],
         ).fetchall()
         transactions = [dict(r) for r in rows]
+        attach_source_account_nicknames(conn, transactions)
         txn_ids = [txn["id"] for txn in transactions]
         tag_map = get_visible_transaction_tag_map(conn, txn_ids) if rows else {}
         blocked_map = get_blocked_transaction_tag_map(conn, txn_ids) if rows else {}
