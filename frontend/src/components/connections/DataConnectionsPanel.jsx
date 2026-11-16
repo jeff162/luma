@@ -26,6 +26,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { Button, Card, Tooltip } from '../ui.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
+import InlineRename from '../InlineRename.jsx'
 import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
@@ -68,14 +69,14 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
     // nothing is exactly what this detail exists to surface.
     setExpandedAccounts((res.accounts || []).map(pa => ({
       external_account_id: pa.external_account_id,
-      label: pa.display_label || pa.provider_name || pa.external_account_id,
+      label: pa.source_label || pa.provider_name || pa.external_account_id,
       mapped: !!pa.mapped,
       mapping_mode: pa.mapping_mode,
     })))
   }, [expandedConnId])
 
   const {
-    syncAll, fetchMoreHistory, refreshConnectionAccounts, openRemoveSynced,
+    syncAll, fetchMoreHistory, refreshConnectionAccounts, openRemoveSynced, renameConnection,
     busy: { refreshingConnId, fetchingHistoryConnId, removingSync },
     dialogsNode,
   } = useConnectionOperations({ onChanged })
@@ -169,25 +170,31 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
               return (
                 <div key={c.id} style={{ padding: '4px 0', borderTop: '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    {/* The name is the disclosure: what opens is that connection's own per-account
-                        detail, so the connection is the thing being opened. */}
+                    {/* The arrow is the disclosure for that connection's own per-account detail; the name
+                        beside it is renamed in place, as a name is everywhere it is shown. */}
                     <button type="button" onClick={() => toggleDetail(c.id)}
                       aria-expanded={expandedConnId === c.id}
+                      aria-label={expandedConnId === c.id
+                        ? `Hide what the last sync did for each ${c.name || 'connection'} account`
+                        : `Show what the last sync did for each ${c.name || 'connection'} account`}
                       title={expandedConnId === c.id
                         ? 'Hide what the last sync did for each account'
                         : 'Show what the last sync did for each account'}
                       style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
-                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                        font: 'inherit', fontSize: 13, color: 'var(--text)',
+                        display: 'inline-flex', alignItems: 'center', background: 'none', border: 'none',
+                        padding: 0, cursor: 'pointer', font: 'inherit', fontSize: 10, color: 'var(--muted)',
                       }}>
-                      <span aria-hidden style={{ color: 'var(--muted)', fontSize: 10 }}>
-                        {expandedConnId === c.id ? '▾' : '▸'}
-                      </span>
-                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.institution || 'Linked bank'}
-                      </span>
+                      <span aria-hidden>{expandedConnId === c.id ? '▾' : '▸'}</span>
                     </button>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: 'var(--text)' }}>
+                      <InlineRename
+                        value={c.nickname || ''}
+                        shown={c.name || 'Linked bank'}
+                        onRename={name => renameConnection(c.id, name)}
+                        ariaLabel={`Name for ${c.institution || 'this connection'}`}
+                        title={c.nickname && c.institution ? `${c.institution} — click to rename` : 'Click to rename'}
+                      />
+                    </span>
                     {/* A connection the provider will no longer accept cannot be repaired from here, and
                         saying so beats a stale timestamp that suggests nothing is wrong. */}
                     {c.reauth_required ? (
@@ -210,7 +217,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
                       ) : null}
                       <ActionMenuButton
                         open={cardMenu?.connection.id === c.id}
-                        title={`Actions for ${c.institution || 'this connection'}`}
+                        title={`Actions for ${c.name || 'this connection'}`}
                         disabled={!!refreshingConnId || !!fetchingHistoryConnId || syncing || removingSync}
                         onOpen={element => setCardMenu({ connection: c, anchorElement: element })}
                       />

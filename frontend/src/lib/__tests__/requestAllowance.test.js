@@ -50,8 +50,8 @@ describe('connectionsAllowanceLines', () => {
 
   it('names each connection when there are several', () => {
     expect(connectionsAllowanceLines([
-      { institution: 'A', request_allowance: allowance },
-      { institution: 'B', request_allowance: allowance },
+      { name: 'A', request_allowance: allowance },
+      { name: 'B', request_allowance: allowance },
     ])).toEqual([
       'A requests: 19 of 22 requests left · 1 more each hour',
       'B requests: 19 of 22 requests left · 1 more each hour',

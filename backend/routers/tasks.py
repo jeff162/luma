@@ -365,7 +365,8 @@ def _connection_tasks(conn) -> list[dict]:
     tasks = []
     rows = conn.execute(
         """
-        SELECT provider, institution, reauth_required, consecutive_sync_failures, credential, credential_enc,
+        SELECT provider, COALESCE(NULLIF(TRIM(nickname), ''), institution) AS institution, reauth_required,
+               consecutive_sync_failures, credential, credential_enc,
                (SELECT COUNT(*) FROM connection_account ca WHERE ca.connection_id = connection.id) AS account_count
         FROM connection
         """

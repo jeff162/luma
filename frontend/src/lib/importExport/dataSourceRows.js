@@ -132,7 +132,9 @@ export function buildDataSourceRows({ profiles = [], batches = [], manualDraftRe
       // card filename; the filename parse stays as a fallback for older cards created before the
       // provenance was plumbed through — and it is the only source for a disconnected group, whose
       // connection row is gone along with the fields it carried.
-      label: byImport[0]?.connection_institution || connectionLabelFromFilename(byImport[0]?.filename),
+      label: byImport[0]?.connection_name || connectionLabelFromFilename(byImport[0]?.filename),
+      // The user's name for a live connection ('' when it has none), which the heading renames.
+      nickname: byImport[0]?.connection_nickname || '',
       provider: byImport[0]?.connection_provider || null,
       profile: null,
       hasImportedCategories: false,

@@ -584,7 +584,7 @@ BACKUP_SECTIONS = (
     # coverage test: `credential`/`credential_enc` (secrets) and `sync_started_at`/`sync_progress` (a sync
     # running in the process that wrote them).
     ("connections", "connection",
-     "SELECT id, provider, external_id, institution, created_at, captured_fields, transactions_cursor, "
+     "SELECT id, provider, external_id, institution, nickname, created_at, captured_fields, transactions_cursor, "
      "initial_sync_complete, last_synced_at, last_sync_error, last_sync_error_at, consecutive_sync_failures, "
      "last_sync_warnings, reauth_required, last_sync_outcome, last_sync_summary, provider_request_budget, "
      "provider_request_budget_at FROM connection ORDER BY rowid"),
@@ -1325,8 +1325,9 @@ def restore_target_status():
         # A routine key replacement clears nothing, so it is not the retirement this asks about.
         retirement = control_database.latest_vault_key_retirement(("lost",) + crypto_service.UNTRUSTED_RETIREMENTS)
         if retirement and retirement["reason"] == "lost":
-            names = [r["institution"] or r["provider"] for r in conn.execute(
-                "SELECT institution, provider FROM connection WHERE COALESCE(credential_enc, '') != '' ORDER BY rowid"
+            names = [r["nickname"] or r["institution"] or r["provider"] for r in conn.execute(
+                "SELECT nickname, institution, provider FROM connection WHERE COALESCE(credential_enc, '') != '' "
+                "ORDER BY rowid"
             )]
             if names:
                 status["relinked_since_reset"] = {"reset_at": retirement["retired_at"], "connections": names}
@@ -1400,7 +1401,7 @@ def _wipe_user_data_tables(conn):
 # What a data restore writes onto a connection row: everything the backup knows about it except its
 # identity, and its resume point and request budget, which are each decided separately.
 _RESTORED_CONNECTION_STATE = (
-    "captured_fields", "last_synced_at", "last_sync_error", "last_sync_error_at",
+    "nickname", "captured_fields", "last_synced_at", "last_sync_error", "last_sync_error_at",
     "consecutive_sync_failures", "last_sync_warnings", "reauth_required", "last_sync_outcome",
     "last_sync_summary",
 )
@@ -1477,7 +1478,7 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
         named_ids = {row["id"] for row in rows}
         named_handles = {(row["provider"], row["external_id"]): row["id"] for row in rows if row.get("external_id")}
         for local in conn.execute(
-                "SELECT id, provider, external_id, institution, provider_request_budget, "
+                "SELECT id, provider, external_id, institution, nickname, provider_request_budget, "
                 "provider_request_budget_at FROM connection").fetchall():
             handle = (local["provider"], local["external_id"])
             if local["id"] in named_ids or handle in named_handles:
@@ -1490,7 +1491,7 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
                                  (named_handles[handle], local["id"]))
             else:
                 remove_connection(conn, local, revoked=False, reason="restored")
-                removed.append(local["institution"] or local["provider"])
+                removed.append(local["nickname"] or local["institution"] or local["provider"])
     for row in rows:
         backup_id, provider, external_id = row["id"], row["provider"], row.get("external_id")
         local = conn.execute(

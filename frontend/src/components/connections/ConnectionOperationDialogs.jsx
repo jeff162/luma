@@ -26,7 +26,7 @@ export function connectionOperationDialogs({
     <>
       {removeSyncTarget ? (
         <AppConfirmDialog
-          title={`Remove synced transactions from ${removeSyncTarget.connection.institution || 'this bank'}?`}
+          title={`Remove synced transactions from ${removeSyncTarget.connection.name || 'this bank'}?`}
           // The label states the size of what is about to happen, which is the number the preflight went
           // and fetched. Until it lands there is nothing honest to promise, so the button waits.
           confirmLabel={removingSync ? 'Removing…'

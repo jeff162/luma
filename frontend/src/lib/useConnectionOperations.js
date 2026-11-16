@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The things you *do* to a data connection that are not configuration: sync it, pull more of its history,
-// rebuild its accounts, and take its synced transactions back out.
+// rebuild its accounts, take its synced transactions back out, and rename it.
 //
 // Kept apart from the Import page's Connections tab that calls them (`ConnectionsTab.jsx`), which holds
 // the configuration — connect, disconnect, account mapping, the provider credential — and the Plaid
@@ -211,9 +211,19 @@ export function useConnectionOperations({ onChanged } = {}) {
     }
   }, [removeSyncTarget, settle])
 
+  // The name the connection is shown by. Not vault-gated: it is display only and reaches no provider. Every
+  // listing that names connections re-reads, so the new name shows wherever the old one did; a failure is
+  // thrown back to the editor, which stays open with the reason.
+  const renameConnection = useCallback(async (connectionId, name) => {
+    await api.setConnectionNickname(connectionId, name)
+    await refreshConnections()
+    await settle()
+  }, [refreshConnections, settle])
+
   return {
     sync,
     syncAll,
+    renameConnection,
     fetchMoreHistory,
     refreshConnectionAccounts,
     openRemoveSynced,

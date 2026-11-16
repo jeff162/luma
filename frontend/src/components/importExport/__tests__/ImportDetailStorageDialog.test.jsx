@@ -96,7 +96,7 @@ describe('the stored-detail screen', () => {
   it('tells two connections at the same institution apart, as the history does', async () => {
     const sync = (id, filename, connectionId, provider) => card(id, filename, {
       source_kind: 'connection_sync', connection_id: connectionId,
-      connection_institution: 'Northgate', connection_provider: provider,
+      connection_institution: 'Northgate', connection_name: 'Northgate', connection_provider: provider,
     })
     renderDialog({
       stored: {

@@ -18,15 +18,12 @@
 // reads as undecided, and its × is still offered so the mapping can be cleared.
 // What differs between surfaces is passed in rather than branched on here: what a row says beneath its
 // label (`details`), a row the file has already delivered (`lockedNote`), what a skipped row reads as
-// (`skipNote`), and new accounts other rows are creating (`inFlightOptions`). A surface whose source
-// accounts can be nicknamed passes `onRename(key, name)`: the label is then clicked to rename it, and a
-// row's `displayLabel` is shown in its place. `label` stays the source's own value, which matching reads.
+// (`skipNote`), and new accounts other rows are creating (`inFlightOptions`).
 
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Select, Button, IconButton } from '../ui.jsx'
 import { PossibleAccountMatchChooserDialog } from './importConfirmDialogs.jsx'
-import TransientTextInput from '../TransientTextInput.jsx'
 import AccountMatchSelect from './AccountMatchSelect.jsx'
 import {
   getAccountMatchLabel,
@@ -41,14 +38,13 @@ const inputStyle = {
   width: '100%', background: 'var(--surface2)', color: 'var(--text)',
   borderRadius: 6, padding: '4px 6px', fontSize: 12, outline: 'none',
 }
-const labelStyle = { fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 const mutedNoteStyle = { fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }
 
 export default function AccountMappingGrid({
   // The column heading naming where the values come from ("Account from file").
   sourceHeading,
-  // `[{ key, label, displayLabel?, title?, details?, entry, candidates?, suggestion?, newNameDefault?,
-  // lockedNote?, skipNote? }]`. `candidates` / `suggestion` come from `findAccountMatchCandidates` /
+  // `[{ key, label, title?, details?, entry, candidates?, suggestion?, newNameDefault?, lockedNote?,
+  // skipNote? }]`. `candidates` / `suggestion` come from `findAccountMatchCandidates` /
   // `findLikelyAccountMatch`; the row never re-derives the second from the first, because "chip-worthy"
   // is stricter than "the list has one entry".
   rows,
@@ -66,11 +62,8 @@ export default function AccountMappingGrid({
   // A grid in a scrolling dialog body keeps its column labels in view; the header is then opaque so rows
   // cannot show through it.
   stickyHeader = false,
-  onRename = null,
 }) {
   const [chooser, setChooser] = useState(null)
-  // `{ key, draft }` while a row's label is being renamed.
-  const [renaming, setRenaming] = useState(null)
 
   // Marketplace accounts (Amazon, …) are filled by their own importer, never by mapping a source onto
   // them, so no row offers them.
@@ -202,32 +195,12 @@ export default function AccountMappingGrid({
             opacity: row.lockedNote ? 0.5 : (entry.skip ? 0.45 : 1),
           }}>
             <div style={{ minWidth: 0 }}>
-              {renaming?.key === key ? (
-                <TransientTextInput
-                  value={renaming.draft}
-                  onChange={draft => setRenaming(prev => (prev?.key === key ? { ...prev, draft } : prev))}
-                  onCommit={() => { onRename(key, renaming.draft.trim()); setRenaming(null) }}
-                  onCancel={() => setRenaming(null)}
-                  restoreOnEscape
-                  aria-label={`Name for ${label}`}
-                  placeholder={label}
-                  style={{ ...inputStyle, fontSize: 13, fontWeight: 500, padding: '0 4px', border: '1px solid var(--accent)' }}
-                />
-              ) : onRename ? (
-                <button
-                  type="button"
-                  onClick={() => setRenaming({ key, draft: row.displayLabel || label })}
-                  style={{
-                    ...labelStyle, display: 'block', maxWidth: '100%', background: 'none', border: 'none',
-                    padding: 0, margin: 0, color: 'var(--text)', cursor: 'pointer', textAlign: 'left',
-                  }}
-                  title={`${row.title || label} — click to rename`}
-                >
-                  {row.displayLabel || label}
-                </button>
-              ) : (
-                <div style={labelStyle} title={row.title || label}>{label}</div>
-              )}
+              <div
+                style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={row.title || label}
+              >
+                {label}
+              </div>
               {row.details}
             </div>
 

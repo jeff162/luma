@@ -98,6 +98,14 @@ The per-bank credential lives on the `connection` row. The aggregator's app-leve
 provider, lives in `provider_config` with its secret vault-encrypted. The provider seam and the
 credential resolver are in `architecture.md` → *Provider connections*.
 
+A connection is shown by `connection.nickname` where the user set one, otherwise by `institution`
+(`services/connection_names.py`). The nickname is display only. `institution` stays the provider's value:
+a re-link rewrites it, account creation is passed it, and labels stored from it keep the value they were
+written with, a sync card's title (see [Sync import cards](#sync-import-cards)) and a sync log row's
+`institution`. Those are rewritten where they are read for the screen. A removed connection takes its
+nickname with it, so what it left behind reads as recorded. Blank, or the institution's own name, stores
+NULL.
+
 ### Connection account mapping
 
 `connection_account`, keyed `(connection_id, external_account_id)`, is a connection's account mapping:
@@ -106,11 +114,7 @@ the counterpart of a CSV import's account step. It records
 - what the provider offers: `provider_name`, `provider_official_name`, `provider_type`,
   `provider_subtype`, `provider_mask`, `provider_currency`. These are kept apart from the local account
   so the mapping screen still shows what the bank calls an account after the local one is renamed
-- what the user decided: `mapping_mode`, `account_id`, `target_account_id`, and `nickname`, a name shown
-  in place of the provider's label. Display only: the provider label stays the source value import cards
-  and synced rows' evidence carry, and duplicate detection keys on it, so a nickname changes no matching.
-  Screens look it up from that label (`source_account_nicknames`), so a card recorded under a label the
-  provider has since changed shows the old label
+- what the user decided: `mapping_mode`, `account_id`, `target_account_id`
 - that account's coverage: `coverage_start_date`, `coverage_through_date`, `terminal_window_days`,
   `history_complete`, `history_empty_streak` (see [Coverage has two shapes](#coverage-has-two-shapes))
 
@@ -1673,6 +1677,10 @@ which is what a transaction-id collision looks like. An unmapped account is alre
 A connection's batches have `source_kind = 'connection_sync'`, carry `connection_id`, and store the
 connection's `provider` key so a card still names its provider after the connection is removed.
 
+- **A card's title is written once**, as `"<institution> · <Month Year>"` (or `· Initial import`), from
+  the connection's institution, else its provider. While the connection has a nickname, the title is
+  shown with the nickname in that prefix's place (`card_title`, and `card_title_sql` for queries that
+  select it); a title written under an institution the connection no longer has is shown as stored.
 - **The first backfill lands on one card** (`resolve_initial_sync_batch`,
   `config_snapshot.initial_backfill`), reused across the polling calls of that pull.
 - **After `initial_sync_complete`, rows land on monthly cards** (`resolve_sync_period_batch`,

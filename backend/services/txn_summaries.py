@@ -10,6 +10,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Iterable
 
+from backend.services.connection_names import card_title_sql
+
 
 def txn_summaries(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> dict[str, dict]:
     """The summary for each id that exists, keyed by id."""
@@ -23,11 +25,12 @@ def txn_summaries(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> dict[str,
                        t.category_source, t.category_id, t.is_split, t.imported_category, t.import_evidence_json,
                        a.display_name AS account_name,
                        t.import_batch_id           AS source_batch_id,
-                       ib.filename                 AS source_filename,
+                       {card_title_sql("ib", "ibconn")} AS source_filename,
                        ib.imported_at              AS source_imported_at
                 FROM   txn t
                 JOIN   account a ON a.id = t.account_id
                 LEFT   JOIN import_batch ib ON ib.id = t.import_batch_id
+                LEFT   JOIN connection ibconn ON ibconn.id = ib.connection_id
                 WHERE  t.id IN ({",".join("?" * len(chunk))})""",
             chunk,
         ).fetchall()

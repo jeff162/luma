@@ -57,7 +57,7 @@ from backend.services.restore_state import require_no_pending_restore
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
-from backend.services.connection_mapping import source_account_nicknames
+from backend.services.connection_names import card_title, connection_display_name
 from backend.services.categorizer import (
     FEATURE_OWNED_CATEGORY_SOURCES,
     PreparedRules,
@@ -4399,13 +4399,10 @@ def _history_card_counts(conn) -> dict[str, dict[str, int]]:
 
 
 def _accounts_by_card(conn) -> dict[str, list[dict]]:
-    """Each completed card's per-account entries, in the order its card lists them. A sync card's entry
-    carries the provider account's `nickname`, when the user gave it one, for the card to show in place
-    of `csv_value`."""
-    nicknames = source_account_nicknames(conn)
+    """Each completed card's per-account entries, in the order its card lists them."""
     by_card: dict[str, list[dict]] = {}
     for row in conn.execute("""
-        SELECT iba.batch_id, b.connection_id, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
+        SELECT iba.batch_id, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
                COALESCE(a.name, a.display_name, iba.csv_value) AS account_name
         FROM   import_batch_account iba
         JOIN   import_batch b ON b.id = iba.batch_id AND b.status = 'completed'
@@ -4413,7 +4410,6 @@ def _accounts_by_card(conn) -> dict[str, list[dict]]:
         ORDER  BY iba.batch_id, iba.was_skipped, iba.csv_value
     """):
         entry = dict(row)
-        entry["nickname"] = nicknames.get((entry.pop("connection_id"), entry["csv_value"]))
         by_card.setdefault(entry.pop("batch_id"), []).append(entry)
     return by_card
 
@@ -5124,6 +5120,7 @@ def list_batches():
                    -- The card's own provider stands in once the connection is removed.
                    COALESCE(conn.provider, b.provider) AS connection_provider,
                    conn.institution AS connection_institution,
+                   conn.nickname AS connection_nickname,
                    -- When the connection last synced: its history row's recency. A card's own
                    -- imported_at is when the card was created, which a monthly card stops tracking
                    -- after its first sync of the month.
@@ -5145,6 +5142,14 @@ def list_batches():
         for b in batches:
             d = dict(b)
             d.pop("config_snapshot", None)
+            # The group heading's name, and a sync card's title with the connection's nickname in place of
+            # the institution it was written with (`services/connection_names.py`).
+            d["connection_name"] = connection_display_name(b["connection_institution"], b["connection_nickname"])
+            if b["connection_nickname"]:
+                d["filename"] = card_title(b["filename"], {
+                    "institution": b["connection_institution"], "provider": b["connection_provider"],
+                    "nickname": b["connection_nickname"],
+                })
             snapshot = safe_json_dict(b["config_snapshot"])
             # Surfaced so the client can tell whether a profileless batch's file shape actually
             # matches a data source before auto-attaching it (Save as data source guard).

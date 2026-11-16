@@ -107,7 +107,7 @@ function connectionRows(providers) {
       rows.push({
         provider: p.provider,
         connectionId: c.id,
-        institution: c.institution || p.provider,
+        institution: c.name || p.provider,
         syncing: !!c.syncing,
         progress: c.sync_progress || null,
       })

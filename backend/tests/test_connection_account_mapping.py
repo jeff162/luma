@@ -23,12 +23,10 @@ from backend.routers.accounts import upsert_connection_accounts
 from backend.services.connection_mapping import (
     MAPPING_MODES,
     apply_account_mapping,
-    attach_source_account_nicknames,
     dedupe_inputs_for_connection,
     list_connection_accounts,
     provider_account_label,
     record_provider_accounts,
-    set_account_nicknames,
     unmapped_count,
 )
 
@@ -353,45 +351,6 @@ class ConnectionAccountMappingTests(_MappingFixture):
             result = self._apply(conn, {"ext-nope": {"mode": "new", "name": "Ghost"}})
             self.assertEqual(result["created"], [])
             self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
-
-
-class NicknameTests(_MappingFixture):
-    """A nickname replaces the provider's label on screen and nowhere else: the label stays the source
-    value duplicate detection keys on, and a refresh, which rewrites the provider's fields, keeps it."""
-
-    def test_a_nickname_is_shown_and_survives_a_refresh_without_changing_the_source_value(self):
-        with database.get_db() as conn:
-            self._record(conn)
-            self._apply(conn, {"ext-card": {"mode": "new"}})
-            before = dedupe_inputs_for_connection(conn, "conn-1")
-            set_account_nicknames(conn, "conn-1", {"ext-card": "  Travel card  "})
-            record_provider_accounts(conn, connection_id="conn-1", accounts=PROVIDER_ACCOUNTS)
-
-            row = next(r for r in list_connection_accounts(conn, "conn-1") if r["external_account_id"] == "ext-card")
-            self.assertEqual(row["display_label"], "Travel card")
-            self.assertEqual(row["source_label"], "CREDIT CARD ···4103")
-            self.assertEqual(dedupe_inputs_for_connection(conn, "conn-1"), before)
-
-            set_account_nicknames(conn, "conn-1", {"ext-card": ""})
-            row = next(r for r in list_connection_accounts(conn, "conn-1") if r["external_account_id"] == "ext-card")
-            self.assertIsNone(row["nickname"])
-            self.assertEqual(row["display_label"], "CREDIT CARD ···4103")
-
-    def test_an_origin_row_gets_the_nickname_of_the_account_it_was_synced_from(self):
-        with database.get_db() as conn:
-            self._record(conn)
-            set_account_nicknames(conn, "conn-1", {"ext-card": "Travel card"})
-            rows = [
-                {"import_batch_connection_id": "conn-1",
-                 "import_evidence_json": '{"account": {"value": "CREDIT CARD ···4103"}}'},
-                {"import_batch_connection_id": "conn-1",
-                 "import_evidence_json": '{"account": {"value": "CHECKING ···1111"}}'},
-                # The same label from a file, which carries no connection.
-                {"import_batch_connection_id": None,
-                 "import_evidence_json": '{"account": {"value": "CREDIT CARD ···4103"}}'},
-            ]
-            attach_source_account_nicknames(conn, rows)
-        self.assertEqual([r["import_source_account_nickname"] for r in rows], ["Travel card", None, None])
 
 
 class AccountsAwaitingHistoryTests(unittest.TestCase):

@@ -292,6 +292,9 @@ export const api = {
     request('/auth/vault/reset', { method: 'POST', body: JSON.stringify({ reason, confirm }) }),
   // Per-provider app-level credentials (the Configure card). Status never returns the secret.
   getProviders: () => request('/providers'),
+  // The name a connection is shown by. Blank, or its institution's own name, clears it.
+  setConnectionNickname: (connectionId, nickname) =>
+    request(`/connections/${connectionId}/nickname`, { method: 'PUT', body: JSON.stringify({ nickname }) }),
   getProviderConfig: (provider) => request(`/providers/${provider}/config`),
   saveProviderConfig: (provider, data) =>
     request(`/providers/${provider}/config`, { method: 'POST', body: JSON.stringify(data) }),
@@ -630,10 +633,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fields }),
     }),
-  setConnectionAccountMap: (connectionId, mappings, nicknames = {}) =>
+  setConnectionAccountMap: (connectionId, mappings) =>
     request(`/connections/${connectionId}/account-map`, {
       method: 'POST',
-      body: JSON.stringify({ mappings, nicknames }),
+      body: JSON.stringify({ mappings }),
     }),
   // Removing a connection's synced transactions also resets its cursor + coverage, so a later sync
   // re-backfills them — the summary is the preflight the confirm dialog states its counts from, and

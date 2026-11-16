@@ -24,6 +24,7 @@ import { describeDataSourceRow, partitionImportHistory, summarizeBatchAttention 
 import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
+import InlineRename from '../InlineRename.jsx'
 import {
   summarizeImportedCategorySettings,
   extractImportedCategorySettings,
@@ -56,6 +57,7 @@ export function ImportHistorySection({
   handleUndoClick,
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
+  renameConnection,
 }) {
   // A saved source that has imported nothing has no history; it is listed with the sources.
   const historyRows = useMemo(() => dataSourceRows.filter(row => row.batches.length > 0), [dataSourceRows])
@@ -427,7 +429,7 @@ export function ImportHistorySection({
                             {b.accounts.map((a, i) => (
                               <SourceAccountChip
                                 key={i}
-                                label={a.nickname || a.csv_value || a.account_name || ''}
+                                label={a.csv_value || a.account_name || ''}
                                 mappedLabel={a.account_name || ''}
                                 count={a.row_count}
                                 skipped={a.was_skipped}
@@ -542,7 +544,19 @@ export function ImportHistorySection({
                           ) : <span style={{ width: 20, height: 20 }} />}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
-                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isConnection ? row.label : row.profile.name}
+                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isConnection ? (
+                                // A live connection's name is renamed where it is read; a disconnected group's
+                                // comes from its cards and has no connection left to rename.
+                                row.connectionId ? (
+                                  <InlineRename
+                                    value={row.nickname}
+                                    shown={row.label}
+                                    onRename={name => renameConnection(row.connectionId, name)}
+                                    ariaLabel={`Name for ${row.label}`}
+                                    title="Click to rename"
+                                  />
+                                ) : row.label
+                              ) : row.profile.name}
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                               {isManual ? (

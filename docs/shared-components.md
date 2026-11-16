@@ -111,6 +111,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | Use | For | Where |
 | --- | --- | --- |
 | `TransientTextInput` | Editing one text value in place. | `components/TransientTextInput.jsx` |
+| `InlineRename` | A name that is clicked to rename in place and saved on its own, such as a heading. | `components/InlineRename.jsx` |
 | `uiInteractions` | Click-away and Escape handling: `useDismissibleLayer`, `useEscapeAction`, `useTransientTextEdit`. | `lib/uiInteractions.js` |
 | `onEnter` / `advanceOnEnter` | Enter moving through a small form and submitting from the last field. | `lib/formKeys.js` |
 | `PasswordInput` (+ `PasswordManagerUsername`) | Any secret that is typed or pasted. | `components/ui.jsx` |

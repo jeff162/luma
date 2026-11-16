@@ -39,6 +39,7 @@ from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
 from backend.services import connection_log, crypto_service, rule_alerts, rule_conflicts
+from backend.services.connection_names import card_title, connection_display_name, nicknamed_connections
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
@@ -960,7 +961,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     sync_diagnostics: list[dict] = []        # per-connection diagnostic rows, persisted at the end of the run
 
     _SELECT_CONNECTIONS = (
-        "SELECT id, provider, external_id, credential, credential_enc, institution, "
+        "SELECT id, provider, external_id, credential, credential_enc, institution, nickname, "
         "transactions_cursor, initial_sync_complete, provider_request_budget FROM connection"
     )
 
@@ -1440,6 +1441,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "connection_id":  connection["id"],
                     "provider":       connection["provider"],
                     "institution":    connection["institution"],
+                    # What the run reports it as; the log row keeps `institution` (`services/connection_names.py`).
+                    "name":           connection_display_name(connection["institution"], connection["nickname"]),
                     "started_at":     started_at,
                     "finished_at":    _utcnow_iso(),
                     "mode":           "initial" if initial else "routine",
@@ -1780,7 +1783,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             if connection_warnings:
                 warned.append({
                     "connection_id": connection["id"],
-                    "institution": connection["institution"] or connection["provider"],
+                    "institution": connection_display_name(connection["institution"], connection["nickname"])
+                                   or connection["provider"],
                     "warnings": connection_warnings,
                 })
             synced_statuses.append(final_status)
@@ -1790,7 +1794,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             if resume_later:
                 paused.append({
                     "connection_id": connection["id"],
-                    "institution": connection["institution"] or connection["provider"],
+                    "institution": connection_display_name(connection["institution"], connection["nickname"])
+                                   or connection["provider"],
                 })
             _record(became_complete=became_complete)
 
@@ -1920,7 +1925,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         "connections": [
             {
                 "connection_id": e["connection_id"],
-                "institution":   e["institution"] or e["provider"],
+                "institution":   e.get("name") or e["provider"],
                 "added":         e["added"],
                 "updated":       e["updated"],
                 "removed":       e["removed"],
@@ -2054,6 +2059,7 @@ def sync_diagnostics(limit: int = 200,
             """
         ).fetchall()
         retention = connection_log.retention_days(conn)
+        nicknamed = nicknamed_connections(conn)
 
     def _json_list(value):
         try:
@@ -2076,6 +2082,13 @@ def sync_diagnostics(limit: int = 200,
         d["warnings"] = _json_list(d.get("warnings"))
         d["advisories"] = _json_list(d.get("advisories"))
         d["card_counts"] = _json_list(d.get("card_counts"))
+        # A row about a connection that now has a nickname is shown under it, cards included; the stored
+        # columns keep the name it was written with (`services/connection_names.py`).
+        named = nicknamed.get(r["connection_id"])
+        if named:
+            d["card_counts"] = [{**c, "card": card_title(c.get("card"), named)} if isinstance(c, dict) else c
+                                for c in d["card_counts"]]
+            d["institution"] = named["nickname"]
         d["requested_windows"] = _json_list(d.get("requested_windows"))
         # Vestigial: the allowance level older rows recorded. The log records what a sync spent; what is
         # left is the connection card's (`request_allowance` in the providers listing).
@@ -2101,7 +2114,8 @@ def sync_diagnostics(limit: int = 200,
                 "subject":       r["subject"],
                 "connection_id": r["connection_id"],
                 "provider":      r["provider"],
-                "institution":   r["institution"] or r["provider"],
+                "institution":   (nicknamed.get(r["connection_id"]) or {}).get("nickname")
+                                 or r["institution"] or r["provider"],
                 "disconnected":  bool(r["disconnected"]),
                 "count":         r["count"],
             }

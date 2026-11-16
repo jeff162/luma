@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
+from backend.services.connection_names import card_title_sql
 from backend.services.link_held_rows import held_txn_ids_sql
 from backend.services.categorizer import (
     _amount_rule_matches,
@@ -435,7 +436,7 @@ class RulePreview(BaseModel):
 # The candidate-row query shared by the preview (would-change) and matches (all matcher hits) endpoints:
 # every field `_rule_matches_txn` needs plus the columns the rules-page transaction report renders. Ordered
 # newest-first so a capped matches result keeps the most recent rows.
-_RULE_PREVIEW_ROW_SQL = """
+_RULE_PREVIEW_ROW_SQL = f"""
     SELECT
         t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
         t.is_pending, t.is_split, t.trashed_at, t.category_overridden, t.category_source, t.display_name_source,
@@ -448,7 +449,7 @@ _RULE_PREVIEW_ROW_SQL = """
         t.category_id,
         c.name        AS category_name,
         NULL          AS category_color,
-        b.filename    AS import_batch_filename,
+        {card_title_sql("b", "bconn")} AS import_batch_filename,
         b.imported_at AS import_batch_imported_at,
         o.name        AS owner_name,
         o.color       AS owner_color,
@@ -459,6 +460,7 @@ _RULE_PREVIEW_ROW_SQL = """
     LEFT JOIN account p ON p.id = a.parent_account_id
     LEFT JOIN category c ON c.id = t.category_id
     LEFT JOIN import_batch b ON b.id = t.import_batch_id
+    LEFT JOIN connection bconn ON bconn.id = b.connection_id
     LEFT JOIN owner o ON o.id = t.owner_id
     ORDER BY t.date DESC
 """

@@ -119,54 +119,6 @@ def provider_account_label(row) -> str:
     return name or (mask and f"···{mask}") or str(row["external_account_id"])
 
 
-def source_account_nicknames(conn: sqlite3.Connection) -> dict[tuple[str, str], str]:
-    """`(connection_id, provider account label)` → the nickname the user gave that account.
-
-    Keyed on the label because that is what an import card's account row and a synced row's evidence
-    record (`import_batch_account.csv_value`, `import_evidence_json.account.value`); neither stores the
-    provider's account id. So a card written before the provider renamed an account keeps the old label
-    and shows it without the nickname.
-    """
-    return {
-        (r["connection_id"], provider_account_label(r)): r["nickname"]
-        for r in conn.execute(
-            "SELECT connection_id, external_account_id, provider_name, provider_mask, nickname "
-            "FROM connection_account WHERE COALESCE(nickname, '') <> ''"
-        ).fetchall()
-    }
-
-
-def attach_source_account_nicknames(conn: sqlite3.Connection, rows: list[dict]) -> None:
-    """Set `import_source_account_nickname` on each origin row (one carrying `import_batch_connection_id`
-    and `import_evidence_json`, as the ledger and the duplicate report select them): the nickname of the
-    provider account the row was synced from, or None. Rows from a file or with no nickname get None."""
-    nicknames = source_account_nicknames(conn)
-    for row in rows:
-        nickname = None
-        connection_id = row.get("import_batch_connection_id")
-        if nicknames and connection_id and row.get("import_evidence_json"):
-            try:
-                evidence = json.loads(row["import_evidence_json"])
-            except (TypeError, ValueError):
-                evidence = None
-            account = evidence.get("account") if isinstance(evidence, dict) else None
-            label = account.get("value") if isinstance(account, dict) else None
-            nickname = nicknames.get((connection_id, label)) if label else None
-        row["import_source_account_nickname"] = nickname
-
-
-def set_account_nicknames(conn: sqlite3.Connection, connection_id: str,
-                          nicknames: dict[str, Optional[str]]) -> None:
-    """Set or clear (blank or None) the nickname of each named provider account on this connection.
-    An id the connection does not hold is ignored."""
-    for external_account_id, nickname in nicknames.items():
-        conn.execute(
-            "UPDATE connection_account SET nickname = ?, updated_at = ? "
-            "WHERE connection_id = ? AND external_account_id = ?",
-            ((nickname or "").strip() or None, utcnow_iso(), connection_id, external_account_id),
-        )
-
-
 def provider_account_index(conn: sqlite3.Connection, connection_id: str) -> dict[str, dict]:
     """Every provider account this connection knows of, by external id → `{label, mapping_mode}`.
 
@@ -217,8 +169,6 @@ def list_connection_accounts(conn: sqlite3.Connection, connection_id: str) -> li
     for r in rows:
         entry = dict(r)
         entry["source_label"] = provider_account_label(r)
-        # What every screen shows; `source_label` stays the matching key (see `source_account_nicknames`).
-        entry["display_label"] = (r["nickname"] or "").strip() or entry["source_label"]
         entry["mapped"] = bool(r["mapping_mode"])
         # Decided here rather than in the UI so "which currency can this ledger hold" has one answer in
         # one place. The client renders the verdict; it does not know the rule or the ledger's currency.

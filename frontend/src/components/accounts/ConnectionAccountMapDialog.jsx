@@ -38,8 +38,6 @@ export default function ConnectionAccountMapDialog({
   requireAll = false,
 }) {
   const [entries, setEntries] = useState({})
-  // External account id → the nickname being edited, saved with the mapping. Blank uses the provider's label.
-  const [nicknames, setNicknames] = useState({})
 
   const selectableAccounts = useMemo(
     // Marketplace accounts are filled by their own importer, never by pointing a data source at them —
@@ -55,10 +53,6 @@ export default function ConnectionAccountMapDialog({
     }
     setEntries(next)
   }, [providerAccounts, selectableAccounts])
-
-  useEffect(() => {
-    setNicknames(Object.fromEntries((providerAccounts || []).map(pa => [pa.external_account_id, pa.nickname || ''])))
-  }, [providerAccounts])
 
   function update(externalId, patch) {
     setEntries(prev => ({
@@ -77,12 +71,7 @@ export default function ConnectionAccountMapDialog({
       const mapping = entryToMapping(entries[pa.external_account_id])
       if (mapping) mappings[pa.external_account_id] = mapping
     }
-    const changedNicknames = {}
-    for (const pa of rows) {
-      const nickname = nicknames[pa.external_account_id] ?? ''
-      if (nickname !== (pa.nickname || '')) changedNicknames[pa.external_account_id] = nickname
-    }
-    onSave?.(mappings, changedNicknames)
+    onSave?.(mappings)
   }
 
   return (
@@ -93,8 +82,8 @@ export default function ConnectionAccountMapDialog({
           the second section undiscoverable. */}
       <AppDialog
         title={requireAll
-          ? `Map accounts from ${connection?.institution || 'this connection'}`
-          : `${connection?.institution || 'Connection'} settings`}
+          ? `Map accounts from ${connection?.name || connection?.institution || 'this connection'}`
+          : `${connection?.name || connection?.institution || 'Connection'} settings`}
         description={
           requireAll
             ? 'Choose what each account from this connection is. Transactions are pulled once every account has a destination — mapping an account onto one already in Luma is also what lets duplicate detection recognize transactions imported from a file.'
@@ -146,11 +135,6 @@ export default function ConnectionAccountMapDialog({
               // The dialog body scrolls; with a dozen provider accounts the column labels would otherwise
               // scroll away and leave a bare checkbox column with nothing naming it.
               stickyHeader
-              onRename={(externalId, name) => setNicknames(prev => ({
-                ...prev,
-                // Typing the provider's own label back is clearing the nickname.
-                [externalId]: name === rows.find(pa => pa.external_account_id === externalId)?.source_label ? '' : name,
-              }))}
               // Unlike a CSV's per-import skip, this one is remembered: it stops "Refresh accounts"
               // recreating an account that was deliberately rejected.
               skipTitle="Don't bring this account into Luma. Remembered, so refreshing the connection won't recreate it."
@@ -159,13 +143,12 @@ export default function ConnectionAccountMapDialog({
                 return {
                   key: pa.external_account_id,
                   label: pa.source_label,
-                  displayLabel: nicknames[pa.external_account_id] || pa.source_label,
                   title: pa.provider_official_name || pa.source_label,
                   entry,
                   candidates: entry.candidates || [],
                   suggestion: entry.suggestion,
-                  newNameDefault: nicknames[pa.external_account_id] || pa.provider_name || pa.source_label,
-                  details: <ProviderAccountDetails providerAccount={pa} nicknamed={!!nicknames[pa.external_account_id]} />,
+                  newNameDefault: pa.provider_name || pa.source_label,
+                  details: <ProviderAccountDetails providerAccount={pa} />,
                 }
               })}
             />
@@ -211,17 +194,12 @@ export default function ConnectionAccountMapDialog({
 // mapping it is the decision this changes: its transactions are discarded, so the account would otherwise
 // be created, sync cleanly, and stay permanently empty. The backend decides which currencies qualify
 // (`currency_is_supported`) — this only renders the verdict.
-// A nicknamed account also shows the provider's own label, which is what its import records carry.
-function ProviderAccountDetails({ providerAccount: pa, nicknamed = false }) {
-  const officialName = pa.provider_official_name && pa.provider_official_name !== pa.provider_name
-    ? pa.provider_official_name
-    : ''
-  const providerLine = [nicknamed ? pa.source_label : '', officialName].filter(Boolean).join(' · ')
+function ProviderAccountDetails({ providerAccount: pa }) {
   return (
     <>
-      {providerLine ? (
+      {pa.provider_official_name && pa.provider_official_name !== pa.provider_name ? (
         <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {providerLine}
+          {pa.provider_official_name}
         </div>
       ) : null}
       {pa.currency_supported === false ? (

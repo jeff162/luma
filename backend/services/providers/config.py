@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from backend.db.database import get_db
 from backend.time_utils import utcnow_iso
 from backend.services import connection_log, crypto_service
+from backend.services.connection_names import card_title, connection_display_name
 
 # Plaid retired its `development` environment; the dashboard now issues one sandbox and one production
 # key and nothing else, so there is no third mode left to offer. Accepting it was not merely dead — the
@@ -259,7 +260,7 @@ def list_connections(provider: str) -> list[dict]:
     adapter = get_adapter(provider)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
+            "SELECT id, external_id, institution, nickname, last_synced_at, last_sync_error, last_sync_error_at, "
             "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at, "
             "sync_progress, last_sync_outcome, last_sync_summary, credential, credential_enc, "
             "provider_request_budget "
@@ -272,8 +273,16 @@ def list_connections(provider: str) -> list[dict]:
             warnings = json.loads(r["last_sync_warnings"]) if r["last_sync_warnings"] else []
         except (TypeError, ValueError):
             warnings = []
+        last_sync = _last_sync_summary(r)
+        if last_sync and r["nickname"]:
+            named = {"institution": r["institution"], "provider": provider, "nickname": r["nickname"]}
+            last_sync["cards"] = [{**c, "label": card_title(c.get("label"), named)} if isinstance(c, dict) else c
+                                  for c in last_sync["cards"]]
         out.append({
             "id": r["id"], "external_id": r["external_id"], "institution": r["institution"],
+            # What the connection is shown as; `institution` stays the provider's (`services/connection_names.py`).
+            "nickname": r["nickname"],
+            "name": connection_display_name(r["institution"], r["nickname"]),
             "last_synced_at": r["last_synced_at"],
             "last_sync_error": r["last_sync_error"],
             "last_sync_error_at": r["last_sync_error_at"],
@@ -290,7 +299,7 @@ def list_connections(provider: str) -> list[dict]:
             # refreshing accounts both need a credential to start from, and a disconnect can no longer
             # revoke anything. Never the credential itself, which this listing must not carry.
             "has_credential": crypto_service.connection_has_credential(r["credential"], r["credential_enc"]),
-            "last_sync": _last_sync_summary(r),
+            "last_sync": last_sync,
             # Read through the staleness check rather than as a bare "is the column set": a process that
             # died mid-sync leaves the marker behind, and a card that believed it would disable syncing
             # for good. Imported here rather than duplicating the rule — the router owns it because it is

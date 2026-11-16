@@ -20,7 +20,8 @@ async function supplyConnection(page) {
         revokes_on_disconnect: false, stable_external_id: false,
         connections: [{
           id: CONNECTION_ID, provider: 'simplefin', external_id: 'spec-external',
-          institution: 'Harborline Bank', has_credential: true, last_synced_at: null,
+          institution: 'Harborline Bank', nickname: null, name: 'Harborline Bank',
+          has_credential: true, last_synced_at: null,
           last_sync: { outcome: 'ok', added: 3, accounts: { 'spec-account': { added: 3 } } },
         }],
       }],
@@ -29,7 +30,7 @@ async function supplyConnection(page) {
   await page.route(`**/api/connections/${CONNECTION_ID}/accounts`, route => route.fulfill({
     json: {
       unmapped: 0,
-      accounts: [{ external_account_id: 'spec-account', source_label: 'Harborline Rewards', display_label: 'Harborline Rewards', mapped: true }],
+      accounts: [{ external_account_id: 'spec-account', source_label: 'Harborline Rewards', mapped: true }],
     },
   }))
   await page.route(/\/api\/accounts(\?.*)?$/, async route => {

@@ -19,7 +19,7 @@ from decimal import Decimal
 import re
 import uuid
 from backend.db.database import compact_if_worthwhile, get_db
-from backend.services.connection_mapping import attach_source_account_nicknames
+from backend.services.connection_names import card_title_sql
 from backend.services.amount_text import DECIMAL_POINT, amount_text_parts
 from backend.services.input_format import (
     DATE_ORDER_DMY, DATE_ORDER_MDY, DATE_ORDER_YMD, DEFAULT_INPUT_FORMAT, InputFormat,
@@ -1269,7 +1269,7 @@ def list_transactions(
                 c.name        AS category_name,
                 NULL          AS category_color,
                 COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals,
-                b.filename    AS import_batch_filename,
+                {card_title_sql("b", "bconn")} AS import_batch_filename,
                 b.imported_at AS import_batch_imported_at,
                 -- Data-source (sync) provenance for the origin hover: the provider names which
                 -- connection a synced row came from, so two same-institution connections (both
@@ -1277,7 +1277,6 @@ def list_transactions(
                 -- connection, so it outlives a removed connection. NULL for CSV/manual batches.
                 b.provider    AS import_batch_provider,
                 (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed,
-                b.connection_id AS import_batch_connection_id,
                 o.name        AS owner_name,
                 o.color       AS owner_color,
                 t.suspect_duplicate_of,
@@ -1303,6 +1302,7 @@ def list_transactions(
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category pc ON pc.id = c.parent_id
             LEFT JOIN import_batch b ON b.id = t.import_batch_id
+            LEFT JOIN connection bconn ON bconn.id = b.connection_id
             LEFT JOIN recurring_series rs ON rs.id = t.recurring_series_id
             LEFT JOIN (
                 SELECT txn_id, MIN(series_id) AS series_id
@@ -1317,7 +1317,6 @@ def list_transactions(
             document_match_params + params + [sql_limit, offset],
         ).fetchall()
         transactions = [dict(r) for r in rows]
-        attach_source_account_nicknames(conn, transactions)
         txn_ids = [txn["id"] for txn in transactions]
         tag_map = get_visible_transaction_tag_map(conn, txn_ids) if rows else {}
         blocked_map = get_blocked_transaction_tag_map(conn, txn_ids) if rows else {}
@@ -2354,19 +2353,20 @@ def list_trashed_transactions(limit: int = Query(200, le=1000), scope: str = "al
         raise HTTPException(status_code=400, detail="Unknown trash scope")
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
                    t.account_id, t.category_id, t.trashed_at, t.notes,
                    t.dedupe_resolved_by,
                    a.name AS account_name, a.display_name AS account_display_name, a.mask AS account_mask,
                    c.name AS category_name,
                    p.name AS group_name, p.id AS group_id,
-                   ib.filename AS source_filename
+                   {card_title_sql("ib", "ibconn")} AS source_filename
             FROM   txn t
             LEFT JOIN account  a ON a.id = t.account_id
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             LEFT JOIN import_batch ib ON ib.id = t.import_batch_id
+            LEFT JOIN connection ibconn ON ibconn.id = ib.connection_id
             WHERE  t.trashed_at IS NOT NULL
               -- Confirmed-duplicate rows soft-deleted by the *unified dedupe flow* — account merges
               -- (dedupe_resolved_by='auto_merge') and explicit Rejects in the duplicate report

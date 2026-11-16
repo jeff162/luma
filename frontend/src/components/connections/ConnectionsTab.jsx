@@ -7,6 +7,7 @@ import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
 import { rosterCardIds } from '../../lib/syncRoster.js'
 import { Card, Button, Spinner, Select, Input, PasswordInput, Tooltip, AppDialog, AppConfirmDialog, AppNoticeDialog, OverlayBackdrop, IconButton, LinkButton } from '../ui.jsx'
 import SectionCard from '../SectionCard.jsx'
+import InlineRename from '../InlineRename.jsx'
 import { HoverLines, LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
 import { useBatchDetailPanels } from '../importExport/useBatchDetailPanels.jsx'
@@ -294,7 +295,7 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose,
                   <input type="radio" name="relink-target" checked={adopt === c.id}
                     onChange={() => setAdopt(c.id)} style={{ marginTop: 3 }} />
                   <span>
-                    Replaces {c.institution || 'an existing connection'}
+                    Replaces {c.name || 'an existing connection'}
                     {c.reauth_required ? (
                       <span style={{ color: 'var(--warning)' }}> — needs reconnecting</span>
                     ) : null}
@@ -576,7 +577,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   // Every non-configuration action a connection has — sync, deepen history, rebuild accounts, remove
   // synced rows — with its own dialogs, from `lib/useConnectionOperations.js`.
   const {
-    sync, syncAll, pullConnectionHistory, retriedAfterUnlock,
+    sync, syncAll, pullConnectionHistory, retriedAfterUnlock, renameConnection,
     fetchMoreHistory, refreshConnectionAccounts, openRemoveSynced,
     busy: { refreshingConnId, fetchingHistoryConnId, removingSync },
     dialogsNode: connectionDialogsNode,
@@ -690,7 +691,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           // account receiving nothing cannot appear in any tally built from what landed.
           providerAccounts[c.id] = (res.accounts || []).map(pa => ({
             external_account_id: pa.external_account_id,
-            label: pa.display_label || pa.provider_name || pa.external_account_id,
+            label: pa.source_label || pa.provider_name || pa.external_account_id,
             mapped: !!pa.mapped,
             mapping_mode: pa.mapping_mode,
           }))
@@ -996,13 +997,13 @@ export default function ConnectionsTab({ onShowHistory }) {
     }
   }
 
-  async function saveAccountMap(mappings, nicknames) {
+  async function saveAccountMap(mappings) {
     const target = mapTarget
     if (!target) return
     setMapSaving(true)
     setMapError(null)
     try {
-      const res = await api.setConnectionAccountMap(target.connection.id, mappings, nicknames)
+      const res = await api.setConnectionAccountMap(target.connection.id, mappings)
       setUnmappedByConnection(prev => ({ ...prev, [target.connection.id]: res.unmapped || 0 }))
       setMapTarget(null)
       await onAccountsChanged?.()
@@ -1252,13 +1253,13 @@ export default function ConnectionsTab({ onShowHistory }) {
                   // resolves itself or does not; this one waits on the user, and a count of attempts is
                   // exactly the wrong thing to show for a connection that will never succeed again.
                   <StatusPill tone="danger"
-                    title={s.reauth.map(c => `${c.institution || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
+                    title={s.reauth.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
                     ⚠ {s.reauth.length === 1 ? 'reconnect needed' : `${s.reauth.length} need reconnecting`}
                   </StatusPill>
                 ) : null}
                 {s.failing.length ? (
                   <StatusPill tone="danger"
-                    title={s.failing.map(c => `${c.institution || 'Connection'}: ${c.last_sync_error || 'sync failed'} (${c.consecutive_sync_failures} in a row)`).join('\n')}>
+                    title={s.failing.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'sync failed'} (${c.consecutive_sync_failures} in a row)`).join('\n')}>
                     ⚠ {s.failing.length === connections.length && connections.length > 1
                       ? 'all connections failing'
                       : `${s.failing.length} failing`}
@@ -1271,7 +1272,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                   // for a problem that isn't there. The text they need is the provider's own, in the
                   // tooltip — which says "authentication required" when that is what happened.
                   <StatusPill tone="warning"
-                    title={s.warned.map(c => `${c.institution || 'Connection'}: ${(c.last_sync_warnings || []).join('; ')}`).join('\n')}>
+                    title={s.warned.map(c => `${c.name || 'Connection'}: ${(c.last_sync_warnings || []).join('; ')}`).join('\n')}>
                     ⚠ provider notice
                   </StatusPill>
                 ) : null}
@@ -1377,7 +1378,15 @@ export default function ConnectionsTab({ onShowHistory }) {
                     return (
                       <div key={c.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600, fontSize: 13 }}>{c.institution || 'Linked bank'}</span>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>
+                            <InlineRename
+                              value={c.nickname || ''}
+                              shown={c.name || 'Linked bank'}
+                              onRename={name => renameConnection(c.id, name)}
+                              ariaLabel={`Name for ${c.institution || 'this connection'}`}
+                              title={c.nickname && c.institution ? `${c.institution} — click to rename` : 'Click to rename'}
+                            />
+                          </span>
                           {/* The outcome line below says whether the last pull worked; this says when it
                               was. Without it "Success" cannot be told apart from a check made thirty
                               seconds ago and one from last week — which is exactly the question the Sync
@@ -1421,12 +1430,12 @@ export default function ConnectionsTab({ onShowHistory }) {
                             <Button variant="secondary"
                               onClick={() => sync(p.provider, { connectionId: c.id })}
                               disabled={ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}
-                              title={`Check this connection by pulling anything new from ${c.institution || 'it'} now`}>
+                              title={`Check this connection by pulling anything new from ${c.name || 'it'} now`}>
                               {c.syncing ? 'Syncing…' : '↻ Sync'}
                             </Button>
                             <ActionMenuButton
                               open={cardMenu?.connectionId === c.id}
-                              title={`Actions for ${c.institution || 'this connection'}`}
+                              title={`Actions for ${c.name || 'this connection'}`}
                               disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing || removingSync}
                               onOpen={element => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorElement: element })}
                             />
@@ -1467,7 +1476,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                               <Button variant="secondary" onClick={() => setDisconnectTarget({
                                 provider: p.provider,
                                 external_id: c.external_id,
-                                institution: c.institution,
+                                institution: c.name,
                                 // With nothing stored there is nothing to revoke *with*, so the
                                 // confirmation must not promise the access ends — see the dialog copy.
                                 revokes: p.revokes_on_disconnect !== false && c.has_credential !== false,
@@ -1749,7 +1758,7 @@ export default function ConnectionsTab({ onShowHistory }) {
               onClick: () => setDisconnectTarget({
                 provider: cardMenu.provider,
                 external_id: cardMenu.connection.external_id,
-                institution: cardMenu.connection.institution,
+                institution: cardMenu.connection.name,
                 revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false
                   && cardMenu.connection.has_credential !== false,
                 hasCredential: cardMenu.connection.has_credential !== false,

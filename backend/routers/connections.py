@@ -25,12 +25,12 @@ from backend.routers.accounts import resolve_default_owner_id
 from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_dedupe import rescan_connection_duplicates
 from backend.services.recurring_detection import settle_owed_rescans
+from backend.services.connection_names import connection_display_name, normalize_nickname
 from backend.services.connection_mapping import (
     MAPPING_MODES,
     apply_account_mapping,
     captured_field_keys,
     list_connection_accounts,
-    set_account_nicknames,
     unmapped_count,
 )
 from backend.services.providers import UnknownProviderError, get_adapter
@@ -62,9 +62,10 @@ class AccountMappingChoice(BaseModel):
 
 class AccountMappingRequest(BaseModel):
     mappings: dict[str, AccountMappingChoice]
-    # External account id → its nickname, blank to clear. Separate from `mappings` because a nickname can
-    # be given to an account whose mapping is still undecided.
-    nicknames: dict[str, Optional[str]] = {}
+
+
+class ConnectionNicknameRequest(BaseModel):
+    nickname: Optional[str] = None
 
 
 class CapturedFieldsRequest(BaseModel):
@@ -165,7 +166,6 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
             mappings={k: v.model_dump() for k, v in (body.mappings or {}).items()},
             default_owner_id=resolve_default_owner_id(conn, None),
         )
-        set_account_nicknames(conn, connection_id, body.nicknames or {})
         rescan = rescan_connection_duplicates(conn, connection) if result["changed"] else None
         awaiting_history = _accounts_awaiting_history(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)
@@ -176,6 +176,19 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
     # now rather than leaving a just-mapped account looking empty until some later sync collects it.
     return {**result, "accounts": accounts, "unmapped": remaining, "rescan": rescan,
             "awaiting_history": awaiting_history}
+
+
+@router.put("/{connection_id}/nickname")
+def set_connection_nickname(connection_id: str, body: ConnectionNicknameRequest):
+    """Set or clear the name a connection is shown by (`services/connection_names.py`). Blank, or the
+    institution's own name, clears it. Display only: nothing that matches or names stored records changes,
+    so this neither needs the vault nor touches the provider."""
+    with get_db() as conn:
+        connection = _get_connection(conn, connection_id)
+        nickname = normalize_nickname(body.nickname, connection["institution"])
+        conn.execute("UPDATE connection SET nickname = ? WHERE id = ?", (nickname, connection_id))
+    return {"id": connection_id, "nickname": nickname,
+            "name": connection_display_name(connection["institution"], nickname)}
 
 
 # Manual edits that make removing a synced row destructive rather than merely undoing a fetch. Kept

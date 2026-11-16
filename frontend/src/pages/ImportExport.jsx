@@ -466,7 +466,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   // moves their "Last synced", and a history loaded before it finished would otherwise go on showing the
   // counts from that moment — rows already landed beside chips and totals that had not been written yet.
   // Keyed to the count seen at mount, so arriving here after earlier runs does not repeat the initial load.
-  const { runsFinished } = useSyncStatus()
+  const { runsFinished, refreshConnections } = useSyncStatus()
   const handledRunsRef = useRef(runsFinished)
   useEffect(() => {
     if (runsFinished === handledRunsRef.current) return
@@ -475,6 +475,12 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   }, [runsFinished])
   // For a change to the cards that no sync run reports (a connection's synced transactions removed).
   const refreshBatches = useCallback(() => api.listBatches().then(setBatches).catch(() => { }), [])
+  // A connection renamed from its history heading: the cards and every connection listing re-read, so the
+  // new name reaches the connections card above as well. A failure stays with the editor.
+  const renameConnection = useCallback(async (connectionId, name) => {
+    await api.setConnectionNickname(connectionId, name)
+    await Promise.all([refreshBatches(), refreshConnections()])
+  }, [refreshBatches, refreshConnections])
 
   // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
   // screen back to the drop zone with that source applied.
@@ -3881,6 +3887,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           handleUndoClick={openUndo}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}
           openReconciliationViewer={reconciliationViewer.open}
+          renameConnection={renameConnection}
         />
       )}
 

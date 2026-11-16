@@ -1163,7 +1163,8 @@ import card. The full rule is in `data-model.md`.
   have coverage or a declared alias. `upsert_connection_accounts` materializes accounts from the
   mapping, and "Refresh accounts" adds newly seen provider accounts as unmapped. Endpoints: `GET
   /api/connections/{id}/accounts`, `POST .../account-map` (idempotent; triggers the re-scan when a
-  mapping changed), `POST .../captured-fields`. Modes: `data-model.md` → Accounts.
+  mapping changed), `PUT .../nickname` (the name the connection is shown by; display only, no vault),
+  `POST .../captured-fields`. Modes: `data-model.md` → Accounts.
 
 - **`GET`/`DELETE /api/connections/{id}/synced-transactions`** preflight and remove everything a
   connection has synced. Rows go through `undo_batches` in `import_export/core.py`, the path a file's

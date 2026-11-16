@@ -52,7 +52,7 @@ function formatHours(hours) {
 // more than one. Empty when none is metered.
 export function connectionsAllowanceLines(connections) {
   const metered = (connections || [])
-    .map(c => ({ name: c.institution || 'Connection', text: allowanceSummary(c.request_allowance) }))
+    .map(c => ({ name: c.name || 'Connection', text: allowanceSummary(c.request_allowance) }))
     .filter(c => c.text)
   if (metered.length === 1) return [`Requests: ${metered[0].text}`]
   return metered.map(c => `${c.name} requests: ${c.text}`)
