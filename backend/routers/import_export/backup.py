@@ -1318,10 +1318,12 @@ def restore_target_status():
     `relinked_since_reset` names the connections reconnected since the vault was last reset after a lost
     passphrase. Every credential here was cleared by that reset, so one held now was linked since, and
     restoring the accounts part of a backup older than the reset replaces it with the backup's or clears
-    it. After any other retirement the backup's credentials are not restored at all, so nothing is said."""
+    it. After a retirement as untrusted the restore asks about the backup's credentials itself
+    (`credentials_retired`), so nothing is said here."""
     with get_db() as conn:
         status = {"has_data": _target_has_data(conn)}
-        retirement = control_database.latest_vault_key_retirement()
+        # A routine key replacement clears nothing, so it is not the retirement this asks about.
+        retirement = control_database.latest_vault_key_retirement(("lost",) + crypto_service.UNTRUSTED_RETIREMENTS)
         if retirement and retirement["reason"] == "lost":
             names = [r["institution"] or r["provider"] for r in conn.execute(
                 "SELECT institution, provider FROM connection WHERE COALESCE(credential_enc, '') != '' ORDER BY rowid"
@@ -2254,9 +2256,15 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
             "database_check_passed": database_health.check_passed()}
 
 
+# Typed to restore credentials under a key this system retired as untrusted (`restore_from_archive`).
+RETIRED_CREDENTIALS_CONFIRM_PHRASE = "RESTORE ANYWAY"
+
+
 def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None, *,
                          include_data: bool = True, include_accounts: bool = False,
                          include_credentials: bool = True,
+                         restore_retired_credentials: Optional[bool] = None,
+                         retired_credentials_confirm: Optional[str] = None,
                          admin_username: Optional[str] = None, admin_password: Optional[str] = None,
                          source: Optional[dict] = None) -> dict:
     """Destructive restore straight from an opened version-10-or-later archive, one member at a time.
@@ -2269,8 +2277,18 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
 
     `include_data` and `include_accounts` choose which of the parts the file holds to apply; a part the file
     does not hold is not applied whatever is asked. `include_credentials` false restores the accounts part
-    as a file without credentials restores (`accounts_backup.apply`). Everything that can refuse — the digests, the
-    compatibility guard and the restoring administrator's password — runs before anything is touched.
+    as a file without credentials restores (`accounts_backup.apply`).
+
+    Credentials under a key this install retired as untrusted (`crypto_service.UNTRUSTED_RETIREMENTS`) are
+    put back only on the restorer's say: `restore_retired_credentials` None refuses with
+    `credentials_retired`, naming the retirement, so the dialog can ask; False withholds them, and True
+    restores them and forgets the retirement, since the key is this vault's again. True needs
+    `retired_credentials_confirm` to be the typed `RETIRED_CREDENTIALS_CONFIRM_PHRASE`, as a vault reset
+    needs its phrase. Withholding cannot be absolute: stopping the app, deleting both databases and
+    restoring the same file puts them back too.
+
+    Everything that can refuse — the digests, the compatibility guard, the restoring administrator's
+    password and the retired key — runs before anything is touched.
     The financial data then commits and the accounts part follows (`accounts_backup.apply`). With both the
     data and the credentials restored, the connections are replaced outright rather than reconciled, and
     `removed_connections` names those this install had and the backup does not.
@@ -2294,13 +2312,32 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     withheld = None
     if accounts_part is not None:
         _check_restoring_admin(accounts_part, admin_username, admin_password)
-        # Credentials under a key retired after an exposure or a replacement are not put back; the rest of
-        # the part restores as a file without credentials does (`crypto_service.UNTRUSTED_RETIREMENTS`).
         if not include_credentials:
             accounts_part["credentials"] = None
+        retired_slots = None
         if accounts_part["credentials"] is not None:
-            withheld = crypto_service.exported_slots_retired(accounts_part["credentials"].get("vault_slots"))
-            if withheld:
+            slots = accounts_part["credentials"].get("vault_slots")
+            retirement = crypto_service.exported_slots_retirement(slots)
+            if retirement and restore_retired_credentials is None:
+                raise HTTPException(status_code=409, detail={
+                    "code": "credentials_retired",
+                    "message": "This backup's data provider credentials are under a vault key this system "
+                               "retired.",
+                    "reason": retirement["reason"],
+                    "retired_at": retirement["retired_at"],
+                    "confirm_phrase": RETIRED_CREDENTIALS_CONFIRM_PHRASE,
+                })
+            if (retirement and restore_retired_credentials
+                    and (retired_credentials_confirm or "").strip().upper() != RETIRED_CREDENTIALS_CONFIRM_PHRASE):
+                raise HTTPException(status_code=400, detail={
+                    "code": "confirmation_required",
+                    "message": f"Type {RETIRED_CREDENTIALS_CONFIRM_PHRASE} to confirm.",
+                })
+            if retirement and restore_retired_credentials:
+                retired_slots = slots
+            elif retirement:
+                # The rest of the part restores as a file without credentials does.
+                withheld = retirement["reason"]
                 accounts_part["credentials"] = None
 
     # Who exists once this is done: the backup's users when its accounts part goes back, this install's
@@ -2330,6 +2367,8 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         compact_if_worthwhile(reason="restored a backup")
     if accounts_part is not None:
         result["accounts"] = accounts_backup.apply(accounts_part)
+        if retired_slots is not None:
+            crypto_service.forget_exported_slots_retirement(retired_slots)
         # With the data left as it was, the preferences of users the accounts part removed would belong to
         # no one. After a data restore too this changes nothing, since that kept only these users already.
         with get_db() as conn:
@@ -3003,6 +3042,10 @@ async def restore_backup_file(
     include_accounts: bool = Form(False),
     # Within the accounts part: false leaves the vault and the credentials here as they are.
     include_credentials: bool = Form(True),
+    # Whether credentials under a key this system retired go back; unset refuses with
+    # `credentials_retired` so the restorer can choose (`restore_from_archive`).
+    restore_retired_credentials: bool | None = Form(None),
+    retired_credentials_confirm: str | None = Form(None),
     # An administrator of the backup, when it turns sign-in on (`accounts_backup.check_restoring_admin`).
     admin_username: str | None = Form(None),
     admin_password: str | None = Form(None),
@@ -3011,6 +3054,8 @@ async def restore_backup_file(
     accounts_options = {
         "include_data": include_data, "include_accounts": include_accounts,
         "include_credentials": include_credentials,
+        "restore_retired_credentials": restore_retired_credentials,
+        "retired_credentials_confirm": retired_credentials_confirm,
         "admin_username": admin_username, "admin_password": admin_password,
     }
     # Named, unlike every other staging file here, because the documents phase may need to read it again

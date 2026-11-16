@@ -458,7 +458,7 @@ class RotationTests(unittest.TestCase):
 
     def test_rotation_replaces_the_key_and_rewrites_every_secret(self):
         before = self._stored()
-        result = cs.rotate_dek(self.alice)
+        result = cs.rotate_dek(self.alice, reason="replaced")
         self.assertEqual(result["secrets_reencrypted"], 2)
         self.assertNotEqual(self._stored(), before, "ciphertext must actually be rewritten")
         cs.lock(self.alice)
@@ -467,7 +467,7 @@ class RotationTests(unittest.TestCase):
 
     def test_the_old_key_no_longer_opens_the_rewritten_secrets(self):
         # What rotation is *for*: a DEK someone saw while unlocked stops being useful.
-        cs.rotate_dek(self.alice)
+        cs.rotate_dek(self.alice, reason="replaced")
         credential, _ = self._stored()
         with self.assertRaises(cs.VaultDecryptError):
             cs.decrypt_secret(self.old_dek, credential, aad=cs._connection_aad("plaid", "item-1"))
@@ -477,7 +477,7 @@ class RotationTests(unittest.TestCase):
         # passphrase and still lands on the new key, without Alice ever holding his secret.
         cs.set_passphrase(self.bob, "bob's long vault passphrase")
         cs.grant_access(self.alice, cs.pending_access_requests()[0]["slot_id"])
-        cs.rotate_dek(self.alice)
+        cs.rotate_dek(self.alice, reason="replaced")
         cs.lock_all()
         self.assertEqual(
             cs.unlock(self.bob, "bob's long vault passphrase"),
@@ -489,7 +489,7 @@ class RotationTests(unittest.TestCase):
         cs.set_passphrase(self.bob, "bob's long vault passphrase")
         cs.grant_access(self.alice, cs.pending_access_requests()[0]["slot_id"])
         cs.revoke_access(self.bob)
-        cs.rotate_dek(self.alice)
+        cs.rotate_dek(self.alice, reason="replaced")
         with self.assertRaises(cs.VaultLocked):
             cs.unlock(self.bob, "bob's long vault passphrase")
 
@@ -506,7 +506,7 @@ class RotationTests(unittest.TestCase):
         cs.encrypt_secret = explode
         try:
             with self.assertRaises(RuntimeError):
-                cs.rotate_dek(self.alice)
+                cs.rotate_dek(self.alice, reason="replaced")
         finally:
             cs.encrypt_secret = original
 
@@ -517,7 +517,7 @@ class RotationTests(unittest.TestCase):
         # Running it again *resumes* rather than starting over. Minting a third key here would push the
         # one the ciphertext is actually under off the end of the two a slot can hold — turning the
         # recoverable state above into exactly the loss the phases exist to prevent.
-        result = cs.rotate_dek(self.alice)
+        result = cs.rotate_dek(self.alice, reason="replaced")
         self.assertTrue(result["resumed"])
         self._assert_everything_reads(self.alice)
         cs.lock_all()
@@ -934,7 +934,7 @@ class PasskeySlotTests(unittest.TestCase):
 
     def test_a_passkey_survives_a_rotation(self):
         cs.register_passkey_slot(self.alice, credential_id="cred-1", prf_output=self.prf, prf_salt="s1")
-        cs.rotate_dek(self.alice)
+        cs.rotate_dek(self.alice, reason="replaced")
         cs.lock_all()
         _, dek = cs.unlock_with_passkey("cred-1", self.prf)
         self.assertNotEqual(dek, self.dek)

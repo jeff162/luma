@@ -643,11 +643,19 @@ passphrase **against the same DEK**, so nothing is re-linked. Restoring a backup
 vault back as it was, opened by the passphrase or recovery code in force when *it* was taken: a complete
 recovery. Only then, reset.
 
-**A backup is a way back only from a lost passphrase.** After a reset for a compromised passphrase, or a
-replaced key, a backup's credentials are exposed or under a key someone who should no longer read them
-knew, so a restore leaves them out and the reset dialog stops offering those backups. The record of
-retired keys is local, so a copy of an old file restored on another install is not caught; revoking at the
-provider is what covers that case.
+**A backup is a way back without asking only from a lost passphrase or a routine key replacement.**
+After a reset for a compromised passphrase, or a key replaced to end someone's access, a backup's
+credentials are exposed or under a key someone who should no longer read them knew. A restore asks before
+putting them back, and the reset dialog stops offering those backups. Replacing the key asks which kind
+of replacement it is, as a reset asks lost or compromised; only the user knows.
+
+**Withholding is the default, not a bar.** Whoever can restore can also stop the app, delete both
+databases and restore the same file, which puts the credentials back with nothing to check, so a refusal
+would protect nothing. The record of retired keys is local, which cuts both ways: a copy of an old file
+restored on another install is not caught, and revoking at the provider is what covers that; and an
+install that was itself restored from another, then replaced the key, holds a record against that other
+system's backups while that system still uses the key. Restoring them anyway forgets the record, since
+the key is this vault's again.
 
 **Losing the passphrase costs the ability to keep syncing, not ledger data**, and the reset dialog leads
 with that: only two columns are ever encrypted.

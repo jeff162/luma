@@ -2658,6 +2658,11 @@ export const HELP_TOPICS = [
           key stops being useful. The unlock methods are unchanged, and the vault locks in every other
           running session.
         </p>
+        <p>
+          The confirmation asks why. Replacing the key <em>to end someone's access, or after an
+          exposure</em> stops earlier backups restoring the data provider credentials unless the person
+          restoring chooses to. A <em>routine</em> replacement leaves earlier backups as they were.
+        </p>
 
         <HelpHeading anchor="exposure">Respond to an exposure</HelpHeading>
         <p>
@@ -4398,12 +4403,20 @@ export const HELP_TOPICS = [
           connections need to be re-established.
         </p>
         <HelpHeading anchor="older-credentials">Credentials in an older backup</HelpHeading>
+        <p>*needs review*</p>
         <p>
-          A restore will not bring back data provider credentials that may have been exposed.
-          After <strong>Replace vault key</strong>, <strong>Respond to an exposure</strong>, or a <strong>vault
-            reset</strong> <em>for a compromised passphrase</em>, earlier backups hold credentials that are no longer safe to
-          use. Restoring one of these skips these credentials and the connections will need to be
-          re-established.
+          After <strong>Replace vault key</strong> <em>to end someone's access</em>, or a <strong>vault
+            reset</strong> <em>for a compromised passphrase</em>, earlier backups hold credentials under a
+          key that may be known to someone who should not have it. Restoring one asks first: restore
+          everything but those credentials, or type <strong>RESTORE ANYWAY</strong> to restore them too.
+          Restoring them puts that key back in use here; <strong>Replace vault key</strong> or <strong>Respond
+            to an exposure</strong> afterwards ends it, and changing the passphrase does not. The record of
+          retired keys belongs to this system; the system a backup came from may still be using the key.
+        </p>
+        <p>
+          After <strong>Respond to an exposure</strong>, earlier backups hold the credentials the
+          providers replaced, which no longer work; the connections need re-establishing after restoring
+          one.
         </p>
         <p>
           A vault reset <em>for a forgotten passphrase</em> is different. Nothing was exposed, so
@@ -4447,7 +4460,7 @@ export const HELP_TOPICS = [
             Change the vault passphrase, under <strong>Unlock methods</strong>.
           </li>
           <li>
-            Choose <strong>Replace vault key&hellip;</strong>.
+            Choose <strong>Replace vault key&hellip;</strong>, answering <em>after an exposure</em>.
           </li>
           <li>
             Make a new <HelpLink to="/help/backup-restore#backups">backup</HelpLink>.

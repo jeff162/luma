@@ -152,7 +152,7 @@ class SessionReachTests(unittest.TestCase):
         with self._session("alice-phone"):
             cs.unlock(self.alice, self.ALICE)
         with self._session("alice-laptop"):
-            cs.rotate_dek(self.alice)
+            cs.rotate_dek(self.alice, reason="replaced")
         self.assertTrue(self._unlocked_in("alice-laptop", self.alice))
         self.assertFalse(self._unlocked_in("alice-phone", self.alice))
         self.assertFalse(self._unlocked_in("bob-phone", self.bob))

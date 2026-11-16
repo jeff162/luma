@@ -394,13 +394,15 @@ describe('vault access queue', () => {
 })
 
 describe('replacing the vault key', () => {
-  it('confirms before rotating', async () => {
+  it('confirms, and asks why, before rotating', async () => {
     renderDialog()
     await userEvent.click((await screen.findByText('Replace vault key…')).closest('button'))
     expect(await screen.findByText('Replace the vault key?')).toBeTruthy()
-    expect(rotateVault).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByText('Replace key').closest('button'))
-    await waitFor(() => expect(rotateVault).toHaveBeenCalled())
+    const confirm = screen.getByText('Replace key').closest('button')
+    expect(confirm.disabled).toBe(true)
+    await userEvent.click(screen.getByText('Routine replacement.'))
+    await userEvent.click(confirm)
+    await waitFor(() => expect(rotateVault).toHaveBeenCalledWith('routine'))
   })
 })
 

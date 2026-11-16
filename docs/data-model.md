@@ -2518,12 +2518,17 @@ which also records `accounts_version`.
   backup per passphrase from these (`crypto_service.credentials_backups_by_passphrase`), and the backup
   task compares the newest with the vault now (`routers/tasks.py` → `_backup_due_task`).
 - **`retired_vault_key`** (control database) records each seal of a key a reset or a rotation retired,
-  with the reason. Removing the last member resets the vault and retires its key as `lost`
-  (`crypto_service.remove_vault_member`). Credentials under a key retired as `compromised` or `replaced` are not restored, from
-  an archive's accounts part (`credentials_withheld`) or a standalone credentials file
-  (`credentials_retired`); the rest of the part restores as a file without credentials does. A key
-  retired as `lost` is one nobody else has, so its backups stay the way back. It survives an accounts
-  restore, which is exactly what it has to outlive.
+  with the reason: a reset's `lost` or `compromised`, a rotation's `replaced` (to end someone's access) or
+  `routine` (`crypto_service.ROTATION_REASONS`). Removing the last member resets the vault and retires its
+  key as `lost` (`crypto_service.remove_vault_member`). Credentials under a key retired as `compromised` or
+  `replaced` are not restored from a standalone credentials file (`credentials_retired`). An archive's
+  accounts part asks: unless `restore_retired_credentials` is given, the restore is refused with
+  `credentials_retired` and the retirement's reason and date before anything changes; false withholds them
+  (`credentials_withheld`, the rest of the part restoring as a file without credentials does), and true, with
+  `retired_credentials_confirm` the typed `RESTORE ANYWAY` (refused as `confirmation_required` otherwise),
+  restores them and deletes their seals' records, since the key is this vault's again. A key retired as
+  `lost` or `routine` was not taken from anyone, so its backups stay the way back. The table
+  survives an accounts restore, which is exactly what it has to outlive.
 
 ### The standalone credentials backup
 

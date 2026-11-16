@@ -160,6 +160,12 @@ class VaultResetRequest(BaseModel):
     confirm: str = ""
 
 
+class VaultRotateRequest(BaseModel):
+    # `crypto_service.ROTATION_REASONS`: 'replaced' to end someone's access, 'routine' otherwise. Only the
+    # user knows which, and it decides whether backups under the old key still restore their credentials.
+    reason: str
+
+
 class VaultPasskeyRegisterRequest(BaseModel):
     # `prf_output` is the authenticator's PRF result for `prf_salt`, base64. It is the unlock secret
     # itself — the exact counterpart of a passphrase in the request above — and is never stored.
@@ -1557,7 +1563,7 @@ def vault_revoke_access(user_id: str, request: Request):
 
 
 @router.post("/vault/rotate")
-def vault_rotate(request: Request):
+def vault_rotate(body: VaultRotateRequest, request: Request):
     """Replace the workspace key and re-encrypt every stored credential under it.
 
     Not admin-gated, for the same reason approving is not: it needs the DEK, and only an unlocked member
@@ -1565,8 +1571,10 @@ def vault_rotate(request: Request):
     slots that remain, so removing access and then rotating is the order that ends a departed member's
     reach."""
     user = _require_current_user(request)
+    if body.reason not in crypto_service.ROTATION_REASONS:
+        raise HTTPException(status_code=400, detail="Say whether the key is replaced to end someone's access")
     try:
-        result = crypto_service.rotate_dek(user["id"])
+        result = crypto_service.rotate_dek(user["id"], reason=body.reason)
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code":    "vault_locked",
@@ -1578,10 +1586,12 @@ def vault_rotate(request: Request):
             "message": "A stored credential could not be read with the current key, so it cannot be "
                        "re-encrypted. Reconnect the affected connection, then try again.",
         })
-    # Every credentials backup made before now is under the key just retired, so its credentials will
-    # not be restored (`crypto_service.UNTRUSTED_RETIREMENTS`); the result panel says a new one is needed.
+    # Every credentials backup made before now is under the key just retired. After a replacement that
+    # ends someone's access its credentials are not restored (`crypto_service.UNTRUSTED_RETIREMENTS`), so
+    # the result panel says a new one is needed; after a routine one they still are.
     return {"result": result, "user": _session_payload(user),
-            "has_credentials_backups": bool(credentials_exports_any())}
+            "has_credentials_backups": body.reason in crypto_service.UNTRUSTED_RETIREMENTS
+            and bool(credentials_exports_any())}
 
 
 # --- Passkey slots (WebAuthn PRF) -----------------------------------------------------------------

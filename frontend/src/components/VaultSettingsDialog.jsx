@@ -43,6 +43,20 @@ function Section({ title, description, help, children, style }) {
 
 // What each connection's outcome asks of the user. Only `manual` and `failed` leave something to do, and
 // both end the same way: the copied credential is only dead once the provider has been told.
+// The answers to "why replace the key?", which `crypto_service.ROTATION_REASONS` records.
+const ROTATE_REASONS = [
+  {
+    value: 'replaced',
+    label: "To end someone's access, or after an exposure.",
+    detail: 'Backups taken before now no longer restore the data provider credentials, unless whoever restores one chooses to.',
+  },
+  {
+    value: 'routine',
+    label: 'Routine replacement.',
+    detail: 'Backups taken before now still restore the data provider credentials.',
+  },
+]
+
 const REISSUE_NOTE = {
   reissued: 'Replaced. The copied credential no longer works.',
   manual: 'This provider cannot replace it from here. Revoke it at the provider, then reconnect.',
@@ -76,6 +90,9 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   const [newPasskeyLabel, setNewPasskeyLabel] = useState('')
   const [issuedRecoveryCode, setIssuedRecoveryCode] = useState('')
   const [confirmingRotate, setConfirmingRotate] = useState(false)
+  // Why the key is replaced, asked in the confirmation: 'replaced' to end someone's access, 'routine'
+  // otherwise. Unset until chosen, since only the user knows and it decides what older backups restore.
+  const [rotateReason, setRotateReason] = useState(null)
   // Set once the key is replaced: a panel rather than the status line, because when a credentials backup
   // exists it has to say that a new one is needed, and a line inside this dialog is easily missed.
   const [rotateResult, setRotateResult] = useState(null)
@@ -535,16 +552,32 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           // sessions are locked. What it *is* is slow to undo — the old key is gone — so it takes a confirmation rather than a single click.
           description="Every stored data provider credential is re-encrypted under a new key. Anyone whose access you removed can no longer decrypt them, even with a copy of the database. This also locks the vault in every other running session."
           confirmLabel={busy === 'rotate' ? 'Replacing…' : 'Replace key'}
-          confirmDisabled={busy === 'rotate'}
+          confirmDisabled={busy === 'rotate' || !rotateReason}
           cancelDisabled={busy === 'rotate'}
           onConfirm={async () => {
             let result = null
-            await run('rotate', async () => { result = await api.rotateVault() })
+            await run('rotate', async () => { result = await api.rotateVault(rotateReason) })
             setConfirmingRotate(false)
+            setRotateReason(null)
             if (result) setRotateResult(result)
           }}
-          onCancel={() => setConfirmingRotate(false)}
-        />
+          onCancel={() => { setConfirmingRotate(false); setRotateReason(null) }}
+        >
+          {/* Asked rather than inferred, as the vault reset asks lost or compromised: it decides whether
+              backups taken before now still restore the credentials. */}
+          <div style={{ display: 'grid', gap: 6 }}>
+            {ROTATE_REASONS.map(option => (
+              <label key={option.value} style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <input type="radio" name="vault-rotate-reason" checked={rotateReason === option.value}
+                  onChange={() => setRotateReason(option.value)} style={{ marginTop: 3 }} />
+                <span>
+                  {option.label}
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>{option.detail}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </AppConfirmDialog>
       ) : null}
 
       {rotateResult ? (

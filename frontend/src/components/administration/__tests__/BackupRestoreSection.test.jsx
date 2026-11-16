@@ -530,4 +530,30 @@ describe('restoring a backup that holds both parts', () => {
       FILE, null, '', false, parts(true, true, 'Avery', 'their-password'),
     ))
   })
+
+  it('asks about credentials under a key this system retired, and restores with the answer', async () => {
+    const user = userEvent.setup()
+    restoreBackupFile
+      .mockRejectedValueOnce(Object.assign(new Error('retired'), {
+        status: 409,
+        detail: {
+          code: 'credentials_retired', reason: 'replaced', retired_at: '2026-11-07 04:49:56',
+          confirm_phrase: 'RESTORE ANYWAY',
+        },
+      }))
+      .mockResolvedValueOnce({ restored_counts: {}, accounts: { users: 1 }, signed_out: true })
+    renderSection()
+    await choose(user)
+    await restore(user, 'Restore everything')
+
+    expect(await screen.findByText(/This system replaced the vault key these credentials are under/)).toBeTruthy()
+    const anyway = screen.getByRole('button', { name: 'Restore them anyway' })
+    expect(anyway.disabled).toBe(true)
+    await user.type(screen.getByLabelText('Confirmation phrase'), 'restore anyway')
+    await user.click(anyway)
+    await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(
+      FILE, null, '', false,
+      { ...parts(true, true), restoreRetiredCredentials: true, retiredCredentialsConfirm: 'restore anyway' },
+    ))
+  })
 })

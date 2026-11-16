@@ -944,19 +944,39 @@ def exported_slots_seal_digest(exported: list[dict]) -> str | None:
     return digests[0] if digests else None
 
 
-# Retired for these reasons, a key's credentials are not put back: after a compromise they are exposed,
-# and after a replacement they are under a key someone who should no longer read them knew. A key lost
-# with its passphrase is a key nobody else has, so its backups remain the way back.
+# Retired for these reasons, a key's credentials are not put back unless the person restoring chooses to:
+# after a compromise they are exposed, and after a replacement made to end someone's access they are under
+# a key that person knew. A key lost with its passphrase is a key nobody else has, and one replaced
+# routinely was known only to those who still hold the new one, so the backups of either remain the way
+# back.
 UNTRUSTED_RETIREMENTS = ("compromised", "replaced")
+
+# Why the key is being replaced, asked when it is: `replaced` to end the access of someone removed (or
+# after an exposure), `routine` for any other reason.
+ROTATION_REASONS = ("replaced", "routine")
 
 
 def exported_slots_retired(exported: list[dict]) -> str | None:
     """Why a backup's credentials must not be restored, when their key was retired as untrusted, or None."""
-    reasons = cdb.retired_vault_seal_reasons(_slot_seal_digests(exported))
+    retirement = exported_slots_retirement(exported)
+    return retirement["reason"] if retirement else None
+
+
+def exported_slots_retirement(exported: list[dict]) -> dict | None:
+    """The untrusted retirement of a backup's key, as `{reason, retired_at}` (a compromise before a
+    replacement), or None."""
+    retirements = cdb.retired_vault_seals(_slot_seal_digests(exported))
     for reason in UNTRUSTED_RETIREMENTS:
-        if reason in reasons:
-            return reason
+        for retirement in retirements:
+            if retirement["reason"] == reason:
+                return retirement
     return None
+
+
+def forget_exported_slots_retirement(exported: list[dict]) -> None:
+    """Forget that a backup's key was retired here, once the person restoring has chosen to put its
+    credentials back: the key is this vault's again, and a backup taken under it from now on must restore."""
+    cdb.forget_retired_vault_seals(_slot_seal_digests(exported))
 
 
 def credentials_backups_by_passphrase() -> list[dict]:
@@ -1440,8 +1460,9 @@ ENCRYPTED_COLUMNS = (
 )
 
 
-def rotate_dek(user_id: str) -> dict:
-    """Replace the workspace DEK and re-encrypt everything sealed under the old one.
+def rotate_dek(user_id: str, *, reason: str) -> dict:
+    """Replace the workspace DEK and re-encrypt everything sealed under the old one. `reason` is one of
+    `ROTATION_REASONS`, recorded with the old key's retirement.
 
     The point of rotation is that a DEK someone saw while unlocked stops opening anything new. Slots
     that remain keep working; slots deleted first (see `revoke_access`) are simply not re-sealed, which
@@ -1463,6 +1484,8 @@ def rotate_dek(user_id: str) -> dict:
     carries a previous seal finishes the rotation already in flight, and only a settled one mints a new
     key.
     """
+    if reason not in ROTATION_REASONS:
+        raise ValueError("a key replacement must state whether it ends someone's access or is routine")
     deks = require_deks(user_id)
     granted = [s for s in cdb.list_vault_slots() if slot_holds_dek(s)]
     resuming = any(s["sealed_dek_prev"] for s in granted)
@@ -1503,7 +1526,7 @@ def rotate_dek(user_id: str) -> dict:
     # Phase 3 — the old key has no ciphertext left to open. Recorded as retired first, from the previous
     # seals the slots still hold, so a resumed rotation records it too.
     cdb.record_retired_vault_seals(
-        [seal_digest(s["sealed_dek_prev"]) for s in cdb.list_vault_slots() if s["sealed_dek_prev"]], "replaced",
+        [seal_digest(s["sealed_dek_prev"]) for s in cdb.list_vault_slots() if s["sealed_dek_prev"]], reason,
     )
     cdb.clear_vault_slot_previous_deks()
     _cache_put(user_id, new_dek)

@@ -105,6 +105,17 @@ function describeRestoreIncompatibility(detail) {
   return parts.join(' ') || 'This backup may not be compatible with the current system.'
 }
 
+// What happened to the key a backup's credentials are under, for the choice the `credentials_retired`
+// refusal asks. The retirement is a record on this system only, so it says nothing about the system the
+// backup came from, which may still be using that key.
+function describeRetiredCredentials({ reason, retiredAt }) {
+  const when = formatTimestamp(retiredAt) || 'an earlier date'
+  const what = reason === 'compromised'
+    ? `This system's vault was reset on ${when} after a possible exposure of its passphrase or database. This backup's credentials are under the key from before that reset.`
+    : `This system replaced the vault key these credentials are under on ${when}, so that anyone who knew the old key could no longer read them.`
+  return what
+}
+
 export default function BackupRestoreSection() {
   const demoRestoreMessage = 'Restoring a backup is disabled while demo data is loaded — clear it from the banner above first.'
   // Restore is blocked server-side while demo data is loaded; disable the file picker to match.
@@ -144,6 +155,11 @@ export default function BackupRestoreSection() {
   const [adminUsername, setAdminUsername] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [pendingConfirm, setPendingConfirm] = useState(null)
+  // Set when the server says the backup's credentials are under a vault key this system retired
+  // (`credentials_retired`): `{ reason, retiredAt, confirmPhrase, type, force }`, held while the restorer
+  // chooses. Restoring them anyway takes the server's phrase typed, as a vault reset does.
+  const [retiredCredentials, setRetiredCredentials] = useState(null)
+  const [retiredConfirmTyped, setRetiredConfirmTyped] = useState('')
   const [backupMsg, setBackupMsg] = useState(null)
   // The name the last backup was saved under, where the save picker could report it.
   const [backupSavedAs, setBackupSavedAs] = useState(null)
@@ -448,8 +464,10 @@ export default function BackupRestoreSection() {
     })
   }
 
-  async function performRestore(file, type, force = false) {
+  async function performRestore(file, type, force = false, restoreRetiredCredentials = undefined, retiredCredentialsConfirm = undefined) {
     setPendingConfirm(null)
+    setRetiredCredentials(null)
+    setRetiredConfirmTyped('')
     if (type === 'credentials') {
       await restoreCredentials(file, typedBackupSecret())
       return
@@ -463,6 +481,8 @@ export default function BackupRestoreSection() {
         includeData: restoreReplacesData,
         includeAccounts: restoreReplacesAccounts,
         includeCredentials: restoreReplacesCredentials,
+        restoreRetiredCredentials,
+        retiredCredentialsConfirm,
         adminUsername: adminPrompt ? adminUsername.trim() : '',
         adminPassword: adminPrompt ? adminPassword : '',
       })
@@ -482,7 +502,7 @@ export default function BackupRestoreSection() {
         sentences.push(`Restored ${users} sign-in account${users === 1 ? '' : 's'}. Everyone has been signed out.`)
       }
       if (result.credentials_withheld) {
-        sentences.push('The data provider credentials were not restored, because the vault key they were sealed under was replaced or reset after an exposure.')
+        sentences.push('The data provider credentials were not restored.')
       }
       for (const name of result.removed_connections || []) {
         sentences.push(`${name} removed — consider revoking its access at the provider.`)
@@ -501,6 +521,14 @@ export default function BackupRestoreSection() {
         setRestoring(false)
         setAdminPrompt({ message: e.detail.message, admins: e.detail.admins || [] })
         setRestoreMsg(code === 'incorrect_admin_password' ? `❌ ${e.message}` : null)
+        return
+      }
+      if (e.status === 409 && code === 'credentials_retired') {
+        // Nothing was touched. The choice is held, and answering it runs the same restore again.
+        setRestoring(false)
+        setRetiredCredentials({
+          reason: e.detail.reason, retiredAt: e.detail.retired_at, confirmPhrase: e.detail.confirm_phrase, type, force,
+        })
         return
       }
       // The backend's compatibility guard (409) means this backup looks like it came from a
@@ -1023,6 +1051,52 @@ export default function BackupRestoreSection() {
           </div>
         </div>
       )}
+
+      {/* Set apart from the restore confirmations before it, which it follows: the danger edge, a title
+          naming the risk, and a typed phrase, the vault reset's pattern for the one other choice that
+          puts credentials at risk. Restoring without them stays one click, since it is the safe answer. */}
+      {retiredCredentials ? (
+        <AppDialog
+          title="Restore credentials under a retired key?"
+          description={describeRetiredCredentials(retiredCredentials)}
+          borderColor="color-mix(in srgb, var(--danger) 45%, var(--border))"
+          onClose={() => { setRetiredCredentials(null); setRetiredConfirmTyped('') }}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => { setRetiredCredentials(null); setRetiredConfirmTyped('') }}>
+                Cancel
+              </Button>
+              <Button variant="secondary"
+                onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, false)}>
+                Restore without them
+              </Button>
+              <Button variant="danger"
+                disabled={retiredConfirmTyped.trim().toUpperCase() !== retiredCredentials.confirmPhrase}
+                onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, true,
+                  retiredConfirmTyped)}>
+                Restore them anyway
+              </Button>
+            </>
+          )}
+        >
+          <div style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>
+            Anyone who knew the retired key can read these credentials again once they are restored.
+            Afterwards, <strong>Replace vault key</strong> in Vault settings, or <strong>Respond to an
+            exposure</strong> there, ends that; changing the passphrase does not.
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+            Without them, the rest of the backup is restored.
+          </div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Type <strong>{retiredCredentials.confirmPhrase}</strong> to restore them.
+            </span>
+            {/* No Enter handler, as on the vault reset: the button is the only way through. */}
+            <Input value={retiredConfirmTyped} onChange={setRetiredConfirmTyped}
+              placeholder={retiredCredentials.confirmPhrase} aria-label="Confirmation phrase" {...NO_AUTOFILL_PROPS} />
+          </div>
+        </AppDialog>
+      ) : null}
 
       {restoreSuccess && (
         <div

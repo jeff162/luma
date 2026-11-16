@@ -194,7 +194,7 @@ class VaultAccessEndpointTests(unittest.TestCase):
             slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
             client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
 
-            rotated = client.post("/api/auth/vault/rotate")
+            rotated = client.post("/api/auth/vault/rotate", json={"reason": "replaced"})
             self.assertEqual(rotated.status_code, 200, rotated.text)
             self.assertEqual(rotated.json()["result"]["secrets_reencrypted"], 1)
 
@@ -211,7 +211,7 @@ class VaultAccessEndpointTests(unittest.TestCase):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/auth/vault/lock")
-            r = client.post("/api/auth/vault/rotate")
+            r = client.post("/api/auth/vault/rotate", json={"reason": "replaced"})
             self.assertEqual(r.status_code, 423)
 
     def test_the_pending_queue_surfaces_as_a_task_to_anyone_who_could_act(self):

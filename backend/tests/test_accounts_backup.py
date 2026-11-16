@@ -531,32 +531,72 @@ class AccountsBackupTests(unittest.TestCase):
 
     # ---- a retired key, and what a backup needs -----------------------
 
-    def _restore_after_retirement(self, retire) -> tuple[dict, str]:
+    def _restore_after_retirement(self, retire, **form) -> tuple[dict, str, int]:
+        """Restore a backup's accounts part after `retire` retired its key; the response, the stored
+        credential, and how many retirements are still recorded."""
         with api_client(base_url=SITE) as (client, _):
             user_id = self._seed_vault(client)
             content = self._export(client)
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
             with in_browser_session(client):
                 retire(user_id)
-            r = self._restore_accounts(client, content)
-            self.assertEqual(r.status_code, 200, r.text)
+            r = self._restore_accounts(client, content, **form)
             with get_db() as conn:
                 credential_enc = conn.execute("SELECT credential_enc FROM connection WHERE id = 'conn-1'").fetchone()[0]
-        return r.json(), credential_enc
+            with cdb.get_control_db() as conn:
+                retired = conn.execute("SELECT COUNT(*) FROM retired_vault_key").fetchone()[0]
+        return r, credential_enc, retired
 
-    def test_credentials_under_a_key_retired_as_untrusted_are_not_restored(self):
-        for retire, reason in ((lambda uid: cs.reset_vault(uid, reason="compromised"), "compromised"),
-                               (lambda uid: cs.rotate_dek(uid), "replaced")):
+    UNTRUSTED = ((lambda uid: cs.reset_vault(uid, reason="compromised"), "compromised"),
+                 (lambda uid: cs.rotate_dek(uid, reason="replaced"), "replaced"))
+
+    def test_credentials_under_a_key_retired_as_untrusted_are_asked_about_before_anything_changes(self):
+        for retire, reason in self.UNTRUSTED:
             with self.subTest(reason=reason):
-                result, credential_enc = self._restore_after_retirement(retire)
-                self.assertEqual(result.get("credentials_withheld"), reason)
+                r, _credential, retired = self._restore_after_retirement(retire)
+                self.assertEqual(r.status_code, 409, r.text)
+                detail = r.json()["detail"]
+                self.assertEqual((detail["code"], detail["reason"]), ("credentials_retired", reason))
+                self.assertTrue(detail["retired_at"])
+                self.assertEqual(detail["confirm_phrase"], "RESTORE ANYWAY")
+                self.assertGreater(retired, 0)
+
+    def test_declining_withholds_them(self):
+        for retire, reason in self.UNTRUSTED:
+            with self.subTest(reason=reason):
+                r, credential_enc, _retired = self._restore_after_retirement(
+                    retire, restore_retired_credentials=False)
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.json().get("credentials_withheld"), reason)
                 if reason == "compromised":
                     self.assertIsNone(credential_enc, "the reset's clearing stands")
 
-    def test_credentials_under_a_key_lost_with_its_passphrase_are_restored(self):
-        result, credential_enc = self._restore_after_retirement(lambda uid: cs.reset_vault(uid, reason="lost"))
-        self.assertNotIn("credentials_withheld", result)
-        self.assertIsNotNone(credential_enc)
+    def test_choosing_to_restore_them_puts_them_back_and_forgets_the_retirement(self):
+        # Forgotten, because the key is this vault's again: a backup taken under it from now on must restore.
+        for retire, reason in self.UNTRUSTED:
+            with self.subTest(reason=reason):
+                r, credential_enc, retired = self._restore_after_retirement(
+                    retire, restore_retired_credentials=True, retired_credentials_confirm="restore anyway")
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertNotIn("credentials_withheld", r.json())
+                self.assertIsNotNone(credential_enc)
+                self.assertEqual(retired, 0)
+
+    def test_restoring_them_needs_the_typed_phrase(self):
+        r, _credential, retired = self._restore_after_retirement(
+            lambda uid: cs.rotate_dek(uid, reason="replaced"), restore_retired_credentials=True)
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(r.json()["detail"]["code"], "confirmation_required")
+        self.assertGreater(retired, 0)
+
+    def test_credentials_under_a_key_lost_or_routinely_replaced_are_restored_without_asking(self):
+        for retire in (lambda uid: cs.reset_vault(uid, reason="lost"),
+                       lambda uid: cs.rotate_dek(uid, reason="routine")):
+            with self.subTest():
+                r, credential_enc, _retired = self._restore_after_retirement(retire)
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertNotIn("credentials_withheld", r.json())
+                self.assertIsNotNone(credential_enc)
 
     def test_the_reset_dialog_lists_one_backup_per_passphrase_with_what_opens_it(self):
         with api_client(base_url=SITE) as (client, _):
@@ -611,7 +651,7 @@ class AccountsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/change-passphrase", json={
                 "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-renewed",
             })
-            rotated = client.post("/api/auth/vault/rotate")
+            rotated = client.post("/api/auth/vault/rotate", json={"reason": "replaced"})
             self.assertEqual(rotated.status_code, 200, rotated.text)
             # Matched by prefix so the test also fails against a builder raising one task per event.
             due = [t for t in client.get("/api/tasks").json()["tasks"] if t["id"].startswith("backup_due")]

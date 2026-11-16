@@ -1622,6 +1622,29 @@ def retired_vault_seal_reasons(seal_digests: list[str]) -> set[str]:
     return {r["reason"] for r in rows}
 
 
+def retired_vault_seals(seal_digests: list[str]) -> list[dict]:
+    """The recorded retirements among these seals, newest first, as `{reason, retired_at}`."""
+    wanted = [d for d in seal_digests if d]
+    if not wanted:
+        return []
+    with get_control_db() as conn:
+        rows = conn.execute(
+            f"SELECT reason, retired_at FROM retired_vault_key WHERE seal_digest IN ({', '.join('?' * len(wanted))}) "
+            "ORDER BY retired_at DESC, rowid DESC",
+            wanted,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forget_retired_vault_seals(seal_digests: list[str]) -> None:
+    """Drop the retirement records of these seals, for a key the operator has chosen to put back."""
+    wanted = [d for d in seal_digests if d]
+    if wanted:
+        with get_control_db() as conn:
+            conn.execute(
+                f"DELETE FROM retired_vault_key WHERE seal_digest IN ({', '.join('?' * len(wanted))})", wanted)
+
+
 def latest_vault_key_retirement(reasons: tuple[str, ...] | None = None) -> dict | None:
     """The most recent retirement, optionally of the given reasons, as `{reason, retired_at}`."""
     where = f"WHERE reason IN ({', '.join('?' * len(reasons))})" if reasons else ""

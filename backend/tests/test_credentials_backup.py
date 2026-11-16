@@ -466,7 +466,7 @@ class CredentialsBackupTests(unittest.TestCase):
         with api_client() as (client, _):
             self._seed(client)
             payload = self._export(client)
-            self.assertEqual(client.post("/api/auth/vault/rotate").status_code, 200)
+            self.assertEqual(client.post("/api/auth/vault/rotate", json={"reason": "replaced"}).status_code, 200)
 
             r = client.post("/api/import-export/restore/credentials",
                             json={"data": payload, "passphrase": PASSPHRASE})

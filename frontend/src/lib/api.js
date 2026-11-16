@@ -251,7 +251,7 @@ export const api = {
     request(`/auth/vault/access/${userId}/revoke`, { method: 'POST' }),
   // Replace the workspace key and re-encrypt every stored credential under it. Revoke first, then
   // rotate: rotation re-seals for whoever still holds a slot.
-  rotateVault: () => request('/auth/vault/rotate', { method: 'POST' }),
+  rotateVault: reason => request('/auth/vault/rotate', { method: 'POST', body: JSON.stringify({ reason }) }),
   // After a possible exposure: swap each connection's credential for a new one where its provider can,
   // and report what is left to do at each provider. Nothing needs re-linking.
   reissueVaultCredentials: () => request('/auth/vault/reissue-credentials', { method: 'POST' }),
@@ -1359,6 +1359,11 @@ export const api = {
     fd.append('include_data', parts.includeData === false ? 'false' : 'true')
     if (parts.includeAccounts) fd.append('include_accounts', 'true')
     if (parts.includeCredentials === false) fd.append('include_credentials', 'false')
+    // Unset until the server has asked (`credentials_retired`); then the restorer's answer.
+    if (typeof parts.restoreRetiredCredentials === 'boolean') {
+      fd.append('restore_retired_credentials', parts.restoreRetiredCredentials ? 'true' : 'false')
+    }
+    if (parts.retiredCredentialsConfirm) fd.append('retired_credentials_confirm', parts.retiredCredentialsConfirm)
     if (parts.adminUsername) fd.append('admin_username', parts.adminUsername)
     if (parts.adminPassword) fd.append('admin_password', parts.adminPassword)
     const res = await trackedFetch('/api/import-export/restore-file', { method: 'POST', body: fd })
