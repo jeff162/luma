@@ -521,7 +521,7 @@ function TagStackChip({ tags, onClick }) {
 // the viewer's job, and this exists purely to answer "which one".
 function DocumentListPopover({ documents, onOpen, onClose }) {
   const ref = useRef(null)
-  useDismissibleLayer({ ref, onDismiss: onClose })
+  useDismissibleLayer({ open: true, onClose, refs: [ref] })
 
   return (
     <div
@@ -868,7 +868,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
                 // One document has nothing to choose between, so it opens straight away; several get
                 // the popover the note and tag markers beside this one already use.
                 if (documents.length === 1) setViewingDocument(documents[0])
-                else setShowDocuments(value => !value)
+                else setShowDocuments(true)
               }}
               aria-label={
                 matchedDocument

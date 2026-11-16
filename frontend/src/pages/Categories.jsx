@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput, FilterChip, IconButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
@@ -26,7 +26,7 @@ import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
-import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
+import { ESCAPE_BEHAVIOR, useEscapeAction } from '../lib/uiInteractions.js'
 import { useDeferredDeviceLayoutPreference, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { preventPressDefaults, trackPointer, useDropZone } from '../lib/pointerDrag.js'
@@ -129,99 +129,75 @@ function getDirectTxnCount(cat, categoryUsage) {
 
 
 function DeleteCategoryDialog({ category, preview, categories, replacementId, onReplacementChange, mode, onModeChange, onConfirm, onCancel, saving }) {
-  const ref = useRef(null)
-  useDismissibleLayer({
-    open: true,
-    onClose: onCancel,
-    refs: [ref],
-  })
-
   const canConfirm = mode === 'unassigned' || !!replacementId
   const isGroup = !!category && category.parent_id == null
 
   return (
-    <OverlayBackdrop zIndex={900} tint="rgba(15, 23, 42, 0.28)">
-      <FloatingPanel
-        ref={ref}
-        style={{
-          width: 'min(560px, 100%)',
-        }}
-      >
-        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{isGroup ? 'Delete group' : 'Delete category'}</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-              {isGroup
-                ? <>&quot;{category?.name}&quot; and its categories are assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>
-                : <>&quot;{category?.name}&quot; is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>}
-            </div>
-          </div>
-        </FloatingPanelHeader>
+    <AppConfirmDialog
+      title={isGroup ? 'Delete group' : 'Delete category'}
+      description={isGroup
+        ? <>&quot;{category?.name}&quot; and its categories are assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>
+        : <>&quot;{category?.name}&quot; is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>}
+      confirmLabel={saving ? 'Deleting…' : (isGroup ? 'Delete group' : 'Delete category')}
+      confirmDisabled={!canConfirm || saving}
+      cancelDisabled={saving}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    >
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+        Choose where those transactions should go before deleting this {isGroup ? 'group' : 'category'}.
+      </div>
 
-        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-            Choose where those transactions should go before deleting this {isGroup ? 'group' : 'category'}.
-          </div>
-
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="radio"
-              checked={mode === 'replace'}
-              onChange={() => onModeChange('replace')}
-              style={{ marginTop: 2, accentColor: 'var(--accent)' }}
-            />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>Move transactions to another category</div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-                Pick the category that should replace this one.
-              </div>
-            </div>
-          </label>
-
-          {mode === 'replace' ? (
-            <div style={{ paddingLeft: 24 }}>
-              <CategoryPicker
-                value={replacementId}
-                categories={categories}
-                onChange={onReplacementChange}
-                placeholder="Choose replacement category…"
-              />
-            </div>
-          ) : null}
-
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="radio"
-              checked={mode === 'unassigned'}
-              onChange={() => onModeChange('unassigned')}
-              style={{ marginTop: 2, accentColor: 'var(--accent)' }}
-            />
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>Mark transactions as unassigned</div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-                Remove the category from those transactions.
-              </div>
-            </div>
-          </label>
-
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            {isGroup
-              ? <>The group is removed. Its categories move to <strong>Inactive</strong>, where you can recover them later.</>
-              : <>The category isn&apos;t erased — it moves to <strong>Inactive</strong>, where you can recover it later.
-                While inactive, future imports that use this label come in uncategorized instead of recreating it.</>}
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+        <input
+          type="radio"
+          checked={mode === 'replace'}
+          onChange={() => onModeChange('replace')}
+          style={{ marginTop: 2, accentColor: 'var(--accent)' }}
+        />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Move transactions to another category</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+            Pick the category that should replace this one.
           </div>
         </div>
+      </label>
 
-        <DialogActions>
-          <Button variant="secondary" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button onClick={onConfirm} disabled={!canConfirm || saving}>
-            {saving ? 'Deleting…' : (isGroup ? 'Delete group' : 'Delete category')}
-          </Button>
-        </DialogActions>
-      </FloatingPanel>
-    </OverlayBackdrop>
+      {mode === 'replace' ? (
+        <div style={{ paddingLeft: 24 }}>
+          {/* The dropdown portals to <body>, so it has to stack above the dialog's own overlay. */}
+          <CategoryPicker
+            value={replacementId}
+            categories={categories}
+            onChange={onReplacementChange}
+            placeholder="Choose replacement category…"
+            panelZIndex={1300}
+          />
+        </div>
+      ) : null}
+
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+        <input
+          type="radio"
+          checked={mode === 'unassigned'}
+          onChange={() => onModeChange('unassigned')}
+          style={{ marginTop: 2, accentColor: 'var(--accent)' }}
+        />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Mark transactions as unassigned</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+            Remove the category from those transactions.
+          </div>
+        </div>
+      </label>
+
+      <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+        {isGroup
+          ? <>The group is removed. Its categories move to <strong>Inactive</strong>, where you can recover them later.</>
+          : <>The category isn&apos;t erased — it moves to <strong>Inactive</strong>, where you can recover it later.
+            While inactive, future imports that use this label come in uncategorized instead of recreating it.</>}
+      </div>
+    </AppConfirmDialog>
   )
 }
 
