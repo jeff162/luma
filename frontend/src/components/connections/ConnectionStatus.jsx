@@ -223,6 +223,7 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
             <SourceAccountChip
               key={c.external_account_id}
               label={c.label}
+              mappedLabel={c.mapped_label}
               count={c.added}
               skipped={c.mapping_mode === 'skip'}
             />

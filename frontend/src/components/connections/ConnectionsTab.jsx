@@ -19,7 +19,7 @@ import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../../lib/useVaultPasskeyUnlock.js'
 import {
   connectionAccountsLabel, connectionProviderLabel as providerLabel, lastSyncReportCards,
-  providerConnectionStates,
+  providerAccountChip, providerConnectionStates,
   providerSummaryLine, relinkCandidates,
 } from '../../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../accounts/ConnectionAccountMapDialog.jsx'
@@ -689,12 +689,7 @@ export default function ConnectionsTab({ onShowHistory }) {
           // Kept for the last-sync breakdown: it is keyed by the *provider's* account id, and only this
           // list can name one that has no local account — which is exactly the row worth showing, since an
           // account receiving nothing cannot appear in any tally built from what landed.
-          providerAccounts[c.id] = (res.accounts || []).map(pa => ({
-            external_account_id: pa.external_account_id,
-            label: pa.source_label || pa.provider_name || pa.external_account_id,
-            mapped: !!pa.mapped,
-            mapping_mode: pa.mapping_mode,
-          }))
+          providerAccounts[c.id] = (res.accounts || []).map(providerAccountChip)
           for (const pa of res.accounts || []) {
             if (pa.account_id && pa.provider_official_name) {
               institutions[pa.account_id] = pa.provider_official_name

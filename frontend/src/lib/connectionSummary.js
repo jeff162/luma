@@ -212,3 +212,16 @@ export function syncNavLabel({ driving = false, finished = false, added = 0, rel
   if (finished) return 'Sync finished'
   return relativeLabel ? `Sync · ${relativeLabel}` : 'Sync · never run'
 }
+
+// A provider account as `GET /connections/{id}/accounts` lists it, reduced to what `LastSyncSummary`'s chips
+// read: the provider's label, and for a mapped account the local account its rows land in, which the chip
+// shows after it as an import card's chip does.
+export function providerAccountChip(pa) {
+  return {
+    external_account_id: pa.external_account_id,
+    label: pa.source_label || pa.provider_name || pa.external_account_id,
+    mapped_label: pa.mapped && pa.mapping_mode !== 'skip' ? pa.account_name || '' : '',
+    mapped: !!pa.mapped,
+    mapping_mode: pa.mapping_mode,
+  }
+}

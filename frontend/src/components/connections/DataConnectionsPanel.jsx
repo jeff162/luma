@@ -32,7 +32,7 @@ import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
 import { useConnectionOperations } from '../../lib/useConnectionOperations.js'
-import { providerSummaryLine } from '../../lib/connectionSummary.js'
+import { providerAccountChip, providerSummaryLine } from '../../lib/connectionSummary.js'
 import { formatTimestamp } from '../../lib/utils.js'
 
 // `batches` is the host's own list of import cards, which is where the count of synced rows waiting on
@@ -67,12 +67,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
     if (!res) return
     // Every account the connection offers, not only those that received something: an account importing
     // nothing is exactly what this detail exists to surface.
-    setExpandedAccounts((res.accounts || []).map(pa => ({
-      external_account_id: pa.external_account_id,
-      label: pa.source_label || pa.provider_name || pa.external_account_id,
-      mapped: !!pa.mapped,
-      mapping_mode: pa.mapping_mode,
-    })))
+    setExpandedAccounts((res.accounts || []).map(providerAccountChip))
   }, [expandedConnId])
 
   const {
