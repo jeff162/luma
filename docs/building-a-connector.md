@@ -77,6 +77,7 @@ otherwise learn by branching on `provider`:
 | `max_history_days` | The provider's own cap on history depth, where it publishes one. |
 | `has_cursor` | Whether there is a change feed. `False` means every pull is a date range and a routine sync must choose a look-back window. |
 | `revokes_on_disconnect` | Whether `remove()` actually invalidates the credential upstream. `False` changes what the disconnect confirmation must tell the user. |
+| `credential_needs_app_secret` | Whether a connection's credential is usable only together with the app-level secret. `True` means deleting the old app secret at the provider stops a copied database from reaching it, while each credential stays valid with the new secret, so a vault reset after an exposure leaves those connections connected instead of revoking them. Decide it from the provider's documentation on what each request must carry. |
 | `reissues_credential` | Whether `reissue_credential()` can swap a connection's credential for a new one, killing the old, with no re-authorization. `False` means responding to an exposure costs that connection a re-link. Decide it from the provider's documentation on how its credentials are deactivated. |
 | `stable_external_id` | Whether re-authorizing returns the **same** `external_id`. `False` means a re-link needs to be told which connection it replaces — see below. |
 | `routine_lookback_days` | How far a routine (non-backfill) sync reaches on a cursorless provider. |

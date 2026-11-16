@@ -2552,7 +2552,10 @@ export const HELP_TOPICS = [
                 <td><strong>Can't open it?</strong></td>
                 <td>Lists the ways back in after a forgotten passphrase. The last resort rebuilds the
                   vault, which keeps the ledger and every connection's account mapping, but every
-                  connection has to be reconnected.</td>
+                  connection has to be reconnected. It asks whether the passphrase was forgotten or may
+                  have been exposed, and works with the vault locked either way. After an exposure,
+                  connections that need the provider's app secret, such as Plaid's, are left connected at
+                  the provider; replacing that secret stops a copy of the database from using them.</td>
               </tr>
             </tbody>
           </table>
@@ -4409,8 +4412,8 @@ export const HELP_TOPICS = [
             reset</strong> <em>for a compromised passphrase</em>, earlier backups hold credentials under a
           key that may be known to someone who should not have it. Restoring one asks first: restore
           everything but those credentials, or type <strong>RESTORE ANYWAY</strong> to restore them too.
-          Restoring them puts that key back in use here; <strong>Replace vault key</strong> or <strong>Respond
-            to an exposure</strong> afterwards ends it, and changing the passphrase does not. The record of
+          Restoring them puts that key back in use here; <strong>Replace vault key</strong> afterwards ends
+          that, and a passphrase in the backup that may also be known needs changing as well. The record of
           retired keys belongs to this system; the system a backup came from may still be using the key.
         </p>
         <p>
@@ -4452,9 +4455,11 @@ export const HELP_TOPICS = [
             choose <strong>Replace connection credentials&hellip;</strong>.
           </li>
           <li>
-            Go to each provider's website, revoke the existing credential and issue
-            a new one. Enter the new credential in the <strong>Configure</strong> menu.
-
+            For a provider with an app secret, such as Plaid: create a new secret on its website, enter
+            it in the <strong>Configure</strong> menu, then delete the old one there. Every request needs
+            the secret, so the copy can no longer reach the provider, and no connection needs
+            reconnecting. For other providers, revoke the existing credential on the website and issue a
+            new one.
           </li>
           <li>
             Change the vault passphrase, under <strong>Unlock methods</strong>.

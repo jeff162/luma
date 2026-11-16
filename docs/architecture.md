@@ -1001,8 +1001,10 @@ custody*; this section is the mechanism.
      each member's passphrase, recovery code or passkey the file carries, as they were when it was taken.
   4. `POST /auth/vault/reset` (admin-gated): every slot deleted, every `ENCRYPTED_COLUMNS` value cleared,
      `reauth_required` set on every connection. Connections, accounts, transactions, mappings and
-     coverage survive. It asks *lost or compromised*: a compromised passphrase still opens the vault, so
-     each credential is first revoked at its provider where `revokes_on_disconnect` allows, with
+     coverage survive. It asks *lost or compromised*: after a compromise each credential is first revoked
+     at its provider where `revokes_on_disconnect` allows and the vault is open (locked, those are listed
+     for the user), except one whose adapter declares `credential_needs_app_secret`, which is left
+     connected (`app_secret`) since deleting the old app secret stops a copy reaching the provider, with
      per-connection outcomes. The preview names other members and the caller's passkeys, and the result
      reports `also_locked_out`, since one DEK per workspace means a reset ends every member's access.
 - `VaultDecryptError` during a sync is classified as `reauth_required`, because retrying cannot fix it.

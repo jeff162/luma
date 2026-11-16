@@ -665,9 +665,18 @@ state to rebuild, and none of it is lost with the credential. Reset clears the e
 off `ENCRYPTED_COLUMNS`) and flags every connection for reconnection.
 
 **Reset asks *lost or compromised*.** Revoking a credential requires decrypting it, so a forgotten
-passphrase is exactly the case where **no revocation is possible for any provider**. A
-compromised-but-known passphrase can revoke on the way out, driven by `revokes_on_disconnect` — and when
-the vault can still be opened, *Respond to an exposure* needs no reset at all.
+passphrase is exactly the case where **no revocation is possible for any provider**. A compromise reset
+revokes on the way out when the vault is open, driven by `revokes_on_disconnect`, and runs locked too,
+listing those credentials for the user instead: an exposure can coincide with a forgotten passphrase, and
+the reset must not wait on an unlock that cannot happen. When the vault can still be opened, *Respond to an
+exposure* needs no reset at all.
+
+**A connection whose credential needs the app secret is never revoked by a reset**
+(`credential_needs_app_secret`). Every request needs the app secret beside the credential, so deleting the
+old secret at the provider stops a copied database from reaching it, needs no vault, and leaves the
+connection in place; the credential stays valid and works with the new secret. Revoking it there adds only
+a re-link at the bank, and ends it for every other system sharing it: an install restored from a backup of
+this one holds the same connections. The result lists the app secret to replace.
 
 **A reset reports per-connection outcomes rather than aborting.** Disconnect keeps the local connection
 when revocation fails so the user can retry; reset cannot, since clearing is the point, so it names the

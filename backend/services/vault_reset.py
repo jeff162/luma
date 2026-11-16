@@ -22,6 +22,17 @@ behaviour by declaring it — the rule `docs/building-a-connector.md` sets for e
 Plaid or SimpleFIN here would mean this file had to be edited for each new adapter, and the one nobody
 remembered to add would silently be reported as revoked.
 
+**A connection whose credential needs the app secret is left connected.** Where a credential is usable only
+together with the provider's app secret (`credential_needs_app_secret`), deleting the old secret at the
+provider stops a copied database from reaching it, without the vault; the credential itself stays valid and
+works with the new secret. Removing the connection there would add only a re-link at the bank, and would
+end it for any other system sharing it: one restored from a backup of this one, or this one's source.
+Those connections are reported as `app_secret`, and the reset's result lists the app secret to replace.
+
+**It runs with the vault locked too.** A forgotten passphrase can coincide with an exposure, and the reset
+must not wait on an unlock that cannot happen. Nothing can then be decrypted: each connection that would be
+revoked is reported `unreadable`, for the user to revoke at the provider.
+
 **This deliberately does not copy `disconnect`'s failure behaviour.** That endpoint keeps the local
 connection when revocation fails, so the user can retry rather than believe a live token is dead. A
 reset cannot honour that — clearing the credentials is the point, and it is about to happen whatever
@@ -39,6 +50,7 @@ REVOKED = "revoked"        # the provider invalidated it; nothing further is nee
 FAILED = "failed"          # revocation was attempted and refused or errored — finish it by hand
 MANUAL = "manual"          # the provider does not revoke on disconnect; it can only be done there
 UNREADABLE = "unreadable"  # the credential could not be decrypted, so there was nothing to send
+APP_SECRET = "app_secret"  # needs the provider's app secret, whose replacement covers it; left connected
 
 
 def _connection_label(row: dict) -> str:
@@ -51,7 +63,7 @@ def revoke_all_credentials(user: dict) -> list[dict]:
     """Attempt provider-side revocation for every connection, returning one outcome per connection.
 
     Never raises for a provider-side problem: see the module comment. The caller runs this *before* the
-    reset, while the vault is still open — afterwards there is no credential left to send.
+    reset — afterwards there is no credential left to send — with the vault open where it can be.
     """
     with get_db() as conn:
         connections = [dict(r) for r in conn.execute(
@@ -68,6 +80,11 @@ def revoke_all_credentials(user: dict) -> list[dict]:
             # become unopenable anyway. Reported as manual so it still appears on the user's list.
             outcomes.append({"connection_id": row["id"], "provider": row["provider"], "label": label,
                              "outcome": MANUAL, "detail": "This data source is no longer supported."})
+            continue
+
+        if adapter.credential_needs_app_secret:
+            outcomes.append({"connection_id": row["id"], "provider": row["provider"], "label": label,
+                             "outcome": APP_SECRET, "detail": None})
             continue
 
         if not adapter.revokes_on_disconnect:

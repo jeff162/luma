@@ -1063,10 +1063,12 @@ export default function ConnectionsTab({ onShowHistory }) {
   // Disconnecting revokes the credential where the provider allows it, so it needs the vault open. The
   // prompt deliberately comes *after* the confirmation rather than gating the menu item: a passphrase is
   // only worth asking for once the user has committed to disconnecting. The confirm dialog stays open
-  // underneath, so backing out of the prompt returns to the decision instead of discarding it.
+  // underneath, so backing out of the prompt returns to the decision instead of discarding it. A connection
+  // with no stored credential (after a vault reset) has nothing to decrypt, so it asks for nothing: the
+  // server removes it without revoking, and a vault that was reset may have no passphrase to give.
   async function confirmDisconnect() {
     if (!disconnectTarget) return
-    if (!(await ensureVault())) return
+    if (disconnectTarget.hasCredential && !(await ensureVault())) return
     setDisconnecting(true)
     try {
       await api.disconnectProvider(disconnectTarget.provider, disconnectTarget.external_id)
@@ -1471,7 +1473,8 @@ export default function ConnectionsTab({ onShowHistory }) {
                                 revokes: p.revokes_on_disconnect !== false && c.has_credential !== false,
                                 hasCredential: c.has_credential !== false,
                               })}>
-                                Disconnect
+                                {/* Nothing to disconnect without a credential, only a record to remove. */}
+                                {c.has_credential !== false ? 'Disconnect' : 'Remove connection'}
                               </Button>
                             </div>
                           </div>
@@ -1662,17 +1665,15 @@ export default function ConnectionsTab({ onShowHistory }) {
 
       {disconnectTarget ? (
         <AppConfirmDialog
-          title={`Disconnect ${disconnectTarget.institution || 'this bank'}?`}
+          title={`${disconnectTarget.hasCredential ? 'Disconnect' : 'Remove'} ${disconnectTarget.institution || 'this bank'}?`}
           // Two materially different outcomes, so they get two different sentences. Where the provider can
           // be told to revoke, disconnecting really does end the access. Where it cannot, only Luma's copy
           // of the credential goes and the credential itself stays live — saying otherwise would leave
           // someone believing they had cut off access they still have.
-          // Three outcomes, not two, and the third is the one a user would otherwise be told wrongly.
-          // Without a stored credential nothing can be sent to the provider at all — so this promises
-          // only the local removal, and says the access may still be live, which for a provider that
-          // *can* revoke is the difference between finished and one step left.
+          // Without a stored credential (after a vault reset) there is nothing to disconnect, only the
+          // record here to remove, so it is named and described as that.
           description={!disconnectTarget.hasCredential
-            ? `This removes the connection from Luma. Existing accounts and their transactions are kept. There is no stored credential left for it, so nothing can be revoked from here — if ${providerLabel(disconnectTarget.provider)} still lists this connection, remove it there too.`
+            ? 'This removes the connection from Luma. Existing accounts and their transactions are kept.'
             : disconnectTarget.revokes
               // Revoking the bank's token leaves Luma's own app credential in force, so a provider that has
               // one is named as still reachable, with where that access is revoked.
@@ -1680,7 +1681,9 @@ export default function ConnectionsTab({ onShowHistory }) {
                 ? `This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts, their transactions and Luma's access to ${providerLabel(disconnectTarget.provider)} are kept. Reconnecting later means linking the bank again. Luma's access to ${providerLabel(disconnectTarget.provider)} can be revoked only by signing into the ${providerLabel(disconnectTarget.provider)} Dashboard.`
                 : 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
               : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
-          confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect'}
+          confirmLabel={disconnectTarget.hasCredential
+            ? (disconnecting ? 'Disconnecting…' : 'Disconnect')
+            : (disconnecting ? 'Removing…' : 'Remove')}
           confirmDisabled={disconnecting}
           cancelDisabled={disconnecting}
           onConfirm={confirmDisconnect}
@@ -1735,11 +1738,14 @@ export default function ConnectionsTab({ onShowHistory }) {
               onClick: () => openRemoveSynced(cardMenu.connection),
             },
             {
-              label: 'Disconnect',
+              // Named apart from "Remove synced transactions" above, which a bare "Remove" would read as.
+              label: cardMenu.connection.has_credential !== false ? 'Disconnect' : 'Remove connection',
               danger: true,
-              title: providerById[cardMenu.provider]?.revokes_on_disconnect === false
-                ? 'Remove this connection from Luma. Existing accounts and transactions are kept. This provider has no way to revoke a credential from here, so revoking it means going to the provider.'
-                : 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
+              title: cardMenu.connection.has_credential === false
+                ? 'Remove this connection from Luma. Existing accounts and transactions are kept.'
+                : providerById[cardMenu.provider]?.revokes_on_disconnect === false
+                  ? 'Remove this connection from Luma. Existing accounts and transactions are kept. This provider has no way to revoke a credential from here, so revoking it means going to the provider.'
+                  : 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
               onClick: () => setDisconnectTarget({
                 provider: cardMenu.provider,
                 external_id: cardMenu.connection.external_id,

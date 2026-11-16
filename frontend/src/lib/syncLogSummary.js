@@ -298,7 +298,7 @@ const REVOKE_TEXT = {
   unreadable: 'Not revoked — the stored credential could not be read',
 }
 const DISCONNECT_TEXT = {
-  no_credential: 'Disconnected — there was no stored credential to revoke',
+  no_credential: 'Connection removed',
   provider_cannot_revoke: 'Disconnected here only — this provider cannot revoke access; revoke it at the provider',
   provider_refused: 'Removed here only — the provider refused to revoke access; revoke it at the provider',
   restored: 'Removed by a restore — consider revoking its access at the provider',

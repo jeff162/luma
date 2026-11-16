@@ -547,7 +547,7 @@ describe('restoring a backup that holds both parts', () => {
     await restore(user, 'Restore everything')
 
     expect(await screen.findByText(/This system replaced the vault key these credentials are under/)).toBeTruthy()
-    const anyway = screen.getByRole('button', { name: 'Restore them anyway' })
+    const anyway = screen.getByRole('button', { name: 'Restore with credentials' })
     expect(anyway.disabled).toBe(true)
     await user.type(screen.getByLabelText('Confirmation phrase'), 'restore anyway')
     await user.click(anyway)

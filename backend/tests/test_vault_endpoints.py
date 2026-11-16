@@ -9,7 +9,9 @@ store live tokens — app-login and the vault are orthogonal.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from backend.db.database import get_db
 from backend.services import attempt_limiter
 from backend.services import crypto_service as cs
 from backend.tests._api_client import STRONG_PASSPHRASE, api_client, limiter_clock
@@ -557,17 +559,39 @@ class VaultRecoveryEndpointTests(unittest.TestCase):
             self.assertEqual(r.json()["revocations"], [])
             self.assertFalse(r.json()["user"]["vault_configured"])
 
-    def test_a_compromise_reset_refuses_while_locked(self):
-        # This path exists so the revocations can run, and they need the DEK. Degrading to the lost path
-        # would retire every credential while reporting success at the one thing it never attempted.
+    def _connection(self, conn_id: str, provider: str):
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, institution, credential_enc) "
+                "VALUES (?, ?, ?, ?, 'stored')",
+                (conn_id, provider, f"ext-{conn_id}", f"Bank {conn_id}"),
+            )
+
+    def test_a_compromise_reset_runs_while_locked_and_lists_what_it_could_not_revoke(self):
+        # A forgotten passphrase can coincide with an exposure, so the reset cannot wait on an unlock.
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self._connection("c-bridge", "simplefin")
             phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
             client.post("/api/auth/vault/lock")
             r = client.post("/api/auth/vault/reset", json={"reason": "compromised", "confirm": phrase})
-            self.assertEqual(r.status_code, 423)
-            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
-            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_configured"])
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual([u["connection_id"] for u in r.json()["unfinished"]], ["c-bridge"])
+            self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_configured"])
+
+    def test_a_compromise_reset_leaves_a_connection_retired_by_the_app_secret_connected(self):
+        # Deleting the app secret retires its copies; removing it at the provider would only add a re-link,
+        # and end it for any other system sharing it.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self._connection("c-item", "plaid")
+            phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
+            with patch("backend.services.providers.plaid.PlaidAdapter.remove") as remove:
+                r = client.post("/api/auth/vault/reset", json={"reason": "compromised", "confirm": phrase})
+            self.assertEqual(r.status_code, 200, r.text)
+            remove.assert_not_called()
+            self.assertEqual([o["outcome"] for o in r.json()["revocations"]], ["app_secret"])
+            self.assertEqual(r.json()["unfinished"], [])
 
     def test_a_compromise_reset_lists_the_app_secret_to_rotate(self):
         # Revoking connections never retires the app secret they were authorized under, so after an

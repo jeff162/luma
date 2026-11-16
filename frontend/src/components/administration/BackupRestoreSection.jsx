@@ -1068,28 +1068,25 @@ export default function BackupRestoreSection() {
               </Button>
               <Button variant="secondary"
                 onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, false)}>
-                Restore without them
+                Restore without credentials
               </Button>
               <Button variant="danger"
                 disabled={retiredConfirmTyped.trim().toUpperCase() !== retiredCredentials.confirmPhrase}
                 onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, true,
                   retiredConfirmTyped)}>
-                Restore them anyway
+                Restore with credentials
               </Button>
             </>
           )}
         >
           <div style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>
-            Anyone who knew the retired key can read these credentials again once they are restored.
-            Afterwards, <strong>Replace vault key</strong> in Vault settings, or <strong>Respond to an
-            exposure</strong> there, ends that; changing the passphrase does not.
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Without them, the rest of the backup is restored.
+            Anyone who knew the retired key can read these credentials again once they are restored.{' '}
+            <strong>Replace vault key</strong> in Vault settings ends that. If a passphrase in the backup may
+            also be known, change it as well.
           </div>
           <div style={{ display: 'grid', gap: 6 }}>
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Type <strong>{retiredCredentials.confirmPhrase}</strong> to restore them.
+              Type <strong>{retiredCredentials.confirmPhrase}</strong> to restore with credentials.
             </span>
             {/* No Enter handler, as on the vault reset: the button is the only way through. */}
             <Input value={retiredConfirmTyped} onChange={setRetiredConfirmTyped}

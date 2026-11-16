@@ -80,6 +80,8 @@ class PlaidAdapter(ProviderAdapter):
     currency_scope = CURRENCY_PER_TRANSACTION
     # `/item/access_token/invalidate`: a new access token for the same Item, the old one dead at once.
     reissues_credential = True
+    # Every Plaid call carries the client secret beside the access token, so a token is dead without it.
+    credential_needs_app_secret = True
 
     def create_link_token(self, app_config: dict, user_id: str = "local-user",
                           access_token: str | None = None) -> str:

@@ -293,8 +293,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           {todo.length > 0 || appSecrets.length > 0 ? (
             <Rung title="Still to do at the provider">
               <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }}>
-                These credentials were not revoked automatically. Until they are removed at the provider,
-                the access they granted stays live.
+                These were not retired automatically. Until they are, the access they granted stays live.
               </p>
               {todo.map(t => (
                 <div key={t.connection_id} style={{ fontSize: 13 }}>
@@ -311,8 +310,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 <div key={`app-secret-${a.provider}`} style={{ fontSize: 13 }}>
                   <strong>{connectionProviderLabel(a.provider)} app secret</strong>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Rotate it at the provider, then delete the old one there — it can keep working until
-                    deleted. Enter the new secret with Configure.
+                    Create a new secret at the provider and enter it with Configure, then delete the old one
+                    there — it keeps working until deleted.
                   </div>
                 </div>
               ))}
@@ -495,9 +494,9 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
               ) : null}
 
               {/* Asked rather than inferred: only the user knows, and the answer changes what the reset
-                  can promise. A compromised passphrase still opens the vault, so each credential can be
-                  revoked at its provider on the way out; a lost one cannot decrypt anything, so every
-                  provider has to be dealt with by hand. */}
+                  does. After an exposure, what can be revoked is revoked on the way out (with the vault
+                  open) and the rest is listed; a connection retired by deleting its provider's app secret
+                  is left connected. A forgotten passphrase exposed nothing, so nothing is sent anywhere. */}
               <div style={{ display: 'grid', gap: 6 }}>
                 <label style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                   <input type="radio" name="vault-reset-reason" checked={reason === 'lost'}
@@ -516,9 +515,11 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                   <span>
                     The passphrase or database may have been exposed.
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>
-                      Unlock the vault first; each credential is then revoked at its provider where that is
-                      supported, before being destroyed. With the vault open, Respond to an exposure in Vault
-                      settings replaces credentials instead, without reconnecting anything.
+                      Connections that need the provider&apos;s app secret, such as Plaid&apos;s, stay connected at the
+                      provider; replacing the app secret stops a copy of the database from using them. Other
+                      credentials are revoked at their provider if the vault is open, and listed to revoke
+                      there if not. With the vault open, Respond to an exposure in Vault settings replaces
+                      credentials instead, without reconnecting anything.
                     </span>
                   </span>
                 </label>

@@ -1406,9 +1406,10 @@ def vault_reset(body: VaultResetRequest, request: Request):
     only the two encrypted columns are lost, and the connection rows that carry the expensive state
     survive so a re-link lands back on them.
 
-    The compromise path revokes first, while the vault is still open, and reports per connection rather
-    than aborting: the credentials are being cleared regardless, so a provider that refuses leaves the
-    user with something to finish, not a reason to stop.
+    The compromise path revokes first and reports per connection rather than aborting: the credentials are
+    being cleared regardless, so a provider that refuses leaves the user with something to finish, not a
+    reason to stop. It runs locked as well, when nothing can be revoked and every connection is reported
+    for the user to finish (`vault_reset`); a connection whose credential needs the app secret is never revoked.
 
     **Another member holding a slot does not block this.** It is a redirect the dialog leads with, by
     name, and a consequence reported back (`also_locked_out`) — not a refusal. See the note above
@@ -1426,15 +1427,6 @@ def vault_reset(body: VaultResetRequest, request: Request):
     revocations: list[dict] = []
     app_secrets: list[dict] = []
     if body.reason == "compromised":
-        # Refused rather than degraded to the lost path. This path exists *so that* the revocations can
-        # run, and running it locked would retire every credential without attempting the one thing the
-        # user came here for — while reporting success.
-        if not crypto_service.is_unlocked(user["id"]):
-            raise HTTPException(status_code=423, detail={
-                "code":    "vault_locked",
-                "message": "Unlock the vault first so each credential can be revoked at its provider "
-                           "before it is destroyed.",
-            })
         revocations = revoke_all_credentials(user)
         app_secrets = app_secrets_to_rotate()
 

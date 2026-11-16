@@ -147,6 +147,13 @@ class ProviderAdapter(ABC):
     # means the only way to retire a copied credential is to revoke it and link again.
     reissues_credential: bool = False
 
+    # Whether a connection's credential is usable only together with the app-level secret
+    # (`requires_app_config` says only that an app setting exists). True means deleting the old app secret at
+    # the provider stops a copied database from reaching it, while the credentials stay valid and work with
+    # the new secret, so a vault reset after an exposure leaves those connections alone rather than removing
+    # them (`vault_reset.revoke_all_credentials`). It is read from the provider's documentation.
+    credential_needs_app_secret: bool = False
+
     # Whether re-authorizing the same source comes back with the SAME `external_id`.
     #
     # True where the provider issues the handle (Plaid's `item_id`), so a re-link upserts onto the existing
