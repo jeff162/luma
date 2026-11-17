@@ -24,6 +24,8 @@ from backend.services import crypto_service, proxy_certificate, update_check
 MET = "met"
 NOT_MET = "not_met"
 UNKNOWN = "unknown"
+# Reported, not graded: a choice that depends on who is on the network, which only the operator knows.
+INFO = "info"
 
 # A not-met item that bypasses protection the operator set up, not just one they haven't set up yet.
 ELEVATED = "elevated"
@@ -44,8 +46,8 @@ def _sign_in_item() -> dict | None:
         return _item("sign_in", "Sign-in required", MET,
                      "This installation is open to other devices on the network, and they have to sign in.")
     return _item(
-        "sign_in", "Sign-in required", NOT_MET,
-        "This installation is open to other devices on the network.",
+        "sign_in", "Sign-in required", INFO,
+        "Other devices on the network can open this installation without signing in.",
         "/settings?section=signInProtection", "Turn on sign-in",
     )
 

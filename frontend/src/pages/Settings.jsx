@@ -90,7 +90,6 @@ export default function Settings() {
         {
           key: 'appearance',
           title: 'Appearance',
-          description: 'The color theme, the display size, and how dates and numbers are written.',
           content: (
             <div style={{ display: 'grid', gap: 18 }}>
               <Subsection title="Theme"><ThemeSection /></Subsection>

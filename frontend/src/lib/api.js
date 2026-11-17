@@ -360,7 +360,7 @@ export const api = {
     request(`/app/warm-derived-caches${ruleReach ? '?rule_reach=true' : ''}`, { method: 'POST', ...opts }),
   // Settings -> About -> Copy details: version, how it runs, platform. Nothing that identifies the machine.
   getInstallationDetails: () => request('/app/installation-details'),
-  // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown, detail, link }.
+  // Settings -> Security checklist: { items } of { id, title, status: met | not_met | unknown | info, detail, link }.
   getSecurityChecklist: () => request('/app/security-checklist'),
   // The TLS proxy's root certificate, where a server installation has one: { available } and, when it
   // does, the fingerprint and whether it is the certificate on record. Public — a device needs it before

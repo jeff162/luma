@@ -4167,7 +4167,8 @@ export const HELP_TOPICS = [
           up can be bypassed. For example, when HTTPS is configured, if {APP_NAME} is
           reachable without going through the HTTPS proxy then some traffic will be encrypted
           but some will not. This may be intentional to allow for passkeys and data connections
-          while still allowing for non-HTTPS traffic.   <strong>Unknown</strong> means the practice cannot be judged yet.
+          while still allowing for non-HTTPS traffic.   <strong>Unknown</strong> means the practice cannot be judged yet. <strong>Info</strong> reports a choice
+          without judging it: whether other devices have to sign in depends on who is on the network.
 
         </p>
       </>

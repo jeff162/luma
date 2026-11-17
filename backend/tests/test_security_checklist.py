@@ -61,7 +61,7 @@ class SecurityChecklistTests(unittest.TestCase):
     def test_a_server_on_the_network_directly_with_no_sign_in(self):
         transport.declare_listener(reachable=True, direct=True)
         items = self._items(_req("192.168.1.10", "luma.local"))
-        self.assertEqual(items["sign_in"]["status"], security_checklist.NOT_MET)
+        self.assertEqual(items["sign_in"]["status"], security_checklist.INFO)
         self.assertEqual(items["https"]["status"], security_checklist.NOT_MET)
         self.assertEqual(items["named_host"]["status"], security_checklist.MET)
 

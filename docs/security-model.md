@@ -695,14 +695,16 @@ statement of record.
 ## Best practices
 
 **The practices an installation is compared against**, in Settings → *Security checklist*
-(`services/security_checklist.py`). The checklist reports each one that applies as met or not, and
-refuses nothing: every practice here is one an operator may decide against for their own network.
-Adding a practice means adding it here and to the checklist together, and a practice is added only
-where the server can tell whether it is met.
+(`services/security_checklist.py`). The checklist reports each one that applies as met or not (or, for
+sign-in, as information), and refuses nothing: every practice here is one an operator may decide
+against for their own network. Adding a practice means adding it here and to the checklist together,
+and a practice is added only where the server can tell whether it is met.
 
 - **Sign-in is required once other devices can connect.** The perimeter is what keeps non-users out
-  (*Identity and the network perimeter*). Where only its own computer can open the installation, who
-  can reach it is decided by who can use that computer, so the practice is not applied there.
+  (*Identity and the network perimeter*). Whether it is needed depends on who is on the network, which
+  only the operator knows, so sign-in off is reported as *info* rather than *not met*. Where only its
+  own computer can open the installation, who can reach it is decided by who can use that computer, so
+  the practice is not applied there.
 - **Other devices connect over HTTPS.** Without it the session cookie and every typed secret cross the
   network readable, and passkeys are unavailable (*Transport security*). Whether another device can
   connect in cleartext is read from what the launcher started — a bind wider than loopback is the

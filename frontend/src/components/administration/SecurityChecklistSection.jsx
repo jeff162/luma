@@ -14,6 +14,7 @@ const STATUS = {
   met: { tone: 'accent2', label: 'Met' },
   not_met: { tone: 'warning', label: 'Not met' },
   unknown: { tone: 'muted', label: 'Unknown' },
+  info: { tone: 'muted', label: 'Info' },
 }
 
 export default function SecurityChecklistSection() {
