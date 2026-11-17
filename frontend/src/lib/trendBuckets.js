@@ -139,8 +139,9 @@ export function resolveTrendsWindowKey(rows, selectedWindow, currentMonth) {
 // The chart under the single-period breakdown answers "this kind of slice, over time", and it has two
 // ways of cutting time, picked from its chooser:
 //
-// - **Calendar grains** (month / quarter / year) bucket the history the caller passes as `firstMonth` —
-//   all of the data's, floored by the trend span (`trendSpan.js`). The selected period
+// - **Calendar grains** (month / quarter / year) bucket the history the caller passes as `firstMonth` /
+//   `lastMonth` — ending at the selected period and reaching back as far as the trend span allows
+//   (`trendSpan.js`). The selected period
 //   is highlighted on every bucket it overlaps, so a period that is not itself a calendar unit — Past 12
 //   months, Year to date, a custom range — lights up the run of bars it touches rather than being
 //   squeezed into one. This is the default, at the grain the selection's length suggests.
@@ -201,24 +202,17 @@ export function calendarGrainOf(date) {
   return null
 }
 
-function rangeDays(date) {
-  return Math.round((new Date(date.end) - new Date(date.start)) / 86400000) + 1
-}
-
 /*
- * The grain the chart opens at for a selection: the calendar unit it *is*, when it is one, otherwise the
- * unit nearest its length, so the selection covers about one bar (Last 30 days → months, Last 90 days →
- * quarters, Year to date and Past 12 months → years). With no explicit selection the trend is not tied
- * to a period at all, and opens monthly.
+ * The grain the chart opens at for a selection: months for anything up to a year (Last 90 days, Year to
+ * date and Past 12 months light up the run of months they cover, which reads better than one or two fat
+ * bars), years for a whole calendar year and anything longer. With no explicit selection the trend is
+ * not tied to a period at all, and opens monthly. Past 12 months runs from a date to the same date a year
+ * later, so "up to a year" is measured by calendar months rather than by days.
  */
 export function defaultTrendGrain(date) {
   if (!isBoundedDate(date)) return 'month'
-  const exact = calendarGrainOf(date)
-  if (exact) return exact
-  const months = rangeDays(date) / 30.44
-  if (months <= 1.5) return 'month'
-  if (months <= 4.5) return 'quarter'
-  return 'year'
+  if (calendarGrainOf(date) === 'year') return 'year'
+  return date.end <= shiftDateByMonths(date.start, 12) ? 'month' : 'year'
 }
 
 /*
@@ -316,13 +310,13 @@ export function sameSpanLabels(rangeStart, rangeEnd, stepMonths) {
 
 /*
  * The selection repeated a step at a time across the data — from the first span reaching `firstMonth`
- * (the data's first month, floored by the trend span) to the last one starting by the end of its last month or by today, whichever is earlier
- * (and never short of the selection itself). Built
+ * (the data's first month, floored by the trend span) to the last one starting by the earliest of the end
+ * of `lastMonth`, `endDay` and today (and never short of the selection itself). Built
  * from the selection itself each time, so clicking one of these bars yields the same family around the
  * new selection and the chart does not move. Capped at SAME_SPAN_MAX_BUCKETS, keeping the newest unless
  * that would drop the selection.
  */
-export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, today = localIsoDate() }) {
+export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, endDay = null, today = localIsoDate() }) {
   const step = sameSpanStepMonths(date)
   if (!step) return []
   const at = k => {
@@ -332,7 +326,7 @@ export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, today = loca
   }
   const firstDay = `${firstMonth || date.start.slice(0, 7)}-01`
   const dataEnd = lastDayOfMonthISO(lastMonth || date.end.slice(0, 7))
-  const lastDay = dataEnd < today ? dataEnd : today
+  const lastDay = [dataEnd, today, endDay].filter(Boolean).reduce((a, b) => (a < b ? a : b))
   let lo = 0
   while (at(lo - 1).rangeEnd >= firstDay) lo--
   let hi = 0

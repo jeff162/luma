@@ -55,14 +55,19 @@ export const MIN_BARS_TO_CLAMP = 5
 /*
  * Work out the axis bound for a set of signed bar values.
  *
- * Returns `{ clamped, bound, domain }`. When `clamped` is false the caller should leave the axis alone
- * and let the chart scale itself, which is the overwhelmingly common case. `domain` is a recharts
- * `[min, max]` covering zero, sized to whichever sides actually carry bars — an all-negative chart is
- * not given an empty positive half.
+ * Returns `{ clamped, bound, domain }`. `domain` always covers zero, sized to whichever sides actually
+ * carry bars — an all-negative chart is not given an empty positive half. When `clamped` is false the
+ * chart scales itself, which is the overwhelmingly common case, and `domain` only says where zero goes.
  *
  * `average` is optional and is the value of any average reference line the caller draws.
  */
-const UNCLAMPED = { clamped: false, bound: null, domain: undefined }
+// Recharts' own default, `[0, 'auto']`, pins zero only at the bottom of the axis, so an all-negative
+// chart runs from its lowest bar to its highest with no zero at all, and a single bar spans an axis a few
+// dollars tall. The mirror of the default puts zero at the top instead; every other chart keeps the default.
+function unclamped(numbers) {
+  const negativeOnly = numbers.some(v => v < 0) && numbers.every(v => v <= 0)
+  return { clamped: false, bound: null, domain: negativeOnly ? ['auto', 0] : undefined }
+}
 
 // Rounding an axis end outward to one of these keeps the ticks legible. It matters more with an explicit
 // domain than without one: recharts pins the ticks to the exact ends it is given, so a domain of
@@ -83,11 +88,11 @@ export function computeClampedDomain(values, { average = null } = {}) {
   const numbers = (values || []).map(Number).filter(Number.isFinite)
   const magnitudes = numbers.map(Math.abs).filter(v => v > 0).sort((a, b) => a - b)
 
-  if (numbers.length < MIN_BARS_TO_CLAMP || magnitudes.length < MIN_BARS_TO_CLAMP) return UNCLAMPED
+  if (numbers.length < MIN_BARS_TO_CLAMP || magnitudes.length < MIN_BARS_TO_CLAMP) return unclamped(numbers)
 
   const ordinary = magnitudes[Math.floor((magnitudes.length - 1) * ORDINARY_PERCENTILE)]
   const largest = magnitudes[magnitudes.length - 1]
-  if (ordinary <= 0 || largest <= ordinary * ENGAGE_MULTIPLE) return UNCLAMPED
+  if (ordinary <= 0 || largest <= ordinary * ENGAGE_MULTIPLE) return unclamped(numbers)
 
   const avg = Number.isFinite(Number(average)) ? Math.abs(Number(average)) : 0
   const bound = Math.max(ordinary * BOUND_MULTIPLE, avg * CLAMP_HEADROOM)

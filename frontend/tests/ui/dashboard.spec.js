@@ -477,7 +477,7 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   }
 
   await pickPreset('Year to date')
-  await expect(grain).toHaveValue('year')
+  await expect(grain).toHaveValue('month')
   await expect(grain.locator('option')).toHaveText(['Monthly', 'Quarterly', 'Yearly', 'Same span each year'])
 
   await pickPreset('Month to date')

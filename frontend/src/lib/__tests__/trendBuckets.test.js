@@ -110,16 +110,17 @@ describe('shiftDateByMonths', () => {
 })
 
 describe('the single-period trend grain', () => {
-  it('opens at the unit a selection is, or the one nearest its length', () => {
+  it('opens monthly for anything up to a year, yearly for a calendar year or longer', () => {
     expect(defaultTrendGrain(null)).toBe('month')
     expect(defaultTrendGrain(PRESETS.lastMonth)).toBe('month')
-    expect(defaultTrendGrain(PRESETS.lastYear)).toBe('year')
-    expect(defaultTrendGrain({ start: '2026-07-01', end: '2026-09-30' })).toBe('quarter')
+    expect(defaultTrendGrain({ start: '2026-07-01', end: '2026-09-30' })).toBe('month')
     expect(defaultTrendGrain(PRESETS.monthToDate)).toBe('month')
     expect(defaultTrendGrain(PRESETS.last30Days)).toBe('month')
-    expect(defaultTrendGrain(PRESETS.last90Days)).toBe('quarter')
-    expect(defaultTrendGrain(PRESETS.yearToDate)).toBe('year')
-    expect(defaultTrendGrain(PRESETS.past12Months)).toBe('year')
+    expect(defaultTrendGrain(PRESETS.last90Days)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.yearToDate)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.past12Months)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.lastYear)).toBe('year')
+    expect(defaultTrendGrain({ start: '2025-06-01', end: '2026-10-07' })).toBe('year')
   })
 
   it('offers same-span only for a selection that is not a calendar unit, stepping by the smallest unit it fits', () => {
@@ -140,7 +141,8 @@ describe('the single-period trend grain', () => {
     expect(effectiveTrendGrain(TREND_GRAIN_SAME_SPAN, PRESETS.yearToDate)).toBe(TREND_GRAIN_SAME_SPAN)
     expect(effectiveTrendGrain(TREND_GRAIN_SAME_SPAN, PRESETS.lastMonth)).toBe('month')
     expect(effectiveTrendGrain('year', PRESETS.lastMonth)).toBe('year')
-    expect(effectiveTrendGrain(null, PRESETS.past12Months)).toBe('year')
+    expect(effectiveTrendGrain(null, PRESETS.lastYear)).toBe('year')
+    expect(effectiveTrendGrain(null, PRESETS.past12Months)).toBe('month')
   })
 })
 
@@ -188,6 +190,12 @@ describe('sameSpanTrendBuckets', () => {
       ['2026-06-08', '2026-07-07'], ['2026-07-08', '2026-08-07'],
       ['2026-08-08', '2026-09-07'], ['2026-09-08', '2026-10-07'],
     ])
+  })
+
+  it('ends at an older selection rather than running on to the data that follows it', () => {
+    const date = { start: '2026-07-20', end: '2026-08-05' }
+    const buckets = sameSpanTrendBuckets({ date, firstMonth: '2026-05', lastMonth: '2026-08', endDay: date.end, today: '2026-10-07' })
+    expect(buckets[buckets.length - 1]).toMatchObject({ rangeStart: '2026-07-20', rangeEnd: '2026-08-05', isSelected: true })
   })
 
   it('yields the same bars around a clicked bar, so the chart stays put', () => {

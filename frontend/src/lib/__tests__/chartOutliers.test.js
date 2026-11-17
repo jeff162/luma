@@ -140,6 +140,14 @@ describe('computeClampedDomain with a lone outlier', () => {
     expect(average).toBeLessThan(domain[1])
   })
 
+  it('keeps zero on the axis of an unclamped all-negative chart', () => {
+    // Left to recharts, an all-negative axis runs from the lowest bar to the highest and leaves out zero.
+    expect(computeClampedDomain([-11653.16]).domain).toEqual(['auto', 0])
+    expect(computeClampedDomain([-400, -350, 0]).domain).toEqual(['auto', 0])
+    expect(computeClampedDomain([400, 350]).domain).toBeUndefined()
+    expect(computeClampedDomain([-400, 350]).domain).toBeUndefined()
+  })
+
   it('rounds the axis ends outward, so the ticks and the zero survive an explicit domain', () => {
     // Recharts pins ticks to the exact ends of a domain it is given, so unrounded ends produce an axis
     // of arbitrary numbers with no zero on it. Outward rounding only ever adds headroom.

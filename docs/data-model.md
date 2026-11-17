@@ -2750,10 +2750,13 @@ end is not a whole one, and `txn.date` has no finer grain than a day.
 - Same-span mode on the single-period trend keeps the mean of its buckets, because those buckets are
   the same window repeated across years and are equal by construction.
 
-The **trend span** (`frontend/src/lib/trendSpan.js`, `ui.dashboard.trendSpan`) sets how much history
-the dashboard's multi-period charts draw. It is one setting, so the charts agree on what an average
-covers. It floors where the bars start and does not filter the selection. N years is counted in whole
-buckets of the grain drawn, and "last N years" is anchored on the data's last month.
+The **trend span** (`frontend/src/lib/trendSpan.js`, `ui.dashboard.trendSpan`) limits how far back
+the dashboard's multi-period charts reach. It is one setting, so the charts agree on what an average
+covers, and it is what bases an average on a recent stretch rather than on all the data. It is a limit
+and never a second period: the page sets where each chart ends (the single-period trend at the
+selected period, or the data's last month with none picked; the Trends report's annual chart at the
+year that report shows; the cash-flow yearly trend at the data's last month), and N years is counted
+back from there in whole buckets of the grain drawn. A selection longer than the span is drawn whole.
 
 ### Cash flow
 
