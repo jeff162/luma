@@ -163,6 +163,55 @@ class DataLocationTests(unittest.TestCase):
         self.assertEqual(location["db_path"], str(Path(data_path).resolve()))
 
 
+class AppNameTests(unittest.TestCase):
+    """`APP_NAME` with its optional colour prefix. What has to hold is that the colour never reaches the
+    name — the name is written into passkey labels a device keeps for good — and that a malformed value
+    is refused rather than kept as text."""
+
+    def test_a_colour_prefix_is_split_off_the_name(self):
+        parsed = runtime_config.parse_app_name("<Red> Luma Demo")
+        self.assertEqual((parsed.name, parsed.color, parsed.problem), ("Luma Demo", "red", None))
+
+        with _env(APP_NAME="<blue>Luma Demo"):
+            self.assertEqual(runtime_config.app_name(), "Luma Demo")
+            self.assertEqual(runtime_config.app_name_color(), "blue")
+
+    def test_anything_else_tag_shaped_is_refused(self):
+        for raw in ("<rde>Luma Demo", "Luma Demo<red>", "<red>Luma Demo</red>", "<red><green>Demo"):
+            with self.subTest(raw=raw):
+                parsed = runtime_config.parse_app_name(raw)
+                self.assertIsNotNone(parsed.problem)
+                self.assertEqual((parsed.name, parsed.color), (runtime_config.DEFAULT_APP_NAME, None))
+
+    def test_a_name_with_an_angle_bracket_that_is_no_tag_is_kept(self):
+        self.assertEqual(runtime_config.parse_app_name("Ledger < 2026").name, "Ledger < 2026")
+
+    def test_a_colour_alone_leaves_the_default_name_and_no_colour(self):
+        parsed = runtime_config.parse_app_name("<red>")
+        self.assertEqual((parsed.name, parsed.color, parsed.problem), (runtime_config.DEFAULT_APP_NAME, None, None))
+        self.assertIsNotNone(parsed.note)
+
+    def test_the_report_shows_the_value_as_written(self):
+        with _isolated_control_db(), _env(APP_NAME="<red>Luma Demo"):
+            self.assertEqual(_row("app_name")["value"], "<red>Luma Demo")
+
+    def test_every_session_is_told_the_server_name(self):
+        # Unlike the data location: a member signed in to one of two copies needs it as much as anyone.
+        from backend.routers import auth
+
+        with _env(APP_NAME="<green>Luma Demo"), api_client(), \
+             mock.patch.object(auth, "auth_required", return_value=True):
+            payload = auth._auth_status_payload(None)
+
+        self.assertEqual(payload["server_name"], {"name": "Luma Demo", "color": "green"})
+        self.assertNotIn("data_location", payload)
+
+    def test_a_refused_value_stops_the_server_starting(self):
+        with _env(APP_NAME="<rde>Luma Demo"), self.assertRaisesRegex(RuntimeError, "<rde>"):
+            with api_client():
+                pass
+
+
 class AppConfigTests(unittest.TestCase):
     def test_session_secret_is_generated_once_and_reused(self):
         with _isolated_control_db(), _env(SESSION_SECRET=None):

@@ -13,7 +13,9 @@ test of a design decision rather than of a line of code: a passkey sign-in is me
 the TOTP prompt, and if that ever silently reverts, the feature has lost its reason to exist.
 """
 
+import os
 import unittest
+from unittest import mock
 
 from webauthn import base64url_to_bytes
 
@@ -375,6 +377,17 @@ class PasskeySignInTests(unittest.TestCase):
             self.assertNotEqual(sign_in["name"], vault["user_name"])
             self.assertNotEqual(sign_in["displayName"], vault["display_name"])
             self.assertNotIn("Tester", {sign_in["name"], vault["user_name"]})
+
+    def test_both_kinds_name_the_server_as_it_was_renamed(self):
+        """The interface's own name is fixed at build time, so on an installation renamed by `APP_NAME`
+        the vault's ceremony has to take the name from the server, as sign-in does — colour left off."""
+        with mock.patch.dict(os.environ, {"APP_NAME": "<red>Ledger Demo"}), api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            sign_in = client.post("/api/auth/passkey/register/begin").json()["options"]["rp"]
+            vault = client.get("/api/auth/vault/passkey/params").json()
+            self.assertEqual(sign_in["name"], "Ledger Demo")
+            self.assertEqual(vault["rp_name"], sign_in["name"])
 
     def test_an_assertion_carrying_the_vaults_handle_is_refused(self):
         """A passkey that claims the account id as its handle — the vault's, and what sign-in passkeys

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import app_config
-from backend.runtime_config import build_stamp, env_file_path
+from backend.runtime_config import app_name, app_name_color, build_stamp, env_file_path
 from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
@@ -376,6 +376,10 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         # machine it is running on. Null in a checkout, where the row is left out.
         "build_stamp": build_stamp(),
         "db_instance_id": db_instance_id,
+        # The name this server goes by, which is not necessarily the one on screen: the interface's is
+        # fixed when it is built. Ungated, unlike the data location below: it says which copy this is, a
+        # question every user of two copies has, since each user's saved passkeys are labelled with it.
+        "server_name": {"name": app_name(), "color": app_name_color()},
     }
     # The current identity always comes from the session (both modes). A perimeter-off session is
     # `pwless`; enabling auth invalidates it (the middleware clears it), so a stale pwless session is
@@ -1611,6 +1615,9 @@ def vault_passkey_params(request: Request):
         "user_handle":   user["id"],
         "user_name":     user_name,
         "display_name":  display_name,
+        # The sign-in ceremony's `rp_name` too, so a device names both kinds of passkey for this host the
+        # same way. From the server rather than the interface, whose name is fixed when it is built.
+        "rp_name":       app_name(),
         "register_salt": crypto_service.new_passkey_salt(),
         # Registered credentials, so `get()` can scope itself and the UI can list what exists.
         "credentials":   crypto_service.passkey_credentials(user["id"]),

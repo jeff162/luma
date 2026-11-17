@@ -35,6 +35,7 @@ import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useDeferredDeviceLayoutPreference, useDeviceLayoutPreference, useUserPreference, useUserPreferences } from './lib/UserPreferencesContext.jsx'
 import DataLocationLine from './components/DataLocationLine.jsx'
 import { useShownDataLocation } from './lib/dataLocation.js'
+import { describeServerName } from './lib/serverName.js'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileAppearanceCacheForDb } from './lib/theme.js'
 import { DISPLAY_SIZE_CHOICES, applyDisplaySize, toCssPx, vh, dvh } from './lib/displaySize.js'
 import { useDisplaySize } from './lib/useDisplaySize.js'
@@ -446,12 +447,12 @@ function ProfileInitials({ name }) {
 }
 
 // Stands in for the wordmark, version and data-location line, so its hover text says what they said.
-function CollapsedNavLogo({ dataLocation, version }) {
+function CollapsedNavLogo({ dataLocation, serverName, version }) {
   const shown = useShownDataLocation(dataLocation)
   const hoverText = [
     APP_NAME,
     version ? `v${version}` : null,
-    shown?.serverName,
+    serverName?.line,
     shown?.path,
     shown?.controlPath ? `Control database: ${shown.controlPath}` : null,
   ].filter(Boolean).join('\n')
@@ -1260,6 +1261,8 @@ export default function App() {
   // Where this copy's databases are. Absent for a session the server will not tell (a non-admin under
   // sign-in protection), which is what keeps the nav line and `/auth/config` on one rule.
   const [dataLocation, setDataLocation] = useState(null)
+  // The name the server goes by and its colour, as the nav pane shows them (`lib/serverName.js`).
+  const [serverName, setServerName] = useState(null)
   // Stopping the whole application, offered only where it would work — see `routers/app_control.py`.
   const [shutdownAvailable, setShutdownAvailable] = useState(false)
   // Whether this browser may send a vault secret: it is on the server, or behind HTTPS (the server's
@@ -1405,6 +1408,7 @@ export default function App() {
         setPasswordPolicy(status.password_policy || 'min_8')
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDataLocation(status.data_location || null)
+        setServerName(describeServerName(status.server_name))
         setShutdownAvailable(!!status.app_shutdown_available)
         setLinkProtected(status.transport?.vault_link_protected !== false)
         setDbInstanceId(status.db_instance_id || '')
@@ -2018,6 +2022,7 @@ export default function App() {
                                         <div style={s.logoCollapsed}>
                                           <CollapsedNavLogo
                                             dataLocation={dataLocation}
+                                            serverName={serverName}
                                             version={developerOptionsEnabled ? APP_VERSION : null}
                                           />
                                           <NavPaneToggle collapsed={navCollapsed} onToggle={() => setNavCollapsed(collapsed => !collapsed)} />
@@ -2025,7 +2030,13 @@ export default function App() {
                                       ) : (
                                         <div style={s.logo}>
                                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            <div
+                                              data-testid="nav-wordmark"
+                                              style={{
+                                                flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                ...(serverName?.color && !serverName.line ? { color: serverName.color } : null),
+                                              }}
+                                            >
                                               {APP_NAME}
                                             </div>
                                             <NavPaneToggle collapsed={navCollapsed} onToggle={() => setNavCollapsed(collapsed => !collapsed)} />
@@ -2039,6 +2050,17 @@ export default function App() {
                                               letterSpacing: '0.04em',
                                             }}>
                                               v{APP_VERSION}
+                                            </div>
+                                          ) : null}
+                                          {serverName?.line ? (
+                                            <div
+                                              data-testid="server-app-name"
+                                              style={{
+                                                marginTop: 2, color: serverName.color || 'var(--muted)', fontSize: 11, lineHeight: 1.4,
+                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                              }}
+                                            >
+                                              {serverName.line}
                                             </div>
                                           ) : null}
                                           <DataLocationLine dataLocation={dataLocation} />

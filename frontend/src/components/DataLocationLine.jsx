@@ -7,10 +7,6 @@
 // copy am I looking at — and the two are read together: a checkout pointed at a restored backup and one
 // pointed at real data are otherwise indistinguishable from anywhere in the app.
 //
-// The server's own name joins it when that differs from the name on screen. The interface's name is
-// fixed at build time, so an installation renamed by `APP_NAME` — which is what labels its passkeys on
-// a device — would otherwise show the change nowhere.
-//
 // Admin-or-local only, and enforced by the *server*: the path rides `/auth/status` solely for a session
 // that could already read it from the configuration report, so this component renders nothing for
 // everyone else without holding a second copy of that rule.
@@ -47,18 +43,6 @@ export default function DataLocationLine({ dataLocation }) {
   }
 
   return (
-    <>
-    {described.serverName ? (
-      <div
-        data-testid="server-app-name"
-        style={{
-          marginTop: 2, color: 'var(--muted)', fontSize: 11, lineHeight: 1.4,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}
-      >
-        {described.serverName}
-      </div>
-    ) : null}
     <Tooltip
       align="left"
       maxWidth={420}
@@ -115,6 +99,5 @@ export default function DataLocationLine({ dataLocation }) {
         </span>
       </button>
     </Tooltip>
-    </>
   )
 }

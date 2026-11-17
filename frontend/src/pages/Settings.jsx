@@ -36,6 +36,7 @@ import CsvExportSection from '../components/settings/CsvExportSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import DisplaySizeSection from '../components/settings/DisplaySizeSection.jsx'
+import DataLocationSection from '../components/settings/DataLocationSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import DisplayFormatSection from '../components/settings/DisplayFormatSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
@@ -62,6 +63,7 @@ export default function Settings() {
     bundledLicenseAvailable,
     buildStamp,
     thirdPartyNoticesScope,
+    dataLocation,
   } = useAppSession()
   const showsAdminFeatures = useShowsAdminFeatures()
 
@@ -95,6 +97,9 @@ export default function Settings() {
               <Subsection title="Theme"><ThemeSection /></Subsection>
               <Subsection title="Display size"><DisplaySizeSection /></Subsection>
               <Subsection title="Dates and numbers"><DisplayFormatSection /></Subsection>
+              {dataLocation ? (
+                <Subsection title="Navigation pane"><DataLocationSection dataLocation={dataLocation} /></Subsection>
+              ) : null}
             </div>
           ),
         },

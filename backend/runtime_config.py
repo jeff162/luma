@@ -15,13 +15,20 @@ case, and the values that must persist across restarts are stored in the control
 """
 
 import os
+import re
 import secrets
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
 DEFAULT_APP_NAME = "Luma"
+# The colours `APP_NAME` may be written with. Names rather than values: the interface maps each to a
+# theme colour, so it stays legible in every theme. The frontend's `SERVER_NAME_COLORS` is the other half.
+APP_NAME_COLORS = frozenset({"red", "green", "yellow", "blue"})
+_APP_NAME_COLOR_PREFIX = re.compile(r"<\s*([A-Za-z]+)\s*>")
+_APP_NAME_TAG = re.compile(r"<[^<>]*>")
 
 # The version the running application reports, and the one the packaged artifact is named for. Stated
 # here rather than in either packaging manifest because this module is the one place both can reach: it
@@ -93,14 +100,66 @@ def resolve_control_db_path() -> str:
     return str(anchor_relative(Path(explicit))) if explicit else str(data_dir() / CONTROL_DB_FILENAME)
 
 
+@dataclass(frozen=True)
+class ParsedAppName:
+    name: str
+    color: str | None
+    # Why the value was refused, or None when it was usable. A refused value contributes nothing: the
+    # name is the default and there is no colour.
+    problem: str | None = None
+    # Something about a usable value worth a line in the startup log.
+    note: str | None = None
+
+
+def parse_app_name(raw: str | None) -> ParsedAppName:
+    """Split `APP_NAME` into the name and the optional colour it is written with (`<red>Luma Demo`).
+
+    **The colour never leaves this function as part of the name.** Every reader of the name — the passkey
+    label a device keeps, the sign-in issuer, the tray, the systemd unit, the CLI's messages — gets plain
+    text, and only the navigation pane asks for the colour. Parsing here rather than at each display is
+    what makes that hold for a caller added later.
+
+    The grammar is one leading `<colour>` from `APP_NAME_COLORS`, case-insensitive, and nothing else that
+    looks like a tag. Anything else tag-shaped (an unknown colour, a closing tag, a tag mid-name) is
+    refused rather than kept as text, because a typo that became part of the name would be written into
+    passkey labels, which cannot be corrected once a device has saved one.
+
+    A colour with nothing after it leaves no name, so the default applies and the colour is dropped: it
+    has nothing to colour, since the pane shows the server's name only when one was given."""
+    value = (raw or "").strip()
+    color = None
+    prefix = _APP_NAME_COLOR_PREFIX.match(value)
+    if prefix and prefix.group(1).lower() in APP_NAME_COLORS:
+        color = prefix.group(1).lower()
+        value = value[prefix.end():].strip()
+    stray = _APP_NAME_TAG.search(value)
+    if stray:
+        return ParsedAppName(
+            DEFAULT_APP_NAME, None,
+            f"APP_NAME contains {stray.group(0)}, which is not a colour it accepts. A colour is written once, "
+            f"at the start, as one of {', '.join(f'<{c}>' for c in sorted(APP_NAME_COLORS))}.",
+        )
+    if not value:
+        note = f"APP_NAME gives the colour <{color}> but no name, so the colour is ignored." if color else None
+        return ParsedAppName(DEFAULT_APP_NAME, None, note=note)
+    return ParsedAppName(value, color)
+
+
 def app_name() -> str:
     """Display name for the application, surfaced in user-facing backend strings (the API title, the
     provider link client name, the sign-in issuer). Overridable by env for white-labelling; mirrors the
-    frontend's build-time VITE_APP_NAME so the two stay in step.
+    frontend's build-time VITE_APP_NAME so the two stay in step. Never carries the colour
+    (`parse_app_name`), and is the default while the value is refused — the server refuses to start in
+    that case, but the CLI tools and the launcher's own messages still need a name to print.
 
     Read at call time rather than captured at import: this module is imported during bootstrap to locate
     the optional `.env` file, which is necessarily *before* that file has been loaded."""
-    return (os.getenv("APP_NAME") or DEFAULT_APP_NAME).strip() or DEFAULT_APP_NAME
+    return parse_app_name(os.getenv("APP_NAME")).name
+
+
+def app_name_color() -> str | None:
+    """The colour `APP_NAME` asks the navigation pane to show the server's name in, or None."""
+    return parse_app_name(os.getenv("APP_NAME")).color
 
 
 def truthy(value: str | None, default: bool = False) -> bool:

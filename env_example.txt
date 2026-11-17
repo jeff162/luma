@@ -125,10 +125,12 @@
 # a deployment that serves the interface and the API from different origins. Default: empty
 # CORS_ORIGINS=https://app.example.invalid
 
-# APP_NAME [source] [docker]
-# Display name, for white-labelling. The interface takes its name from VITE_APP_NAME when it is built,
-# so this is only meaningful alongside a build of the interface. Default: Luma
-# APP_NAME=Luma
+# APP_NAME [all]
+# The name this installation goes by: the label saved passkeys carry on a device, the sign-in issuer,
+# and a line in the navigation pane when it differs from the interface's own name. Set it on a second
+# installation on the same machine so the two can be told apart. A leading <red>, <green>, <yellow> or
+# <blue> shows the name in that colour in the navigation pane and is not part of the name. Default: Luma
+# APP_NAME=<red>Luma Demo
 
 # ------------------------------------------------------------------------------
 # 4. Launcher and developer options

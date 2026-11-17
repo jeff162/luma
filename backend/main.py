@@ -45,6 +45,7 @@ except Exception as error:  # noqa: BLE001 - see below
 
 import base64
 import json
+import os
 from contextlib import asynccontextmanager
 
 import itsdangerous
@@ -277,6 +278,15 @@ async def lifespan(app: FastAPI):
     # Before `init_db`, so a start that fails there is kept and counted for the Tasks reminder — and left
     # attached when it does, since uvicorn reports the failure only after this function has raised.
     app_log_file.install()
+    # A refused `APP_NAME` stops the start rather than serving under the default name: the name is what a
+    # device's saved passkeys are labelled with, so serving under a name nobody chose would label new ones
+    # wrongly for good. Here rather than in the launcher so every way of starting the server meets it.
+    parsed_name = runtime_config.parse_app_name(os.getenv("APP_NAME"))
+    if parsed_name.problem:
+        log_error(parsed_name.problem)
+        raise RuntimeError(parsed_name.problem)
+    if parsed_name.note:
+        log_warning(parsed_name.note)
     # Before the financial database is touched at all, since readying it would create a missing one.
     problem = pairing_problem()
     pairing_lock.engage(problem)

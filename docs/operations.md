@@ -355,7 +355,9 @@ name is seeded from the control-database path, so the two do not sign each other
 **Give the second one an `APP_NAME`, or its passkeys are indistinguishable from the first's.** A device
 keeps one passkey list per *host*, and the label in it — `username (AppName purpose)` — is all a user has
 to go on when deciding which entry to keep. The collision is cosmetic, since the WebAuthn user handle is
-minted per control database, but `APP_NAME=Luma Demo` is what makes the list readable.
+minted per control database, but `APP_NAME=Luma Demo` is what makes the list readable. A leading colour
+(`APP_NAME=<red>Luma Demo`) also shows the name in that colour in the navigation pane, for telling the two
+apart at a glance; the colour is not part of the name.
 `security-model.md` → *Passkeys and the second factor* covers the labelling rules themselves.
 
 **A watched import folder is a directory on the server, not on the browser's machine.** The backend

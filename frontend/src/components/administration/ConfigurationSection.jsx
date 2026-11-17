@@ -3,10 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../../lib/api.js'
-import { useAppSession } from '../../lib/AppSessionContext.jsx'
-import { Card, Spinner, InsetPanel, SectionEyebrow, AppConfirmDialog, Toggle, Tooltip } from '../ui.jsx'
-import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
-import { NAV_DATA_LOCATION_PREF_KEY } from '../../lib/dataLocation.js'
+import { Card, Spinner, InsetPanel, SectionEyebrow, AppConfirmDialog, Tooltip } from '../ui.jsx'
 import { LABEL_PILL_COLORS } from '../pillStyles.js'
 
 // The configuration report: every resolved setting and which layer supplied it. Read-only on purpose.
@@ -202,36 +199,6 @@ function configResetPrompt(row) {
   }
 }
 
-/*
- * Whether the navigation pane names the database this copy is open on.
- *
- * It lives on this panel rather than under Appearance for two reasons. This is where the database
- * locations are read, so it is where someone thinks "I want that where I can see it" — and the section
- * is already admin-or-local, which is the same audience the line itself is served to, so one gate covers
- * the control and the thing it controls instead of two rules that could drift.
- *
- * It is a *preference*, not a configured value, and is presented as one: ruled off from the rows above
- * and carrying no source chip, because no layer supplied it and nothing resolves it at startup. Stored
- * per user rather than as an app setting for the same reason — a stored setting would need an
- * environment variable that would then outrank the switch, which is not what a display toggle should do.
- */
-function DataLocationNavToggle({ dataLocation }) {
-  const [showDataLocation, setShowDataLocation] = useUserPreference(
-    NAV_DATA_LOCATION_PREF_KEY, !!dataLocation?.show_by_default,
-  )
-  if (!dataLocation) return null
-  return (
-    <div style={{ borderTop: '1px solid var(--border)', display: 'grid', gap: 6, paddingTop: 12 }}>
-      <Toggle
-        checked={showDataLocation}
-        onChange={setShowDataLocation}
-        label="Show the data location in the navigation pane"
-      />
-
-    </div>
-  )
-}
-
 export default function ConfigurationSection({ authEnabled, currentUser }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -240,8 +207,6 @@ export default function ConfigurationSection({ authEnabled, currentUser }) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [resettingKey, setResettingKey] = useState('')
   const [notice, setNotice] = useState('')
-
-  const { dataLocation } = useAppSession()
 
   const canManage = !authEnabled || currentUser?.role === 'admin'
 
@@ -338,8 +303,6 @@ export default function ConfigurationSection({ authEnabled, currentUser }) {
               />
             ))}
           </div>
-
-          <DataLocationNavToggle dataLocation={dataLocation} />
 
           {rowGroups.advanced.length > 0 ? (
             <div style={{ display: 'grid', gap: 2 }}>

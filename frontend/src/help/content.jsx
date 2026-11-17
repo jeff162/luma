@@ -3845,7 +3845,8 @@ export const HELP_TOPICS = [
             and same pointer device will share the same settings. Screen layout (eg. column sizes and order) for
             the various tables is also stored per screen size+input device. There is a right-click menu
             on the user profile at the bottom of the navigation pane that also allows the scaling
-            factor to be changed.
+            factor to be changed. Administrators can also choose whether the navigation pane shows where
+            the database files are.
           </li>
           <li>
             <strong>Security</strong> (only visible when sign-in protection is enabled) supports
@@ -4208,6 +4209,15 @@ export const HELP_TOPICS = [
           {' '}<strong>Backend port</strong>, only matters when {APP_NAME} runs from source code,
           where the interface is served separately and passes requests on to the backend on that
           port. A downloaded copy does not use it.
+        </p>
+        <p>*needs review*</p>
+        <p>
+          <strong>Application name</strong> tells two installations apart: it labels the passkeys saved
+          for each, and the navigation pane shows it under {APP_NAME} when it is different. Starting it
+          with <code>&lt;red&gt;</code>, <code>&lt;green&gt;</code>, <code>&lt;yellow&gt;</code> or{' '}
+          <code>&lt;blue&gt;</code> shows the name in that colour, for example{' '}
+          <code>APP_NAME=&lt;red&gt;Luma Demo</code>; a colour with the name unchanged colours {APP_NAME}
+          itself. Anything else in angle brackets stops {APP_NAME} from starting, with a message saying why.
         </p>
         <p>
           Each setting indicates how the current value is derived:

@@ -7,7 +7,6 @@
 // relative default anchors, and only it can shorten the home prefix. What is left for the client is the
 // preference behind the line and the one editorial decision below.
 
-import { APP_NAME } from './appConfig.js'
 import { useUserPreference } from './UserPreferencesContext.jsx'
 
 // Per-user, so two people signed into one installation each answer it for their own sidebar. Its
@@ -47,7 +46,5 @@ export function useShownDataLocation(dataLocation) {
     NAV_DATA_LOCATION_PREF_KEY, !!dataLocation?.show_by_default,
   )
   const described = describeDataLocation(dataLocation)
-  if (!described || !showDataLocation) return null
-  const serverName = String(dataLocation.app_name || '').trim()
-  return { ...described, serverName: serverName && serverName !== APP_NAME ? serverName : null }
+  return described && showDataLocation ? described : null
 }

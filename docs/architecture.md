@@ -1486,7 +1486,18 @@ display and a `show_by_default` flag.
   preference follows it; an explicit choice wins.
 - **The paths are admin-or-local information, gated on the server.** The status payload carries
   `data_location` only for a session that could read `/auth/config` (`_session_can_manage_config`). The
-  toggle sits in Settings' *Startup configuration* section, behind the same gate.
+  toggle sits in Settings → Appearance and appears only when that field is present, so the switch and the
+  line follow one rule.
+- **The server's name is not gated, and not part of the toggle.** The interface's name is fixed at build
+  time, so the status payload carries `server_name` (`APP_NAME`) for every session, and the pane shows it
+  when it differs from the build's or carries a colour. Which copy this is matters to every user of two
+  copies, since each user's saved passkeys are labelled with the name.
+- **The colour never becomes part of the name.** `APP_NAME` may start with one colour from
+  `APP_NAME_COLORS` (`<red>Luma Demo`). `runtime_config.parse_app_name` splits it off, so `app_name()`
+  returns plain text to every reader (passkey labels, the sign-in issuer, the tray, the CLI), and anything
+  else tag-shaped refuses the value: the server will not start, since a typo kept as text would be written
+  into passkey labels that cannot be corrected. A colour with no name is dropped, with a warning in the
+  startup log. The configuration report shows the value as written.
 
 ## Where to change things
 

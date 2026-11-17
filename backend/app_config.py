@@ -43,6 +43,7 @@ from backend.runtime_config import (
     DEFAULT_FRONTEND_HOST,
     DEFAULT_FRONTEND_PORT,
     anchor_relative,
+    app_name,
     DIST_FORM_CHECKOUT,
     default_data_dir,
     distribution_form,
@@ -118,11 +119,13 @@ def _sanitize_cookie_label(value: str) -> str:
 
 
 SETTINGS: tuple[Setting, ...] = (
+    # Resolves to the value as written, colour prefix included, because the report shows what is in
+    # `.env`. The name itself is read through `runtime_config.app_name()`, never `value_of`.
     Setting(
         key="app_name",
         env_var="APP_NAME",
         label="Application name",
-        help="Display name used in the sign-in issuer, provider link screens, and the label saved passkeys carry on the device. Set it per instance where several run on one host, so their passkey entries can be told apart.",
+        help="Display name used in the sign-in issuer, provider link screens, and the label saved passkeys carry on the device; the navigation pane shows it when it differs from the interface's own name. Set it per instance where several run on one host, so their passkey entries can be told apart. A leading <red>, <green>, <yellow> or <blue> shows it in that colour and is not part of the name.",
         default=DEFAULT_APP_NAME,
         advanced=True,
     ),
@@ -437,10 +440,6 @@ def data_location() -> dict:
         "db_display_path": _home_relative(db_path),
         "control_db_path": str(control_db_path),
         "control_db_display_path": _home_relative(control_db_path),
-        # The name this server goes by, which is not necessarily the one on screen: the interface's is
-        # fixed when it is built. It rides here because it answers the same question the paths do —
-        # which copy is this — and is the only thing telling two copies' saved passkeys apart.
-        "app_name": value_of("app_name"),
         "show_by_default": (
             not stock_location
             or distribution_form() == DIST_FORM_CHECKOUT
@@ -518,7 +517,7 @@ def resolve() -> AppConfig:
     so they cannot be resolved lazily on the first request."""
     origins = [origin.strip() for origin in value_of("cors_origins").split(",") if origin.strip()]
     return AppConfig(
-        app_name=value_of("app_name"),
+        app_name=app_name(),
         session_secret=value_of("session_secret"),
         session_cookie_name=value_of("session_cookie_name"),
         session_cookie_secure=truthy(value_of("session_cookie_secure")),
