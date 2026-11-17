@@ -50,6 +50,8 @@ one file, not scan a monolith for the paragraph that applies.
   the ledger grows.
 - [Reports by when the money actually left the bank](cash-basis-reporting.md) — a second date on card
   purchases, the date the card payment covered them.
+- [A cash-flow Trends view whose two charts agree](cash-flow-trends-view.md) — the yearly and monthly
+  charts pick their periods separately, yet a click on one moves the other. No design agreed.
 - [Managing and building tag reports](saved-tag-reports.md) — one place to manage saved tag reports, and
   a richer report builder.
 - [Categorizing merchants Luma has never seen](online-categorizer.md) — an opt-in AI categorizer for a new
