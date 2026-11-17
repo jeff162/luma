@@ -556,4 +556,38 @@ describe('restoring a backup that holds both parts', () => {
       { ...parts(true, true), restoreRetiredCredentials: true, retiredCredentialsConfirm: 'restore anyway' },
     ))
   })
+
+  it('names the passkeys left behind, and restores without them keeping the earlier answer', async () => {
+    const user = userEvent.setup()
+    restoreBackupFile
+      .mockRejectedValueOnce(Object.assign(new Error('retired'), {
+        status: 409,
+        detail: { code: 'credentials_retired', reason: 'replaced', retired_at: '2026-11-07 04:49:56', confirm_phrase: 'RESTORE ANYWAY' },
+      }))
+      .mockRejectedValueOnce(Object.assign(new Error('elsewhere'), {
+        status: 409,
+        detail: {
+          code: 'passkeys_elsewhere',
+          passkeys: [{ label: 'Laptop', member: 'Alex', host: 'source.local' }],
+          members_without_access: ['Alex'],
+          hosts_here: ['localhost'],
+        },
+      }))
+      .mockResolvedValueOnce({ restored_counts: {}, accounts: { users: 1 }, signed_out: true })
+    renderSection()
+    await choose(user)
+    await restore(user, 'Restore everything')
+    await user.type(await screen.findByLabelText('Confirmation phrase'), 'restore anyway')
+    await user.click(screen.getByRole('button', { name: 'Restore with credentials' }))
+
+    expect(await screen.findByText('source.local')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Restore without them' }))
+    await waitFor(() => expect(restoreBackupFile).toHaveBeenLastCalledWith(
+      FILE, null, '', false,
+      {
+        ...parts(true, true), restoreRetiredCredentials: true, retiredCredentialsConfirm: 'restore anyway',
+        leavePasskeysElsewhere: true,
+      },
+    ))
+  })
 })

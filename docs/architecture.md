@@ -884,14 +884,16 @@ has several requests in flight.
 **Passkey sign-in** is an additional credential on this perimeter, never a replacement for the password.
 
 - `app_passkey` (control DB) holds one row per registered device: credential id, COSE public key, sign
-  counter, transports and a label. It is separate from `vault_slot`, which also holds passkeys; the two
+  counter, transports, a label, and the RP id it was registered under (`rp_id`, recorded at its next
+  sign-in for one registered before it was kept). It is separate from `vault_slot`, which also holds passkeys; the two
   features share no storage, endpoint or ceremony (`security-model.md` → *Passkeys and the second
   factor*).
 - `services/app_passkey.py` wraps `py_webauthn`: it builds the ceremony options and verifies the result
   (origin, RP id, type, signature, user verification, sign-counter regression, and that a returned user
   handle is the owner's). User verification is required on both ceremonies, and registration asks for a
   discoverable credential so the sign-in screen can offer a passkey before a username is typed. The
-  sign-in ceremony's `allowCredentials` names every active account's passkey, never an empty list.
+  sign-in ceremony's `allowCredentials` names every active account's passkey that can answer at the
+  page's host, never an empty list.
   Sign-in passkeys are registered under their own user handle (`sign_in_user_handle`, a hash of the
   account id).
 - `POST /auth/passkey/register/begin|complete` needs a signed-in session. `GET /auth/passkey/params` and
@@ -934,7 +936,12 @@ custody*; this section is the mechanism.
   wrong PRF output fails at the AEAD tag as a wrong passphrase does. WebAuthn's preconditions (a secure
   context, an RP id that is a domain) are detected server-side (`transport.passkey_context`) and returned
   as stated reasons. A passkey slot records the RP id it answers under (`rp_id`), at registration or, for
-  one registered before that was kept, at its next unlock.
+  one registered before that was kept, at its next unlock. The names a passkey could answer under here are
+  those this install's pages have been opened at (`served_host`, written by `/auth/status` through
+  `transport.note_served_host`) plus the asking page's (`transport.passkey_host_names`). A restore does
+  not adopt a passkey registered under none of them (*The accounts part* in `data-model.md`). A page offers
+  only passkeys whose `rp_id` is its own host or unrecorded, and the passkey lists say where any other one
+  works (`passkeyHost.js`); sign-in follows the same rules.
 - **Unlocking** holds the DEK in a server-side, in-process cache keyed by `user_id` and the sign-in
   session, with an idle TTL (`UNLOCK_TTL_SECONDS`). It is never put in the session cookie, and is
   dropped on logout and restart. Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,unlock,
@@ -1003,7 +1010,8 @@ custody*; this section is the mechanism.
      takes `{code, new_passphrase}` as one operation: the replacement slot is written before the
      recovery slot is deleted, so a failure leaves the code usable, and a fresh code is issued.
   3. A backup holding the vault: restoring its accounts part puts the vault back as it was, opened by
-     each member's passphrase, recovery code or passkey the file carries, as they were when it was taken.
+     each member's passphrase, recovery code or passkey the file carries, as they were when it was taken,
+     less any passkey registered under a host name this install is never opened at.
   4. `POST /auth/vault/reset` (admin-gated): every slot deleted, every `ENCRYPTED_COLUMNS` value cleared,
      `reauth_required` set on every connection. Connections, accounts, transactions, mappings and
      coverage survive. It asks *lost or compromised*: after a compromise each credential is first revoked

@@ -1376,6 +1376,8 @@ export const api = {
       fd.append('restore_retired_credentials', parts.restoreRetiredCredentials ? 'true' : 'false')
     }
     if (parts.retiredCredentialsConfirm) fd.append('retired_credentials_confirm', parts.retiredCredentialsConfirm)
+    // Set once the server has named the vault passkeys it would leave behind (`passkeys_elsewhere`).
+    if (parts.leavePasskeysElsewhere) fd.append('leave_passkeys_elsewhere', 'true')
     if (parts.adminUsername) fd.append('admin_username', parts.adminUsername)
     if (parts.adminPassword) fd.append('admin_password', parts.adminPassword)
     const res = await trackedFetch('/api/import-export/restore-file', { method: 'POST', body: fd })

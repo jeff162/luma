@@ -625,11 +625,13 @@ unencrypted backup leaves out. The ledger cannot be got back once lost, and a cr
 so a backup of the ledger never waits on the vault. The file says it holds no credentials, and the backup
 surface says so before it is made, along with any passphrase an unencrypted backup would leave out.
 
-**A passkey answers only at the host name it was registered under**, so each passkey slot in a file
-carries a salted digest of that name. The slots are readable without any key, so a digest rather than the
-name; a common name is still guessable from it, which is why it is a courtesy and not a secret. A
-passkey's label rides along in the clear, so a restore can name it, and discloses whatever the user named
-it, as a backup key's name does.
+**A passkey answers only at the host name it was registered under**, so each passkey in a file, vault
+slot or sign-in, carries that name in the clear. A host name is not a secret, and a restore has
+to be able to say which name a passkey needs. A restore leaves out a passkey registered under a name the
+install is never opened at, since it can never work there, and says so before anything changes;
+someone who wants it serves the install under that name and restores again. A passkey's label rides along
+in the clear too, so a restore can name it, and discloses whatever the user named it, as a backup key's
+name does.
 
 **A restore of the accounts replaces them; it never merges.** A merge would have to decide, person by
 person, whose password and second factor win, and a merged vault would hold two keys for one set of

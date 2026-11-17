@@ -2267,6 +2267,7 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
                          restore_retired_credentials: Optional[bool] = None,
                          retired_credentials_confirm: Optional[str] = None,
                          admin_username: Optional[str] = None, admin_password: Optional[str] = None,
+                         page_rp_id: Optional[str] = None, leave_passkeys_elsewhere: bool = False,
                          source: Optional[dict] = None) -> dict:
     """Destructive restore straight from an opened version-10-or-later archive, one member at a time.
 
@@ -2288,8 +2289,14 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
     needs its phrase. Withholding cannot be absolute: stopping the app, deleting both databases and
     restoring the same file puts them back too.
 
+    Vault and sign-in passkeys registered under a host name this install is never opened at are not
+    restored (`accounts_backup.passkeys_elsewhere`), and the restore says so first: `leave_passkeys_elsewhere`
+    False refuses with `passkeys_elsewhere`, naming them, the people left without vault access and this
+    install's names, so the restorer can serve it under the name they need before restoring. `page_rp_id`
+    is the name the restoring page was opened under (`transport.passkey_host_names`).
+
     Everything that can refuse — the digests, the compatibility guard, the restoring administrator's
-    password and the retired key — runs before anything is touched.
+    password, the retired key and the passkeys left behind — runs before anything is touched.
     The financial data then commits and the accounts part follows (`accounts_backup.apply`). With both the
     data and the credentials restored, the connections are replaced outright rather than reconciled, and
     `removed_connections` names those this install had and the backup does not.
@@ -2340,6 +2347,15 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
                 # The rest of the part restores as a file without credentials does.
                 withheld = retirement["reason"]
                 accounts_part["credentials"] = None
+        passkey_hosts = transport.passkey_host_names(page_rp_id)
+        left_behind = accounts_backup.passkeys_elsewhere(accounts_part, passkey_hosts)
+        if left_behind and not leave_passkeys_elsewhere:
+            raise HTTPException(status_code=409, detail={
+                "code": "passkeys_elsewhere",
+                "message": "Some of this backup's passkeys were registered under a host name this system "
+                           "is not opened at, so they cannot be restored.",
+                **left_behind,
+            })
 
     # Who exists once this is done: the backup's users when its accounts part goes back, this install's
     # otherwise. Only their preferences are kept.
@@ -2367,7 +2383,9 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         result["removed_connections"] = removed_connections
         compact_if_worthwhile(reason="restored a backup")
     if accounts_part is not None:
-        result["accounts"] = accounts_backup.apply(accounts_part)
+        result["accounts"] = accounts_backup.apply(accounts_part, passkey_hosts)
+        if left_behind:
+            result["passkeys_elsewhere"] = left_behind
         if retired_slots is not None:
             crypto_service.forget_exported_slots_retirement(retired_slots)
         # With the data left as it was, the preferences of users the accounts part removed would belong to
@@ -2875,7 +2893,7 @@ def _unlock_options(slots: list[dict], request: Request) -> dict:
             {"credential_id": s["credential_id"], "prf_salt": s["prf_salt"], "label": s.get("label") or "Passkey"}
             for s in slots
             if s.get("method") == "passkey" and context["available"]
-            and crypto_service.exported_site_matches(s, context["rp_id"])
+            and crypto_service.exported_passkey_answers_at(s, {context["rp_id"]})
         ],
         "rp_id": context["rp_id"],
     }
@@ -3033,6 +3051,7 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
 
 @router.post("/restore-file", dependencies=[Depends(require_admin_or_local)])
 async def restore_backup_file(
+    request: Request,
     file: UploadFile = File(...),
     private_key_file: UploadFile | None = File(None),
     private_key_passphrase: str | None = Form(None),
@@ -3050,6 +3069,9 @@ async def restore_backup_file(
     # An administrator of the backup, when it turns sign-in on (`accounts_backup.check_restoring_admin`).
     admin_username: str | None = Form(None),
     admin_password: str | None = Form(None),
+    # Restore without the vault passkeys registered under a name this system is not opened at, once the
+    # restorer has been told which (`passkeys_elsewhere`).
+    leave_passkeys_elsewhere: bool = Form(False),
 ):
     private_key_bytes = await private_key_file.read() if private_key_file else None
     accounts_options = {
@@ -3058,6 +3080,8 @@ async def restore_backup_file(
         "restore_retired_credentials": restore_retired_credentials,
         "retired_credentials_confirm": retired_credentials_confirm,
         "admin_username": admin_username, "admin_password": admin_password,
+        "page_rp_id": transport.passkey_context(request)["rp_id"],
+        "leave_passkeys_elsewhere": leave_passkeys_elsewhere,
     }
     # Named, unlike every other staging file here, because the documents phase may need to read it again
     # after the ledger has committed. Removed below unless that phase claimed it.

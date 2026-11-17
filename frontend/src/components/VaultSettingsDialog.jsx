@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AppConfirmDialog, AppDialog, AppNoticeDialog, Button, DialogActions, Input, SectionEyebrow, Spinner } from './ui.jsx'
 import { NO_AUTOFILL_PROPS } from '../lib/sensitiveFields.js'
 import { PASSKEY_UNAVAILABLE, passkeyAvailability, registerPasskey } from '../lib/vaultPasskey.js'
+import { passkeyAnswersHere } from '../lib/passkeyHost.js'
 import { RecoveryCodeReveal } from './VaultRecoveryDialog.jsx'
 import { VaultPassphraseDialog } from './VaultPassphraseDialog.jsx'
 import { api } from '../lib/api.js'
@@ -306,6 +307,9 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
               {pk.pending ? (
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>awaiting approval</span>
               ) : null}
+              {passkeyAnswersHere(pk) ? null : (
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>works only at {pk.host}</span>
+              )}
               <Button
                 variant="secondary" style={{ marginLeft: 'auto' }}
                 disabled={busy === `remove-${pk.slot_id}`}

@@ -28,7 +28,7 @@ from unittest import mock
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 
 from backend.db import control_database
 from backend.services import backup_history, database_health
@@ -77,6 +77,9 @@ from backend.services.categorizer import seed_default_rules
 # `export_backup` called directly, as most tests here do, with no identity behind the request. The file
 # still carries the accounts part, without credentials, which none of these tests read.
 NO_USER_REQUEST = SimpleNamespace(state=SimpleNamespace(user=None))
+# What the upload endpoint reads the page's host name from (`transport.passkey_context`): this machine.
+UPLOAD_REQUEST = Request({"type": "http", "scheme": "http", "server": ("localhost", 80), "path": "/",
+                          "headers": [], "client": ("127.0.0.1", 50000)})
 
 EXCLUDED_TABLES = {"plaid_item", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
 # The document text index and the shadow tables FTS5 keeps beside it. Derived state, not data: every
@@ -1452,6 +1455,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                request=UPLOAD_REQUEST,
                 file=self._upload(body, "luma_backup.encrypted.zip"),
                 private_key_file=self._upload(private_pem, "key.pem"),
                 private_key_passphrase=None,
@@ -1525,6 +1529,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                    request=UPLOAD_REQUEST,
                     file=self._upload(tampered, "luma_backup.encrypted.zip"),
                     private_key_file=self._upload(private_pem, "key.pem"),
                     private_key_passphrase=None,
@@ -1542,6 +1547,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         archive = self._write_archive()
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                request=UPLOAD_REQUEST,
                 file=self._upload(archive, "luma_backup.zip"),
                 private_key_file=None, private_key_passphrase=None, force=False,
             ))
@@ -1562,6 +1568,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                request=UPLOAD_REQUEST,
                 file=self._upload(legacy, "luma_backup.zip"),
                 private_key_file=None, private_key_passphrase=None, force=False,
             ))
@@ -1644,6 +1651,7 @@ class BackupIdentificationTests(BackupFixtureTestCase):
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                    request=UPLOAD_REQUEST,
                     file=self._upload(self._credentials_file(), "luma_credentials.zip"),
                     private_key_file=None, private_key_passphrase=None, force=False))
         self.assertEqual(ctx.exception.status_code, 400)
@@ -1912,6 +1920,7 @@ class BackupKeypairTests(BackupFixtureTestCase):
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                request=UPLOAD_REQUEST,
                 file=self._upload(body, "luma_backup.encrypted.zip"),
                 private_key_file=self._upload(generated["private_key"].encode(), "key.pem"),
                 private_key_passphrase="a passphrase",

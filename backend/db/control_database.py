@@ -341,6 +341,9 @@ def init_control_db():
                 sign_count    INTEGER NOT NULL DEFAULT 0,
                 transports    TEXT,
                 label         TEXT,
+                -- The host name (WebAuthn RP id) it was registered under, the only name it answers at.
+                -- NULL until a passkey registered before this was kept next signs in.
+                rp_id         TEXT,
                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                 last_used_at  TEXT
             );
@@ -416,6 +419,16 @@ def init_control_db():
             );
             CREATE INDEX IF NOT EXISTS idx_sign_in_session_user ON sign_in_session(user_id);
 
+            -- The host names this install's pages have been opened under where a passkey could run
+            -- (`transport.note_served_host`). A passkey answers only at the name it was registered for,
+            -- and nothing inside the app can see a reverse proxy's site list, so this is how a restore or
+            -- Vault settings tells a passkey that can work here from one that never can
+            -- (`transport.passkey_host_names`). It describes this machine and survives a restore.
+            CREATE TABLE IF NOT EXISTS served_host (
+                host          TEXT PRIMARY KEY,
+                first_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Retired with the vault rework: the old `user_secret_material` held a per-user DEK wrapped
             -- under an app master key (the `server_managed` model), which never delivered
             -- leaked-DB != leaked-tokens. Its ciphertext is unrecoverable under the new model by design
@@ -463,6 +476,8 @@ def init_control_db():
             )
         except Exception:
             pass
+        if "rp_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(app_passkey)")}:
+            conn.execute("ALTER TABLE app_passkey ADD COLUMN rp_id TEXT")
         export_columns = {r["name"] for r in conn.execute("PRAGMA table_info(credentials_export)")}
         for column in ("recovery_issued_at", "passkey_credential_ids", "seal_digest", "backup_id", "withdrawn_at"):
             if column not in export_columns:
@@ -1693,11 +1708,11 @@ def credentials_exports_any() -> list[dict]:
 
 def list_app_passkeys(user_id: str) -> list[dict]:
     """One user's registered login passkeys, oldest first. Never returns the public key: the settings
-    list only ever needs to say which devices exist and when each was last used."""
+    list only ever needs to say which devices exist, where each works and when each was last used."""
     with get_control_db() as conn:
         rows = conn.execute(
             """
-            SELECT id, label, transports, created_at, last_used_at
+            SELECT id, label, transports, rp_id AS host, created_at, last_used_at
             FROM app_passkey WHERE user_id = ? ORDER BY created_at, id
             """,
             (user_id,),
@@ -1715,18 +1730,32 @@ def list_app_passkey_credential_ids(user_id: str) -> list[str]:
     return [row["credential_id"] for row in rows]
 
 
-def list_all_app_passkey_credentials() -> list[dict]:
-    """Every active account's sign-in credential ids and transports, for the sign-in screen's
-    `allowCredentials`. A disabled account's passkeys are left out: listing them would only offer a
-    device prompt that `verify_assertion` is bound to refuse."""
+def record_served_host(host: str) -> None:
+    with get_control_db() as conn:
+        # Read first: this runs on every page load, and a write lock is needed only the first time.
+        if conn.execute("SELECT 1 FROM served_host WHERE host = ?", (host,)).fetchone() is None:
+            conn.execute("INSERT OR IGNORE INTO served_host (host) VALUES (?)", (host,))
+
+
+def list_served_hosts() -> list[str]:
+    with get_control_db() as conn:
+        return [r["host"] for r in conn.execute("SELECT host FROM served_host ORDER BY host")]
+
+
+def list_all_app_passkey_credentials(rp_id: str | None) -> list[dict]:
+    """Every active account's sign-in credential ids and transports that can answer at `rp_id`, for the
+    sign-in screen's `allowCredentials`. A disabled account's passkeys are left out, and so is one
+    registered under another host name: listing either would only offer a device prompt that cannot
+    succeed. One whose name was never recorded may answer anywhere."""
     with get_control_db() as conn:
         rows = conn.execute(
             """
             SELECT p.credential_id, p.transports
             FROM app_passkey p JOIN user_account u ON u.id = p.user_id
-            WHERE u.status = 'active'
+            WHERE u.status = 'active' AND (p.rp_id IS NULL OR p.rp_id = ?)
             ORDER BY p.created_at, p.id
-            """
+            """,
+            (rp_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1756,28 +1785,30 @@ def add_app_passkey(
     sign_count: int = 0,
     transports: str | None = None,
     label: str | None = None,
+    rp_id: str | None = None,
 ) -> dict:
     passkey_id = str(uuid.uuid4())
     with get_control_db() as conn:
         conn.execute(
             """
-            INSERT INTO app_passkey (id, user_id, credential_id, public_key, sign_count, transports, label)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO app_passkey (id, user_id, credential_id, public_key, sign_count, transports, label, rp_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (passkey_id, user_id, credential_id, public_key, sign_count, transports, label or None),
+            (passkey_id, user_id, credential_id, public_key, sign_count, transports, label or None, rp_id),
         )
         row = conn.execute(
-            "SELECT id, label, transports, created_at, last_used_at FROM app_passkey WHERE id = ?",
+            "SELECT id, label, transports, rp_id AS host, created_at, last_used_at FROM app_passkey WHERE id = ?",
             (passkey_id,),
         ).fetchone()
     return dict(row)
 
 
-def record_app_passkey_use(passkey_id: str, sign_count: int):
+def record_app_passkey_use(passkey_id: str, sign_count: int, rp_id: str):
+    """A verified sign-in. It ran under `rp_id`, which proves that is the passkey's name."""
     with get_control_db() as conn:
         conn.execute(
-            "UPDATE app_passkey SET sign_count = ?, last_used_at = datetime('now') WHERE id = ?",
-            (sign_count, passkey_id),
+            "UPDATE app_passkey SET sign_count = ?, rp_id = ?, last_used_at = datetime('now') WHERE id = ?",
+            (sign_count, rp_id, passkey_id),
         )
 
 

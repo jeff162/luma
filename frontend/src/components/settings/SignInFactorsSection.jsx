@@ -8,6 +8,7 @@ import { Card, Button, FieldIssue, InsetPanel, PasswordInput, PasswordManagerUse
 import { PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, usePasswordChecks } from '../../lib/passwordPolicy.js'
 import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../../lib/appPasskey.js'
 import { formatDate } from '../../lib/utils.js'
+import { passkeyAnswersHere } from '../../lib/passkeyHost.js'
 
 // Password fields don't need the full card width.
 const PASSWORD_FIELD_WIDTH = { maxWidth: 360 }
@@ -178,6 +179,7 @@ function SignInPasskeysPanel({ user, onUserChange }) {
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
                   Added {formatDate(passkey.created_at)}
                   {passkey.last_used_at ? ` · Last used ${formatDate(passkey.last_used_at)}` : ' · Not used yet'}
+                  {passkeyAnswersHere(passkey) ? '' : ` · Works only at ${passkey.host}`}
                 </div>
               </div>
               <Button variant="secondary" disabled={busy} onClick={() => removePasskey(passkey.id)}>

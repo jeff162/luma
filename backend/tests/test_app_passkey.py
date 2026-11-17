@@ -19,6 +19,7 @@ from unittest import mock
 
 from webauthn import base64url_to_bytes
 
+from backend.db import control_database as cdb
 from backend.tests._api_client import api_client
 from backend.tests._software_authenticator import SoftwareAuthenticator, b64url
 
@@ -348,6 +349,22 @@ class PasskeySignInTests(unittest.TestCase):
             self.assertEqual(begun.status_code, 200, begun.text)
             listed = {entry["id"] for entry in begun.json()["options"]["allowCredentials"]}
             self.assertEqual(listed, {b64url(laptop.credential_id), b64url(phone.credential_id)})
+
+    def test_a_passkey_registered_under_another_host_name_is_not_offered(self):
+        """It can never answer here, so offering it only puts a prompt on the device that must fail."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            admin_id = self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            laptop = SoftwareAuthenticator()
+            self._register(client, laptop)
+            self.assertEqual([p["host"] for p in client.get("/api/auth/me").json()["user"]["app_passkeys"]], [RP_ID])
+            cdb.add_app_passkey(admin_id, credential_id="elsewhere-cred", public_key="cHVibGlj", rp_id="source.local")
+            client.post("/api/auth/logout")
+
+            begun = client.post("/api/auth/passkey/login/begin")
+            self.assertEqual(begun.status_code, 200, begun.text)
+            listed = {entry["id"] for entry in begun.json()["options"]["allowCredentials"]}
+            self.assertEqual(listed, {b64url(laptop.credential_id)})
 
     def test_nothing_to_sign_in_with_is_refused_before_a_device_is_asked(self):
         """An empty list means "any passkey" to a browser, so it must never be sent."""

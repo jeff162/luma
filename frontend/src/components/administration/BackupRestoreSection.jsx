@@ -42,6 +42,7 @@ import { BackupHistoryList } from './BackupHistoryList.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGateContext } from '../../contexts/VaultGateContext.jsx'
 import { runBackupPasskeyCeremony } from '../../lib/vaultPasskey.js'
+import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { formatDate, formatTimestamp, localIsoDate, parseTimestamp } from '../../lib/utils.js'
 import FileInput from '../FileInput.jsx'
 import { PICKER_IDS, chooseSaveFile } from '../../lib/filePicker.js'
@@ -116,6 +117,20 @@ function describeRetiredCredentials({ reason, retiredAt }) {
   return what
 }
 
+// Who the passkeys a restore left behind leave with no way into the vault (`passkeys_elsewhere`).
+function describeStranded(stranded) {
+  if (!stranded?.length) return ''
+  return `${stranded.join(', ')} ${stranded.length === 1 ? 'has' : 'have'} no other way into the vault.`
+}
+
+function describePasskeyLeftBehind(passkey) {
+  return `${passkey.label} (${[passkey.member, passkey.purpose].filter(Boolean).join(', ')})`
+}
+
+function describePasskeysLeftBehind({ passkeys, members_without_access: stranded }) {
+  return `Passkeys not restored: ${passkeys.map(describePasskeyLeftBehind).join(', ')}. ${describeStranded(stranded)}`.trim()
+}
+
 export default function BackupRestoreSection() {
   const demoRestoreMessage = 'Restoring a backup is disabled while demo data is loaded — clear it from the banner above first.'
   // Restore is blocked server-side while demo data is loaded; disable the file picker to match.
@@ -159,6 +174,8 @@ export default function BackupRestoreSection() {
   // (`credentials_retired`): `{ reason, retiredAt, confirmPhrase, type, force }`, held while the restorer
   // chooses. Restoring them anyway takes the server's phrase typed, as a vault reset does.
   const [retiredCredentials, setRetiredCredentials] = useState(null)
+  // The `passkeys_elsewhere` refusal, held for the restorer to cancel or restore without them.
+  const [passkeysElsewhere, setPasskeysElsewhere] = useState(null)
   const [retiredConfirmTyped, setRetiredConfirmTyped] = useState('')
   const [backupMsg, setBackupMsg] = useState(null)
   // The name the last backup was saved under, where the save picker could report it.
@@ -464,10 +481,15 @@ export default function BackupRestoreSection() {
     })
   }
 
-  async function performRestore(file, type, force = false, restoreRetiredCredentials = undefined, retiredCredentialsConfirm = undefined) {
+  // `answers` are the restorer's replies to the server's questions so far (`force`, the retired key, the
+  // passkeys left behind). Each refusal that asks one keeps them, so answering it carries every earlier
+  // reply into the retry rather than asking again.
+  async function performRestore(file, type, answers = {}) {
+    const { force = false, restoreRetiredCredentials, retiredCredentialsConfirm, leavePasskeysElsewhere } = answers
     setPendingConfirm(null)
     setRetiredCredentials(null)
     setRetiredConfirmTyped('')
+    setPasskeysElsewhere(null)
     if (type === 'credentials') {
       await restoreCredentials(file, typedBackupSecret())
       return
@@ -483,6 +505,7 @@ export default function BackupRestoreSection() {
         includeCredentials: restoreReplacesCredentials,
         restoreRetiredCredentials,
         retiredCredentialsConfirm,
+        leavePasskeysElsewhere,
         adminUsername: adminPrompt ? adminUsername.trim() : '',
         adminPassword: adminPrompt ? adminPassword : '',
       })
@@ -503,6 +526,9 @@ export default function BackupRestoreSection() {
       }
       if (result.credentials_withheld) {
         sentences.push('The data provider credentials were not restored.')
+      }
+      if (result.passkeys_elsewhere) {
+        sentences.push(describePasskeysLeftBehind(result.passkeys_elsewhere))
       }
       for (const name of result.removed_connections || []) {
         sentences.push(`${name} connection removed.`)
@@ -527,8 +553,15 @@ export default function BackupRestoreSection() {
         // Nothing was touched. The choice is held, and answering it runs the same restore again.
         setRestoring(false)
         setRetiredCredentials({
-          reason: e.detail.reason, retiredAt: e.detail.retired_at, confirmPhrase: e.detail.confirm_phrase, type, force,
+          reason: e.detail.reason, retiredAt: e.detail.retired_at, confirmPhrase: e.detail.confirm_phrase, type, answers,
         })
+        return
+      }
+      if (e.status === 409 && code === 'passkeys_elsewhere') {
+        // Nothing was touched. Told before the restore, so this system can be served under the name the
+        // passkeys need and the restore run then instead.
+        setRestoring(false)
+        setPasskeysElsewhere({ detail: e.detail, type, answers })
         return
       }
       // The backend's compatibility guard (409) means this backup looks like it came from a
@@ -542,7 +575,7 @@ export default function BackupRestoreSection() {
           message: describeRestoreIncompatibility(e.detail),
           confirmLabel: 'Restore anyway',
           variant: 'danger',
-          force: true,
+          answers: { ...answers, force: true },
         })
         return
       }
@@ -1043,7 +1076,7 @@ export default function BackupRestoreSection() {
               </Button>
               <Button
                 variant={pendingConfirm.variant === 'danger' ? 'danger' : 'primary'}
-                onClick={() => performRestore(restoreFile, pendingConfirm.type, pendingConfirm.force)}
+                onClick={() => performRestore(restoreFile, pendingConfirm.type, pendingConfirm.answers)}
               >
                 {pendingConfirm.confirmLabel}
               </Button>
@@ -1067,13 +1100,15 @@ export default function BackupRestoreSection() {
                 Cancel
               </Button>
               <Button variant="secondary"
-                onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, false)}>
+                onClick={() => performRestore(restoreFile, retiredCredentials.type,
+                  { ...retiredCredentials.answers, restoreRetiredCredentials: false })}>
                 Restore without credentials
               </Button>
               <Button variant="danger"
                 disabled={retiredConfirmTyped.trim().toUpperCase() !== retiredCredentials.confirmPhrase}
-                onClick={() => performRestore(restoreFile, retiredCredentials.type, retiredCredentials.force, true,
-                  retiredConfirmTyped)}>
+                onClick={() => performRestore(restoreFile, retiredCredentials.type, {
+                  ...retiredCredentials.answers, restoreRetiredCredentials: true, retiredCredentialsConfirm: retiredConfirmTyped,
+                })}>
                 Restore with credentials
               </Button>
             </>
@@ -1091,6 +1126,39 @@ export default function BackupRestoreSection() {
             {/* No Enter handler, as on the vault reset: the button is the only way through. */}
             <Input value={retiredConfirmTyped} onChange={setRetiredConfirmTyped}
               placeholder={retiredCredentials.confirmPhrase} aria-label="Confirmation phrase" {...NO_AUTOFILL_PROPS} />
+          </div>
+        </AppDialog>
+      ) : null}
+
+      {passkeysElsewhere ? (
+        <AppDialog
+          title="Some passkeys will not be restored"
+          description="A passkey works only at the host name it was registered under."
+          help={<FeatureExplainer topic="passkey-host-names" label="About passkeys and host names" placement="bottom-left" />}
+          onClose={() => setPasskeysElsewhere(null)}
+          actions={(
+            <>
+              <Button variant="secondary" onClick={() => setPasskeysElsewhere(null)}>Cancel</Button>
+              <Button variant="danger"
+                onClick={() => performRestore(restoreFile, passkeysElsewhere.type,
+                  { ...passkeysElsewhere.answers, leavePasskeysElsewhere: true })}>
+                Restore without them
+              </Button>
+            </>
+          )}
+        >
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
+            {passkeysElsewhere.detail.passkeys.map((p, index) => (
+              <li key={index}>
+                {describePasskeyLeftBehind(p)}
+                {p.host ? <> &mdash; works only at <strong>{p.host}</strong></> : ' — registered under another name'}
+              </li>
+            ))}
+          </ul>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+            {passkeysElsewhere.detail.hosts_here.length
+              ? `This system is opened at ${passkeysElsewhere.detail.hosts_here.join(', ')}. ` : ''}
+            {describeStranded(passkeysElsewhere.detail.members_without_access)}
           </div>
         </AppDialog>
       ) : null}

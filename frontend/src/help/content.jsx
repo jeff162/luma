@@ -4407,7 +4407,8 @@ export const HELP_TOPICS = [
         <p>
           A restore operation starts by erasing the section being restored so following a restore all
           that remains is what was in the backup. Data provider connections start syncing from the last
-          syncpoint recorded in the backup.
+          syncpoint recorded in the backup. Passkeys added under a host name this system is not opened at
+          are left out (see <HelpLink to="/help/passkey-host-names">passkeys and host names</HelpLink>).
         </p>
         <HelpHeading anchor="partial-restore">Restoring part of a backup</HelpHeading>
         <p>
@@ -4491,6 +4492,45 @@ export const HELP_TOPICS = [
             Make a new <HelpLink to="/help/backup-restore#backups">backup</HelpLink>.
           </li>
         </ol>
+      </>
+    ),
+  },
+  {
+    id: 'passkey-host-names',
+    section: 'general-concepts',
+    title: 'Passkeys and host names',
+    surfaces: ['Backup / Restore (passkeys not restored)', 'Vault settings', 'Settings (Sign-in passkeys)'],
+    summary: 'A passkey works only at the host name it was added under. A restore leaves out passkeys added under a name this system is not opened at.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A passkey belongs to the host name in the address bar when it was added, and the browser offers
+          it only at that name. A passkey added at <code>server.local</code> does not work
+          at <code>localhost</code>, even in the same browser with the same data. A system opened under two
+          names needs a passkey added at each name it is used from. A passkey added under another name is
+          not offered here, and its entry in Vault settings or the sign-in passkeys says where it works.
+        </p>
+        <HelpHeading anchor="restore">Restoring on another system</HelpHeading>
+        <p>
+          A backup records the name each passkey was added under, for unlocking the vault and for signing
+          in. A name counts as this system&apos;s once a page of it has been opened there. A restore leaves
+          out the passkeys added under any other name, since they could never work here, and lists them
+          before anything changes. The password still signs in. Someone whose only way into the vault was
+          one of them has no access afterwards, until they set a passphrase or add a passkey and someone
+          who can open the vault approves it.
+        </p>
+        <p>
+          Keeping those passkeys means opening this system at the name they were added under and restoring
+          the backup again. That can take more than a setting: the name has to reach this machine (on a
+          local network only one machine answers to a <code>.local</code> name), and any name
+          but <code>localhost</code> needs HTTPS, usually from a reverse proxy.
+        </p>
+        <HelpHeading anchor="copied-database">A copied database</HelpHeading>
+        <p>
+          A database copied from another system brings that system&apos;s passkeys, each marked with the
+          name it works at. <strong>Remove</strong> deletes one this system is never opened at.
+        </p>
       </>
     ),
   },

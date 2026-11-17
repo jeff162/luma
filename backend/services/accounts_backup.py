@@ -188,6 +188,43 @@ def check_restoring_admin(part: dict, username: str | None, password: str | None
     raise AdminPasswordRequired([u["username"] for u in admins], attempted=bool(wanted or password))
 
 
+def _sign_in_passkey_elsewhere(row: dict, passkey_hosts: set[str]) -> bool:
+    """Whether a sign-in passkey from the part was registered under a host name outside `passkey_hosts`.
+    One whose name was never recorded is not judged."""
+    return bool(row.get("rp_id")) and row["rp_id"].lower() not in passkey_hosts
+
+
+def passkeys_elsewhere(part: dict, passkey_hosts: set[str]) -> dict | None:
+    """The part's passkeys a restore here leaves behind, and the people that leaves with no way into the
+    vault; None when there are none.
+
+    A passkey answers only at the host name it was registered under, so one registered under a name this
+    install is never opened at (`transport.passkey_host_names`) could never work here, and a restore does
+    not adopt it (`apply`, `crypto_service.vault_slot_rows`). Said before anything is touched, so the
+    restorer can serve this install under the name it needs and restore again instead. Nobody is shut out
+    by a sign-in passkey left behind, since every account keeps its password."""
+    names = {u["id"]: u.get("display_name") or u["username"] for u in part.get("users") or []}
+    signing_in = [p for p in part.get("passkeys") or [] if _sign_in_passkey_elsewhere(p, passkey_hosts)]
+    credentials = part.get("credentials")
+    slots = (credentials or {}).get("vault_slots") or []
+    vault = [s for s in slots if crypto_service.exported_passkey_registered_elsewhere(s, passkey_hosts)]
+    if not (signing_in or vault):
+        return None
+    left = {s["user_id"] for s in slots if s not in vault}
+    return {
+        "passkeys": [
+            {"label": p.get("label") or "Passkey", "member": names.get(p["user_id"]), "host": p.get("rp_id"),
+             "purpose": purpose}
+            for purpose, rows in (("sign-in", signing_in), ("vault", vault))
+            for p in rows
+        ],
+        "members_without_access": sorted(
+            {names[s["user_id"]] for s in vault if s["user_id"] not in left and s["user_id"] in names},
+        ),
+        "hosts_here": sorted(passkey_hosts),
+    }
+
+
 def write_credentials(conn, connections, provider_configs, connection_secret, provider_secret) -> int:
     """Make the stored credentials exactly the given set. `conn` is the data database, inside the caller's
     transaction.
@@ -256,8 +293,10 @@ def write_credentials(conn, connections, provider_configs, connection_secret, pr
     return len(connections) + len(provider_configs)
 
 
-def apply(part: dict) -> dict:
-    """Replace this install's accounts with the part's. The caller has already run `check_restoring_admin`.
+def apply(part: dict, passkey_hosts: set[str]) -> dict:
+    """Replace this install's accounts with the part's. The caller has already run `check_restoring_admin`,
+    and has said which passkeys are left behind (`passkeys_elsewhere`), given the host names in
+    `passkey_hosts`.
 
     Two databases and no transaction spanning them, so the order is chosen for what an interruption leaves.
     The data database goes first — the credentials, copied as exported, and the backup keys — then the
@@ -296,8 +335,12 @@ def apply(part: dict) -> dict:
                 f"INSERT INTO backup_recipient ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
                 [row[c] for c in columns],
             )
+    part = {**part, "passkeys": [
+        p for p in part.get("passkeys") or [] if not _sign_in_passkey_elsewhere(p, passkey_hosts)
+    ]}
     control_database.replace_identities(
-        part, crypto_service.vault_slot_rows(credentials["vault_slots"]) if credentials is not None else None,
+        part,
+        crypto_service.vault_slot_rows(credentials["vault_slots"], passkey_hosts) if credentials is not None else None,
     )
     # Every unlock and proof in this process was taken against the people and vault just replaced.
     crypto_service.lock_all()

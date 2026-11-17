@@ -33,6 +33,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useVaultGate } from '../lib/useVaultGate.js'
+import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
 import { VaultPassphraseDialog } from '../components/VaultPassphraseDialog.jsx'
 import { AppNoticeDialog } from '../components/ui.jsx'
 
@@ -44,9 +45,8 @@ export function useVaultGateContext() {
   return ctx
 }
 
-// The session's view of the vault, in the shape every consumer already reads. `hasPasskey` ignores a
-// pending enrolment: a passkey awaiting approval cannot open anything yet, so offering it as a way in
-// would be an affordance that always fails.
+// The session's view of the vault, in the shape every consumer already reads. `hasPasskey` counts only a
+// passkey that could open the vault from this page (`hasUsableVaultPasskey`).
 function vaultFlags(user) {
   const u = user || {}
   return {
@@ -54,7 +54,7 @@ function vaultFlags(user) {
     hasPassphrase: !!u.vault_has_passphrase,
     unlocked: !!u.vault_unlocked,
     accessPending: !!u.vault_access_pending,
-    hasPasskey: (u.vault_passkeys || []).some(pk => !pk.pending),
+    hasPasskey: hasUsableVaultPasskey(u),
     // Judged at this member's last unlock against the current strength rule, and failed.
     passphraseNeedsChange: !!u.vault_passphrase_needs_change,
     // Not yet judged under the current rule, which only typing it can do.

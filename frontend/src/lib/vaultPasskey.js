@@ -26,6 +26,7 @@
 
 import { api } from './api.js'
 import { decodeBase64, encodeBase64, encodeBase64Url } from './base64url.js'
+import { passkeyAnswersHere } from './passkeyHost.js'
 
 const PRF_UNSUPPORTED = { ok: false, reason: 'no_prf' }
 
@@ -179,7 +180,7 @@ export async function registerPasskey(params, { label } = {}) {
 export async function unlockWithPasskey(params) {
   const availability = passkeyAvailability(params)
   if (!availability.available) return { ok: false, reason: availability.reason }
-  const usable = (params.credentials || []).filter(c => !c.pending)
+  const usable = (params.credentials || []).filter(c => !c.pending && passkeyAnswersHere(c))
   if (!usable.length) return PRF_UNSUPPORTED
 
   let assertion
@@ -332,9 +333,10 @@ export async function runBackupPasskeyCeremony({ rpId, credentialId, prfSalt }) 
   }
 }
 
-// Whether this user has a passkey that can actually open the vault. A `pending` slot is one awaiting
-// approval — registered, but not yet able to unlock anything — so offering it would produce a ceremony
-// that can only fail. Read from the session user, which both callers already hold.
+// Whether this user has a passkey that can actually open the vault from this page. A `pending` slot is
+// one awaiting approval — registered, but not yet able to unlock anything — so offering it would produce
+// a ceremony that can only fail, as would one registered under another name. Read from the session user,
+// which every caller already holds.
 export function hasUsableVaultPasskey(user) {
-  return (user?.vault_passkeys || []).some(pk => !pk.pending)
+  return (user?.vault_passkeys || []).some(pk => !pk.pending && passkeyAnswersHere(pk))
 }

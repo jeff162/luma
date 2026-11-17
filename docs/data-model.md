@@ -2509,9 +2509,10 @@ which also records `accounts_version`.
   under its own `user_id`. Which go in is `accounts_backup._carried_slots`: every recovery code and
   passkey, and every passphrase in an encrypted backup. An unencrypted backup leaves out a passphrase not
   judged under the current rule or failing it (`crypto_service.passphrase_export_shortfall`). A recovery slot
-  carries `issued_at`; a passkey slot its `credential_id`, `prf_salt`, `label`, and `site`, a salted
-  digest of the RP id it was registered under. Each carries its strength verdict and the basis it was
-  taken under, so it comes back judged.
+  carries `issued_at`; a passkey slot its `credential_id`, `prf_salt`, `label`, and `rp_id`, the host name
+  it was registered under (files written before carry `site`, a salted digest of it, which matches a name
+  but cannot be read back). Each carries its strength verdict and the basis it was taken under, so it comes
+  back judged.
 - **Export needs no unlocked vault**, since it copies wrapped material, and the person taking it needs no
   vault access. When there is ciphertext but no slot to carry, the credentials are **left out** and the
   rest of the backup written: `vault_access_required` when nobody can open the vault,
@@ -2526,8 +2527,16 @@ which also records `accounts_version`.
   are cleared as a vault reset clears them (`crypto_service.clear_stored_secrets`). A person in both keeps their row, so the id this machine's records hang off survives;
   a person the file does not name is deleted. The slots are adopted under their own `user_id` and `id`,
   which their AAD binds them to, so the vault opens again for each member with a slot in the file, with
-  the secrets in force at export; the passkey's RP id is recorded at its next unlock. The per-person preferences in the data part
-  are keyed by the same ids, so a full restore reattaches them.
+  the secrets in force at export. The per-person preferences in the data part are keyed by the same ids,
+  so a full restore reattaches them.
+- **A passkey registered under a name this install is never opened at is not adopted**, a vault slot or
+  an `app_passkey` row alike, since it could never work here. The names are `served_host` plus the
+  restoring page's own (`transport.passkey_host_names`). Unless `leave_passkeys_elsewhere` is given the
+  restore is refused first with `passkeys_elsewhere`, naming each such passkey, its `purpose` (`vault` or
+  `sign-in`) and where it works, the members it leaves with no way into the vault, and this install's
+  names; the result repeats the list. A sign-in passkey strands nobody, since every account keeps its
+  password. An adopted passkey keeps its name, and one whose file records none keeps `rp_id` empty until
+  it next answers.
 - **A file that turns sign-in on needs an administrator of it** (`check_restoring_admin`): the username
   and password of an active admin with a password, checked against the file's own hash before anything is
   touched. Refused as `admin_password_required` or `incorrect_admin_password`, with the file's admin
@@ -2561,6 +2570,10 @@ which also records `accounts_version`.
   restores them and deletes their seals' records, since the key is this vault's again. A key retired as
   `lost` or `routine` was not taken from anyone, so its backups stay the way back. The table
   survives an accounts restore, which is exactly what it has to outlive.
+- **`served_host`** (control database) holds each host name a page of this install was opened under by a
+  session past the perimeter, where a passkey could run (`transport.note_served_host`). It may name a host
+  nobody uses, since the `Host` header is the client's; the most that does is keep a file's passkey for it.
+  It is not in the backup and survives a restore: it describes this machine.
 
 ### The standalone credentials backup
 

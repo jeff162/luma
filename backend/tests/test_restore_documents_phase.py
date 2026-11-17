@@ -36,7 +36,7 @@ from backend.services.restore_state import (
     require_no_pending_restore,
     set_restore_state,
 )
-from backend.tests.test_backup_restore import BackupFixtureTestCase
+from backend.tests.test_backup_restore import UPLOAD_REQUEST, BackupFixtureTestCase
 
 
 class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
@@ -71,6 +71,7 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                request=UPLOAD_REQUEST,
                 file=self._upload(archive, "luma_backup.zip"),
                 private_key_file=None,
                 private_key_passphrase=None,

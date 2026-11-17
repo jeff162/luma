@@ -30,6 +30,7 @@ import ipaddress
 from fastapi import HTTPException, Request
 
 from backend import app_config
+from backend.db import control_database
 from backend.runtime_config import app_name
 
 # Whether other devices can open this installation at all, as distinct from where one request came
@@ -190,6 +191,29 @@ def passkey_context(request: Request) -> dict:
     if not page_is_secure_context(request):
         return {"available": False, "reason": "insecure_context", "rp_id": None}
     return {"available": True, "reason": None, "rp_id": (request.url.hostname or "").strip("[]")}
+
+
+def note_served_host(request: Request) -> None:
+    """Record the name this page was opened under, where a passkey could run there.
+
+    The `Host` header is the client's own word, which is why only a session already past the perimeter
+    calls this: the most a false name can do is keep a backup's passkey for a name nobody uses."""
+    rp_id = passkey_context(request)["rp_id"]
+    if rp_id:
+        control_database.record_served_host(rp_id)
+
+
+def passkey_host_names(page_rp_id: str | None) -> set[str]:
+    """Every host name a passkey could answer under on this install: the names its pages have been
+    opened under (`note_served_host`), and the page asking.
+
+    A passkey registered under any other name can never work here. The vault's own passkeys are not
+    evidence of a name: a copied database brings the ones registered where it came from. A name configured
+    only in a reverse proxy and never opened in a browser is not known either."""
+    names = set(control_database.list_served_hosts())
+    if page_rp_id:
+        names.add(page_rp_id)
+    return {name.lower() for name in names}
 
 
 def link_is_protected(request: Request) -> bool:

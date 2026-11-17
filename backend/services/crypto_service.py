@@ -512,6 +512,7 @@ def user_passkey_slots(user_id: str) -> list[dict]:
             "label":      s["label"],
             "created_at": s["created_at"],
             "pending":    not slot_holds_dek(s),
+            "host":       s["rp_id"],
         }
         for s in cdb.list_vault_slots(user_id, method="passkey")
     ]
@@ -904,10 +905,12 @@ def _upgrade_slot_to_keypair(slot: dict, secret: str, dek: bytes, *, user_id: st
 # against the current rule and passes (`passphrase_export_shortfall`). Which slots go in is decided in
 # `accounts_backup._carried_slots`.
 #
-# **A passkey answers only at the host name it was registered under**, so each passkey slot carries a
-# salted digest of that name (`site`), and a restore offers a passkey only where the page's own name
-# matches it. A digest rather than the name, because the slots are readable by anyone holding the file;
-# a common name is still guessable from it, which is why it is a courtesy rather than a secret.
+# **A passkey answers only at the host name it was registered under**, so each passkey slot carries that
+# name (`rp_id`). A restore offers a passkey only where the page's own name matches it, and a whole restore
+# drops one registered under a name this install is never reached at, since nothing could ever open it
+# here (`exported_passkey_registered_elsewhere`). The name is in the clear because the restore has to say
+# which name a dropped passkey needs; a host name is not a secret. Files written before carried a salted
+# digest of it (`site`) instead, which can still be matched against a name but cannot be read back.
 
 def _dek_seal(slot: dict | None) -> str | None:
     """The stored ciphertext of the workspace key a slot holds — the field that changes exactly when the
@@ -1019,12 +1022,26 @@ def _site_digest(salt: bytes, rp_id: str) -> str:
     return hashlib.sha256(b"vault.passkey-site.v1|" + salt + b"|" + rp_id.lower().encode("utf-8")).hexdigest()
 
 
-def exported_site_matches(exported: dict, rp_id: str | None) -> bool:
-    """Whether a passkey slot from a backup was registered under the host this page is served from."""
+def exported_passkey_answers_at(exported: dict, names: set[str]) -> str | None:
+    """Which of `names` a passkey slot from a backup was registered under, or None when it is none of them
+    or the file does not say."""
+    if exported.get("rp_id"):
+        rp_id = exported["rp_id"].lower()
+        return rp_id if rp_id in names else None
     site = exported.get("site") or {}
-    if not rp_id or not site.get("salt") or not site.get("digest"):
+    if not site.get("salt") or not site.get("digest"):
+        return None
+    salt = _b64d(site["salt"])
+    return next((name for name in sorted(names) if hmac.compare_digest(_site_digest(salt, name), site["digest"])), None)
+
+
+def exported_passkey_registered_elsewhere(exported: dict, names: set[str]) -> bool:
+    """Whether a slot from a backup is a passkey registered under a host name that is none of `names`, so
+    it can never answer there. One whose name was never recorded is not judged."""
+    if exported.get("method") != "passkey":
         return False
-    return hmac.compare_digest(_site_digest(_b64d(site["salt"]), rp_id), site["digest"])
+    recorded = exported.get("rp_id") or (exported.get("site") or {}).get("digest")
+    return bool(recorded) and exported_passkey_answers_at(exported, names) is None
 
 
 def export_vault_slots(user_id: str) -> list[dict]:
@@ -1064,29 +1081,29 @@ def export_vault_slots(user_id: str) -> list[dict]:
             # So someone restoring can tell which of the codes they kept opens this file.
             entry["issued_at"] = slot["updated_at"]
         elif slot["method"] == "passkey":
-            salt = os.urandom(16)
             entry.update({
                 "label":         slot["label"],
                 "credential_id": slot["credential_id"],
                 "prf_salt":      slot["prf_salt"],
-                "site": (
-                    {"salt": _b64e(salt), "digest": _site_digest(salt, slot["rp_id"])} if slot["rp_id"] else None
-                ),
+                "rp_id":         slot["rp_id"],
             })
         exported.append(entry)
     return exported
 
 
-def vault_slot_rows(exported: list[dict]) -> list[dict]:
-    """`vault_slot` rows for the slots a backup carries, to be adopted as they stand.
+def vault_slot_rows(exported: list[dict], passkey_hosts: set[str]) -> list[dict]:
+    """`vault_slot` rows for the slots a backup carries, to be adopted as they stand, less any passkey
+    registered under a name outside `passkey_hosts` (`transport.passkey_host_names`), which could never
+    open the vault here.
 
     Only for a restore that also brings back the identities the slots belong to: each slot's material is
     bound to its own user and slot id (`_private_key_aad`, `_sealed_dek_aad`), so it opens again only under
-    those ids, and adopting it for anyone else would install a key nobody here can open. The host a passkey
-    was registered under is not in the file, only a digest of it, so it is left to be recorded at the next
-    unlock, as for a slot that predates the column."""
+    those ids, and adopting it for anyone else would install a key nobody here can open. A passkey whose
+    file does not say where it was registered keeps `rp_id` empty, to be recorded at its next unlock."""
     rows = []
     for slot in exported or []:
+        if exported_passkey_registered_elsewhere(slot, passkey_hosts):
+            continue
         row = {
             "id":                   slot["id"],
             "user_id":              slot["user_id"],
@@ -1095,6 +1112,7 @@ def vault_slot_rows(exported: list[dict]) -> list[dict]:
             "label":                slot.get("label"),
             "credential_id":        slot.get("credential_id"),
             "prf_salt":             slot.get("prf_salt"),
+            "rp_id":                exported_passkey_answers_at(slot, passkey_hosts),
             "public_key":           slot.get("public_key"),
             "wrapped_private_key":  slot.get("wrapped_private_key"),
             "sealed_dek":           slot.get("sealed_dek"),
@@ -1561,10 +1579,11 @@ def new_passkey_salt() -> str:
 def passkey_credentials(user_id: str) -> list[dict]:
     """What the browser needs to run a `get()` against this user's registered passkeys. The salt is
     public input to the authenticator, not a secret — the PRF output it produces is the secret, and it
-    never leaves the browser except as the unlock attempt itself."""
+    never leaves the browser except as the unlock attempt itself. `host` is the name a passkey answers
+    under, so a page opened under another name can leave it out and say where it works."""
     return [
         {"credential_id": s["credential_id"], "prf_salt": s["prf_salt"], "slot_id": s["id"],
-         "label": s["label"], "pending": not slot_holds_dek(s)}
+         "label": s["label"], "pending": not slot_holds_dek(s), "host": s["rp_id"]}
         for s in cdb.list_vault_slots(user_id, method="passkey")
     ]
 

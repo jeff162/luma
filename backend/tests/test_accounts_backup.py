@@ -59,6 +59,9 @@ CONTROL_TABLES_LEFT_OUT = {
     # machine — the session signing secret and cookie name, the proxy certificate accepted here, error
     # counters, update checks.
     "app_setting",
+    # The host names this install has been opened under. They describe this machine, and are what decides
+    # which of a file's passkeys can work here (`transport.passkey_host_names`).
+    "served_host",
 }
 # Carried by the accounts part's credentials, which hold the exporter's slots.
 CONTROL_TABLES_CARRIED = {table for _part, table in cdb.IDENTITY_TABLES} | {"vault_slot"}
@@ -160,11 +163,6 @@ class AccountsBackupTests(unittest.TestCase):
             return cs.decrypt_connection_credential(
                 {"id": user_id}, "plaid", "ext-1", row["credential"], row["credential_enc"],
             )
-
-    @staticmethod
-    def _without_site(slots):
-        # The passkey's host is carried as a digest under a fresh salt, so it differs on every export.
-        return [{k: v for k, v in s.items() if k != "site"} for s in slots]
 
     # ---- coverage -------------------------------------------------------
 
@@ -364,8 +362,7 @@ class AccountsBackupTests(unittest.TestCase):
 
             self.assertEqual(cdb.export_identities(), source["identities"])
             self.assertIsNone(cdb.get_user_by_id(local_identity))
-            self.assertEqual(self._without_site(cs.export_vault_slots(source["admin_id"])),
-                             self._without_site(source["slots"]))
+            self.assertEqual(cs.export_vault_slots(source["admin_id"]), source["slots"])
             self.assertEqual(cs.export_vault_slots(source["sam_id"]), [])
             self.assertEqual(client.get("/api/auth/me").status_code, 401)
 
@@ -395,6 +392,79 @@ class AccountsBackupTests(unittest.TestCase):
                 self.assertTrue(conn.execute("SELECT 1 FROM account WHERE id = 'acct-here'").fetchone())
                 # The connection the file holds credentials for is created, so they have a row to sit on.
                 self.assertTrue(conn.execute("SELECT credential_enc FROM connection WHERE id = 'conn-1'").fetchone()[0])
+
+    # ---- passkeys registered under another host name ---------------------
+
+    def test_a_passkey_for_a_name_this_install_is_not_opened_at_is_named_first_and_left_behind(self):
+        with api_client(base_url=SITE) as (client, _):
+            user_id = self._seed_vault(client)
+            content = self._export(client)
+
+        with api_client(base_url="https://elsewhere.local") as (client, _):
+            local_identity = self._me(client)["id"]
+            r = self._restore(client, content, include_accounts=True)
+            self.assertEqual(r.status_code, 409, r.text)
+            detail = r.json()["detail"]
+            self.assertEqual(detail["code"], "passkeys_elsewhere")
+            self.assertEqual([(p["label"], p["host"]) for p in detail["passkeys"]], [("Laptop", "luma.local")])
+            self.assertEqual(detail["members_without_access"], [], "the passphrase and recovery code still open it")
+            self.assertIn("elsewhere.local", detail["hosts_here"])
+            self.assertEqual(self._me(client)["id"], local_identity, "refused before anything was touched")
+
+            r = self._restore(client, content, include_accounts=True, leave_passkeys_elsewhere=True)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["passkeys_elsewhere"]["passkeys"], detail["passkeys"])
+            self.assertEqual(sorted(s["method"] for s in cdb.list_vault_slots(user_id)), ["passphrase", "recovery"])
+
+    def test_a_passkey_for_a_name_this_install_has_been_opened_at_is_restored_with_its_name(self):
+        with api_client(base_url=SITE) as (client, _):
+            user_id = self._seed_vault(client)
+            content = self._export(client)
+
+        with api_client(base_url="https://elsewhere.local") as (client, _):
+            # The page load records the name it was opened under; luma.local stands for a second name this
+            # install answers to and was opened at before.
+            self.assertEqual(client.get("/api/auth/status").status_code, 200)
+            self.assertEqual(cdb.list_served_hosts(), ["elsewhere.local"])
+            cdb.record_served_host("luma.local")
+            r = self._restore(client, content, include_accounts=True)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertNotIn("passkeys_elsewhere", r.json())
+            self.assertEqual([s["rp_id"] for s in cdb.list_vault_slots(user_id, method="passkey")], ["luma.local"])
+
+    def test_a_member_whose_only_way_in_is_left_behind_is_named(self):
+        part = {
+            "users": [{"id": "u-1", "username": "alex"}, {"id": "u-2", "username": "sam", "display_name": "Sam"}],
+            "credentials": {"vault_slots": [
+                {"user_id": "u-1", "method": "passphrase"},
+                {"user_id": "u-1", "method": "passkey", "label": "Laptop", "rp_id": "source.local"},
+                {"user_id": "u-2", "method": "passkey", "label": "Tablet", "rp_id": "source.local"},
+            ]},
+        }
+        left = accounts_backup.passkeys_elsewhere(part, {"localhost"})
+        self.assertEqual(left["members_without_access"], ["Sam"])
+        self.assertEqual([p["member"] for p in left["passkeys"]], ["alex", "Sam"])
+        self.assertIsNone(accounts_backup.passkeys_elsewhere(part, {"source.local"}))
+
+    def test_a_sign_in_passkey_for_a_name_this_install_is_not_opened_at_is_named_and_left_behind(self):
+        with api_client(base_url=SITE) as (client, _):
+            user_id = self._seed_vault(client)
+            cdb.add_app_passkey(user_id, credential_id="login-here", public_key="cHVibGlj", label="Phone",
+                                rp_id="elsewhere.local")
+            cdb.add_app_passkey(user_id, credential_id="login-there", public_key="cHVibGlj", label="Tablet",
+                                rp_id="luma.local")
+            content = self._export(client)
+
+        with api_client(base_url="https://elsewhere.local") as (client, _):
+            r = self._restore(client, content, include_accounts=True)
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(
+                sorted((p["label"], p["purpose"]) for p in r.json()["detail"]["passkeys"]),
+                [("Laptop", "vault"), ("Tablet", "sign-in")],
+            )
+            r = self._restore(client, content, include_accounts=True, leave_passkeys_elsewhere=True)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual([p["label"] for p in cdb.list_app_passkeys(user_id)], ["Phone"])
 
     # ---- restoring over the install it came from ------------------------
 

@@ -391,6 +391,7 @@ def _auth_status_payload(request: Request | None = None) -> dict:
             user = get_user_by_id(user_id)
             if user:
                 payload["user"] = _session_payload(user)
+                transport.note_served_host(request)
         # Where this copy's databases are, for the navigation pane's data-location line. Sent only to a
         # session that could already read it from the configuration report, so the line cannot widen who
         # knows the filesystem layout; every other session gets no field and renders nothing. It rides
@@ -993,7 +994,7 @@ def passkey_params(request: Request):
     an active account's passkey — so the button is never offered for a list that would come back empty.
     """
     context = transport.passkey_context(request)
-    return {**context, "any_registered": bool(list_all_app_passkey_credentials())}
+    return {**context, "any_registered": bool(context["rp_id"] and list_all_app_passkey_credentials(context["rp_id"]))}
 
 
 @router.post("/passkey/register/begin")

@@ -319,10 +319,7 @@ class CredentialsBackupTests(unittest.TestCase):
 
             # Readable under the LOCAL dek, and the local vault slot is untouched.
             self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
-            self.assertEqual(
-                [{k: v for k, v in s.items() if k != "site"} for s in cs.export_vault_slots(local_user)],
-                [{k: v for k, v in s.items() if k != "site"} for s in local_slots_before],
-            )
+            self.assertEqual(cs.export_vault_slots(local_user), local_slots_before)
             with get_db() as conn:
                 stored = conn.execute("SELECT credential_enc FROM connection WHERE external_id='ext-1'").fetchone()
             self.assertNotEqual(stored["credential_enc"], payload["connections"][0]["credential_enc"],
@@ -398,9 +395,16 @@ class CredentialsBackupTests(unittest.TestCase):
         self.assertEqual(methods, ["passphrase", "recovery", "passkey"])
         recovery, passkey = payload["vault_slots"][1], payload["vault_slots"][2]
         self.assertTrue(recovery["issued_at"], "so a restore can say which kept code opens it")
-        self.assertTrue(cs.exported_site_matches(passkey, "luma.local"))
-        self.assertFalse(cs.exported_site_matches(passkey, "elsewhere.local"))
-        self.assertNotIn("luma.local", json.dumps(passkey), "the host is carried as a digest, not by name")
+        self.assertEqual(passkey["rp_id"], "luma.local", "so a restore elsewhere can name where it works")
+
+    def test_a_passkey_host_carried_as_a_digest_by_an_older_file_still_matches(self):
+        # Files already in people's backup folders carry a salted digest of the host instead of its name.
+        salt = b"\x07" * 16
+        older = {"method": "passkey", "site": {"salt": base64.b64encode(salt).decode(),
+                                               "digest": cs._site_digest(salt, "luma.local")}}
+        self.assertEqual(cs.exported_passkey_answers_at(older, {"localhost", "luma.local"}), "luma.local")
+        self.assertFalse(cs.exported_passkey_registered_elsewhere(older, {"luma.local"}))
+        self.assertTrue(cs.exported_passkey_registered_elsewhere(older, {"localhost"}))
 
     def test_a_foreign_install_offers_what_the_file_carries_and_where_a_passkey_works(self):
         with api_client(base_url=self.SITE) as (client, _):

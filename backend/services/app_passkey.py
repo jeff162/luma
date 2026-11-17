@@ -121,7 +121,8 @@ def registration_options(user: dict, rp_id: str) -> tuple[str, str]:
 def authentication_options(rp_id: str) -> tuple[str, str]:
     """Options for `navigator.credentials.get()` on the sign-in screen.
 
-    **`allow_credentials` names every sign-in passkey in this workspace**, and this reverses a deliberate
+    **`allow_credentials` names every sign-in passkey in this workspace** that can answer at `rp_id` (one
+    registered under another host name never can, `list_all_app_passkey_credentials`), and this reverses a deliberate
     first choice. Sending none let the browser offer *every* passkey it holds for the host — and a device
     holds one list per host, not per install or per port, so the chooser filled with vault passkeys and
     with passkeys from other Luma databases served on the same host, all under the same name, and only
@@ -139,7 +140,7 @@ def authentication_options(rp_id: str) -> tuple[str, str]:
             id=webauthn.base64url_to_bytes(row["credential_id"]),
             transports=_known_transports(row["transports"]),
         )
-        for row in list_all_app_passkey_credentials()
+        for row in list_all_app_passkey_credentials(rp_id)
     ]
     if not allowed:
         # An empty list does not mean "none" to a browser — it means "any", which is the whole-host
@@ -198,6 +199,7 @@ def register_credential(
         sign_count=verified.sign_count,
         transports=json.dumps(transports) if transports else None,
         label=(label or "").strip() or None,
+        rp_id=rp_id,
     )
 
 
@@ -240,10 +242,7 @@ def verify_assertion(*, credential: dict, challenge: str, rp_id: str, origin: st
     # A counter that stayed at 0 is not a regression: an authenticator is free to keep no counter at
     # all, and the platform ones backed by a synced keychain do exactly that. `py_webauthn` already
     # refuses a genuine regression above; this only decides what is worth writing back.
-    if verified.new_sign_count > stored["sign_count"]:
-        record_app_passkey_use(stored["id"], verified.new_sign_count)
-    else:
-        record_app_passkey_use(stored["id"], stored["sign_count"])
+    record_app_passkey_use(stored["id"], max(verified.new_sign_count, stored["sign_count"]), rp_id)
     return stored
 
 
