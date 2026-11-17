@@ -192,17 +192,22 @@ the registration in the same change as the column.
 
 ## Revocation, in both directions
 
-**Whether disconnect actually revokes is a per-provider fact the app states rather than hides.** Adapters
-declare `revokes_on_disconnect` and the disconnect confirmation reads it, because **a user who believes
-access ended when it did not is worse off than one who knows to go and revoke it.** A provider with no
-revocation call is an ordinary supported case; the remedy is to revoke the token at the provider, rotate
-the vault passphrase and key, then re-link.
+**Revoking on disconnect is housekeeping, not containment.** Where an adapter declares
+`revokes_on_disconnect`, Disconnect can end the account connection at the provider, so nothing is left
+linked there that is no longer used. It retires nothing a copy of the database could use: a credential
+that needs the app secret is retired by rotating the secret (*Responding to an exposure*). So user-facing
+copy states the choice and gives no security reason for it. A provider with no revocation call is an
+ordinary supported case, and its Disconnect only removes the connection here.
+
+**A restored install shares its account connections with the install it came from.** The credential is
+the token itself, so revoking a connection on either install ends it on both. Every removal (one
+connection's Disconnect, or removing a provider with its connections) therefore offers revoking beside
+removing from this install only, and the Sync log records which was chosen.
 
 **A refused revocation keeps the connection until the user removes it anyway.** A refusal may pass, so
-disconnect stops and says what the provider answered rather than dropping a token that may still be live.
-Some never pass: the app credentials moved to another environment, or the provider account ended. So the
-refusal offers removal without revoking, stating that the access may still be live and where to end it,
-and the Sync log records the disconnect as not revoked.
+disconnect stops and says what the provider answered. Some never pass: the app credentials moved to another
+environment, or the provider account ended. So the refusal offers removal without revoking, and the Sync
+log records the disconnect as not revoked.
 
 ### Responding to an exposure
 
@@ -223,6 +228,19 @@ the secret.
   deleted there** — so the step is rotate, enter the new one with Configure, then delete the old one.
   Deleting the old secret stops existing Items syncing as well as new links; once the new secret is
   entered they sync again without being re-linked.
+
+**Containment is replacing the provider connection credential.** The two providers differ in what that
+is, because they differ in who owns the link to the institution:
+
+- **Plaid**: the app's operator holds one app secret, and the app creates a token per account connection
+  through it. Every request needs the secret, so once the old secret is deleted every copied token is
+  useless. Reissuing the tokens is hygiene that covers an old secret not yet deleted, so its result lines
+  state the outcome only (`covered_by_app_secret`), and user-facing copy recommends nothing about the
+  account connections.
+- **SimpleFIN**: each person holds their own credential to the bridge, and the links to institutions are
+  managed in SimpleFIN's portal, outside the app. That credential is the provider connection credential,
+  so containment is revoking it at the provider and connecting again with a new one, and its result lines
+  say so.
 
 **With the vault open, the response replaces rather than revokes** (*Respond to an exposure*,
 `services/exposure_response.py`): each connection's credential is reissued where the provider declares it
@@ -674,7 +692,7 @@ listing those credentials for the user instead: an exposure can coincide with a 
 the reset must not wait on an unlock that cannot happen. When the vault can still be opened, *Respond to an
 exposure* needs no reset at all.
 
-**A connection whose credential needs the app secret is never revoked by a reset**
+**An account connection whose credential needs the app secret is never revoked by a reset**
 (`credential_needs_app_secret`). Every request needs the app secret beside the credential, so deleting the
 old secret at the provider stops a copied database from reaching it, needs no vault, and leaves the
 connection in place; the credential stays valid and works with the new secret. Revoking it there adds only

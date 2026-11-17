@@ -31,6 +31,7 @@ const reissueVaultCredentials = vi.fn(async () => ({
   outcomes: [
     { connection_id: 'c1', label: 'Harborline Bank', outcome: 'reissued', detail: null },
     { connection_id: 'c2', label: 'Riverstone Credit Union', outcome: 'manual', detail: null },
+    { connection_id: 'c3', label: 'Lakeside Savings', outcome: 'failed', detail: 'refused', covered_by_app_secret: true },
   ],
   app_secrets_to_rotate: [{ provider: 'plaid' }],
   has_credentials_backups: true,
@@ -55,6 +56,7 @@ vi.mock('../../lib/api.js', () => ({
 }))
 
 const { VaultSettingsDialog } = await import('../VaultSettingsDialog.jsx')
+const { REPLACE_AT_PROVIDER } = await import('../../lib/connectionSummary.js')
 const { AppSessionProvider } = await import('../../lib/AppSessionContext.jsx')
 
 // Proof of a recently presented secret, as the server reports it. The dialog reads the countdown to
@@ -409,16 +411,19 @@ describe('replacing the vault key', () => {
 describe('responding to an exposure', () => {
   it('confirms, then lists what was replaced and everything still to do', async () => {
     // A connection whose provider cannot reissue, and the app secret no connection-level call retires,
-    // are exactly what a user would otherwise believe the button had handled.
+    // are exactly what a user would otherwise believe the button had handled. A credential the app secret
+    // covers asks nothing of the user, whatever became of it: the app secret's own line is the step.
     renderDialog()
     await userEvent.click((await screen.findByText('Replace connection credentials…')).closest('button'))
     expect(reissueVaultCredentials).not.toHaveBeenCalled()
     await userEvent.click(screen.getByText('Replace credentials').closest('button'))
     await waitFor(() => expect(reissueVaultCredentials).toHaveBeenCalled())
 
+    const rowText = label => screen.getByText(label).parentElement.textContent
     expect(await screen.findByText('Harborline Bank')).toBeTruthy()
-    expect(screen.getByText(/copied credential no longer works/)).toBeTruthy()
-    expect(screen.getByText(/cannot replace it from here/)).toBeTruthy()
+    expect(rowText('Harborline Bank')).not.toContain(REPLACE_AT_PROVIDER)
+    expect(rowText('Riverstone Credit Union')).toContain(REPLACE_AT_PROVIDER)
+    expect(rowText('Lakeside Savings')).not.toContain(REPLACE_AT_PROVIDER)
     expect(screen.getByText('Plaid app secret')).toBeTruthy()
     expect(screen.getByText(/Backups made before now carry the replaced credentials/)).toBeTruthy()
     expect(screen.getByText('Change passphrase').closest('button')).toBeTruthy()

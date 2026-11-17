@@ -34,6 +34,12 @@ defined owners" is a claim about configuration. A login identity is a **user**, 
 the household is meant: never an "account", which is a bank account, and never a "profile", which on
 the import side is a saved data source.
 
+**A connection says which kind it is wherever nothing around it does.** A *provider connection* is the
+app's link to a data provider (Plaid's app secret, a SimpleFIN bridge credential); an *account connection*
+is one link through it to an institution (a Plaid bank login). Inside a provider's card "connection" alone
+is clear. Elsewhere (help, the vault and restore results, docs) name the kind, because the two are created,
+owned and replaced differently.
+
 - **Prefer explicit user choice over hidden inference when a decision changes meaning.** A single strong
   match may be offered as a suggested default, visibly a suggestion; real ambiguity is left to the user.
 - **Favor workflows that are understandable and reversible**: it should be possible to see what

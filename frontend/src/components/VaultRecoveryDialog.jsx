@@ -42,16 +42,16 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
-import { connectionProviderLabel } from '../lib/connectionSummary.js'
+import { REPLACE_AT_PROVIDER, connectionProviderLabel } from '../lib/connectionSummary.js'
 
 const CONFIRM_FALLBACK = 'RESET VAULT'
 
-// What each revocation outcome asks of the user. Only two of the four ask anything, which is why the
-// result screen groups by this rather than listing every connection at the same weight.
+// What each unfinished revocation asks of the user (`vault_reset.unfinished`). A connection covered by its
+// provider's app secret is never among them: replacing that secret is its own line.
 const OUTCOME_NOTE = {
-  manual: 'Revoke this one yourself at the provider — it stays live until you do.',
-  failed: 'The provider refused the revocation. Revoke this one yourself.',
-  unreadable: 'Its stored credential could not be read, so nothing could be sent. Revoke it yourself.',
+  manual: REPLACE_AT_PROVIDER,
+  failed: `The provider refused. ${REPLACE_AT_PROVIDER}`,
+  unreadable: `Nothing stored could be read. ${REPLACE_AT_PROVIDER}`,
 }
 
 // What of one member's opens one backup, as it compares with now
@@ -299,7 +299,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 <div key={t.connection_id} style={{ fontSize: 13 }}>
                   <strong>{t.label}</strong>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {t.detail || OUTCOME_NOTE[t.outcome]}
+                    {t.detail ? `${t.detail} ${REPLACE_AT_PROVIDER}` : OUTCOME_NOTE[t.outcome]}
                   </div>
                 </div>
               ))}
@@ -515,8 +515,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                   <span>
                     The passphrase or database may have been exposed.
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>
-                      Connections that need the provider&apos;s app secret, such as Plaid&apos;s, stay connected at the
-                      provider; replacing the app secret stops a copy of the database from using them. Other
+                      A provider&apos;s app secret, such as Plaid&apos;s, has to be replaced at the provider. Other
                       credentials are revoked at their provider if the vault is open, and listed to revoke
                       there if not. With the vault open, Respond to an exposure in Vault settings replaces
                       credentials instead, without reconnecting anything.

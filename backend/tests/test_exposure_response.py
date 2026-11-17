@@ -72,6 +72,10 @@ class ReissueCredentialsTests(unittest.TestCase):
             self.assertEqual(self._stored_credential(client, connection_id), "access-new")
             outcomes = {o["connection_id"]: o["outcome"] for o in r.json()["outcomes"]}
             self.assertEqual(outcomes, {connection_id: "reissued", "c-sf": "manual"})
+            # Only the credential that needs the app secret is retired by replacing it; the other is the
+            # user's to replace at its provider.
+            covered = {o["connection_id"]: o["covered_by_app_secret"] for o in r.json()["outcomes"]}
+            self.assertEqual(covered, {connection_id: True, "c-sf": False})
             # Reissuing every connection never touches the app secret, so it is always on the list.
             self.assertEqual(r.json()["app_secrets_to_rotate"], [{"provider": "plaid"}])
 

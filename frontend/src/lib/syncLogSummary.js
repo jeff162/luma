@@ -299,9 +299,9 @@ const REVOKE_TEXT = {
 }
 const DISCONNECT_TEXT = {
   no_credential: 'Connection removed',
-  provider_cannot_revoke: 'Disconnected here only — this provider cannot revoke access; revoke it at the provider',
-  provider_refused: 'Removed here only — the provider refused to revoke access; revoke it at the provider',
-  restored: 'Removed by a restore — consider revoking its access at the provider',
+  provider_cannot_revoke: 'Removed from this install',
+  kept_at_provider: 'Removed from this install only',
+  restored: 'Removed by a restore',
 }
 
 // Null for a sync row, which the log describes with its own fields.

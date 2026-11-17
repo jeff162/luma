@@ -17,6 +17,11 @@ cost a re-link the institution or the plan may not grant — which is why this e
 reset's *exposed* path rather than being that path. The reset remains the route for a forgotten
 passphrase, where nothing can be decrypted and so nothing can be sent to a provider.
 
+**Where a credential needs the app secret, replacing it is hygiene, not containment.** A provider declaring
+`credential_needs_app_secret` refuses every request that lacks the secret, so rotating the secret already
+retires a copied credential; the reissue only covers an old secret not yet deleted at the provider. Such an
+outcome carries `covered_by_app_secret`, and its line states the outcome with nothing for the user to do.
+
 **The app-level secret is always left to the user.** It is not per-connection, no API call retires it, and
 reissuing every connection's credential does not change it. What the provider's documentation says about
 deactivating it decides the wording: Plaid keeps a rotated-away secret working until it is deleted, so the
@@ -74,12 +79,14 @@ def reissue_all_credentials(user: dict) -> list[dict]:
 
     outcomes, failures = [], {}
     for row in connections:
-        base = {"connection_id": row["id"], "provider": row["provider"], "label": _connection_label(row)}
+        base = {"connection_id": row["id"], "provider": row["provider"], "label": _connection_label(row),
+                "covered_by_app_secret": False}
         try:
             adapter = get_adapter(row["provider"])
         except UnknownProviderError:
             outcomes.append({**base, "outcome": MANUAL, "detail": "This data source is no longer supported."})
             continue
+        base["covered_by_app_secret"] = adapter.credential_needs_app_secret
         if not adapter.reissues_credential:
             outcomes.append({**base, "outcome": MANUAL, "detail": None})
             continue

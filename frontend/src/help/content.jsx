@@ -2341,11 +2341,11 @@ export const HELP_TOPICS = [
           supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>. There are
           no credentials supplied in {APP_NAME}. SimpleFIN Bridge is a subscription model and provides access to most
           financial institutions. Plaid offers a developer license which allows
-          a limited number of connections to be built.
+          a limited number of account connections to be built.
         </p>
         <p>
           The <strong>data provider</strong> defines the model. With SimpleFIN Bridge, the accounts are
-          connected on the SimpleFIN Bridge webpage and the <strong>connection</strong> provides the transaction data from
+          connected on the SimpleFIN Bridge webpage and the <strong>provider connection</strong> provides the transaction data from
           all of the connected accounts. For Plaid, the Plaid webpage has the secrets and after they are
           entered, <strong>Institutions</strong> are connected in {APP_NAME} and that process defines
           the accounts which will provide data.
@@ -2366,7 +2366,7 @@ export const HELP_TOPICS = [
         </p>
         <h4>Secrets Vault</h4>
         <p>
-          The credentials a connection stores on disk are encrypted in
+          Provider and account connection credentials are encrypted in
           the <HelpLink to="/help/credential-vault">credential vault</HelpLink>. To get started with
           data connections use <strong>Set vault passphrase</strong> on the Connections tab. The vault
           has to be unlocked to connect or sync.
@@ -2478,17 +2478,19 @@ export const HELP_TOPICS = [
         </ul>
 
         <h4>Disconnecting</h4>
+        <p>*needs review*</p>
         <p>
-          Disconnecting retains the accounts and their transactions. If disconnecting the
-          account revokes the provider's access the confirmation page will indicate this.
-          For Plaid, {APP_NAME}'s own access (its client ID and secret) is kept; it can be revoked only
-          by signing into the Plaid Dashboard.
+          Disconnecting keeps the accounts and their transactions. For a Plaid account connection the
+          confirmation offers <strong>Revoke and remove</strong>, which ends the connection at Plaid, or{' '}
+          <strong>Remove from this install only</strong>, which leaves it in place there.
         </p>
         <p>
-          If the provider refuses to revoke the access, for instance after the Plaid client ID and secret
-          were changed to another environment, the connection is kept and <strong>Remove anyway</strong> is
-          offered. That removes it from {APP_NAME} without ending its access at the provider, which then
-          has to be revoked there.
+          <strong>Remove Configuration</strong> in <strong>Configure</strong> removes every Plaid account
+          connection, with the same two choices, and then deletes the Plaid client ID and secret from {APP_NAME}.
+        </p>
+        <p>
+          If Plaid refuses to revoke a connection, for instance after the client ID and secret were changed
+          to another environment, the connection is kept and <strong>Remove anyway</strong> is offered.
         </p>
       </>
     ),
@@ -2503,8 +2505,9 @@ export const HELP_TOPICS = [
       <>
         <p>*needs review*</p>
         <p>
-          The vault encrypts the credentials a{' '}
-          <HelpLink to="/help/data-providers">data provider</HelpLink> connection stores on disk.
+          The vault encrypts the{' '}
+          <HelpLink to="/help/data-providers">data provider</HelpLink> and account connection credentials
+          stored on disk.
           Nothing else is encrypted: transactions, accounts, categories and rules are not in the vault
           and are not affected by anything done to it. The vault has to be open to connect a provider
           or to sync. Everything else in {APP_NAME} works with it locked.
@@ -2558,9 +2561,8 @@ export const HELP_TOPICS = [
                 <td>Lists the ways back in after a forgotten passphrase. The last resort rebuilds the
                   vault, which keeps the ledger and every connection's account mapping, but every
                   connection has to be reconnected. It asks whether the passphrase was forgotten or may
-                  have been exposed, and works with the vault locked either way. After an exposure,
-                  connections that need the provider's app secret, such as Plaid's, are left connected at
-                  the provider; replacing that secret stops a copy of the database from using them.</td>
+                  have been exposed, and works with the vault locked either way. After an exposure, a
+                  provider's app secret, such as Plaid's, also has to be replaced at the provider.</td>
               </tr>
             </tbody>
           </table>
@@ -2668,16 +2670,15 @@ export const HELP_TOPICS = [
         </p>
         <p>
           The confirmation asks why. Replacing the key <em>to end someone's access, or after an
-          exposure</em> stops earlier backups restoring the data provider credentials unless the person
+            exposure</em> stops earlier backups restoring the data provider credentials unless the person
           restoring chooses to. A <em>routine</em> replacement leaves earlier backups as they were.
         </p>
 
         <HelpHeading anchor="exposure">Respond to an exposure</HelpHeading>
         <p>
           For when the database or a backup may have been copied. <strong>Replace connection
-            credentials&hellip;</strong> has each provider issue a new credential where the provider
-          supports that, so the copied ones stop working and the connections keep syncing. The rest are
-          listed with what to do at the provider. It is the first step
+            credentials&hellip;</strong> has each provider issue a new account connection credential
+          where it supports that, and lists what is left to replace at the provider. It is the first step
           of <HelpLink to="/help/copied-database">responding to a copied database</HelpLink>.
         </p>
       </>
@@ -4368,8 +4369,8 @@ export const HELP_TOPICS = [
             two-factor secrets, and the backup keys. This is the control.db file.
           </li>
           <li>
-            <strong>Data provider credentials</strong> &mdash; the stored credential for each connection
-            and the provider secrets, encrypted as they are in
+            <strong>Data provider credentials</strong> &mdash; the stored provider and account connection
+            credentials, encrypted as they are in
             the <HelpLink to="/help/credential-vault">vault</HelpLink>. The vault is spread across both
             files and opens with its users' unlock methods (passphrases, recovery codes and passkeys),
             which is why the credentials restore together with Users &amp; security.
@@ -4436,9 +4437,9 @@ export const HELP_TOPICS = [
           retired keys belongs to this system; the system a backup came from may still be using the key.
         </p>
         <p>
-          After <strong>Respond to an exposure</strong>, earlier backups hold the credentials the
-          providers replaced, which no longer work; the connections need re-establishing after restoring
-          one.
+          After <strong>Respond to an exposure</strong>, earlier backups hold the account connection
+          credentials the providers replaced, which no longer work; those account connections need
+          re-establishing after restoring one.
         </p>
         <p>
           A vault reset <em>for a forgotten passphrase</em> is different. Nothing was exposed, so
@@ -4455,14 +4456,14 @@ export const HELP_TOPICS = [
     section: 'general-concepts',
     title: 'What to do if the database or an unencrypted backup is stolen',
     surfaces: ['Vault settings (Respond to an exposure)'],
-    summary: 'While the transactions in a copied database or unencrypted backup are exposed, the provider credentials are encrypted, but should be revoked at each provider.',
+    summary: 'While the transactions in a copied database or unencrypted backup are exposed, the provider credentials are encrypted, but should be replaced.',
     body: () => (
       <>
         <p>
           A lost encrypted backup is not a concern as long as the private encryption
           key is not also stolen. Data provider credentials are always encrypted on disk, and vault
           passphrases must be strong enough to resist attempts to guess them. Even so, best practice is
-          to revoke the lost credentials at each provider and change the vault passphrase. A passphrase
+          to replace the provider connection credentials and change the vault passphrase. A passphrase
           guessed later is then of no use.
         </p>
 
@@ -4476,9 +4477,9 @@ export const HELP_TOPICS = [
           <li>
             For a provider with an app secret, such as Plaid: create a new secret on its website, enter
             it in the <strong>Configure</strong> menu, then delete the old one there. Every request needs
-            the secret, so the copy can no longer reach the provider, and no connection needs
-            reconnecting. For other providers, revoke the existing credential on the website and issue a
-            new one.
+            the secret, so the copy can no longer reach the provider, and no account connection needs
+            reconnecting. For other providers, such as SimpleFIN, revoke the existing credential on the
+            provider&apos;s website, issue a new one, and connect again with it.
           </li>
           <li>
             Change the vault passphrase, under <strong>Unlock methods</strong>.

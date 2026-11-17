@@ -23,6 +23,7 @@ import {
   providerSummaryLine, relinkCandidates,
 } from '../../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../accounts/ConnectionAccountMapDialog.jsx'
+import RevokeChoiceDialog from './RevokeChoiceDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { formatTimestamp } from '../../lib/utils.js'
 import { connectionsAllowanceLines } from '../../lib/requestAllowance.js'
@@ -64,7 +65,7 @@ function EnvBadge({ env }) {
   )
 }
 
-function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault }) {
+function ProviderConfigDialog({ provider, initial, onSave, onRemove, onClose, ensureVault }) {
   const [clientId, setClientId] = useState(initial?.client_id || '')
   const [secret, setSecret] = useState('')
   const [env, setEnv] = useState(initial?.env || 'sandbox')
@@ -142,6 +143,13 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
       width="min(520px, 100%)"
       actions={
         <>
+          {/* Apart from Save and Cancel, since it takes the provider's connections with it; its own
+              confirmation says which. Only once there is something saved to remove. */}
+          {initial?.configured ? (
+            <Button variant="danger" onClick={onRemove} disabled={saving} style={{ marginRight: 'auto' }}>
+              Remove configuration
+            </Button>
+          ) : null}
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button onClick={submit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
@@ -555,8 +563,11 @@ export default function ConnectionsTab({ onShowHistory }) {
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   // Set when the provider refused to revoke: `{ target, message }`, offering removal without revoking.
+  // { provider, message, scope: 'connection' | 'provider', removeAnyway } after a refused revoke.
   const [revokeRefused, setRevokeRefused] = useState(null)
-  const [disconnecting, setDisconnecting] = useState(false)
+  // Which answer is in flight ('revoke' | 'remove'), so its own button says so.
+  const [disconnectBusy, setDisconnectBusy] = useState(null)
+  const [removeProviderTarget, setRemoveProviderTarget] = useState(null) // the provider entry
   // The open connection card's "⋯" menu. One at a time, so it lives on the tab rather than per card.
   const [cardMenu, setCardMenu] = useState(null) // { connectionId, provider, connection, anchorElement }
   // Which connections have their account list open. Collapsed by default: the list is the card's bulk —
@@ -715,10 +726,10 @@ export default function ConnectionsTab({ onShowHistory }) {
   useEffect(() => {
     if (runsFinished === handledRunsRef.current) return
     handledRunsRef.current = runsFinished
-    ;(async () => {
-      await onAccountsChanged?.()
-      await refresh()
-    })()
+      ; (async () => {
+        await onAccountsChanged?.()
+        await refresh()
+      })()
   }, [runsFinished, onAccountsChanged, refresh])
 
   // Accounts link a connection by account.connection_id == connection.id (6b-3). CSV/manual accounts and
@@ -919,7 +930,7 @@ export default function ConnectionsTab({ onShowHistory }) {
               institutionName: metadata?.institution?.name || null,
               requestId: metadata?.request_id || null,
               error: err,
-            }).catch(() => {})
+            }).catch(() => { })
           }
         },
       })
@@ -1056,47 +1067,82 @@ export default function ConnectionsTab({ onShowHistory }) {
   // the preflight rather than on cached card counts, since the numbers it states are what gets deleted.
 
 
-  // Disconnecting revokes the credential where the provider allows it, so it needs the vault open. The
-  // prompt deliberately comes *after* the confirmation rather than gating the menu item: a passphrase is
-  // only worth asking for once the user has committed to disconnecting. The confirm dialog stays open
-  // underneath, so backing out of the prompt returns to the decision instead of discarding it. A connection
-  // with no stored credential (after a vault reset) has nothing to decrypt, so it asks for nothing: the
-  // server removes it without revoking, and a vault that was reset may have no passphrase to give.
-  async function confirmDisconnect() {
-    if (!disconnectTarget) return
-    if (disconnectTarget.hasCredential && !(await ensureVault())) return
-    setDisconnecting(true)
+  // Taking connections away: one from its card, or all of a provider's along with its app credential.
+  // `how` is 'revoke' (ask the provider to end the access) or 'remove' (this install only).
+  //
+  // Revoking decrypts the credential, so it needs the vault open, and so does a provider with no
+  // revocation call, which the server answers by recording that it could not revoke. The prompt comes
+  // *after* the choice rather than gating the menu item: a passphrase is only worth asking for once the
+  // user has committed. The confirmation stays open underneath, so backing out of the prompt returns to
+  // the decision instead of discarding it. Removing from this install only decrypts nothing and asks for
+  // nothing, which matters after a vault reset, when there may be no passphrase to give.
+  async function disconnectConnection(how) {
+    const target = disconnectTarget
+    if (!target) return
+    if (how === 'revoke' && !(await ensureVault())) return
+    setDisconnectBusy(how)
     try {
-      await api.disconnectProvider(disconnectTarget.provider, disconnectTarget.external_id)
+      await api.disconnectProvider(target.provider, target.external_id, { removeWithoutRevoking: how === 'remove' })
       setDisconnectTarget(null)
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
-      if (await retriedAfterUnlock(e, confirmDisconnect)) return
-      const target = disconnectTarget
+      if (await retriedAfterUnlock(e, () => disconnectConnection(how))) return
       setDisconnectTarget(null)
       // A refusal can be one that never clears (app credentials moved to another environment, a provider
       // account that ended), so the connection can be removed anyway, said plainly to leave access live.
-      if (e.detail?.code === 'revoke_failed') setRevokeRefused({ target, message: e.message })
-      else setNotice({ title: 'Could not disconnect', description: e.message })
+      if (e.detail?.code === 'revoke_failed') {
+        setRevokeRefused({
+          provider: target.provider, message: e.message, scope: 'connection',
+          removeAnyway: () => api.disconnectProvider(target.provider, target.external_id, { removeWithoutRevoking: true }),
+        })
+      } else setNotice({ title: 'Could not disconnect', description: e.message })
     } finally {
-      setDisconnecting(false)
+      setDisconnectBusy(null)
     }
   }
 
-  async function removeWithoutRevoking() {
-    const { target } = revokeRefused
-    setDisconnecting(true)
+  // Removing the app credential discards a vaulted value, so the server wants the vault open on either
+  // answer. A refused revoke stops the server's walk part way: the connections already revoked are gone,
+  // so the tab refreshes before offering to remove the rest from this install only.
+  async function removeProvider(how) {
+    const target = removeProviderTarget
+    if (!target || !(await ensureVault())) return
+    setDisconnectBusy(how)
     try {
-      await api.disconnectProvider(target.provider, target.external_id, { removeWithoutRevoking: true })
+      await api.removeProviderConfig(target.provider, { revoke: how === 'revoke' })
+      setRemoveProviderTarget(null)
+      await onAccountsChanged?.()
+      await refresh()
+    } catch (e) {
+      if (await retriedAfterUnlock(e, () => removeProvider(how))) return
+      setRemoveProviderTarget(null)
+      if (e.detail?.code === 'revoke_failed') {
+        await onAccountsChanged?.()
+        await refresh()
+        setRevokeRefused({
+          provider: target.provider, message: e.message, scope: 'provider',
+          removeAnyway: () => api.removeProviderConfig(target.provider, { revoke: false }),
+        })
+      } else setNotice({ title: `Could not remove ${providerLabel(target.provider)}`, description: e.message })
+    } finally {
+      setDisconnectBusy(null)
+    }
+  }
+
+  async function removeAfterRefusal() {
+    setDisconnectBusy('remove')
+    try {
+      await revokeRefused.removeAnyway()
       setRevokeRefused(null)
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
+      if (await retriedAfterUnlock(e, removeAfterRefusal)) return
       setRevokeRefused(null)
-      setNotice({ title: 'Could not remove the connection', description: e.message })
+      setNotice({ title: 'Could not remove', description: e.message })
     } finally {
-      setDisconnecting(false)
+      setDisconnectBusy(null)
     }
   }
 
@@ -1128,673 +1174,697 @@ export default function ConnectionsTab({ onShowHistory }) {
 
   return (
     <>
-    <div style={{ display: 'grid', gap: 12, width: IMPORT_CONFIG_MAX_WIDTH }}>
-      {/* Modal block while Plaid Link is open. Plaid's own iframe sits at ~max z-index, so Link stays fully
+      <div style={{ display: 'grid', gap: 12, width: IMPORT_CONFIG_MAX_WIDTH }}>
+        {/* Modal block while Plaid Link is open. Plaid's own iframe sits at ~max z-index, so Link stays fully
           interactive above this scrim; the scrim (z 2000, above app chrome) covers the app so a stray click
           can't reach nav and unmount this component mid-connect. Cancel is the never-trapped escape hatch. */}
-      {linkInProgress ? (
-        <OverlayBackdrop zIndex={2000}>
-          <div style={{
-            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
-            padding: '20px 22px', maxWidth: 380, textAlign: 'center', display: 'grid', gap: 10,
-            pointerEvents: 'auto', boxShadow: '0 10px 40px rgba(0,0,0,0.28)',
-          }}>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>Connecting your account…</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-              Finish the steps in the connection window. The rest of the app is paused so a stray click can’t interrupt it.
+        {linkInProgress ? (
+          <OverlayBackdrop zIndex={2000}>
+            <div style={{
+              background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+              padding: '20px 22px', maxWidth: 380, textAlign: 'center', display: 'grid', gap: 10,
+              pointerEvents: 'auto', boxShadow: '0 10px 40px rgba(0,0,0,0.28)',
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>Connecting your account…</div>
+              <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+                Finish the steps in the connection window. The rest of the app is paused so a stray click can’t interrupt it.
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+                <Button variant="secondary" onClick={cancelPlaidLink}>Cancel</Button>
+              </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
-              <Button variant="secondary" onClick={cancelPlaidLink}>Cancel</Button>
-            </div>
-          </div>
-        </OverlayBackdrop>
-      ) : null}
-      <VaultStrip
-        vault={vault}
-        waiting={waitingRequests}
-        onSet={() => openVault('set')}
-        onRequest={() => openVault('request')}
-        onUnlock={() => openVault('unlock', { offerPasskey: false })}
-        onUnlockPasskey={unlockWithPasskey}
-        passkeyBusy={passkeyBusy}
-        passkeyLabel={passkeyLabel}
-        onSettings={() => setVaultSettingsOpen(true)}
-        onRecover={() => (linkProtected ? setVaultRecoveryOpen(true) : refuseUnprotected())}
-        onCheck={() => openVault('check')}
-        onLock={lockVault}
-      />
+          </OverlayBackdrop>
+        ) : null}
+        <VaultStrip
+          vault={vault}
+          waiting={waitingRequests}
+          onSet={() => openVault('set')}
+          onRequest={() => openVault('request')}
+          onUnlock={() => openVault('unlock', { offerPasskey: false })}
+          onUnlockPasskey={unlockWithPasskey}
+          passkeyBusy={passkeyBusy}
+          passkeyLabel={passkeyLabel}
+          onSettings={() => setVaultSettingsOpen(true)}
+          onRecover={() => (linkProtected ? setVaultRecoveryOpen(true) : refuseUnprotected())}
+          onCheck={() => openVault('check')}
+          onLock={lockVault}
+        />
 
-      {connected.length ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {/* Unfiltered, where each card's own button starts at its provider: "a sync brought in less than
+        {connected.length ? (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            {/* Unfiltered, where each card's own button starts at its provider: "a sync brought in less than
               I expected" is as often a question about the whole run as about one connection. */}
-          <Button variant="secondary" onClick={() => setSyncLogScope({ subjects: [] })}
-            title="What every sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
-            Sync log
-          </Button>
-          <Tooltip describeTrigger content={syncingAny
-            ? 'A sync is already running'
-            : `Pull new and changed transactions for all ${connectionCount} connection${connectionCount === 1 ? '' : 's'}`}>
-            <Button onClick={syncAll} disabled={syncingAny}>
-              {syncingAny ? 'Syncing…' : '↻ Sync now'}
+            <Button variant="secondary" onClick={() => setSyncLogScope({ subjects: [] })}
+              title="What every sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
+              Sync log
             </Button>
-          </Tooltip>
-        </div>
-      ) : null}
+            <Tooltip describeTrigger content={syncingAny
+              ? 'A sync is already running'
+              : `Pull new and changed transactions for all ${connectionCount} connection${connectionCount === 1 ? '' : 's'}`}>
+              <Button onClick={syncAll} disabled={syncingAny}>
+                {syncingAny ? 'Syncing…' : '↻ Sync now'}
+              </Button>
+            </Tooltip>
+          </div>
+        ) : null}
 
-      {configured.length === 0 && unconfigured.length === 0 ? (
-        <Card style={{ padding: 16 }}>
-          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No data providers are available.</p>
-        </Card>
-      ) : null}
+        {configured.length === 0 && unconfigured.length === 0 ? (
+          <Card style={{ padding: 16 }}>
+            <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No data providers are available.</p>
+          </Card>
+        ) : null}
 
-      {configured.map(p => {
-        const connections = p.connections || []
-        const ss = syncState[p.provider] || {}
-        const syncedCardIds = rosterCardIds(runConnections.filter(e => e.provider === p.provider))
-        // Any connection of this provider reporting a live sync — the server's own view, which outlives
-        // the page that started it (see `sync_started_at`).
-        const serverSyncing = connections.some(c => c.syncing)
-        // A locked vault deliberately does NOT disable this: clicking asks for the passphrase and then
-        // goes on to connect. What still disables is what no dialog here can resolve — missing HTTPS,
-        // and a vault this user cannot open yet, whether because they have not asked for access or
-        // because the request has not been approved. Both of those are answered on the strip above,
-        // which is where the button's hover points.
-        const noVaultSlot = vault.configured && !vault.hasPassphrase
-        const connectDisabled = noVaultSlot || httpsBlocked
-        const connectTitle = vault.accessPending ? 'Waiting for your vault access to be approved'
-          : noVaultSlot ? 'Request access to this workspace’s credential vault first'
-            : httpsBlocked ? 'Needs HTTPS, or a browser on the computer the server runs on'
-              : ''
-        const s = providerSummary(p)
-        const lastSyncedLabel = formatTimestamp(s.lastSynced)
-        // Same syncing expression the button below uses, deliberately: `ss.syncing` is this component's
-        // memory of a pull it started and turns over immediately on click, while `serverSyncing` is the
-        // connection's own marker and survives a navigation. Reading only one of them would let the button
-        // and the line beside it disagree, which is the class of bug this line already had once. The
-        // precedence itself lives in `providerSummaryLine`.
-        const summaryLine = providerSummaryLine({
-          connectionCount: connections.length,
-          syncing: ss.syncing || serverSyncing,
-          lastSyncedLabel,
-        })
-        const allowanceLines = connectionsAllowanceLines(connections)
-        const expanded = expandedProviders[p.provider] !== undefined
-          ? expandedProviders[p.provider]
-          // Default: open while there is nothing to sync yet (the card is a setup step, and collapsing
-          // it would hide the only action available), collapsed once it is connected and doing its job.
-          : connections.length === 0
-        return (
-          <SectionCard
-            key={p.provider}
-            title={providerLabel(p.provider)}
-            summary={(
-              // A metered provider's requests left ride on the hover, so they are there while collapsed.
-              <HoverLines lines={allowanceLines}>
-                <span aria-label={[summaryLine, ...allowanceLines].join('. ')}>{summaryLine}</span>
-              </HoverLines>
-            )}
-            collapsible
-            expanded={expanded}
-            onExpandedChange={(next) => setExpandedProviders({ ...expandedProviders, [p.provider]: next })}
-            width="100%"
-            headerCenter={
-              // Everything here has to survive collapsing, because each item is asking for something and
-              // a nudge only visible after expanding a card is a nudge that will not be seen. The env
-              // badge is the exception and stays last: it is context, not a request.
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                {s.reauth.length ? (
-                  // First, and its own pill rather than another failure count. Every other sync failure
-                  // resolves itself or does not; this one waits on the user, and a count of attempts is
-                  // exactly the wrong thing to show for a connection that will never succeed again.
-                  <StatusPill tone="danger"
-                    title={s.reauth.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
-                    ⚠ {s.reauth.length === 1 ? 'reconnect needed' : `${s.reauth.length} need reconnecting`}
-                  </StatusPill>
-                ) : null}
-                {s.failing.length ? (
-                  <StatusPill tone="danger"
-                    title={s.failing.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'sync failed'} (${c.consecutive_sync_failures} in a row)`).join('\n')}>
-                    ⚠ {s.failing.length === connections.length && connections.length > 1
-                      ? 'all connections failing'
-                      : `${s.failing.length} failing`}
-                  </StatusPill>
-                ) : null}
-                {s.warned.length ? (
-                  // Labelled as a message from the provider rather than as "partly synced": the pill
-                  // cannot tell a bank that failed to deliver from a server advisory about the request
-                  // itself, and asserting missing data when none is missing would send the user looking
-                  // for a problem that isn't there. The text they need is the provider's own, in the
-                  // tooltip — which says "authentication required" when that is what happened.
-                  <StatusPill tone="warning"
-                    title={s.warned.map(c => `${c.name || 'Connection'}: ${(c.last_sync_warnings || []).join('; ')}`).join('\n')}>
-                    ⚠ provider notice
-                  </StatusPill>
-                ) : null}
-                {s.unmapped ? (
-                  <StatusPill tone="accent2"
-                    title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this provider ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
-                    {s.unmapped} to map
-                  </StatusPill>
-                ) : null}
-                {s.review ? (
-                  <StatusPill tone="warning"
-                    onClick={() => onShowHistory?.({
-                      connectionIds: connections.filter(c => syncSummaryByConnection[c.id]?.suspects > 0).map(c => c.id),
-                    })}
-                    title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review`}>
-                    ⚠ {s.review} to review
-                  </StatusPill>
-                ) : null}
-                <EnvBadge env={p.env} />
-              </span>
-            }
+        {configured.map(p => {
+          const connections = p.connections || []
+          const ss = syncState[p.provider] || {}
+          const syncedCardIds = rosterCardIds(runConnections.filter(e => e.provider === p.provider))
+          // Any connection of this provider reporting a live sync — the server's own view, which outlives
+          // the page that started it (see `sync_started_at`).
+          const serverSyncing = connections.some(c => c.syncing)
+          // A locked vault deliberately does NOT disable this: clicking asks for the passphrase and then
+          // goes on to connect. What still disables is what no dialog here can resolve — missing HTTPS,
+          // and a vault this user cannot open yet, whether because they have not asked for access or
+          // because the request has not been approved. Both of those are answered on the strip above,
+          // which is where the button's hover points.
+          const noVaultSlot = vault.configured && !vault.hasPassphrase
+          const connectDisabled = noVaultSlot || httpsBlocked
+          const connectTitle = vault.accessPending ? 'Waiting for your vault access to be approved'
+            : noVaultSlot ? 'Request access to this workspace’s credential vault first'
+              : httpsBlocked ? 'Needs HTTPS, or a browser on the computer the server runs on'
+                : ''
+          const s = providerSummary(p)
+          const lastSyncedLabel = formatTimestamp(s.lastSynced)
+          // Same syncing expression the button below uses, deliberately: `ss.syncing` is this component's
+          // memory of a pull it started and turns over immediately on click, while `serverSyncing` is the
+          // connection's own marker and survives a navigation. Reading only one of them would let the button
+          // and the line beside it disagree, which is the class of bug this line already had once. The
+          // precedence itself lives in `providerSummaryLine`.
+          const summaryLine = providerSummaryLine({
+            connectionCount: connections.length,
+            syncing: ss.syncing || serverSyncing,
+            lastSyncedLabel,
+          })
+          const allowanceLines = connectionsAllowanceLines(connections)
+          const expanded = expandedProviders[p.provider] !== undefined
+            ? expandedProviders[p.provider]
+            // Default: open while there is nothing to sync yet (the card is a setup step, and collapsing
+            // it would hide the only action available), collapsed once it is connected and doing its job.
+            : connections.length === 0
+          return (
+            <SectionCard
+              key={p.provider}
+              title={providerLabel(p.provider)}
+              summary={(
+                // A metered provider's requests left ride on the hover, so they are there while collapsed.
+                <HoverLines lines={allowanceLines}>
+                  <span aria-label={[summaryLine, ...allowanceLines].join('. ')}>{summaryLine}</span>
+                </HoverLines>
+              )}
+              collapsible
+              expanded={expanded}
+              onExpandedChange={(next) => setExpandedProviders({ ...expandedProviders, [p.provider]: next })}
+              width="100%"
+              headerCenter={
+                // Everything here has to survive collapsing, because each item is asking for something and
+                // a nudge only visible after expanding a card is a nudge that will not be seen. The env
+                // badge is the exception and stays last: it is context, not a request.
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {s.reauth.length ? (
+                    // First, and its own pill rather than another failure count. Every other sync failure
+                    // resolves itself or does not; this one waits on the user, and a count of attempts is
+                    // exactly the wrong thing to show for a connection that will never succeed again.
+                    <StatusPill tone="danger"
+                      title={s.reauth.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
+                      ⚠ {s.reauth.length === 1 ? 'reconnect needed' : `${s.reauth.length} need reconnecting`}
+                    </StatusPill>
+                  ) : null}
+                  {s.failing.length ? (
+                    <StatusPill tone="danger"
+                      title={s.failing.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'sync failed'} (${c.consecutive_sync_failures} in a row)`).join('\n')}>
+                      ⚠ {s.failing.length === connections.length && connections.length > 1
+                        ? 'all connections failing'
+                        : `${s.failing.length} failing`}
+                    </StatusPill>
+                  ) : null}
+                  {s.warned.length ? (
+                    // Labelled as a message from the provider rather than as "partly synced": the pill
+                    // cannot tell a bank that failed to deliver from a server advisory about the request
+                    // itself, and asserting missing data when none is missing would send the user looking
+                    // for a problem that isn't there. The text they need is the provider's own, in the
+                    // tooltip — which says "authentication required" when that is what happened.
+                    <StatusPill tone="warning"
+                      title={s.warned.map(c => `${c.name || 'Connection'}: ${(c.last_sync_warnings || []).join('; ')}`).join('\n')}>
+                      ⚠ provider notice
+                    </StatusPill>
+                  ) : null}
+                  {s.unmapped ? (
+                    <StatusPill tone="accent2"
+                      title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this provider ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
+                      {s.unmapped} to map
+                    </StatusPill>
+                  ) : null}
+                  {s.review ? (
+                    <StatusPill tone="warning"
+                      onClick={() => onShowHistory?.({
+                        connectionIds: connections.filter(c => syncSummaryByConnection[c.id]?.suspects > 0).map(c => c.id),
+                      })}
+                      title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review`}>
+                      ⚠ {s.review} to review
+                    </StatusPill>
+                  ) : null}
+                  <EnvBadge env={p.env} />
+                </span>
+              }
             // No provider-level "Sync now": the routine pull is one control for every connection, at the
             // top of the tab and in the navigation pane. What a card has is the per-connection check
             // below, which answers a different question: "did the thing I just configured work?"
-          >
-            <div style={{ padding: '12px 16px 14px', display: 'grid', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {/* Configure only where there is something to configure — a provider with no app-level
+            >
+              <div style={{ padding: '12px 16px 14px', display: 'grid', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Configure only where there is something to configure — a provider with no app-level
                     credential would open a dialog with no fields in it. */}
-                {showsAdminFeatures && p.requires_app_config !== false
-                  ? <Button variant="secondary" onClick={() => openConfig(p)}>Configure</Button> : null}
-                {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
+                  {showsAdminFeatures && p.requires_app_config !== false
+                    ? <Button variant="secondary" onClick={() => openConfig(p)}>Configure</Button> : null}
+                  {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
                     because it differs in kind: Plaid's widget authorizes one institution, while a
                     SimpleFIN setup token claims a bridge that may span several banks and so has no noun
                     to name — that button stays a bare "+ Connect". The provider's own name is not it: it
                     already labels the card this button sits in. Never "account", which means a ledger
                     account everywhere else in the app. */}
-                <Tooltip describeTrigger content={connectTitle}>
-                  <Button onClick={() => connect(p)} disabled={connectDisabled}>
-                    {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
-                  </Button>
-                </Tooltip>
-                {/* Scoped to this provider, since that is what the card it sits in is about — by provider
+                  <Tooltip describeTrigger content={connectTitle}>
+                    <Button onClick={() => connect(p)} disabled={connectDisabled}>
+                      {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
+                    </Button>
+                  </Tooltip>
+                  {/* Scoped to this provider, since that is what the card it sits in is about — by provider
                     rather than by its connections' ids, so the scope takes in what has no live connection
                     to name: a failed connect, and a disconnected connection's record. Offered with no
                     connections at all for the same reason: a first connect that failed is exactly when
                     the log is wanted. The log's own pills widen it to the rest. */}
-                <Button variant="secondary" onClick={() => setSyncLogScope({ providers: [p.provider] })}
-                  title="What each sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
-                  Sync log
-                </Button>
-              </div>
-              {/* Only for a provider whose connect step opens straight into the provider's own widget:
+                  <Button variant="secondary" onClick={() => setSyncLogScope({ providers: [p.provider] })}
+                    title="What each sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
+                    Sync log
+                  </Button>
+                </div>
+                {/* Only for a provider whose connect step opens straight into the provider's own widget:
                   there is no dialog of ours to ask in, so the depth has to be chosen before the button is
                   pressed. A token-style provider asks inside its connect dialog instead, at the moment it
                   applies — a second copy here would be a control for a choice already made. */}
-              {p.connect_spec?.style !== 'token' ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
-                  <span>New connections fetch</span>
-                  <Select
-                    value={String(historyDays)}
-                    onChange={v => setHistoryDays(Number(v))}
-                    options={HISTORY_DEPTH_OPTIONS}
-                    title={HISTORY_DEPTH_TITLE}
-                    style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
-                  />
-                </span>
-              ) : null}
+                {p.connect_spec?.style !== 'token' ? (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+                    <span>New connections fetch</span>
+                    <Select
+                      value={String(historyDays)}
+                      onChange={v => setHistoryDays(Number(v))}
+                      options={HISTORY_DEPTH_OPTIONS}
+                      title={HISTORY_DEPTH_TITLE}
+                      style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
+                    />
+                  </span>
+                ) : null}
 
-              {ss.syncing ? (
-                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
-                  {ss.progress
-                    ? `Importing history… ${ss.progress.added} added so far${ss.status === 'INITIAL_UPDATE_COMPLETE' ? ' (fetching older transactions…)' : ''}`
-                    : 'Importing history…'}
-                </div>
-              ) : ss.result ? (
-                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
-                  {ss.incomplete
-                    ? `Synced ${ss.result.added} so far — the bank is still sending history. Click Sync now again in a minute to pull the rest.`
-                    : ss.paused?.length
-                      // Named for what the user sees and what to do about it. Retrying now would not help
-                      // and would push the provider toward cutting the connection off entirely.
-                      ? `Synced ${ss.result.added} transactions — exhausted ${providerLabel(p.provider)} limit on requests/day. History retrieval will restart on the next sync after the limit resets.`
-                      // No skipped count, for the reason given on the sync panel's finished row: it is almost
-                      // all rows already held, and a bare total beside "0 added" reads as a failure.
-                      : ss.result.added || ss.result.updated || ss.result.removed
-                        ? `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}`
-                        : 'Sync complete — nothing new'}
-                  {/* The cards this run added rows to, in the history where their outcome is kept. */}
-                  {syncedCardIds.length ? (
-                    <LinkButton onClick={() => onShowHistory?.({ batchIds: syncedCardIds })} style={{ marginLeft: 10, fontSize: 13 }}>
-                      View in import history →
-                    </LinkButton>
-                  ) : null}
-                </div>
-              ) : null}
+                {ss.syncing ? (
+                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
+                    {ss.progress
+                      ? `Importing history… ${ss.progress.added} added so far${ss.status === 'INITIAL_UPDATE_COMPLETE' ? ' (fetching older transactions…)' : ''}`
+                      : 'Importing history…'}
+                  </div>
+                ) : ss.result ? (
+                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
+                    {ss.incomplete
+                      ? `Synced ${ss.result.added} so far — the bank is still sending history. Click Sync now again in a minute to pull the rest.`
+                      : ss.paused?.length
+                        // Named for what the user sees and what to do about it. Retrying now would not help
+                        // and would push the provider toward cutting the connection off entirely.
+                        ? `Synced ${ss.result.added} transactions — exhausted ${providerLabel(p.provider)} limit on requests/day. History retrieval will restart on the next sync after the limit resets.`
+                        // No skipped count, for the reason given on the sync panel's finished row: it is almost
+                        // all rows already held, and a bare total beside "0 added" reads as a failure.
+                        : ss.result.added || ss.result.updated || ss.result.removed
+                          ? `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}`
+                          : 'Sync complete — nothing new'}
+                    {/* The cards this run added rows to, in the history where their outcome is kept. */}
+                    {syncedCardIds.length ? (
+                      <LinkButton onClick={() => onShowHistory?.({ batchIds: syncedCardIds })} style={{ marginLeft: 10, fontSize: 13 }}>
+                        View in import history →
+                      </LinkButton>
+                    ) : null}
+                  </div>
+                ) : null}
 
-              {connections.length ? (
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {connections.map(c => {
-                    const accts = accountsForConnectionId(c.id)
-                    const syncSummary = syncSummaryByConnection[c.id]
-                    return (
-                      <div key={c.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600, fontSize: 13 }}>
-                            <InlineRename
-                              value={c.nickname || ''}
-                              shown={c.name || 'Linked bank'}
-                              onRename={name => renameConnection(c.id, name)}
-                              ariaLabel={`Name for ${c.institution || 'this connection'}`}
-                              title={c.nickname && c.institution ? `${c.institution} — click to rename` : 'Click to rename'}
-                            />
-                          </span>
-                          {/* The outcome line below says whether the last pull worked; this says when it
+                {connections.length ? (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {connections.map(c => {
+                      const accts = accountsForConnectionId(c.id)
+                      const syncSummary = syncSummaryByConnection[c.id]
+                      return (
+                        <div key={c.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>
+                              <InlineRename
+                                value={c.nickname || ''}
+                                shown={c.name || 'Linked bank'}
+                                onRename={name => renameConnection(c.id, name)}
+                                ariaLabel={`Name for ${c.institution || 'this connection'}`}
+                                title={c.nickname && c.institution ? `${c.institution} — click to rename` : 'Click to rename'}
+                              />
+                            </span>
+                            {/* The outcome line below says whether the last pull worked; this says when it
                               was. Without it "Success" cannot be told apart from a check made thirty
                               seconds ago and one from last week — which is exactly the question the Sync
                               button beside it creates. */}
-                          <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />
-                          {syncSummary?.suspects > 0 ? (
-                            <StatusPill
-                              tone="warning"
-                              onClick={() => onShowHistory?.({ connectionIds: [c.id] })}
-                              title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review this connection's sync cards`}
-                            >
-                              ⚠ {syncSummary.suspects} to review
-                            </StatusPill>
-                          ) : null}
-                          {unmappedByConnection[c.id] > 0 ? (
-                            <StatusPill
-                              onClick={() => openAccountMap(c)}
-                              title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this connection ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
-                            >
-                              {unmappedByConnection[c.id]} to map
-                            </StatusPill>
-                          ) : null}
-                          {/* Card maintenance lives behind one "⋯" rather than a row of buttons. These
+                            <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />
+                            {syncSummary?.suspects > 0 ? (
+                              <StatusPill
+                                tone="warning"
+                                onClick={() => onShowHistory?.({ connectionIds: [c.id] })}
+                                title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review this connection's sync cards`}
+                              >
+                                ⚠ {syncSummary.suspects} to review
+                              </StatusPill>
+                            ) : null}
+                            {unmappedByConnection[c.id] > 0 ? (
+                              <StatusPill
+                                onClick={() => openAccountMap(c)}
+                                title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this connection ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
+                              >
+                                {unmappedByConnection[c.id]} to map
+                              </StatusPill>
+                            ) : null}
+                            {/* Card maintenance lives behind one "⋯" rather than a row of buttons. These
                               actions are real but rare, and five permanent controls per card meant a
                               screenful of them at seven connections — louder than the badges above, which
                               are the part of the card that is actually asking for something. Busy state
                               shows beside the trigger, since the menu it lives in is closed while the
                               work runs. */}
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-                            {fetchingHistoryConnId === c.id || refreshingConnId === c.id ? (
-                              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                                {fetchingHistoryConnId === c.id ? 'Fetching…' : 'Refreshing…'}
-                              </span>
-                            ) : null}
-                            {/* Small and quiet on purpose, and *not* a second home for the routine pull —
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+                              {fetchingHistoryConnId === c.id || refreshingConnId === c.id ? (
+                                <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                                  {fetchingHistoryConnId === c.id ? 'Fetching…' : 'Refreshing…'}
+                                </span>
+                              ) : null}
+                              {/* Small and quiet on purpose, and *not* a second home for the routine pull —
                                 that is Sync now at the top of the tab. This one exists because the changes made
                                 on this card (a mapping, a reconnect, a fresh connection) are only really
                                 confirmed by data arriving, and the effect of an action belongs where the
                                 action was taken. Scoped to this connection alone, and its outcome lands
                                 on the line below rather than sending the user elsewhere to look. */}
-                            <Button variant="secondary"
-                              onClick={() => sync(p.provider, { connectionId: c.id })}
-                              disabled={ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}
-                              title={`Check this connection by pulling anything new from ${c.name || 'it'} now`}>
-                              {c.syncing ? 'Syncing…' : '↻ Sync'}
-                            </Button>
-                            <ActionMenuButton
-                              open={cardMenu?.connectionId === c.id}
-                              title={`Actions for ${c.name || 'this connection'}`}
-                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing || removingSync}
-                              onOpen={element => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorElement: element })}
-                            />
+                              <Button variant="secondary"
+                                onClick={() => sync(p.provider, { connectionId: c.id })}
+                                disabled={ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}
+                                title={`Check this connection by pulling anything new from ${c.name || 'it'} now`}>
+                                {c.syncing ? 'Syncing…' : '↻ Sync'}
+                              </Button>
+                              <ActionMenuButton
+                                open={cardMenu?.connectionId === c.id}
+                                title={`Actions for ${c.name || 'this connection'}`}
+                                disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing || removingSync}
+                                onOpen={element => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorElement: element })}
+                              />
+                            </div>
                           </div>
-                        </div>
-                        {/* Stated on the card as well as in the header pill. The pill has to work while
+                          {/* Stated on the card as well as in the header pill. The pill has to work while
                             collapsed, so it summarizes across connections; this is where the user is when
                             they act, and with several connections under one provider it is the only place
                             that says which one. */}
-                        {c.reauth_required ? (
-                          <div style={{
-                            fontSize: 12, lineHeight: 1.5, borderRadius: 6, padding: '6px 9px',
-                            background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
-                            border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
-                            color: 'var(--danger)',
-                          }}>
-                            {c.last_sync_error || 'The provider no longer accepts this connection.'}
-                            {' '}Syncing stays stopped until it is connected again.
-                            {/* Both ways out, side by side and where the problem is stated — this is one
+                          {c.reauth_required ? (
+                            <div style={{
+                              fontSize: 12, lineHeight: 1.5, borderRadius: 6, padding: '6px 9px',
+                              background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
+                              border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
+                              color: 'var(--danger)',
+                            }}>
+                              {c.last_sync_error || 'The provider no longer accepts this connection.'}
+                              {' '}Syncing stays stopped until it is connected again.
+                              {/* Both ways out, side by side and where the problem is stated — this is one
                                 of the few things on a card that is actually asking to be acted on, and
                                 leaving the only remedies in the ⋯ menu made the notice a dead end.
                                 Disconnect is offered *as well as* reconnect because it is sometimes the
                                 only one available, and because even a successful fresh connect leaves
                                 this row behind to be cleaned up. */}
-                            <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                              {/* Repair, not re-connect: it reopens the bank's own sign-in against the
+                              <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                {/* Repair, not re-connect: it reopens the bank's own sign-in against the
                                   connection that already exists, so the card keeps its accounts, mapping
                                   and fetched history, where "+ Connect" would start a second connection
                                   beside it. Hidden without a stored credential — there is no Item to
                                   re-authorize, so the button could only ever fail. */}
-                              {p.provider === 'plaid' && c.has_credential !== false ? (
-                                <Tooltip describeTrigger content={connectTitle}>
-                                  <Button disabled={connectDisabled} onClick={() => reconnect(c)}>
-                                    Reconnect this bank
-                                  </Button>
-                                </Tooltip>
-                              ) : null}
-                              <Button variant="secondary" onClick={() => setDisconnectTarget({
-                                provider: p.provider,
-                                external_id: c.external_id,
-                                institution: c.name,
-                                // With nothing stored there is nothing to revoke *with*, so the
-                                // confirmation must not promise the access ends — see the dialog copy.
-                                revokes: p.revokes_on_disconnect !== false && c.has_credential !== false,
-                                hasCredential: c.has_credential !== false,
-                              })}>
-                                {/* Nothing to disconnect without a credential, only a record to remove. */}
-                                {c.has_credential !== false ? 'Disconnect' : 'Remove connection'}
-                              </Button>
+                                {p.provider === 'plaid' && c.has_credential !== false ? (
+                                  <Tooltip describeTrigger content={connectTitle}>
+                                    <Button disabled={connectDisabled} onClick={() => reconnect(c)}>
+                                      Reconnect this bank
+                                    </Button>
+                                  </Tooltip>
+                                ) : null}
+                                <Button variant="secondary" onClick={() => setDisconnectTarget({
+                                  provider: p.provider,
+                                  external_id: c.external_id,
+                                  institution: c.name,
+                                  // With nothing stored there is nothing to revoke *with*, so the
+                                  // confirmation must not promise the access ends — see the dialog copy.
+                                  revokes: p.revokes_on_disconnect !== false && c.has_credential !== false,
+                                  hasCredential: c.has_credential !== false,
+                                })}>
+                                  {/* Nothing to disconnect without a credential, only a record to remove. */}
+                                  {c.has_credential !== false ? 'Disconnect' : 'Remove connection'}
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                        ) : null}
-                        {/* Outcome and totals, with the per-account chips behind the "Last sync"
+                          ) : null}
+                          {/* Outcome and totals, with the per-account chips behind the "Last sync"
                             disclosure. Shown outright they made this card two lists of the same
                             accounts, one from the provider and one local, and a seven-account
                             connection fifteen rows tall. */}
-                        <LastSyncSummary
-                          lastSync={c.last_sync}
-                          syncing={!!c.syncing}
-                          providerAccounts={openSyncDetails[c.id] ? providerAccountsByConnection[c.id] : undefined}
-                          detailOpen={!!openSyncDetails[c.id]}
-                          onToggleDetail={providerAccountsByConnection[c.id]?.length
-                            ? () => setOpenSyncDetails(prev => ({ ...prev, [c.id]: !prev[c.id] }))
-                            : null}
-                          onOpenReport={() => openLastSyncReport(c)}
-                          onOpenLog={() => setSyncLogScope({ subjects: [c.id] })}
-                        />
-                        {accts.length || unfedProviderAccounts(c).length ? (() => {
-                          const unfed = unfedProviderAccounts(c)
-                          const total = accts.length + unfed.length
-                          const open = !!openAccountLists[c.id]
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => setOpenAccountLists(prev => ({ ...prev, [c.id]: !open }))}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-                                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                                font: 'inherit', fontSize: 12, color: 'var(--muted)',
-                              }}
-                              title={open ? 'Hide the accounts this connection feeds' : 'Show the accounts this connection feeds'}
-                            >
-                              <span aria-hidden style={{ fontSize: 10 }}>{open ? '▾' : '▸'}</span>
-                              <span>Accounts ({total})</span>
-                              {/* Survives the collapse deliberately: an account with no destination is
+                          <LastSyncSummary
+                            lastSync={c.last_sync}
+                            syncing={!!c.syncing}
+                            providerAccounts={openSyncDetails[c.id] ? providerAccountsByConnection[c.id] : undefined}
+                            detailOpen={!!openSyncDetails[c.id]}
+                            onToggleDetail={providerAccountsByConnection[c.id]?.length
+                              ? () => setOpenSyncDetails(prev => ({ ...prev, [c.id]: !prev[c.id] }))
+                              : null}
+                            onOpenReport={() => openLastSyncReport(c)}
+                            onOpenLog={() => setSyncLogScope({ subjects: [c.id] })}
+                          />
+                          {accts.length || unfedProviderAccounts(c).length ? (() => {
+                            const unfed = unfedProviderAccounts(c)
+                            const total = accts.length + unfed.length
+                            const open = !!openAccountLists[c.id]
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setOpenAccountLists(prev => ({ ...prev, [c.id]: !open }))}
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+                                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                  font: 'inherit', fontSize: 12, color: 'var(--muted)',
+                                }}
+                                title={open ? 'Hide the accounts this connection feeds' : 'Show the accounts this connection feeds'}
+                              >
+                                <span aria-hidden style={{ fontSize: 10 }}>{open ? '▾' : '▸'}</span>
+                                <span>Accounts ({total})</span>
+                                {/* Survives the collapse deliberately: an account with no destination is
                                   skipped by every sync until it is resolved, and a nudge only visible
                                   after expanding is one that will not be seen. */}
-                              {unfed.length ? (
-                                <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>
-                                  · {unfed.length} with no destination
-                                </span>
-                              ) : null}
-                            </button>
-                          )
-                        })() : null}
-                        {openAccountLists[c.id] && accts.length ? accts.map(a => (
-                          <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
-                            <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
-                            {a.mask ? <span>····{a.mask}</span> : null}
-                            {/* One credential can cover several banks (a SimpleFIN access URL does), so the
+                                {unfed.length ? (
+                                  <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>
+                                    · {unfed.length} with no destination
+                                  </span>
+                                ) : null}
+                              </button>
+                            )
+                          })() : null}
+                          {openAccountLists[c.id] && accts.length ? accts.map(a => (
+                            <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
+                              <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
+                              {a.mask ? <span>····{a.mask}</span> : null}
+                              {/* One credential can cover several banks (a SimpleFIN access URL does), so the
                                 card's own institution name does not identify which bank an account is at.
                                 Shown only when it adds something the card heading doesn't already say. */}
-                            {institutionByAccountId[a.id] && institutionByAccountId[a.id] !== c.institution ? (
-                              <span style={{ fontSize: 11 }}>{institutionByAccountId[a.id]}</span>
-                            ) : null}
-                            {/* Named because a merged account is otherwise indistinguishable here from a
+                              {institutionByAccountId[a.id] && institutionByAccountId[a.id] !== c.institution ? (
+                                <span style={{ fontSize: 11 }}>{institutionByAccountId[a.id]}</span>
+                              ) : null}
+                              {/* Named because a merged account is otherwise indistinguishable here from a
                                 standalone one, and the group is where its transactions are read. */}
-                            {a.parent_account_id ? (
-                              <span style={{ fontSize: 11 }}>
-                                in {accountLabelById.get(a.parent_account_id) || 'a merged group'}
-                              </span>
-                            ) : null}
-                            {/* Last, after every part of the account's identity. It used to sit between the
+                              {a.parent_account_id ? (
+                                <span style={{ fontSize: 11 }}>
+                                  in {accountLabelById.get(a.parent_account_id) || 'a merged group'}
+                                </span>
+                              ) : null}
+                              {/* Last, after every part of the account's identity. It used to sit between the
                                 mask and the bank name, which put a control in the middle of a name — the
                                 row read as "Rewards Card ····4417 ↗ Harborline Bank" and the arrow
                                 looked like punctuation rather than a button. Same launcher the Accounts
                                 page uses, opening the same panel: a connection's account list is a place
                                 a user wants to go *look at* the account from. */}
-                            <IconButton
-                              size="compact"
-                              tone="accent"
-                              onClick={() => openAccountDetail({
-                                id: a.id, name: a.display_name || a.name, mask: a.mask,
-                              })}
-                              aria-label={`View ${a.display_name || a.name}`}
-                            >↗</IconButton>
-                          </div>
-                        )) : null}
-                        {/* Named in the provider's own words, because that is what the user chose from at
+                              <IconButton
+                                size="compact"
+                                tone="accent"
+                                onClick={() => openAccountDetail({
+                                  id: a.id, name: a.display_name || a.name, mask: a.mask,
+                                })}
+                                aria-label={`View ${a.display_name || a.name}`}
+                              >↗</IconButton>
+                            </div>
+                          )) : null}
+                          {/* Named in the provider's own words, because that is what the user chose from at
                             the bank and the local account may since have been renamed. Without these the
                             list answers "what is Luma importing?" while looking like it answers "what did
                             I share?" — and a skipped account, which appears nowhere else in the app, is
                             silently missing from it. */}
-                        {openAccountLists[c.id] ? unfedProviderAccounts(c).map(pa => (
-                          <div key={pa.external_account_id}
-                            style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
-                            <span>{pa.label}</span>
-                            <span style={{ fontSize: 11, fontStyle: 'italic' }}>
-                              {pa.mapping_mode === 'skip' ? 'not imported (skipped)' : 'not imported yet'}
+                          {openAccountLists[c.id] ? unfedProviderAccounts(c).map(pa => (
+                            <div key={pa.external_account_id}
+                              style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
+                              <span>{pa.label}</span>
+                              <span style={{ fontSize: 11, fontStyle: 'italic' }}>
+                                {pa.mapping_mode === 'skip' ? 'not imported (skipped)' : 'not imported yet'}
+                              </span>
+                            </div>
+                          )) : null}
+                          {!accts.length && !unfedProviderAccounts(c).length ? (
+                            // One empty state now, not two. This used to also cover "accounts are here but
+                            // undecided", which needed the mapping step rather than a refresh — those rows
+                            // are listed above as *not imported yet*, so reaching this text means the
+                            // provider account list is genuinely empty and there is nothing to map.
+                            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                              {c.has_credential === false
+                                // Refreshing needs a credential to fetch with, so for a connection whose
+                                // credential is gone the old advice was a step that could only fail.
+                                ? 'No accounts, and no stored credential to fetch them with — connect this provider again, then disconnect this connection.'
+                                : 'No accounts imported yet — pull them in with ⋯ → “↻ Refresh accounts”.'}
                             </span>
-                          </div>
-                        )) : null}
-                        {!accts.length && !unfedProviderAccounts(c).length ? (
-                          // One empty state now, not two. This used to also cover "accounts are here but
-                          // undecided", which needed the mapping step rather than a refresh — those rows
-                          // are listed above as *not imported yet*, so reaching this text means the
-                          // provider account list is genuinely empty and there is nothing to map.
-                          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                            {c.has_credential === false
-                              // Refreshing needs a credential to fetch with, so for a connection whose
-                              // credential is gone the old advice was a step that could only fail.
-                              ? 'No accounts, and no stored credential to fetch them with — connect this provider again, then disconnect this connection.'
-                              : 'No accounts imported yet — pull them in with ⋯ → “↻ Refresh accounts”.'}
-                          </span>
-                        ) : null}
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
-                  {/* The sandbox note only makes sense for a provider that has one; for the rest it would
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
+                    {/* The sandbox note only makes sense for a provider that has one; for the rest it would
                       describe a mode they cannot be in. */}
-                  {p.env === 'sandbox'
-                    ? 'Running in Sandbox — use the provider’s test credentials when the connect dialog opens. Switch to Production on Configure once you’re ready for real accounts.'
-                    : 'Connect an account to keep balances and transactions in sync.'}
-                </p>
-              )}
-            </div>
-          </SectionCard>
-        )
-      })}
+                    {p.env === 'sandbox'
+                      ? 'Running in Sandbox — use the provider’s test credentials when the connect dialog opens. Switch to Production on Configure once you’re ready for real accounts.'
+                      : 'Connect an account to keep balances and transactions in sync.'}
+                  </p>
+                )}
+              </div>
+            </SectionCard>
+          )
+        })}
 
-      {/* Adding a data provider means whatever its first step actually is: entering app credentials for a
+        {/* Adding a data provider means whatever its first step actually is: entering app credentials for a
           provider that has them, and connecting straight away for one that has none — for which a
           Configure dialog would open with nothing in it. Providers needing credentials stay admin-only;
           one that needs none is gated on the vault like any other connect. */}
-      {unconfigured.length && unconfigured.some(p => showsAdminFeatures || p.requires_app_config === false) ? (
-        <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data provider:</span>
-          {unconfigured
-            .filter(p => showsAdminFeatures || p.requires_app_config === false)
-            .map(p => (
-              <Button key={p.provider} variant="secondary"
-                onClick={() => (p.requires_app_config === false ? connect(p) : openConfig(p))}>
-                + {providerLabel(p.provider)}
-              </Button>
-            ))}
-        </Card>
-      ) : null}
+        {unconfigured.length && unconfigured.some(p => showsAdminFeatures || p.requires_app_config === false) ? (
+          <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data provider:</span>
+            {unconfigured
+              .filter(p => showsAdminFeatures || p.requires_app_config === false)
+              .map(p => (
+                <Button key={p.provider} variant="secondary"
+                  onClick={() => (p.requires_app_config === false ? connect(p) : openConfig(p))}>
+                  + {providerLabel(p.provider)}
+                </Button>
+              ))}
+          </Card>
+        ) : null}
 
-      {connectTarget ? (
-        <TokenConnectDialog
-          provider={connectTarget.provider}
-          spec={connectTarget.connect_spec}
-          relinkCandidates={relinkCandidates(connectTarget)}
-          describeConnection={c => connectionAccountsLabel(
-            accountsForConnectionId(c.id).map(a => a.display_name || a.name),
-          )}
-          historyDays={historyDays}
-          onConnect={(token, days, adopt) => connectWithToken(connectTarget.provider, token, days, adopt)}
-          onClose={() => setConnectTarget(null)}
-        />
-      ) : null}
+        {connectTarget ? (
+          <TokenConnectDialog
+            provider={connectTarget.provider}
+            spec={connectTarget.connect_spec}
+            relinkCandidates={relinkCandidates(connectTarget)}
+            describeConnection={c => connectionAccountsLabel(
+              accountsForConnectionId(c.id).map(a => a.display_name || a.name),
+            )}
+            historyDays={historyDays}
+            onConnect={(token, days, adopt) => connectWithToken(connectTarget.provider, token, days, adopt)}
+            onClose={() => setConnectTarget(null)}
+          />
+        ) : null}
 
-      {configTarget ? (
-        <ProviderConfigDialog
-          provider={configTarget.provider}
-          initial={configTarget}
-          onSave={(payload) => saveConfig(configTarget.provider, payload)}
-          ensureVault={ensureVault}
-          onClose={() => setConfigTarget(null)}
-        />
-      ) : null}
+        {configTarget ? (
+          <ProviderConfigDialog
+            provider={configTarget.provider}
+            initial={configTarget}
+            onSave={(payload) => saveConfig(configTarget.provider, payload)}
+            onRemove={() => { setRemoveProviderTarget(configTarget); setConfigTarget(null) }}
+            ensureVault={ensureVault}
+            onClose={() => setConfigTarget(null)}
+          />
+        ) : null}
 
-      {vaultSettingsOpen ? (
-        <VaultSettingsDialog
-          currentUserId={currentUser?.id}
-          isAdmin={showsAdminFeatures}
-          onChangePassphrase={() => { setVaultSettingsOpen(false); changePassphrase() }}
-          onChanged={refresh}
-          onClose={() => setVaultSettingsOpen(false)}
-        />
-      ) : null}
+        {vaultSettingsOpen ? (
+          <VaultSettingsDialog
+            currentUserId={currentUser?.id}
+            isAdmin={showsAdminFeatures}
+            onChangePassphrase={() => { setVaultSettingsOpen(false); changePassphrase() }}
+            onChanged={refresh}
+            onClose={() => setVaultSettingsOpen(false)}
+          />
+        ) : null}
 
-      {vaultRecoveryOpen ? (
-        // Both outcomes change vault state the page reads — a recovery leaves it unlocked, a reset
-        // leaves it unconfigured — so both refresh through the same path the other vault dialogs use
-        // rather than each patching a flag locally.
-        <VaultRecoveryDialog
-          onRecovered={refresh}
-          onReset={refresh}
-          onClose={() => { setVaultRecoveryOpen(false); refresh() }}
-        />
-      ) : null}
+        {vaultRecoveryOpen ? (
+          // Both outcomes change vault state the page reads — a recovery leaves it unlocked, a reset
+          // leaves it unconfigured — so both refresh through the same path the other vault dialogs use
+          // rather than each patching a flag locally.
+          <VaultRecoveryDialog
+            onRecovered={refresh}
+            onReset={refresh}
+            onClose={() => { setVaultRecoveryOpen(false); refresh() }}
+          />
+        ) : null}
 
-      {disconnectTarget ? (
-        <AppConfirmDialog
-          title={`${disconnectTarget.hasCredential ? 'Disconnect' : 'Remove'} ${disconnectTarget.institution || 'this bank'}?`}
-          // Two materially different outcomes, so they get two different sentences. Where the provider can
-          // be told to revoke, disconnecting really does end the access. Where it cannot, only Luma's copy
-          // of the credential goes and the credential itself stays live — saying otherwise would leave
-          // someone believing they had cut off access they still have.
-          // Without a stored credential (after a vault reset) there is nothing to disconnect, only the
-          // record here to remove, so it is named and described as that.
-          description={!disconnectTarget.hasCredential
-            ? 'This removes the connection from Luma. Existing accounts and their transactions are kept.'
-            : disconnectTarget.revokes
-              // Revoking the bank's token leaves Luma's own app credential in force, so a provider that has
-              // one is named as still reachable, with where that access is revoked.
-              ? providerById[disconnectTarget.provider]?.requires_app_config !== false
-                ? `This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts, their transactions and Luma's access to ${providerLabel(disconnectTarget.provider)} are kept. Reconnecting later means linking the bank again. Luma's access to ${providerLabel(disconnectTarget.provider)} can be revoked only by signing into the ${providerLabel(disconnectTarget.provider)} Dashboard.`
-                : 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
-              : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
-          confirmLabel={disconnectTarget.hasCredential
-            ? (disconnecting ? 'Disconnecting…' : 'Disconnect')
-            : (disconnecting ? 'Removing…' : 'Remove')}
-          confirmDisabled={disconnecting}
-          cancelDisabled={disconnecting}
-          onConfirm={confirmDisconnect}
-          onCancel={() => setDisconnectTarget(null)}
-        />
-      ) : null}
+        {disconnectTarget ? (() => {
+          const label = providerLabel(disconnectTarget.provider)
+          // Ending a connection at the provider is housekeeping, not a security step, so the choice is
+          // stated without a reason (`security-model.md` → *Revocation, in both directions*).
+          const description = disconnectTarget.revokes
+            ? `Revoke and remove ends this connection at ${label}. Remove from this install only leaves it in place. Accounts and transactions are kept.`
+            : 'This removes the connection from this install. Accounts and transactions are kept.'
+          return (
+            <RevokeChoiceDialog
+              title={`${disconnectTarget.hasCredential ? 'Disconnect' : 'Remove'} ${disconnectTarget.institution || 'this bank'}?`}
+              description={description}
+              offersRevoke={disconnectTarget.revokes}
+              busy={disconnectBusy}
+              onRevoke={() => disconnectConnection('revoke')}
+              // A provider with no revocation call still goes through the revoke path, which records that
+              // it could not revoke rather than that the user chose not to.
+              onRemove={() => disconnectConnection(disconnectTarget.hasCredential && !disconnectTarget.revokes ? 'revoke' : 'remove')}
+              onCancel={() => setDisconnectTarget(null)}
+            />
+          )
+        })() : null}
 
-      {revokeRefused ? (
-        <AppConfirmDialog
-          title="The provider refused to revoke this connection"
-          description={`${revokeRefused.message} Removing it here deletes the connection from Luma and keeps its accounts and transactions, but does not end its access at ${providerLabel(revokeRefused.target.provider)}. That access may still be live; revoke it from the provider's dashboard or the institution's website.`}
-          borderColor="var(--warning)"
-          confirmLabel={disconnecting ? 'Removing…' : 'Remove anyway'}
-          confirmDisabled={disconnecting}
-          cancelDisabled={disconnecting}
-          onConfirm={removeWithoutRevoking}
-          onCancel={() => setRevokeRefused(null)}
-        />
-      ) : null}
+        {removeProviderTarget ? (() => {
+          const label = providerLabel(removeProviderTarget.provider)
+          const connections = removeProviderTarget.connections || []
+          // Revoking is a real choice only where at least one connection holds something to revoke and the
+          // provider can be asked to.
+          const offersRevoke = removeProviderTarget.revokes_on_disconnect !== false
+            && connections.some(c => c.has_credential !== false)
+          return (
+            <RevokeChoiceDialog
+              title={`Remove ${label}?`}
+              description={connections.length
+                ? `This removes the account connections below and the ${label} client ID and secret. Accounts and transactions are kept.`
+                : `This deletes the ${label} client ID and secret from this install.`}
+              offersRevoke={offersRevoke}
+              busy={disconnectBusy}
+              onRevoke={() => removeProvider('revoke')}
+              onRemove={() => removeProvider('remove')}
+              onCancel={() => setRemoveProviderTarget(null)}
+            >
+              {connections.length ? (
+                <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, lineHeight: 1.6 }}>
+                  {connections.map(c => <li key={c.id}>{c.name || c.external_id}</li>)}
+                </ul>
+              ) : null}
+            </RevokeChoiceDialog>
+          )
+        })() : null}
 
-      {/* Grouped by what the action is for: the mapping decision, then the two provider re-pulls, then
-          the two that take something away. Only Disconnect is styled danger — it revokes the token at
-          the provider, so coming back means a fresh Link the bank (or the plan) may not grant. Removing
+        {revokeRefused ? (
+          <AppConfirmDialog
+            title={`${providerLabel(revokeRefused.provider)} refused to revoke ${revokeRefused.scope === 'provider' ? 'an account connection' : 'this connection'}`}
+            description={revokeRefused.scope === 'provider'
+              ? `${revokeRefused.message} Account connections revoked before it are removed. Removing the rest anyway leaves them in place at ${providerLabel(revokeRefused.provider)}.`
+              : `${revokeRefused.message} Removing it anyway leaves it in place at ${providerLabel(revokeRefused.provider)}. Accounts and transactions are kept.`}
+            borderColor="var(--warning)"
+            confirmLabel={disconnectBusy ? 'Removing…' : 'Remove anyway'}
+            confirmDisabled={!!disconnectBusy}
+            cancelDisabled={!!disconnectBusy}
+            onConfirm={removeAfterRefusal}
+            onCancel={() => setRevokeRefused(null)}
+          />
+        ) : null}
+
+        {/* Grouped by what the action is for: the mapping decision, then the two provider re-pulls, then
+          the two that take something away. Only Disconnect is styled danger — it can revoke the token
+          at the provider, so coming back means a fresh Link the bank (or the plan) may not grant. Removing
           synced transactions reads more destructive than it is: the cursor reset is what makes the next
           sync pull the same history back, so its red belongs on the confirm button, not here. */}
-      {cardMenu ? (
-        <ActionMenu
-          anchorElement={cardMenu.anchorElement}
-          onClose={() => setCardMenu(null)}
-          minWidth={220}
-          items={[
-            {
-              label: 'Connection settings…',
-              title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
-              onClick: () => openAccountMap(cardMenu.connection),
-            },
-            {
-              label: '↻ Fetch more history',
-              separatorBefore: true,
-              title: 'Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what’s already here. A bank or plan may cap how far back it will return.',
-              onClick: () => fetchMoreHistory(cardMenu.provider, cardMenu.connection),
-            },
-            {
-              label: '↻ Refresh accounts',
-              title: 'Rebuild this connection’s accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.',
-              onClick: () => refreshConnectionAccounts(cardMenu.provider, cardMenu.connection),
-            },
-            {
-              label: 'Remove synced transactions',
-              separatorBefore: true,
-              title: 'Delete every transaction this connection has synced and reset how far it has pulled, so the next sync re-imports that history from the provider. The connection, its accounts, and their mapping are kept.',
-              onClick: () => openRemoveSynced(cardMenu.connection),
-            },
-            {
-              // Named apart from "Remove synced transactions" above, which a bare "Remove" would read as.
-              label: cardMenu.connection.has_credential !== false ? 'Disconnect' : 'Remove connection',
-              danger: true,
-              title: cardMenu.connection.has_credential === false
-                ? 'Remove this connection from Luma. Existing accounts and transactions are kept.'
-                : providerById[cardMenu.provider]?.revokes_on_disconnect === false
-                  ? 'Remove this connection from Luma. Existing accounts and transactions are kept. This provider has no way to revoke a credential from here, so revoking it means going to the provider.'
-                  : 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
-              onClick: () => setDisconnectTarget({
-                provider: cardMenu.provider,
-                external_id: cardMenu.connection.external_id,
-                institution: cardMenu.connection.name,
-                revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false
-                  && cardMenu.connection.has_credential !== false,
-                hasCredential: cardMenu.connection.has_credential !== false,
-              }),
-            },
-          ]}
+        {cardMenu ? (
+          <ActionMenu
+            anchorElement={cardMenu.anchorElement}
+            onClose={() => setCardMenu(null)}
+            minWidth={220}
+            items={[
+              {
+                label: 'Connection settings…',
+                title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
+                onClick: () => openAccountMap(cardMenu.connection),
+              },
+              {
+                label: '↻ Fetch more history',
+                separatorBefore: true,
+                title: 'Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what’s already here. A bank or plan may cap how far back it will return.',
+                onClick: () => fetchMoreHistory(cardMenu.provider, cardMenu.connection),
+              },
+              {
+                label: '↻ Refresh accounts',
+                title: 'Rebuild this connection’s accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.',
+                onClick: () => refreshConnectionAccounts(cardMenu.provider, cardMenu.connection),
+              },
+              {
+                label: 'Remove synced transactions',
+                separatorBefore: true,
+                title: 'Delete every transaction this connection has synced and reset how far it has pulled, so the next sync re-imports that history from the provider. The connection, its accounts, and their mapping are kept.',
+                onClick: () => openRemoveSynced(cardMenu.connection),
+              },
+              {
+                // Named apart from "Remove synced transactions" above, which a bare "Remove" would read as.
+                label: cardMenu.connection.has_credential !== false ? 'Disconnect' : 'Remove connection',
+                danger: true,
+                title: cardMenu.connection.has_credential === false
+                  || providerById[cardMenu.provider]?.revokes_on_disconnect === false
+                  ? 'Remove this connection from this install. Accounts and transactions are kept.'
+                  : 'End this connection at the provider, or remove it from this install only. Accounts and transactions are kept.',
+                onClick: () => setDisconnectTarget({
+                  provider: cardMenu.provider,
+                  external_id: cardMenu.connection.external_id,
+                  institution: cardMenu.connection.name,
+                  revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false
+                    && cardMenu.connection.has_credential !== false,
+                  hasCredential: cardMenu.connection.has_credential !== false,
+                }),
+              },
+            ]}
+          />
+        ) : null}
+
+
+        {mapTarget ? (
+          <ConnectionAccountMapDialog
+            connection={mapTarget.connection}
+            providerAccounts={mapTarget.accounts}
+            captureFields={mapTarget.captureFields}
+            accounts={accounts}
+            onToggleCaptureField={toggleCaptureField}
+            loading={mapLoading}
+            saving={mapSaving}
+            error={mapError}
+            requireAll={mapTarget.pendingBackfill}
+            onSave={saveAccountMap}
+            onClose={() => { setMapTarget(null); setMapError(null) }}
+          />
+        ) : null}
+
+        {notice ? (
+          <AppNoticeDialog title={notice.title} description={notice.description} onClose={() => setNotice(null)} />
+        ) : null}
+      </div>
+      {/* Outside the grid above: these float over the app rather than sitting in the tab's column. */}
+      {connectionDialogsNode}
+      {panelsNode}
+      {accountDetailPanelsNode}
+      {syncLogScope ? (
+        <ConnectionSyncLogDialog
+          initialConnectionIds={syncLogScope.subjects}
+          initialProviders={syncLogScope.providers}
+          onClose={() => setSyncLogScope(null)}
         />
       ) : null}
-
-
-      {mapTarget ? (
-        <ConnectionAccountMapDialog
-          connection={mapTarget.connection}
-          providerAccounts={mapTarget.accounts}
-          captureFields={mapTarget.captureFields}
-          accounts={accounts}
-          onToggleCaptureField={toggleCaptureField}
-          loading={mapLoading}
-          saving={mapSaving}
-          error={mapError}
-          requireAll={mapTarget.pendingBackfill}
-          onSave={saveAccountMap}
-          onClose={() => { setMapTarget(null); setMapError(null) }}
-        />
-      ) : null}
-
-      {notice ? (
-        <AppNoticeDialog title={notice.title} description={notice.description} onClose={() => setNotice(null)} />
-      ) : null}
-    </div>
-    {/* Outside the grid above: these float over the app rather than sitting in the tab's column. */}
-    {connectionDialogsNode}
-    {panelsNode}
-    {accountDetailPanelsNode}
-    {syncLogScope ? (
-      <ConnectionSyncLogDialog
-        initialConnectionIds={syncLogScope.subjects}
-        initialProviders={syncLogScope.providers}
-        onClose={() => setSyncLogScope(null)}
-      />
-    ) : null}
     </>
   )
 }

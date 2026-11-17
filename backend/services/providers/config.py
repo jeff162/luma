@@ -405,6 +405,14 @@ def resolve_app_config(user: dict, provider: str) -> dict | None:
     return None
 
 
+def clear_provider_config(provider: str) -> None:
+    """Delete the provider's app credential, returning it to unconfigured. The caller removes the
+    provider's connections first (`DELETE /providers/{provider}/config`), because none of them can sync or
+    be revoked without it."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM provider_config WHERE provider = ?", (provider,))
+
+
 def set_provider_config(user: dict, provider: str, *, client_id=None, secret=None, env=None) -> None:
     """Upsert the app credential. client_id/env store plaintext; a provided secret is vault-encrypted.
     `secret=None` leaves the stored secret unchanged; `secret=''` clears it. A field left None keeps its

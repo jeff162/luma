@@ -302,6 +302,11 @@ export const api = {
   // dashboard, kept off the status payload so plaintext only ever appears when explicitly asked for.
   // 423 when the vault is locked; 409 when nothing is on file.
   getProviderSecret: (provider) => request(`/providers/${provider}/secret`),
+  // Remove a provider from this install: its connections (revoked at the provider when `revoke`), then its
+  // app credential. 502 `revoke_failed` stops with the credential kept and the rest of the connections in
+  // place.
+  removeProviderConfig: (provider, { revoke }) =>
+    request(`/providers/${provider}/config?revoke=${revoke ? 'true' : 'false'}`, { method: 'DELETE' }),
   // Connect a data source whose authorization is not a Link widget — the payload shape is whatever that
   // provider's `connect_spec` asked the UI to collect (e.g. { setup_token }).
   // `adoptConnectionId` names the existing connection this authorization *replaces*, for a provider whose
@@ -315,8 +320,8 @@ export const api = {
     }),
   // Drop a linked connection. Where the provider supports it this also revokes the credential at the
   // provider; where it does not (SimpleFIN has no revocation call) only the local copy goes.
-  // `removeWithoutRevoking` is the answer to a `revoke_failed` refusal: remove it here knowing the access
-  // may still be live at the provider.
+  // `removeWithoutRevoking` removes it from this install only, leaving the access live at the provider:
+  // chosen up front when another install shares the credential, or as the answer to a `revoke_failed`.
   disconnectProvider: (provider, external_id, { removeWithoutRevoking = false } = {}) =>
     request(`/providers/${provider}/disconnect`, {
       method: 'POST', body: JSON.stringify({ external_id, remove_without_revoking: removeWithoutRevoking }),

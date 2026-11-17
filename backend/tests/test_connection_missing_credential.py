@@ -173,4 +173,4 @@ class RefusedRevocationTests(unittest.TestCase):
             with get_db() as conn:
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0], 0)
             entry = client.get("/api/sync/diagnostics").json()["entries"][0]
-            self.assertEqual((entry["event"], entry["detail"]["reason"]), ("disconnect", "provider_refused"))
+            self.assertEqual((entry["event"], entry["detail"]["reason"]), ("disconnect", "kept_at_provider"))

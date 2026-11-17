@@ -73,7 +73,7 @@ that secret, with the DEK sealed to the slot's public key.
   it was never encrypted, and nothing done afterwards changes the contents of a file someone already
   has. The stored data-source credentials in that copy are encrypted, but they are protected only by
   how well the vault passphrase resists an **offline** attack against the copy — so treat them as
-  reachable given enough time, and **revoke** them on the provider side.
+  reachable given enough time, and **replace** the provider connection credentials.
 - **A leaked provider credential** grants whatever access the provider issued it for, for as long as it
   remains valid. Luma only ever *uses* read access — transactions, balances, and the account metadata
   that identifies them — and never initiates money-movement. However what a credential *can* do is
@@ -83,13 +83,13 @@ that secret, with the DEK sealed to the slot's public key.
   replace it where the provider can issue a new one, following that provider's documentation. That is
   the only action that affects a credential in a copy someone already has.
 - **After a leaked file, assume the vault secrets are recoverable and change them.** Nothing done
-  afterwards protects the copy already taken — only revocation limits that. But whatever an offline
+  afterwards protects the copy already taken — only replacing the credentials limits that. But whatever an offline
   attack against the copy yields (the passphrase, and through it the slot's private key and the DEK)
   stays valid against **anything encrypted afterwards** until it is deliberately retired — including
   the replacement credentials that retiring makes necessary. So the full response is, in order:
-  **retire every credential** — each connection, replaced where its provider can so it keeps syncing
-  (*Vault settings → Respond to an exposure*) and otherwise revoked, plus any app secret rotated and its
-  old value deleted — then **change the vault passphrase**, then **replace the vault key**.
+  **replace every provider connection credential** — an app secret rotated and its old value deleted, or
+  a credential with no app secret revoked and reissued (*Vault settings → Respond to an exposure* lists
+  them) — then **change the vault passphrase**, then **replace the vault key**.
 - **Those last two are not interchangeable — they retire different artifacts.** A passphrase change
   re-wraps the slot under a new key but leaves the DEK unchanged, so a recovered *DEK* would still
   decrypt a future copy's ciphertext without any passphrase at all. A key replacement re-encrypts

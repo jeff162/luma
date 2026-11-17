@@ -28,7 +28,7 @@ surfaces are in `ui-patterns.md`.
   - [Configuration layers](#configuration-layers)
   - [Identity, access & deployment model](#identity-access--deployment-model)
   - [Token vault & transport security](#token-vault--transport-security)
-  - [Provider connections (the aggregator seam)](#provider-connections-the-aggregator-seam)
+  - [Data providers (the aggregator seam)](#data-providers-the-aggregator-seam)
   - [Database concurrency](#database-concurrency)
   - [Storage layers](#storage-layers)
 - [Cross-platform approach](#cross-platform-approach)
@@ -584,7 +584,7 @@ precondition; its docstring has the ladder. What each state and field means is i
     group, tagged `dedupe_resolved_by = 'auto_merge'`.
   - `detach_account` restores any `auto_merge` promotion whose pair straddles the detach boundary,
     whichever side holds the trashed row. Rows the user rejected (`'user'`) are left alone.
-  - Applying a connection mapping re-judges that connection's earlier rows (see *Provider connections*).
+  - Applying a connection mapping re-judges that connection's earlier rows (see *Data providers*).
   - `POST /accounts/duplicate-rescan` runs on app load, gated on `DUPLICATE_DETECTION_VERSION`: it
     re-judges any rejection whose import is gone, as above, then re-scans each account once per matcher
     change and skips pairs the user has judged.
@@ -992,7 +992,9 @@ custody*; this section is the mechanism.
   for the slots that remain.
 - **Exposure response.** `POST /auth/vault/reissue-credentials` (`services/exposure_response.py`) gets a
   new credential from the provider for each connection whose adapter declares `reissues_credential` and
-  returns the rest as outcomes (`security-model.md` → *Responding to an exposure*).
+  returns the rest as outcomes. Each outcome carries `covered_by_app_secret` (the adapter's
+  `credential_needs_app_secret`): replacing the app secret retires that credential, so its result line
+  states the outcome with no instruction (`security-model.md` → *Responding to an exposure*).
 - **Recovery, cheapest first.**
   1. Another member re-enrols the stuck user.
   2. A recovery-code slot (`method='recovery'`, one per user) opens the vault and re-keys the passphrase
@@ -1022,7 +1024,7 @@ custody*; this section is the mechanism.
   device seen getting through, in cleartext or not, overrides the declaration until the next start.
   Settings → *Security checklist* (`services/security_checklist.py`) reads both.
 
-### Provider connections (the aggregator seam)
+### Data providers (the aggregator seam)
 
 Data-source aggregators reach the app through one provider-neutral seam, so adding a provider is an
 adapter and not a change to the connect and sync callers. `building-a-connector.md` is the guide to
@@ -1035,7 +1037,8 @@ and the transactions received, on `import_batch` + `import_batch_account`, which
 import card. The full rule is in `data-model.md`.
 
 - **Storage.** A `connection` row is the credential boundary: a `provider` discriminator, the provider's
-  `external_id`, and the per-connection credential encrypted under the DEK (`credential_enc`). Accounts
+  `external_id`, and the per-connection credential encrypted under the DEK (`credential_enc`). Which kind
+  of connection a row is depends on the provider (`data-model.md` → *Data-source linkage*). Accounts
   link through `account.connection_id` (`ON DELETE SET NULL`, so a disconnected account keeps its rows);
   `account.provider` records origin and `account.external_account_id` is the provider's per-account
   handle and the sync upsert key. CSV and manual accounts have `connection_id IS NULL`.
@@ -1143,6 +1146,11 @@ import card. The full rule is in `data-model.md`.
   once it has a connection, and is gated on a Production-strength vault at connect time. CRUD is
   admin-gated at `GET/POST /api/providers/{provider}/config`; every save needs the vault unlocked,
   since the three values work only as a set, so the Configure dialog opens behind the vault gate. App credentials ride the accounts part of a backup (`provider_configs`).
+  `DELETE /api/providers/{provider}/config` removes a provider: each of its account connections as a
+  disconnect (revoked or kept at the provider, by `revoke`), then the row. The connections go first because none of
+  them can sync or be revoked without the app credential. A refused revoke stops the walk with the row
+  kept, so what remains can be retried or removed without revoking. It refuses while a sync runs and,
+  like a save, needs the vault unlocked.
 
 - **The vault gate is hosted at App level** (`contexts/VaultGateContext.jsx`, `lib/useVaultGate.js`),
   because the navigation pane's sync control (`components/SyncNavItem.jsx`) starts gated work from any
@@ -1155,9 +1163,13 @@ import card. The full rule is in `data-model.md`.
 
 - **Disconnect** (`POST /api/providers/{provider}/disconnect`) revokes the token at the provider where
   the adapter's `remove` can, then drops the `connection` row and keeps accounts and transactions. Where
-  `revokes_on_disconnect` is false, `remove` is a no-op and the confirm dialog says so. A provider that
-  refuses is a `revoke_failed` 502 that keeps the row; `remove_without_revoking` then drops it without
-  calling the provider (`security-model.md` → *Revocation, in both directions*).
+  `revokes_on_disconnect` is false, `remove` is a no-op and the confirm dialog says so.
+  `remove_without_revoking` drops the row without calling the provider, needing neither the vault nor the
+  app credential; the confirm dialog offers it beside revoking, since another install may share the token
+  (`security-model.md` → *Revocation, in both directions*). A provider that refuses is a `revoke_failed`
+  502 that keeps the row, and the same option is offered then. A connection with no stored credential is
+  removed without a provider call either way. The disconnect log row's `reason` says why access did not
+  end: `no_credential`, `provider_cannot_revoke`, `kept_at_provider`, or a restore's `restored`.
 
 - **The mapping seam** (`connection_account`, `routers/connections.py`,
   `services/connection_mapping.py`). Connecting records the provider's accounts as unmapped and creates

@@ -21,7 +21,7 @@ import { VaultPassphraseDialog } from './VaultPassphraseDialog.jsx'
 import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { formatDate } from '../lib/utils.js'
-import { connectionProviderLabel } from '../lib/connectionSummary.js'
+import { REPLACE_AT_PROVIDER, connectionProviderLabel } from '../lib/connectionSummary.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 function Section({ title, description, help, children, style }) {
@@ -41,8 +41,6 @@ function Section({ title, description, help, children, style }) {
   )
 }
 
-// What each connection's outcome asks of the user. Only `manual` and `failed` leave something to do, and
-// both end the same way: the copied credential is only dead once the provider has been told.
 // The answers to "why replace the key?", which `crypto_service.ROTATION_REASONS` records.
 const ROTATE_REASONS = [
   {
@@ -57,11 +55,20 @@ const ROTATE_REASONS = [
   },
 ]
 
-const REISSUE_NOTE = {
-  reissued: 'Replaced. The copied credential no longer works.',
-  manual: 'This provider cannot replace it from here. Revoke it at the provider, then reconnect.',
-  failed: 'The provider refused. Revoke it at the provider, then reconnect.',
-  unreadable: 'Nothing stored could be read, so nothing was sent. If the provider still lists this connection, revoke it there.',
+// What each connection's outcome says. A credential covered by its provider's app secret
+// (`covered_by_app_secret`) is retired by replacing that secret, which has its own line, so only the
+// outcome is stated; any other credential not replaced here has to be replaced at its provider.
+const REISSUE_OUTCOME = {
+  reissued: 'Replaced.',
+  manual: 'Not replaced.',
+  failed: 'Not replaced: the provider refused.',
+  unreadable: 'Not replaced: nothing stored could be read.',
+}
+
+function reissueNote(o) {
+  const outcome = REISSUE_OUTCOME[o.outcome]
+  if (o.outcome === 'reissued' || o.covered_by_app_secret) return outcome
+  return [o.detail || outcome, REPLACE_AT_PROVIDER].join(' ')
 }
 
 function Row({ children, style }) {
@@ -456,7 +463,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
             instead destroy every credential and cost a re-link the bank or plan may not grant. */}
         <Section
           title="Respond to an exposure"
-          description="If the database or a backup may have been copied, replace each connection's credential at its provider so the copied ones stop working. Connections keep syncing where the provider supports this; the rest are listed with what to do at the provider."
+          description="If the database or a backup may have been copied, this replaces each account connection credential where the provider allows it and lists what is left to replace at the provider."
           help={<FeatureExplainer topic="copied-database" label="About responding to an exposure" placement="bottom-left" />}
         >
           <div>
@@ -469,7 +476,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
               {reissueResult.outcomes.map(o => (
                 <Row key={o.connection_id} style={{ display: 'grid', gap: 2 }}>
                   <strong>{o.label}</strong>
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{o.detail || REISSUE_NOTE[o.outcome]}</span>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{reissueNote(o)}</span>
                 </Row>
               ))}
               {/* Never retired by the step above: the app secret is not per-connection, and a rotated-away
@@ -513,7 +520,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           title="Replace connection credentials?"
           // Confirmed because it reaches past this install: every other copy of the database — a restored
           // backup elsewhere, a second install — holds the credentials being retired and stops syncing.
-          description="Each connection's credential is replaced at its provider where the provider supports it, and the old one stops working. Connections here keep syncing. Any other copy of this database stops syncing those connections."
+          description="Each account connection credential is replaced at its provider where the provider supports it, and the old one stops working. Account connections here keep syncing. Any other copy of this database stops syncing them."
           confirmLabel={busy === 'reissue' ? 'Replacing…' : 'Replace credentials'}
           confirmDisabled={busy === 'reissue'}
           cancelDisabled={busy === 'reissue'}

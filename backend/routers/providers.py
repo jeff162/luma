@@ -31,7 +31,12 @@ from backend.services.providers import (
     set_provider_config,
     supported_providers,
 )
-from backend.services.providers.config import list_connections, remove_connection
+from backend.services.providers.config import (
+    clear_provider_config,
+    list_connections,
+    remove_connection,
+    sync_marker_is_live,
+)
 
 router = APIRouter()
 
@@ -55,8 +60,9 @@ class ConnectRequest(BaseModel):
 
 class DisconnectRequest(BaseModel):
     external_id: str
-    # Remove the connection here although the provider refused to revoke it: the user's answer to the
-    # `revoke_failed` refusal below, given knowing the access may still be live.
+    # Remove the connection from this install only, leaving its access live at the provider. Chosen up
+    # front when another install shares the credential (a restored copy holds the same token, so revoking
+    # here would end the access there too), or as the answer to a `revoke_failed` refusal.
     remove_without_revoking: bool = False
 
 
@@ -417,12 +423,55 @@ def get_secret(provider: str, request: Request):
     return {"secret": app_config["secret"], "source": get_provider_config_status(provider)["source"]}
 
 
+@router.delete("/{provider}/config")
+def remove_config(provider: str, request: Request, revoke: bool = True):
+    """Remove a provider from this install: every connection under it, then its app credential.
+
+    The connections go first because each one needs the app credential to be revoked, and a connection
+    left without it could neither sync nor be revoked later. `revoke` is the same choice a single
+    disconnect offers. With it, each connection is revoked and removed in turn, and a refusal stops the
+    walk with the app credential kept: the connections already revoked are gone, and the rest wait for the
+    user to retry or to remove them from this install only. Without it nothing is sent to the provider.
+
+    Like every save of the app credential, it needs the vault unlocked, since it discards a vaulted value.
+    Accounts and transactions are kept, as with any disconnect."""
+    require_admin_or_local(request)
+    _validate_provider(provider)
+    if not get_adapter(provider).requires_app_config:
+        raise HTTPException(status_code=409, detail={
+            "code": "no_app_credential",
+            "message": "This data provider has no app-level credentials to remove.",
+        })
+    user = request.state.user
+    if not crypto_service.is_unlocked(user["id"]):
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to remove this data provider.",
+        })
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, institution, external_id, credential, credential_enc, sync_started_at "
+            "FROM connection WHERE provider = ? ORDER BY created_at, id",
+            (provider,),
+        ).fetchall()
+    if any(sync_marker_is_live(r["sync_started_at"]) for r in rows):
+        raise HTTPException(status_code=409, detail={
+            "code": "sync_running",
+            "message": "A sync is running for this data provider. Try again once it finishes.",
+        })
+    for row in rows:
+        _disconnect_row(request, provider, row, user, revoke=revoke)
+    clear_provider_config(provider)
+    return {"ok": True, "removed_connections": len(rows)}
+
+
 @router.post("/{provider}/disconnect")
 def disconnect(provider: str, body: DisconnectRequest, request: Request):
     # Revoke a linked connection *at the provider* (so any leaked copy of the token dies too — the
-    # mitigation the threat model relies on), then drop the local connection row. Needs the vault unlocked
-    # to decrypt the credential; not admin-gated (symmetric with connect/sync). Accounts + their
-    # transactions are preserved — they simply stop being backed by a live connection.
+    # mitigation the threat model relies on), then drop the local connection row; or, on request, drop the
+    # row alone. Revoking needs the vault unlocked to decrypt the credential; not admin-gated (symmetric
+    # with connect/sync). Accounts + their transactions are preserved — they simply stop being backed by a
+    # live connection.
     _validate_provider(provider)
     user = request.state.user
     with get_db() as conn:
@@ -433,17 +482,25 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Connection not found")
-    credential = None
-    revoked = False
-    if body.remove_without_revoking:
-        reason = "provider_refused"
-    else:
+    revoked = _disconnect_row(request, provider, row, user, revoke=not body.remove_without_revoking)
+    return {"ok": True, "revoked": revoked}
+
+
+def _disconnect_row(request: Request, provider: str, row, user, *, revoke: bool) -> bool:
+    """Remove one connection, revoking it at the provider first when `revoke` asks; returns whether access
+    ended there. The log row's reason says why it did not: nothing stored to revoke with, a provider with
+    no revocation call, or the user keeping the access live for use elsewhere. A connection with nothing
+    stored is removed the same way whichever was asked, needing neither the vault nor the app credential."""
+    has_credential = crypto_service.connection_has_credential(row["credential"], row["credential_enc"])
+    if revoke and has_credential:
         credential, revoked = _revoke_for_disconnect(request, provider, row, user)
         reason = None if revoked else "no_credential" if credential is None else "provider_cannot_revoke"
+    else:
+        revoked, reason = False, "kept_at_provider" if has_credential else "no_credential"
     with get_db() as conn:
         remove_connection(conn, {"id": row["id"], "provider": provider, "institution": row["institution"]},
                           revoked=revoked, reason=reason)
-    return {"ok": True, "revoked": revoked}
+    return revoked
 
 
 def _revoke_for_disconnect(request: Request, provider: str, row, user) -> tuple:

@@ -89,14 +89,21 @@ import, or by hand. It is a reporting and ownership dimension only: it carries n
 
 ### Data-source linkage
 
-An account fed by a provider connection carries `external_account_id` (the provider's per-account
+**A `connection` row is the link the app holds a credential for, and its kind depends on the provider.**
+For Plaid it is an *account connection*: one bank login with its own token, usable only with the app secret
+in `provider_config`, which is Plaid's *provider connection*. For SimpleFIN it is the *provider
+connection*: one bridge credential, whose links to institutions SimpleFIN manages outside the app. These
+docs say "connection" for the row and name the kind only where the two behave differently: revocation,
+exposure, restore and removing a provider.
+
+An account fed by a data connection carries `external_account_id` (the provider's per-account
 handle, the upsert key on connect and sync, `UNIQUE`), `connection_id` (FK to `connection`,
 `ON DELETE SET NULL`) and `provider` (the provider key, or the `csv` / `manual` sentinels). CSV and
 manual accounts, and any account whose connection was removed, have `connection_id IS NULL`.
 
 The per-bank credential lives on the `connection` row. The aggregator's app-level credential, one per
 provider, lives in `provider_config` with its secret vault-encrypted. The provider seam and the
-credential resolver are in `architecture.md` → *Provider connections*.
+credential resolver are in `architecture.md` → *Data providers*.
 
 A connection is shown by `connection.nickname` where the user set one, otherwise by `institution`
 (`services/connection_names.py`). The nickname is display only. `institution` stays the provider's value:
@@ -2450,8 +2457,7 @@ the data because it is a claim about data held, written with the rows it describ
 with `replace`). Both halves of every row are then the backup's, so the table is emptied and the backup's
 connections go in for the credentials to be written onto. A connection the backup does not name is removed
 as a disconnect without revoking removes it (`remove_connection`, logged with reason `restored`), and
-the restore result names it (`removed_connections`) with a hint to revoke its access at the provider.
-Whether that matters is the user's call; the app only says it was removed.
+the restore result names it (`removed_connections`).
 
 **Otherwise `connection` is not wiped**, because the half the restore leaves alone sits on the same
 row. A data restore without the credentials reconciles:

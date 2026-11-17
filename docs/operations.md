@@ -442,8 +442,7 @@ signs everyone out, and a file that turns sign-in on is restored only with the p
 administrator in it, so the operator keeps a way in: the administrator they then sign in as.
 
 **Restoring the data and the credentials together leaves exactly the backup's data connections.** One this
-install had and the backup does not is removed, and the result names it with a hint to revoke its access
-at the provider, since removing it here does not end access granted there. A restore that leaves the
+install had and the backup does not is removed without revoking, and the result names it. A restore that leaves the
 credentials out keeps every connection, because those credentials sit on the same rows
 (`data-model.md` → *A connection is split across the two parts*). A data restore is refused while a sync
 is running.

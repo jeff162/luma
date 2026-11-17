@@ -47,6 +47,7 @@ vi.mock('../../lib/api.js', () => ({
 }))
 
 const { VaultRecoveryDialog } = await import('../VaultRecoveryDialog.jsx')
+const { REPLACE_AT_PROVIDER } = await import('../../lib/connectionSummary.js')
 const { AppSessionProvider } = await import('../../lib/AppSessionContext.jsx')
 
 const SESSION = { currentUser: { vault_passphrase_min_length: 20 } }
@@ -257,7 +258,7 @@ describe('the reset', () => {
 
     expect(await screen.findByText('Still to do at the provider')).toBeTruthy()
     expect(screen.getByText('Harborline Bank')).toBeTruthy()
-    expect(screen.getByText(/stays live until you do/)).toBeTruthy()
+    expect(screen.getByText('Harborline Bank').parentElement.textContent).toContain(REPLACE_AT_PROVIDER)
   })
 
   it('names the app secret to rotate even when every connection was revoked', async () => {

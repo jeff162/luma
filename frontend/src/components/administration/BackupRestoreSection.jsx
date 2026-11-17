@@ -505,7 +505,7 @@ export default function BackupRestoreSection() {
         sentences.push('The data provider credentials were not restored.')
       }
       for (const name of result.removed_connections || []) {
-        sentences.push(`${name} removed — consider revoking its access at the provider.`)
+        sentences.push(`${name} connection removed.`)
       }
       setRestoreMsg(null)
       setAdminPassword('')

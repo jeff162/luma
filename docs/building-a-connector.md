@@ -11,7 +11,7 @@ each one produces a plausible-looking result, so a test that does not already kn
 will not find it.
 
 "Connector" here means any **data source** that produces transactions. There are three shapes — a
-provider connection (a `ProviderAdapter`), a file importer, and a marketplace importer — and they do not
+data provider (a `ProviderAdapter`), a file importer, and a marketplace importer — and they do not
 share a base class, so some declarations live on the adapter class and some in a registry
 (`services/source_capabilities.py`). The rules are about sources rather than connections, so the other
 two shapes hit several of them unchanged:
@@ -57,7 +57,7 @@ two shapes hit several of them unchanged:
 
 ## The adapter interface
 
-The seam itself is described in [`architecture.md`](architecture.md) → *Provider connections*. Subclass
+The seam itself is described in [`architecture.md`](architecture.md) → *Data providers*. Subclass
 `ProviderAdapter` (`backend/services/providers/`) rather than duck-typing the two methods a caller happens to use. The sync loop
 reads capability declarations to decide how deep to fetch and whether a backfill finished, so a partial
 stand-in goes stale the moment the contract grows — silently, because an `AttributeError` inside the loop
@@ -86,6 +86,14 @@ otherwise learn by branching on `provider`:
 
 Most have a default. `zero_amount_rows` and `currency_scope` deliberately do not, because their answers do
 not generalize between providers and a wrong inherited guess is silent.
+
+**`requires_app_config`, `revokes_on_disconnect` and `credential_needs_app_secret` follow from who owns the
+link to the institution.** Plaid issues one app secret to the app's operator, whose users each link their
+own institutions through the app; each link gets its own token, usable only with the secret, and the app can
+remove it. SimpleFIN issues each person their own credential to its bridge, and the person links
+institutions in SimpleFIN's portal; there is no app secret, and the app holds only the one credential, with
+no institution link to remove. Place a new provider by asking which of these it resembles, then confirm
+each declaration from its documentation.
 
 ## Where the connection handle comes from
 

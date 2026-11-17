@@ -35,6 +35,10 @@ export function providerSummaryLine({ connectionCount = 0, syncing = false, last
 // the user is configuring, so it gets a word rather than an empty string that would leave a label blank.
 const CONNECTION_PROVIDER_LABELS = { plaid: 'Plaid', simplefin: 'SimpleFIN Bridge' }
 
+// What a credential sweep (the exposure response, the vault reset) asks of the user for a connection
+// whose credential works without an app secret and was not retired here.
+export const REPLACE_AT_PROVIDER = 'Revoke it at the provider and connect again with a new credential.'
+
 export function connectionProviderLabel(provider) {
   const key = String(provider || '').toLowerCase()
   if (CONNECTION_PROVIDER_LABELS[key]) return CONNECTION_PROVIDER_LABELS[key]

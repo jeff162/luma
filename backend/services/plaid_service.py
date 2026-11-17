@@ -118,9 +118,9 @@ def _plaid_errors():
 def _get_client(app_config: dict):
     """Build a Plaid client from the resolved app credential ({client_id, secret, env}).
 
-    The credential now comes from the vaulted DB (or the `.env` bootstrap) via
-    `providers.config.resolve_app_config` and is passed in per call — never read from the environment
-    here — so a client is built from whatever creds the caller resolved, not a process-wide singleton.
+    The credential comes from the saved provider configuration via `providers.config.resolve_app_config`
+    and is passed in per call, so a client is built from whatever creds the caller resolved, not a
+    process-wide singleton.
     """
     client_id = (app_config or {}).get("client_id", "")
     secret    = (app_config or {}).get("secret", "")
