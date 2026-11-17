@@ -2085,7 +2085,7 @@ export default function Dashboard() {
     ...summaryFilters,
     date_start: dateStart || undefined,
     date_end: dateEnd || undefined,
-    group_ids: selectedGroup?.group_id,
+    group_id: selectedGroup?.group_id,
     account_id: accountId || undefined,
     tag_ids: tagIds,
     owner_ids: ownerIds,
@@ -2338,13 +2338,15 @@ export default function Dashboard() {
   }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeFrame, beginSingleTotals])
 
   // The trend follows the drill: an open group or category charts its own history, in the scope the
-  // detail panels use (`category_id`, with `__group__` for a group), so its bars are the rows the list
-  // beneath them lists. Null at the top level, where the trend is the frame's total.
-  const trendScopeId = level === 'transactions' && selectedCat
-    ? selectedCat.category_id
-    : level === 'categories' && selectedGroup
-      ? `__group__${selectedGroup.group_id}`
-      : null
+  // drill list beneath it takes (`category_id`, or `group_id` for a group), so its bars are the rows that
+  // list shows. Null at the top level, where the trend is the frame's total. `trendScopeId` keys the
+  // fetched rows to the scope they belong to.
+  const trendCategoryId = level === 'transactions' && selectedCat ? selectedCat.category_id : null
+  const trendGroupId = !trendCategoryId && level === 'categories' && selectedGroup ? selectedGroup.group_id : null
+  const trendScope = useMemo(() => (
+    trendCategoryId ? { category_id: trendCategoryId } : trendGroupId ? { group_id: trendGroupId } : null
+  ), [trendCategoryId, trendGroupId])
+  const trendScopeId = trendScope ? new URLSearchParams(trendScope).toString() : null
   const trendScopeName = trendScopeId
     ? (level === 'transactions' ? selectedCat.category_name : selectedGroup.group_name)
     : null
@@ -2353,9 +2355,9 @@ export default function Dashboard() {
   const loadDrillTrend = useCallback(async () => {
     if (!trendScopeId) return
     const request = ++drillTrendRequestRef.current
-    const rows = await api.getMonthlyTrend(120, trendScopeId, accountId || undefined, ALL_TIME_START, undefined, tagIds, activeFrame, ownerIds, summaryFilters)
+    const rows = await api.getMonthlyTrend(120, undefined, accountId || undefined, ALL_TIME_START, undefined, tagIds, activeFrame, ownerIds, { ...summaryFilters, ...trendScope })
     if (request === drillTrendRequestRef.current) setDrillTrend({ key: trendScopeId, rows })
-  }, [trendScopeId, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
+  }, [trendScope, trendScopeId, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
   useEffect(() => {
     if (mode !== 'single') return
     loadDrillTrend().catch(() => { })
@@ -2408,9 +2410,9 @@ export default function Dashboard() {
       return { start, end }
     })
     const rows = await api.getRangeTrend(ranges, accountId || undefined, tagIds, activeFrame, ownerIds,
-      { ...summaryFilters, category_id: trendScopeId || undefined })
+      { ...summaryFilters, ...trendScope })
     if (request === spanRequestRef.current) setSpanTrend({ key: spanKey, rows })
-  }, [spanKey, spanRanges, trendScopeId, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
+  }, [spanKey, spanRanges, trendScope, accountId, tagIds, activeFrame, ownerIds, summaryFilters])
   useEffect(() => {
     if (mode !== 'single' || dateResolving) return
     loadSpanTrend().catch(() => { })

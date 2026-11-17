@@ -4,20 +4,17 @@
 /*
  * The transaction-list filter behind a Dashboard period report (PeriodDetail): a date range, the frame
  * (`view`), the page's filters, and optionally one slice of the breakdown the report was opened from —
- * `scope` is `{ kind: 'category' | 'group', id, name }`. Kept out of the component so the one rule that
- * is easy to get wrong here is stated, and tested, in one place.
+ * `scope` is `{ kind: 'category' | 'group', id, name }`.
  *
- * That rule: the scope *replaces* a category or group include filter of the same kind rather than
- * joining it. Both facets are single comma-separated params, so joining would mean an OR (widening the
- * report past the slice) and appending a second param is not something the endpoint reads. Replacing is
- * exact for every report that can be opened: a slice only has a figure if it survived the page's include
- * filter, so the filter intersected with the slice *is* the slice. Exclusions and every other facet ride
- * along untouched and still AND.
+ * The slice travels in the list feed's scope params (`category_id`, `group_id`), never in the filter's
+ * `category_ids` / `group_ids`: those two OR with each other as one facet, so a slice folded into them
+ * would widen the report past the slice. A scope param ANDs with the whole filter, which is exactly the
+ * rows behind the slice's figure.
  */
 
 function scopeParams(scope) {
   if (!scope?.id) return {}
-  return scope.kind === 'group' ? { group_ids: scope.id } : { category_ids: scope.id }
+  return scope.kind === 'group' ? { group_id: scope.id } : { category_id: scope.id }
 }
 
 export function periodReportParams({ start, end, view, accountId, tagIds, ownerIds, filters = {}, scope = null }) {

@@ -12,23 +12,17 @@ describe('periodReportParams', () => {
 
   it('narrows a category slice by category and a group slice by group', () => {
     expect(periodReportParams({ ...base, scope: { kind: 'category', id: 'cat-1', name: 'Groceries' } }))
-      .toMatchObject({ category_ids: 'cat-1' })
+      .toMatchObject({ category_id: 'cat-1' })
     const group = periodReportParams({ ...base, scope: { kind: 'group', id: 'grp-1', name: 'Living' } })
-    expect(group).toMatchObject({ group_ids: 'grp-1' })
-    expect(group).not.toHaveProperty('category_ids')
+    expect(group).toMatchObject({ group_id: 'grp-1' })
+    expect(group).not.toHaveProperty('category_id')
   })
 
-  it('replaces an include filter of the same kind, so the report is the slice and not the filter', () => {
-    // The page's filter includes two categories; the row the report was opened from is one of them.
-    const params = periodReportParams({
-      ...base,
-      filters: { category_ids: 'cat-1,cat-2', exclude_tag_ids: 'tag-9', group_ids: 'grp-1' },
-      scope: { kind: 'category', id: 'cat-1', name: 'Groceries' },
-    })
-    expect(params.category_ids).toBe('cat-1')
-    // Everything else still narrows it.
-    expect(params.exclude_tag_ids).toBe('tag-9')
-    expect(params.group_ids).toBe('grp-1')
+  it('leaves the filter whole, so the slice narrows it rather than joining its category selection', () => {
+    // The filter's groups and categories OR as one selection; folding the slice into them would widen it.
+    const filters = { category_ids: 'cat-1,cat-2', exclude_tag_ids: 'tag-9', group_ids: 'grp-1' }
+    const params = periodReportParams({ ...base, filters, scope: { kind: 'group', id: 'grp-2', name: 'Travel' } })
+    expect(params).toMatchObject({ ...filters, group_id: 'grp-2' })
   })
 
   it('keeps the frame even if a filter object carries a stray view', () => {

@@ -4,8 +4,8 @@
 """
 The shared filter facets — one definition of "is a member of this facet set", for every surface.
 
-A *facet* is one axis the app-wide FilterBar exposes as chips: account (by name or by type), group,
-category, owner, payee, tag, and attribute. Each is accepted as an **include** set and an **exclude** set, and the two are the same expression
+A *facet* is one axis the app-wide FilterBar exposes as chips: account (by name or by type), category
+(by group or by leaf), owner, payee, tag, and attribute. Each is accepted as an **include** set and an **exclude** set, and the two are the same expression
 — exclusion is the NULL-safe negation of the membership the include path builds, so they cannot drift.
 
 **Why this is a registry rather than a helper per endpoint.** Nine endpoints consume these facets (the
@@ -286,8 +286,11 @@ FACETS: tuple[Facet, ...] = (
     Facet('account', 'account_ids', 'exclude_account_ids', account_membership, variants=(
         Facet('account_type', 'account_types', 'exclude_account_types', account_type_membership),
     )),
-    Facet('group', 'group_ids', 'exclude_group_ids', group_membership),
-    Facet('category', 'category_ids', 'exclude_category_ids', category_membership),
+    # Groups and leaves are picked from one category tree, so a group and a leaf in another group must
+    # widen the selection, not intersect to nothing.
+    Facet('group', 'group_ids', 'exclude_group_ids', group_membership, variants=(
+        Facet('category', 'category_ids', 'exclude_category_ids', category_membership),
+    )),
     Facet('owner', 'owner_ids', 'exclude_owner_ids', owner_membership),
     Facet('payee', 'payees', 'exclude_payees', payee_membership, separator='|', variants=(
         Facet('payee_contains', 'payee_contains', 'exclude_payee_contains', payee_contains_membership,
@@ -339,8 +342,8 @@ class TransactionFacets:
     attribute_ids: Optional[str] = Query(None, description="comma-separated attribute keys (see GET /transactions/filter-attributes)")
     account_ids: Optional[str] = Query(None, description="comma-separated account IDs (effective/top-level account)")
     account_types: Optional[str] = Query(None, description="comma-separated account types; ORs with account_ids")
-    group_ids: Optional[str] = Query(None, description="comma-separated top-level group IDs")
-    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs")
+    group_ids: Optional[str] = Query(None, description="comma-separated top-level group IDs; ORs with category_ids")
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs; ORs with group_ids")
     owner_ids: Optional[str] = Query(None, description="comma-separated owner IDs")
     payees: Optional[str] = Query(None, description="pipe-separated payee names")
     payee_contains: Optional[str] = Query(None, description="pipe-separated fragments of the shown payee name")

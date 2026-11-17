@@ -46,6 +46,7 @@ from backend.services.transaction_facets import (
     append_totals_exclusion,
     coerce_facets,
     facets_from,
+    group_membership,
     like_contains_pattern,
 )
 from backend.services.transaction_tags import (
@@ -198,13 +199,6 @@ def _resolve_category_is_income(conn, category_id: str) -> bool:
         return True
     if category_id in (UNCATEGORIZED_EXPENSE_CATEGORY_ID, UNCATEGORIZED_CATEGORY_ID):
         return False
-    if category_id.startswith("__group__"):
-        gid = category_id[len("__group__"):]
-        row = conn.execute(
-            "SELECT category_type FROM category WHERE id = ?",
-            [gid],
-        ).fetchone()
-        return bool(row and row[0] == "income")
     row = conn.execute(
         """
         SELECT COALESCE(c.category_type, p.category_type)
@@ -217,6 +211,13 @@ def _resolve_category_is_income(conn, category_id: str) -> bool:
     return bool(row and row[0] == "income")
 
 
+def _resolve_group_is_income(conn, group_id: str) -> bool:
+    if group_id == UNCATEGORIZED_INCOME_CATEGORY_ID:
+        return True
+    if group_id in (UNCATEGORIZED_EXPENSE_CATEGORY_ID, UNCATEGORIZED_CATEGORY_ID):
+        return False
+    row = conn.execute("SELECT category_type FROM category WHERE id = ?", [group_id]).fetchone()
+    return bool(row and row[0] == "income")
 
 
 def _summary_uncategorized_id_sql(level: str) -> str:
@@ -818,7 +819,7 @@ def _parse_quick_filter_amount(
 def _build_transaction_filter(
     *,
     month=None, date_start=None, date_end=None, import_batch_id=None,
-    account_id=None, source_account_ids=None, category_id=None, require_all_tag_ids=None,
+    account_id=None, source_account_ids=None, category_id=None, group_id=None, require_all_tag_ids=None,
     require_all_attribute_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     sync_connection_id=None, expanded=False,
@@ -949,6 +950,14 @@ def _build_transaction_filter(
     elif category_id:
         clauses.append("t.category_id = ?")
         params.append(category_id)
+    # One group of a breakdown, as a drill opens it: unlike `group_ids`, which ORs with `category_ids`
+    # as the filter bar's selection, this ANDs with every facet, so the list is the rows behind the
+    # slice's figure under the page's filter. It means what `group_id` means on the summary endpoints:
+    # the group's leaves, or the bucket a synthetic uncategorized id names.
+    group_scope = group_membership([group_id]) if group_id and isinstance(group_id, str) else None
+    if group_scope:
+        clauses.append(group_scope[0])
+        params.extend(group_scope[1])
     # group/category/tag/payee/owner include+exclude all route through the shared facet helpers so the
     # list feed and the summary/trend endpoints build one identical set definition per facet (and its
     # NULL-safe negation). Payee chips come from canonicalized labels in the UI, so matching honors
@@ -1053,6 +1062,7 @@ def transaction_list_filters(
     account_id:   Optional[str] = Query(None),
     source_account_ids: Optional[str] = Query(None),
     category_id:  Optional[str] = Query(None),
+    group_id:     Optional[str] = Query(None),
     require_all_tag_ids: Optional[str] = Query(None),
     require_all_attribute_ids: Optional[str] = Query(None),
     direction:    Optional[str] = Query(None),
@@ -1102,7 +1112,7 @@ def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple
     # and cash_flow through its exclude_from_totals guard, which a split's parts can straddle. See
     # services/txn_splits.py.
     expand_splits = bool(
-        filters.get("category_id") or facets.category_ids or facets.group_ids
+        filters.get("category_id") or filters.get("group_id") or facets.category_ids or facets.group_ids
         or facets.exclude_category_ids or facets.exclude_group_ids
         or filters.get("view") in ("spending", "income", "cash_flow")
     )
@@ -1163,6 +1173,7 @@ def list_transactions(
     facets:       TransactionFacets = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     category_id:  Optional[str] = Query(None),
+    group_id:     Optional[str] = Query(None, description="one breakdown group (or synthetic uncategorized bucket) a drill lists; ANDs with every facet, unlike group_ids"),
     require_all_tag_ids:  Optional[str] = Query(None, description="comma-separated tag IDs the row must ALL have (AND), independent of tag_ids"),
     require_all_attribute_ids: Optional[str] = Query(None, description="comma-separated attribute keys the row must ALL carry (AND), independent of attribute_ids"),
     direction:    Optional[str] = Query(None, description="debit | credit"),
@@ -1197,7 +1208,7 @@ def list_transactions(
         filters=dict(
             month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
             account_id=account_id, source_account_ids=source_account_ids,
-            category_id=category_id, require_all_tag_ids=require_all_tag_ids,
+            category_id=category_id, group_id=group_id, require_all_tag_ids=require_all_tag_ids,
             require_all_attribute_ids=require_all_attribute_ids,
             direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
             sync_connection_id=sync_connection_id,
@@ -2050,7 +2061,7 @@ def trash_transaction(txn_id: str):
 # to be named by hand.
 _BULK_FILTER_KEYS = FACET_PARAM_NAMES | AMOUNT_PARAM_NAMES | {
     "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id",
-    "source_account_ids", "category_id", "require_all_tag_ids", "require_all_attribute_ids",
+    "source_account_ids", "category_id", "group_id", "require_all_tag_ids", "require_all_attribute_ids",
     "view", "search", "quick_filter", "needs_review", "recurring_only",
 }
 
@@ -2798,15 +2809,16 @@ def spending_by_category_in_group(
 # only in how they cut time. Signed totals (no ABS), so reverses against the natural direction of the
 # queried scope appear as negative bars instead of being folded into a magnitude. Sign and
 # transaction-filter selection:
-#   - category_id given: ignore `view`; sign follows category type so
+#   - category_id or group_id given: ignore `view`; sign follows the category's or group's type so
 #     income-type scopes flip to positive-on-receipt; the existing
-#     category-membership filter limits which transactions count.
+#     category-membership filter limits which transactions count. `group_id` is the drill scope the
+#     list feed and the group breakdowns take, so a drilled group's bars count the rows its figure did.
 #   - payee given: ignore `view`; signed SUM, positive = paid them.
 #   - neither: `view` selects the cross-cutting frame the caller wants:
 #       * spending  -> filter to expense-side transactions, SUM
 #       * income    -> filter to income-side transactions, -SUM
 #       * cash_flow -> all transactions, -SUM (positive = net inflow)
-def _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view):
+def _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id=None):
     if payee:
         clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
@@ -2816,26 +2828,10 @@ def _trend_scope(category_id, payee, account_id, facets, amount, source_account_
         params  = []
         if _append_uncategorized_filter(clauses, params, category_id=category_id):
             pass
-        elif category_id and category_id.startswith("__group__"):
-            gid = category_id[len("__group__"):]
-            clauses.append(
-                """
-                (
-                    t.category_id IN (SELECT id FROM category WHERE parent_id = ?)
-                    OR (
-                        t.category_id IS NULL
-                        AND t.amount > 0
-                        AND EXISTS (
-                            SELECT 1
-                            FROM category
-                            WHERE id = ?
-                              AND system_key = ?
-                        )
-                    )
-                )
-                """
-            )
-            params.extend([gid, gid, UNASSIGNED_CATEGORY_SYSTEM_KEY])
+        elif group_id:
+            group_scope = group_membership([group_id])
+            clauses.append(group_scope[0])
+            params.extend(group_scope[1])
         elif category_id:
             clauses.append("t.category_id = ?")
             params.append(category_id)
@@ -2858,7 +2854,7 @@ def _trend_scope(category_id, payee, account_id, facets, amount, source_account_
             )
         # cash_flow: no category-type filter
 
-        if not category_id:
+        if not category_id and not group_id:
             # In cross-cutting dashboard frames the bars represent total
             # spending/income/cash flow, so categories marked exclude_from_totals
             # (transfers etc.) are removed. Detail-panel scopes (category_id) keep
@@ -2871,7 +2867,7 @@ def _trend_scope(category_id, payee, account_id, facets, amount, source_account_
     append_facets(clauses, params, facets)
     append_amount_filter(clauses, params, amount)
 
-    needs_category_join = bool(category_id) or (not payee)
+    needs_category_join = bool(category_id or group_id) or (not payee)
     join_sql = (
         "LEFT JOIN category c ON c.id = t.category_id "
         "LEFT JOIN category p ON p.id = c.parent_id"
@@ -2880,9 +2876,11 @@ def _trend_scope(category_id, payee, account_id, facets, amount, source_account_
     return clauses, params, join_sql
 
 
-def _trend_sign_factor(conn, category_id, payee, view) -> int:
+def _trend_sign_factor(conn, category_id, payee, view, group_id=None) -> int:
     if category_id:
         return -1 if _resolve_category_is_income(conn, category_id) else 1
+    if group_id:
+        return -1 if _resolve_group_is_income(conn, group_id) else 1
     if payee:
         return 1
     return -1 if view in ("income", "cash_flow") else 1
@@ -2891,6 +2889,7 @@ def _trend_sign_factor(conn, category_id, payee, view) -> int:
 @router.get("/summary/monthly-trend")
 def monthly_trend(
     category_id: Optional[str] = Query(None),
+    group_id:    Optional[str] = Query(None, description="one breakdown group (or synthetic uncategorized bucket), as a drill opens it; ANDs with every facet"),
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
@@ -2904,9 +2903,11 @@ def monthly_trend(
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
+    # A direct (non-HTTP) call leaves an unset Query default as a truthy FieldInfo.
+    group_id = group_id if isinstance(group_id, str) else None
     # Payee detail drawers want the merchant's full visible history by default, so the rolling month
     # window is suppressed for a payee scope unless the caller supplied an explicit date filter.
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -2947,7 +2948,7 @@ def monthly_trend(
                 params.append(anchor_date)
                 where = "WHERE " + " AND ".join(clauses)
 
-        sign_factor = _trend_sign_factor(conn, category_id, payee, view)
+        sign_factor = _trend_sign_factor(conn, category_id, payee, view, group_id)
 
         rows = conn.execute(
             f"""
@@ -2986,6 +2987,7 @@ RANGE_TREND_MAX_RANGES = 64
 def range_trend(
     ranges:      str           = Query(..., description="comma-separated start:end inclusive ISO date pairs"),
     category_id: Optional[str] = Query(None),
+    group_id:    Optional[str] = Query(None, description="one breakdown group (or synthetic uncategorized bucket), as a drill opens it; ANDs with every facet"),
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
@@ -2994,6 +2996,8 @@ def range_trend(
     view:        str           = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
     facets = coerce_facets(facets) or TransactionFacets()
+    # A direct (non-HTTP) call leaves an unset Query default as a truthy FieldInfo.
+    group_id = group_id if isinstance(group_id, str) else None
     spans = []
     for part in (ranges or "").split(","):
         if not part.strip():
@@ -3010,7 +3014,7 @@ def range_trend(
     if len(spans) > RANGE_TREND_MAX_RANGES:
         raise HTTPException(status_code=400, detail=f"at most {RANGE_TREND_MAX_RANGES} ranges")
 
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id)
     # The overall bounds let the date index prune before the per-range join does its work.
     clauses.append("t.date >= ?")
     params.append(min(s for s, _ in spans))
@@ -3024,7 +3028,7 @@ def range_trend(
     with get_db() as conn:
         # The same split-expansion seam monthly-trend reads, so a split counts per allocation here too.
         _expanded = txn_effective_sql(conn, expand=True)
-        sign_factor = _trend_sign_factor(conn, category_id, payee, view)
+        sign_factor = _trend_sign_factor(conn, category_id, payee, view, group_id)
         rows = conn.execute(
             f"""
             WITH r(idx, lo, hi) AS (VALUES {values_sql})

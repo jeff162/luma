@@ -175,3 +175,80 @@ class DashboardFilterReconciliationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GroupDrillReconciliationTests(unittest.TestCase):
+    """A drilled group's figure, the list under it and its trend bars count the same rows.
+
+    The Unassigned group is the case that splits them: the Categories page shows uncategorized rows under
+    it, but the group breakdown gives those rows their own Uncategorized slice, so a drill into either
+    one must count only its own rows.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "group-drill.db"
+        init_db(str(self.db_path))
+        with self._use_db_path(), get_db() as conn:
+            account = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO account (id, external_account_id, provider, name, display_name,
+                                     type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                VALUES (?, ?, 'fixture', 'Checking', 'Checking', 'checking', 'checking', '1', ?, NULL, NULL)
+                """,
+                (account, f"fixture_{account}", SHARED_OWNER_ID),
+            )
+            self.unassigned = conn.execute(
+                "SELECT id FROM category WHERE system_key = 'unassigned'"
+            ).fetchone()["id"]
+            parked = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO category (id, parent_id, name, sort_order) VALUES (?, ?, 'Imported Label', 0)",
+                (parked, self.unassigned),
+            )
+            for category_id, amount in ((parked, 40.0), (None, 200.0)):
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name,
+                                     display_name, raw_name, date, is_pending)
+                    VALUES (?, ?, ?, ?, ?, 'M', 'M', 'M', ?, 0)
+                    """,
+                    (str(uuid.uuid4()), account, SHARED_OWNER_ID, category_id, amount, f"{MONTH}-10"),
+                )
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _surfaces(self, group_id: str) -> dict:
+        window = dict(date_start=f"{MONTH}-01", date_end=f"{MONTH}-31")
+        with self._use_db_path():
+            figure = next(
+                r["total"] for r in _call(spending_by_group, **window) if r["group_id"] == group_id
+            )
+            listed = _call(list_transactions, group_id=group_id, limit=0, **window)
+            trend = _call(monthly_trend, group_id=group_id, view="spending", months=120, **window)
+            ranged = _call(range_trend, group_id=group_id, view="spending", ranges=f"{MONTH}-01:{MONTH}-31")
+        return {
+            "figure": figure,
+            "drill list": sum(r["amount"] for r in listed["transactions"]),
+            "monthly-trend": sum(r["total"] for r in trend if r["month"] == MONTH),
+            "range-trend": sum(r["total"] for r in ranged),
+        }
+
+    def test_unassigned_drill_counts_only_its_leaves(self):
+        totals = self._surfaces(self.unassigned)
+        self.assertEqual(totals, {surface: 40.0 for surface in totals})
+
+    def test_uncategorized_drill_counts_the_bucket(self):
+        from backend.services.transaction_facets import UNCATEGORIZED_EXPENSE_CATEGORY_ID
+        totals = self._surfaces(UNCATEGORIZED_EXPENSE_CATEGORY_ID)
+        self.assertEqual(totals, {surface: 200.0 for surface in totals})

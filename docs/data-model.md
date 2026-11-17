@@ -623,6 +623,7 @@ attribute) as an include set and an exclude set (`exclude_*` parameters). It fee
 "select all matching" resolver, every `/transactions/summary/*` endpoint and the CSV export.
 
 - **Combination.** Within a facet, include ids OR and exclude ids AND; across facets everything ANDs.
+  Groups and leaf categories are one facet (see *One facet registry, both halves*).
 - **Exclusion is the NULL-safe negation of the same membership expression the include path builds**:
   `COALESCE((membership), 0) = 0`. A bare `NOT IN` is SQL-unknown for a NULL category and would drop
   every uncategorized row from "not Groceries". The invariant is that a row the include set does not
@@ -667,7 +668,14 @@ unfiltered, and a total stops matching the list it drills into.
   descriptor it does not display. `GET /transactions/payee-names` lists the names a fragment selects.
   The account facet likewise takes ids (`account_ids`) and types (`account_types`), so "credit cards
   plus one checking account" is one selection, and an excluded account can be carved out of an included
-  type. A type covers an account added after the chip was picked.
+  type. A type covers an account added after the chip was picked. The category facet takes groups
+  (`group_ids`) and leaves (`category_ids`) the same way, because both are picked from one tree.
+- **A drill's slice is a scope, not a facet value.** A drill into one group or category of a breakdown
+  sends it as `group_id` or `category_id`, to the list feed and to the trend endpoints alike, which AND
+  with every facet, so the list and the trend bars are the rows behind the slice's figure under the
+  page's filter. `group_id` is a group's own leaves, as the group breakdown counts it: uncategorized rows
+  are their own slice there, even though the Categories page shows them under Unassigned. Folded into `group_ids` / `category_ids`
+  it would OR with the filter's own selection and widen the list past the slice.
 - **The CSV export takes the list feed's whole filter, row source and order**
   (`transaction_list_filters`, `transaction_list_scope` in `routers/transactions.py`), so the file holds
   the rows on screen. `tests/test_export_matches_ledger.py` asserts the dependency names every filter

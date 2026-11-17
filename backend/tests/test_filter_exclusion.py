@@ -163,6 +163,34 @@ class FilterExclusionTests(unittest.TestCase):
     def test_include_unchanged(self):
         self.assertEqual(self._matching_keys(category_ids=self.groceries), {"groc"})
 
+    def _add_salary(self) -> None:
+        income = self._insert_category(name="Income", parent_id=None, category_type="income")
+        self.salary = self._insert_category(name="Salary", parent_id=income, category_type="income")
+        self._insert_txn(key="salary", account_id=self.a2, category_id=self.salary, amount=-900.0,
+                         merchant="Employer", owner_id=SHARED_OWNER_ID)
+
+    def test_group_and_leaf_of_another_group_widen(self):
+        # Groups and leaves are picked from one tree, so they are one selection and OR.
+        self._add_salary()
+        self.assertEqual(self._matching_keys(group_ids=self.food, category_ids=self.salary),
+                         {"groc", "dining", "salary"})
+
+    def test_excluded_leaf_carves_out_of_included_group(self):
+        self.assertEqual(self._matching_keys(group_ids=self.food, exclude_category_ids=self.dining), {"groc"})
+
+    def test_group_scope_narrows_the_category_selection(self):
+        # A drill into one group lists that group's rows *under* the filter, never the filter's union.
+        self._add_salary()
+        self.assertEqual(
+            self._matching_keys(group_id=self.food, group_ids=self.food, category_ids=self.salary),
+            {"groc", "dining"},
+        )
+        self.assertEqual(self._matching_keys(group_id=self.food, category_ids=self.groceries), {"groc"})
+
+    def test_group_scope_names_a_synthetic_bucket(self):
+        from backend.routers.transactions import UNCATEGORIZED_EXPENSE_CATEGORY_ID
+        self.assertEqual(self._matching_keys(group_id=UNCATEGORIZED_EXPENSE_CATEGORY_ID), {"uncat"})
+
     def test_exclude_synthetic_uncategorized_bucket(self):
         from backend.routers.transactions import UNCATEGORIZED_EXPENSE_CATEGORY_ID
         # Excluding the expense-side uncategorized bucket drops the NULL/positive row, keeps the rest.
