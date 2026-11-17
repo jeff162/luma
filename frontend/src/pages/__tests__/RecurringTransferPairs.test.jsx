@@ -6,8 +6,8 @@
 // Detection now pairs those rows and reads the rhythm off the pairs, so a movement arrives as a single
 // series that owns both legs (`counterpart_account_id` is what marks it). This file covers the page's
 // half of that: the card names both accounts and counts both legs, its actions are one set because
-// there is one series, and the one pairing the detector refuses to make — a tie — is reachable and
-// answerable.
+// there is one series, and the one pairing the detector refuses to make (a tie) is answerable from
+// *Needs attention* and can be taken back.
 //
 // Most series are not movements. An ordinary payee series must be completely unaffected, which is the
 // last test here and the one that would catch a card learning to assume a counterpart.
@@ -69,7 +69,7 @@ const AMBIGUITY = {
   ],
 }
 
-function renderPage({ series = [MOVEMENT], review = { ambiguous: [], hidden: [] } } = {}) {
+function renderPage({ series = [MOVEMENT], review = { ambiguous: [], resolved: [] } } = {}) {
   api.getRecurringSeries.mockResolvedValue({ series })
   api.getRecurringSignals.mockResolvedValue({ signals: [], counts: {}, anomaly_count: 0, dismissed_count: 0, horizon_days: 30 })
   api.getCategories.mockResolvedValue([])
@@ -104,14 +104,12 @@ describe('a money movement on the Recurring page', () => {
     expect(screen.getAllByText('Harborline Checking')).toHaveLength(1)
   })
 
-  it('will not record a pair until one is chosen, and says why', async () => {
-    renderPage({ review: { ambiguous: [AMBIGUITY], hidden: [] } })
-    await userEvent.click(await screen.findByRole('button', { name: /Transfer & payment review \(1\)/ }))
+  it('will not record a pair until one is chosen', async () => {
+    renderPage({ review: { ambiguous: [AMBIGUITY], resolved: [] } })
+    await userEvent.click(await screen.findByRole('button', { name: /Needs attention/ }))
     const accept = await screen.findByRole('button', { name: 'Accept' })
     expect(accept.disabled).toBe(true)
 
-    // Picking a candidate is the whole answer — the user can see which one matches, and this is how
-    // they say so.
     await userEvent.click(screen.getByRole('radio', { name: /Joint Savings/ }))
     expect(accept.disabled).toBe(false)
     api.decideTransferPair.mockResolvedValue({ ok: true })
@@ -119,51 +117,29 @@ describe('a money movement on the Recurring page', () => {
     expect(api.decideTransferPair).toHaveBeenCalledWith('t1', 't3')
   })
 
-  it('dismisses an ambiguity without pairing anything', async () => {
-    renderPage({ review: { ambiguous: [AMBIGUITY], hidden: [] } })
-    await userEvent.click(await screen.findByRole('button', { name: /Transfer & payment review/ }))
+  it('dismisses a tie without pairing anything, and the toast takes it back', async () => {
+    renderPage({ review: { ambiguous: [AMBIGUITY], resolved: [] } })
+    await userEvent.click(await screen.findByRole('button', { name: /Needs attention/ }))
     api.decideTransferPair.mockResolvedValue({ ok: true })
     await userEvent.click(await screen.findByRole('button', { name: 'Dismiss' }))
     expect(api.decideTransferPair).toHaveBeenCalledWith('t1', null)
-  })
 
-  it('can take an answer back', async () => {
-    // A decision made once should not be permanent just because it was made — the same escape hatch
-    // the dismissed-signals dialog offers on this page.
-    renderPage({ review: { ambiguous: [], hidden: [
-      { kind: 'dismissed', label: 'Harborline Checking · 2026-02-02', paying_txn_id: 't1' },
-    ] } })
-    // No open items, so the button carries no count — but it is still there, or the way back would be
-    // hidden by the act of answering the last question.
-    const opener = await screen.findByRole('button', { name: 'Transfer & payment review' })
-    await userEvent.click(opener)
-    await userEvent.click(await screen.findByRole('button', { name: /1 answered/ }))
     api.restoreTransferDecision.mockResolvedValue({ ok: true })
-    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
     expect(api.restoreTransferDecision).toHaveBeenCalledWith({ paying_txn_id: 't1' })
   })
 
-  it('says whether there is anything pending, in the count and on hover', async () => {
-    // The count is the only signal for whether there is work, so "no number" must not be the way the
-    // zero state is expressed — it reads as a count that has not loaded. The button stays clickable
-    // either way, because it is the only route back to the answered list.
-    renderPage({ review: { ambiguous: [AMBIGUITY], hidden: [] } })
-    const open = await screen.findByRole('button', { name: 'Transfer & payment review (1)' })
-    expect(open.title).toMatch(/1 transfer could not be matched up/)
-
-    cleanup()
-    renderPage({ review: { ambiguous: [], hidden: [
-      { kind: 'dismissed', label: 'Harborline Checking · 2026-02-02', paying_txn_id: 't1' },
+  it('can take an answer back from the resolved list with nothing open', async () => {
+    // With no open ties the section is gone, so the resolved list is the only way back to an answer.
+    renderPage({ review: { ambiguous: [], resolved: [
+      { kind: 'paired', paying_txn_id: 't1', row: AMBIGUITY.row, counterpart: AMBIGUITY.candidates[1] },
     ] } })
-    const settled = await screen.findByRole('button', { name: 'Transfer & payment review' })
-    expect(settled.title).toBe('Nothing pending.')
-    expect(settled.disabled).toBeFalsy()
-  })
-
-  it('says nothing when there is nothing to review', async () => {
-    renderPage()
-    await screen.findByText('Card Payment')
-    expect(screen.queryByText(/to review/)).toBeNull()
+    api.getDismissedRecurringSignals.mockResolvedValue({ signals: [] })
+    await userEvent.click(await screen.findByRole('button', { name: /Needs attention/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /1 resolved/ }))
+    api.restoreTransferDecision.mockResolvedValue({ ok: true })
+    await userEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+    expect(api.restoreTransferDecision).toHaveBeenCalledWith({ paying_txn_id: 't1' })
   })
 
   it('leaves an ordinary series exactly as it was', async () => {

@@ -27,8 +27,7 @@ import {
   RefreshButton, FilterChip, IconButton, LinkButton, PencilGlyph} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
-import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
-import { TransferReviewDialog } from '../components/TransferReviewDialog.jsx'
+import { RecurringSignalsView, RecurringUpcomingView, ResolvedFindingsDialog } from '../components/RecurringSignals.jsx'
 import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
 import RecurringAmountMatchDialog from '../components/RecurringAmountMatchDialog.jsx'
 import SplitButton from '../components/SplitButton.jsx'
@@ -696,16 +695,15 @@ export default function Recurring() {
     const stored = sessionStore.get(VIEW_STORAGE_KEY)
     return VIEW_IDS.includes(stored) ? stored : VIEW_SERIES
   })
-  const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
+  const [resolvedSignals, setResolvedSignals] = useState(null)    // dismissed signals; null = resolved list closed
   const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
   const [excludeUndo, setExcludeUndo] = useState(null)            // the charge a finding last excluded from its series
   const [confirmUndo, setConfirmUndo] = useState(null)            // { id, name } of the last accepted series
-  // Transfers and card payments the detector found but has not matched up, and what is stopping each.
-  // Fetched once on load for the count on the button; re-fetched when the report opens so it reflects
-  // the ledger as it stands.
+  // Transfers the scan would not pair because two transactions match equally well (`ambiguous`), and the
+  // answers already given (`resolved`). Shown in *Needs attention* and its resolved list.
   const [transferReview, setTransferReview] = useState(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
-  const [adoptBusy, setAdoptBusy] = useState(null)
+  const [tieBusyId, setTieBusyId] = useState(null)
+  const [tieUndo, setTieUndo] = useState(null)                    // the transfer answer last given
 
   // The owner lens keeps the series holding a lens owner's rows (`lib/ownerLens.js`). It narrows what the
   // layout is built from, so the status counts and sections agree with the cards shown, and the
@@ -839,27 +837,40 @@ export default function Recurring() {
   )
   useEffect(() => { loadSignals() }, [loadSignals])
 
-  // Every answer in the review changes how rows pair, and the server rescans after each — so everything
-  // the page shows is downstream of it. These reload rather than patching in place, which makes them
-  // deliberate re-sorts, unlike a card action.
-  const answerReview = useCallback(async (key, act) => {
-    setAdoptBusy(key)
+  // Every transfer answer changes how rows pair, and the server rescans after each, so everything the page
+  // shows is downstream of it. These reload rather than patching in place, which makes them deliberate
+  // re-sorts, unlike a card action.
+  const answerTransfer = useCallback(async (payingId, act) => {
+    setTieBusyId(payingId)
     try {
       await act()
       await load()
       loadSignals()
       await loadTransferReview()
     } finally {
-      setAdoptBusy(null)
+      setTieBusyId(null)
     }
   }, [load, loadSignals, loadTransferReview])
 
-  const pairAmbiguity = (item, receivingId) => answerReview(
-    item.row.id, () => api.decideTransferPair(item.row.id, receivingId))
-  const dismissAmbiguity = (item) => answerReview(
-    item.row.id, () => api.decideTransferPair(item.row.id, null))
-  const restoreDecision = (hidden) => answerReview(
-    hidden.paying_txn_id, () => api.restoreTransferDecision({ paying_txn_id: hidden.paying_txn_id }))
+  const pairTie = (tie, receivingId) => answerTransfer(tie.row.id, async () => {
+    await api.decideTransferPair(tie.row.id, receivingId)
+    setTieUndo({ payingId: tie.row.id, paired: true })
+  })
+  const dismissTie = (tie) => answerTransfer(tie.row.id, async () => {
+    await api.decideTransferPair(tie.row.id, null)
+    setTieUndo({ payingId: tie.row.id, paired: false })
+  })
+  const restoreTie = (payingId) => {
+    setTieUndo(null)
+    return answerTransfer(payingId, () => api.restoreTransferDecision({ paying_txn_id: payingId }))
+  }
+  const dismissTieToast = useCallback(() => setTieUndo(null), [])
+
+  // A transfer row carries only what the question needs, so the detail panel gets the whole transaction.
+  async function openTxnById(id) {
+    const txn = (await api.getTransactions({ ids: id, limit: 1 }).catch(() => null))?.transactions?.[0]
+    if (txn) setPayeeDetail(txn)
+  }
 
   // Landing from a Tasks card (?signal=<kind>) opens the findings view with that kind preselected, then
   // strips the param so the view and the filter are the user's to change from there.
@@ -868,7 +879,8 @@ export default function Recurring() {
     const wanted = searchParams.get('signal')
     if (!wanted || landedSignalRef.current === wanted) return
     landedSignalRef.current = wanted
-    setSignalKind(wanted)
+    // `transfer_ties` names the section above the series findings, not a kind, so it leaves them unfiltered.
+    setSignalKind(wanted === 'transfer_ties' ? 'all' : wanted)
     setView(VIEW_SIGNALS)
     const next = new URLSearchParams(searchParams); next.delete('signal')
     setSearchParams(next, { replace: true })
@@ -1102,8 +1114,8 @@ export default function Recurring() {
     await api.restoreRecurringSignal(key)
     setSignalUndo(null)
     loadSignals()
-    if (dismissedSignals) {
-      api.getDismissedRecurringSignals().then(r => setDismissedSignals(r.signals || [])).catch(() => {})
+    if (resolvedSignals) {
+      api.getDismissedRecurringSignals().then(r => setResolvedSignals(r.signals || [])).catch(() => {})
     }
   }
 
@@ -1161,25 +1173,24 @@ export default function Recurring() {
   const dismissUndoToast = useCallback(() => setSignalUndo(null), [])
   const dismissExcludeToast = useCallback(() => setExcludeUndo(null), [])
 
-  async function showDismissedSignals() {
-    setDismissedSignals([])
+  async function showResolved() {
+    setResolvedSignals([])
+    loadTransferReview()
     const r = await api.getDismissedRecurringSignals().catch(() => ({ signals: [] }))
-    setDismissedSignals(r.signals || [])
+    setResolvedSignals(r.signals || [])
   }
 
   // The drill-down docks below whichever view is showing, so a finding can be inspected without leaving
   // the list of findings.
   const drillOpen = !!openSeries
   const signalCounts = signalData?.counts || {}
-  const anomalyCount = signalData?.anomaly_count || 0
+  const transferTies = transferReview?.ambiguous || []
+  const resolvedTies = transferReview?.resolved || []
+  // Open transfers to match count towards the view's badge with the series findings: both are a decision
+  // the view is waiting on.
+  const anomalyCount = (signalData?.anomaly_count || 0) + transferTies.length
   const upcomingCount = signalCounts.upcoming || 0
 
-  // Answered items are deliberately not counted: the button exists to say how much is still open, and a
-  // count that never falls no matter what the user decides is a nag rather than a list. But the button
-  // still *appears* while answers exist with nothing open, because taking one back has to stay
-  // reachable — answering the last item must not hide the way to un-answer it.
-  const reviewCount = transferReview?.ambiguous?.length || 0
-  const reviewHasAny = reviewCount > 0 || (transferReview?.hidden?.length || 0) > 0
   const byId = new Map((allSeries || []).map(s => [s.id, s]))
   // Search is a live display filter over the frozen layout — it narrows which cards show (and hides
   // now-empty sections) without reordering, so cards never jump while typing.
@@ -1232,22 +1243,6 @@ export default function Recurring() {
           >
             {/* "+New" rather than "Add manually": the page names what is created (see ui-patterns). */}
             <Button variant="secondary" onClick={() => setAdding(true)}>+New</Button>
-            {reviewHasAny ? (
-              // The count is the whole signal for whether there is work, so the zero state has to say
-              // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
-              // at zero, and is deliberately not disabled: this button is the only route to the
-              // answered list, so greying it out would strand every answer behind the act of
-              // answering the last one.
-              <Button
-                variant="secondary"
-                onClick={() => { setReviewOpen(true); loadTransferReview() }}
-                title={reviewCount
-                  ? `${reviewCount} transfer${reviewCount === 1 ? '' : 's'} could not be matched up: more than one transaction matches it equally well.`
-                  : 'Nothing pending.'}
-              >
-                Transfer &amp; payment review{reviewCount ? ` (${reviewCount})` : ''}
-              </Button>
-            ) : null}
             {/* Quiet: import, sync, edits and the app-load catch-up keep detection current, so this is
                 a manual override rather than the page's main action. */}
             <Button variant="secondary" onClick={scan} disabled={scanning}>
@@ -1334,7 +1329,7 @@ export default function Recurring() {
                 <RecurringSignalsView
                   signals={signalData.signals || []}
                   counts={signalData.counts || {}}
-                  dismissedCount={signalData.dismissed_count || 0}
+                  resolvedCount={(signalData.dismissed_count || 0) + resolvedTies.length}
                   kind={signalKind}
                   onKindChange={setSignalKind}
                   activeSeriesId={openSeries?.id || null}
@@ -1343,7 +1338,12 @@ export default function Recurring() {
                   onOpenSeries={openSignalTarget}
                   onAcceptPrice={acceptPriceChange}
                   onExcludeCharge={excludeSignalCharge}
-                  onShowDismissed={showDismissedSignals}
+                  onShowResolved={showResolved}
+                  ties={transferTies}
+                  tieBusyId={tieBusyId}
+                  onPairTie={pairTie}
+                  onDismissTie={dismissTie}
+                  onOpenTxn={openTxnById}
                   matches={matchesSignal}
                   renderSeries={renderSeriesCard}
                 />
@@ -1450,18 +1450,6 @@ export default function Recurring() {
         />
       )}
 
-      {reviewOpen && (
-        <TransferReviewDialog
-          review={transferReview}
-          loading={transferReview === null}
-          busyKey={adoptBusy}
-          onPair={pairAmbiguity}
-          onDismiss={dismissAmbiguity}
-          onRestore={restoreDecision}
-          onClose={() => setReviewOpen(false)}
-        />
-      )}
-
       {deleteTarget && (
         <AppConfirmDialog
           title={`Delete “${deleteTarget.display_name || deleteTarget.payee_key}”?`}
@@ -1479,12 +1467,14 @@ export default function Recurring() {
         />
       )}
 
-      {dismissedSignals !== null && (
-        <DismissedSignalsDialog
-          signals={dismissedSignals}
+      {resolvedSignals !== null && (
+        <ResolvedFindingsDialog
+          signals={resolvedSignals}
+          ties={resolvedTies}
           loading={false}
-          onRestore={(signal) => restoreSignal(signal.key)}
-          onClose={() => setDismissedSignals(null)}
+          onRestoreSignal={(signal) => restoreSignal(signal.key)}
+          onRestoreTie={(tie) => restoreTie(tie.paying_txn_id)}
+          onClose={() => setResolvedSignals(null)}
         />
       )}
 
@@ -1505,6 +1495,17 @@ export default function Recurring() {
             : 'It stays hidden; a new finding about the same series still appears.'}
           onUndo={() => restoreSignal(signalUndo.key)}
           onDismiss={dismissUndoToast}
+        />
+      )}
+
+      {tieUndo && (
+        <UndoToast
+          title={tieUndo.paired ? 'Transfer matched' : 'Transfer dismissed'}
+          description={tieUndo.paired
+            ? 'The pair can now count towards a series.'
+            : 'Its transactions stay matched by merchant name.'}
+          onUndo={() => restoreTie(tieUndo.payingId)}
+          onDismiss={dismissTieToast}
         />
       )}
 

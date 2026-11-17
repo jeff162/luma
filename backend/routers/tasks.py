@@ -55,7 +55,7 @@ from backend import app_log_file, runtime_config, transport
 from backend.services import crypto_service, proxy_certificate, rule_alerts, rule_conflicts, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
-from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens
+from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens, transfer_review
 from backend.services.recurring_signals import compute_signals, narrow_signals
 from backend.services.rule_range_drift import find_range_drift
 from backend.services.reimbursements import due_reminders
@@ -680,6 +680,9 @@ def _build_tasks(request: Request | None) -> list[dict]:
         if owed_rescan_task:
             tasks.append(owed_rescan_task)
         tasks.extend(_recurring_signal_tasks(conn))
+        transfer_ties_task = _transfer_ties_task(conn)
+        if transfer_ties_task:
+            tasks.append(transfer_ties_task)
         tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_rule_conflict_tasks(conn))
         tasks.extend(_rule_alert_tasks(conn))
@@ -805,6 +808,26 @@ def _recurring_signal_tasks(conn, counts: dict | None = None) -> list[dict]:
             "severity":    spec["severity"],
         })
     return tasks
+
+
+def _transfer_ties_task(conn) -> dict | None:
+    """Transfers the recurring scan could not pair because two transactions match equally well
+    (`recurring_detection.transfer_review`). The link lands on the Recurring page's *Needs attention*
+    view, where each is answered."""
+    n = len(transfer_review(conn)["ambiguous"])
+    if not n:
+        return None
+    return {
+        "id":          "recurring_transfer_ties",
+        "title":       "Transfer needs matching",
+        "description": f"{n} transfer{'s' if n != 1 else ''} between two tracked accounts "
+                       f"{'match' if n != 1 else 'matches'} more than one transaction equally well. "
+                       "Picking the other half lets it count towards a recurring series.",
+        "count":       n,
+        "link":        "/recurring?signal=transfer_ties",
+        "link_label":  "Review recurring",
+        "severity":    SEVERITY_INFO,
+    }
 
 
 def _owed_rescan_task(conn) -> dict | None:

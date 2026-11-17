@@ -38,7 +38,7 @@ const UPCOMING = {
 function renderSection(props = {}) {
   const handlers = {
     onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(),
-    onOpenSeries: vi.fn(), onShowDismissed: vi.fn(), onAcceptPrice: vi.fn(), onExcludeCharge: vi.fn(),
+    onOpenSeries: vi.fn(), onShowResolved: vi.fn(), onAcceptPrice: vi.fn(), onExcludeCharge: vi.fn(),
   }
   const signals = props.signals || []
   const counts = props.counts || signals.reduce((acc, s) => ({ ...acc, [s.kind]: (acc[s.kind] || 0) + 1 }), {})
@@ -46,7 +46,7 @@ function renderSection(props = {}) {
     <RecurringSignalsView
       signals={signals}
       counts={counts}
-      dismissedCount={props.dismissedCount || 0}
+      resolvedCount={props.resolvedCount || 0}
       kind={props.kind || 'all'}
       {...handlers}
     />,
@@ -66,9 +66,9 @@ describe('RecurringSignals', () => {
   })
 
   it('keeps the way back reachable when everything open has been dismissed', async () => {
-    const { onShowDismissed } = renderSection({ dismissedCount: 2 })
-    await userEvent.click(screen.getByText('2 dismissed — review'))
-    expect(onShowDismissed).toHaveBeenCalled()
+    const { onShowResolved } = renderSection({ resolvedCount: 2 })
+    await userEvent.click(screen.getByRole('button', { name: /2 resolved/ }))
+    expect(onShowResolved).toHaveBeenCalled()
   })
 
   it('offers Mark ended only once a series is presumed ended', () => {
@@ -109,9 +109,9 @@ describe('RecurringSignals', () => {
     // transactions the user opened, or reopens ones they closed.
     function setup() {
       const onOpenSeries = vi.fn()
-      const props = { signals: [PRICE], counts: { price_change: 1 }, dismissedCount: 0, kind: 'all',
+      const props = { signals: [PRICE], counts: { price_change: 1 }, resolvedCount: 0, kind: 'all',
         renderSeries: () => <div>card</div>, onOpenSeries,
-        onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(), onShowDismissed: vi.fn(),
+        onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(), onShowResolved: vi.fn(),
         onAcceptPrice: vi.fn(), onExcludeCharge: vi.fn() }
       const { rerender } = render(<RecurringSignalsView {...props} />)
       const setActive = (id) => rerender(<RecurringSignalsView {...props} activeSeriesId={id} />)

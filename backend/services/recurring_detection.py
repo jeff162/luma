@@ -672,8 +672,21 @@ def detect_transfer_series(pool: list[dict], ref_now: date, *, chosen: dict[str,
     return candidates, paired_ids
 
 
+def _dismissed_candidates(pool: list[dict], paying_id: str, chosen: dict[str, str],
+                          dismissed: set[str]) -> list[dict]:
+    """The rows a dismissed paying row would be asked about again if its dismissal were taken back: the
+    tie's candidates, or the one row it would now pair with outright. Re-runs the real pairing without
+    that one dismissal, so the answer follows every rule pairing applies rather than restating them."""
+    pairs, ambiguous = pair_money_movements(pool, chosen=chosen, dismissed=dismissed - {paying_id})
+    for item in ambiguous:
+        if item["row"]["id"] == paying_id:
+            return item["candidates"]
+    by_id = {row["id"]: row for row in pool}
+    return [by_id[p["in_id"]] for p in pairs if p["out_id"] == paying_id]
+
+
 def transfer_review(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict:
-    """The pairings the detector refused to make, for the user to settle.
+    """The pairings the detector refused to make, for the user to settle, and the answers already given.
 
     One case reaches here, and it is a refusal rather than a failure: a paying row whose nearest
     candidate counterpart is a **tie**. Nothing in the ledger distinguishes two same-day, same-amount
@@ -686,13 +699,22 @@ def transfer_review(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MO
     series happens to hold them (`scan_and_store`). The one claim it yields to is a rule-backed series,
     where membership is an instruction the user wrote; that is not a question either, so it is not asked.
 
-    Derived on read, like the pairing itself, so it always describes the ledger as it stands.
+    **`resolved` lists only the answers pairing still applies**: the paying row (and, for a named pair,
+    the receiving row) live, in the window and money movement, and for a dismissal at least one
+    candidate still there to be asked about. Those are the only ones taking an answer back would change.
+    A dismissal's candidates are not stored, so they are re-derived as of now, which is also what a
+    restore would ask against. The rest stay stored, so a row restored from the trash, or a wider window, brings
+    its answer back without asking twice.
+
+    Derived on read, like the pairing itself, so it always describes the ledger as it stands. Pairing
+    reads money-movement rows alone, so that is all that is loaded; this also feeds the Tasks badge.
     """
-    pool, _ref_now = _load_pool(conn, window_months)
+    pool = _pool_rows(conn, window_months, _money_movement_where(conn))
     chosen, dismissed = load_transfer_decisions(conn)
     _pairs, ambiguous = pair_money_movements(pool, chosen=chosen, dismissed=dismissed)
     names = {r["id"]: r["display_name"] for r in conn.execute(
         "SELECT id, display_name FROM account").fetchall()}
+    by_id = {row["id"]: row for row in pool}
 
     def _row_view(row):
         return {
@@ -704,32 +726,25 @@ def transfer_review(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MO
             "account_name": names.get(row["account_id"]),
         }
 
-    # Everything the user has already answered, so a decision can be taken back. Kept in the same
-    # payload rather than behind a second request: a hidden item is only interesting beside the list it
-    # was hidden from, and one fetch means the count and the list can never disagree.
-    txn_names = {}
-    settled_ids = list(chosen.keys()) + list(dismissed)
-    if settled_ids:
-        marks = ",".join("?" * len(settled_ids))
-        txn_names = {
-            r["id"]: (r["date"], r["amount"], names.get(r["account_id"]))
-            for r in conn.execute(
-                f"SELECT t.id AS id, t.date AS date, t.amount AS amount, "
-                f"       COALESCE(a.parent_account_id, t.account_id) AS account_id "
-                f"FROM txn t JOIN account a ON a.id = t.account_id WHERE t.id IN ({marks})",
-                settled_ids,
-            ).fetchall()
-        }
-    hidden = [
-        {
-            "kind": "paired" if paying in chosen else "dismissed",
-            "label": (f"{txn_names[paying][2]} · {txn_names[paying][0]}"
-                      if paying in txn_names else "A transaction no longer in range"),
-            "detail": txn_names[paying][1] if paying in txn_names else None,
-            "paying_txn_id": paying,
-        }
-        for paying in settled_ids
-    ]
+    # Kept in the same payload rather than behind a second request, so the count and the list can never
+    # disagree.
+    resolved = []
+    for paying_id, receiving_id in chosen.items():
+        paying, receiving = by_id.get(paying_id), by_id.get(receiving_id)
+        if paying is None or receiving is None:
+            continue
+        resolved.append({"kind": "paired", "paying_txn_id": paying_id, "row": _row_view(paying),
+                         "counterpart": _row_view(receiving), "candidates": []})
+    for paying_id in dismissed:
+        paying = by_id.get(paying_id)
+        if paying is None:
+            continue
+        candidates = _dismissed_candidates(pool, paying_id, chosen, dismissed)
+        if not candidates:
+            continue
+        resolved.append({"kind": "dismissed", "paying_txn_id": paying_id, "row": _row_view(paying),
+                         "counterpart": None, "candidates": [_row_view(c) for c in candidates]})
+    resolved.sort(key=lambda r: r["row"]["date"], reverse=True)
 
     return {
         "ambiguous": [
@@ -740,7 +755,7 @@ def transfer_review(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MO
             }
             for a in ambiguous
         ],
-        "hidden": hidden,
+        "resolved": resolved,
     }
 
 

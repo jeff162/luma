@@ -35,10 +35,16 @@
  * Upcoming is a peer view rather than a tab inside the findings, and carries no dismissal or badge: it
  * is a budgeting view someone may want to consult, not a thing that is wrong. Filing it under "needs
  * attention" was the mislabelling that separating the views fixes.
+ *
+ * **Transfers to match** sit in their own section above the series findings, because they are not about
+ * a series: each is a transfer the scan would not pair because two transactions match it equally well
+ * (`recurring_detection.transfer_review`). Answering one can change the series below, which is why it
+ * comes first. The kind chips and the page search leave the section alone, since both are about series.
+ * Answered transfers join dismissed findings in one resolved list, the single place either is taken back.
  */
 
 import { useState } from 'react'
-import { AppDialog, Button, EmptyState, Spinner, FilterChip, IconButton, LinkButton } from './ui.jsx'
+import { AppDialog, Button, EmptyState, Spinner, FilterChip, IconButton, LinkButton, Tooltip } from './ui.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
@@ -238,6 +244,79 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
   )
 }
 
+const SECTION_HEADING = {
+  fontSize: 11.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+  color: 'var(--muted)', margin: '4px 2px 8px',
+}
+const LIST_FRAME = {
+  border: '1px solid color-mix(in srgb, var(--border) 80%, transparent)',
+  borderRadius: 12, background: 'var(--surface)', overflow: 'hidden',
+}
+
+function OpenTxnButton({ id, onOpenTxn }) {
+  return (
+    <IconButton
+      size="compact"
+      tone="accent"
+      onClick={() => onOpenTxn(id)}
+      aria-label="Open this transaction"
+      title="Open this transaction"
+      style={{ marginLeft: 3 }}
+    >
+      ↗
+    </IconButton>
+  )
+}
+
+function TransferTieRow({ tie, busy, onPair, onDismiss, onOpenTxn }) {
+  const [picked, setPicked] = useState(null)
+  const row = tie.row
+  return (
+    <div data-testid="transfer-tie" style={{
+      display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px',
+      borderTop: '1px solid color-mix(in srgb, var(--border) 55%, transparent)',
+    }}>
+      <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: 'color-mix(in srgb, var(--accent2) 65%, transparent)', flexShrink: 0 }} />
+      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>
+          {formatCurrency(Math.abs(row.amount))} left {row.account_name} on {formatDate(row.date)}
+          <OpenTxnButton id={row.id} onOpenTxn={onOpenTxn} />
+        </div>
+        {row.name ? <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{row.name}</div> : null}
+        <div role="radiogroup" aria-label="The other half" style={{ marginTop: 6, fontSize: 13 }}>
+          {tie.candidates.map(c => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '1px 0' }}>
+              <label style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name={`pair-${row.id}`}
+                  checked={picked === c.id}
+                  onChange={() => setPicked(c.id)}
+                  disabled={busy}
+                />
+                <span>{c.account_name} · {formatDate(c.date)}{c.name ? ` · ${c.name}` : ''}</span>
+              </label>
+              <OpenTxnButton id={c.id} onOpenTxn={onOpenTxn} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        {/* A disabled control says why on hover; the Tooltip wrapper is what makes that reachable, since a
+            disabled button is inert to pointer events. */}
+        <Tooltip describeTrigger content={picked ? 'Record this as the other half, so the transfer can count towards a series' : 'Choose the matching transaction first'}>
+          <Button size="compact" disabled={busy || !picked} onClick={() => onPair(tie, picked)}>
+            {busy ? 'Working…' : 'Accept'}
+          </Button>
+        </Tooltip>
+        <Button size="compact" variant="quiet" disabled={busy} onClick={() => onDismiss(tie)} title="Leave these transactions matched by merchant name">
+          Dismiss
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function TabButton({ label, count, on, onClick, tone }) {
   return <FilterChip selected={on} count={count} countTone={tone} onClick={onClick}>{label}</FilterChip>
 }
@@ -256,8 +335,9 @@ function TabButton({ label, count, on, onClick, tone }) {
  * search never makes a kind look resolved.
  */
 export function RecurringSignalsView({
-  signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
-  onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, onShowDismissed,
+  signals, counts, resolvedCount, kind, onKindChange, activeSeriesId,
+  onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, onShowResolved,
+  ties = [], tieBusyId = null, onPairTie, onDismissTie, onOpenTxn,
   matches = () => true,
   // seriesId → the series' own card (the page's SeriesCard), shown under a finding's Details toggle.
   // Supplied by the page so the card is the one the Series view renders, not a lookalike; null where
@@ -274,6 +354,30 @@ export function RecurringSignalsView({
 
   return (
     <div>
+      {ties.length ? (
+        <div style={{ marginBottom: 18 }}>
+          <div style={SECTION_HEADING}>Transfers to match <span style={{ opacity: 0.7 }}>({ties.length})</span></div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 2px 8px' }}>
+            A transfer between two tracked accounts is recorded in both. More than one transaction matches
+            each of these equally well.
+          </div>
+          <div style={LIST_FRAME}>
+            {ties.map(tie => (
+              <TransferTieRow
+                key={tie.row.id}
+                tie={tie}
+                busy={tieBusyId === tie.row.id}
+                onPair={onPairTie}
+                onDismiss={onDismissTie}
+                onOpenTxn={onOpenTxn}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {ties.length && anomalies.length ? <div style={SECTION_HEADING}>Series findings</div> : null}
+
       {anomalies.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
           <TabButton label="All" count={anomalies.length} on={effectiveKind === 'all'} onClick={() => onKindChange('all')} />
@@ -291,10 +395,7 @@ export function RecurringSignalsView({
       ) : null}
 
       {shown.length ? (
-        <div style={{
-          border: '1px solid color-mix(in srgb, var(--border) 80%, transparent)',
-          borderRadius: 12, background: 'var(--surface)', overflow: 'hidden',
-        }}>
+        <div style={LIST_FRAME}>
           {shown.map(s => (
             <SignalRow
               key={s.key}
@@ -309,7 +410,7 @@ export function RecurringSignalsView({
             />
           ))}
         </div>
-      ) : (
+      ) : !anomalies.length && ties.length ? null : (
         <EmptyState message={!anomalies.length
           ? 'Nothing needs attention. Missing charges, amount changes and newly detected series show up here.'
           : ofKind.length
@@ -318,10 +419,10 @@ export function RecurringSignalsView({
         />
       )}
 
-      {dismissedCount ? (
+      {resolvedCount ? (
         <div style={{ marginTop: 12 }}>
-          <LinkButton tone="muted" onClick={onShowDismissed} style={{ fontSize: 12, fontWeight: 600 }}>
-            {dismissedCount} dismissed — review
+          <LinkButton tone="muted" onClick={onShowResolved} style={{ fontSize: 12, fontWeight: 600 }}>
+            {resolvedCount} resolved — review
           </LinkButton>
         </div>
       ) : null}
@@ -391,36 +492,71 @@ export function RecurringUpcomingView({ signals, horizonDays, matches = () => tr
  * listed: a dismissal whose subject has since been trashed or resolved has nothing to restore, so
  * showing it would offer an action that does nothing.
  */
-export function DismissedSignalsDialog({ signals, loading, onRestore, onClose }) {
+function tieHeadline(tie) {
+  const amount = formatCurrency(Math.abs(tie.row.amount))
+  const date = formatDate(tie.row.date)
+  return tie.counterpart
+    ? `${date} ${amount} ${tie.row.account_name} → ${tie.counterpart.account_name}`
+    : `${date} ${amount} left ${tie.row.account_name}`
+}
+
+// The accounts a dismissal turned down, named once each: two candidates on one account are one "not".
+function tieDetail(tie) {
+  if (tie.counterpart) return 'Marked as a transfer between accounts'
+  const names = [...new Set(tie.candidates.map(c => c.account_name))]
+  if (names.length === 1) return `Dismissed: not ${names[0]}`
+  if (names.length === 2) return `Dismissed: neither ${names[0]} nor ${names[1]}`
+  return `Dismissed: none of ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+}
+
+function ResolvedRow({ title, detail, onRestore }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 2px',
+      borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)',
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 620 }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{detail}</div>
+      </div>
+      <Button size="compact" variant="secondary" onClick={onRestore}>Restore</Button>
+    </div>
+  )
+}
+
+// Dismissed findings and answered transfers, together: both are a decision the view stopped asking about,
+// and this is the one place either is taken back.
+export function ResolvedFindingsDialog({ signals, ties, loading, onRestoreSignal, onRestoreTie, onClose }) {
   return (
     <AppDialog
-      title="Dismissed signals"
-      description="Findings you have marked as seen. Restoring one puts it back in the review list."
+      title="Resolved findings"
+      description="Restore returns a finding to Needs attention."
       onClose={onClose}
       actions={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       {loading ? (
         <Spinner />
-      ) : !signals.length ? (
-        <EmptyState message="Nothing is currently dismissed." />
+      ) : !signals.length && !ties.length ? (
+        <EmptyState message="Nothing has been dismissed or answered." />
       ) : (
-        signals.map(s => (
-          <div
-            key={s.key}
-            style={{
-              display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 2px',
-              borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)',
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 620 }}>{headline(s)}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                {SIGNAL_KINDS[s.kind]?.label || s.kind}{s.one_off ? ' (one-off)' : ''} · {describe(s)}
-              </div>
-            </div>
-            <Button size="compact" variant="secondary" onClick={() => onRestore(s)}>Restore</Button>
-          </div>
-        ))
+        <>
+          {ties.map(t => (
+            <ResolvedRow
+              key={t.paying_txn_id}
+              title={tieHeadline(t)}
+              detail={tieDetail(t)}
+              onRestore={() => onRestoreTie(t)}
+            />
+          ))}
+          {signals.map(s => (
+            <ResolvedRow
+              key={s.key}
+              title={headline(s)}
+              detail={`${SIGNAL_KINDS[s.kind]?.label || s.kind}${s.one_off ? ' (one-off)' : ''} · ${describe(s)}`}
+              onRestore={() => onRestoreSignal(s)}
+            />
+          ))}
+        </>
       )}
     </AppDialog>
   )

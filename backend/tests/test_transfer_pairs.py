@@ -389,7 +389,52 @@ class TransferSeriesTests(unittest.TestCase):
         self.assertEqual(review["ambiguous"], [])
         # Still nothing paired — a dismissal answers the question, it does not resolve it.
         self.assertEqual(self._transfers(), [])
-        self.assertEqual(len(review["hidden"]), 8)
+        self.assertEqual(len(review["resolved"]), 8)
+
+    def test_an_answer_is_listed_only_while_pairing_still_applies_it(self):
+        """The resolved list offers Undo, so it holds only answers that taking back would change: a
+        trashed row's answer drops off the list but stays stored, and returns with the row."""
+        third = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO account (id, provider, name, display_name) "
+                         "VALUES (?, 'fixture', 'Second Card', 'Second Card')", (third,))
+        self._movement(count=1)
+        self._row(account=third, payee="Card Payment", amount=-120.0, when=date.today())
+        with self._use_db_path(), get_db() as conn:
+            item = transfer_review(conn)["ambiguous"][0]
+            receiving = next(c for c in item["candidates"] if c["account_id"] == self.receiving_account)
+            conn.execute("INSERT INTO transfer_pair_decision (paying_txn_id, receiving_txn_id) "
+                         "VALUES (?, ?)", (item["row"]["id"], receiving["id"]))
+            [listed] = transfer_review(conn)["resolved"]
+            self.assertEqual((listed["kind"], listed["counterpart"]["id"]), ("paired", receiving["id"]))
+
+            conn.execute("UPDATE txn SET trashed_at = datetime('now') WHERE id = ?", (receiving["id"],))
+            self.assertEqual(transfer_review(conn)["resolved"], [])
+            self.assertEqual(conn.execute("SELECT count(*) FROM transfer_pair_decision").fetchone()[0], 1)
+
+            conn.execute("UPDATE txn SET trashed_at = NULL WHERE id = ?", (receiving["id"],))
+            self.assertEqual(len(transfer_review(conn)["resolved"]), 1)
+
+    def test_a_dismissal_names_its_candidates_and_drops_off_once_none_remain(self):
+        """A dismissal stores no candidates, so they are re-derived; with none left, a restore would ask
+        nothing, so the answer is not offered for one."""
+        third = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO account (id, provider, name, display_name) "
+                         "VALUES (?, 'fixture', 'Second Card', 'Second Card')", (third,))
+        self._movement(count=1)
+        self._row(account=third, payee="Card Payment", amount=-120.0, when=date.today())
+        with self._use_db_path(), get_db() as conn:
+            item = transfer_review(conn)["ambiguous"][0]
+            conn.execute("INSERT INTO transfer_pair_decision (paying_txn_id, receiving_txn_id) "
+                         "VALUES (?, NULL)", (item["row"]["id"],))
+            [listed] = transfer_review(conn)["resolved"]
+            self.assertEqual({c["id"] for c in listed["candidates"]},
+                             {c["id"] for c in item["candidates"]})
+
+            conn.execute("UPDATE txn SET trashed_at = datetime('now') WHERE id IN (?, ?)",
+                         tuple(c["id"] for c in item["candidates"]))
+            self.assertEqual(transfer_review(conn)["resolved"], [])
 
 
 if __name__ == "__main__":

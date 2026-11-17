@@ -2016,16 +2016,16 @@ export const HELP_TOPICS = [
         </p>
         <p>
           When more than one transaction could be the other half, nothing is paired, and the transfer is
-          listed under <strong>Transfer &amp; payment review</strong> on the Recurring page. Choosing the
-          right one settles it. <strong>Dismiss</strong> leaves it matched by merchant name. Dismissed items
-          collect at the foot of the panel, where they can be undone.
+          listed under <strong>Transfers to match</strong> in <strong>Needs attention</strong>. Choosing the
+          right one settles it. <strong>Dismiss</strong> leaves it matched by merchant name. Either answer can
+          be taken back from the resolved list at the foot of the view.
         </p>
 
         <h4>What needs attention</h4>
         <p>
           The Recurring page has three views, chosen from the selector under its title: the
           <strong> Series</strong> list itself, <strong>Needs attention</strong>, and <strong>Upcoming</strong>. The count beside
-          <strong> Needs attention</strong> is how many findings are open.
+          <strong> Needs attention</strong> is how many findings are open, including any transfers to match.
         </p>
         <ul>
           <li>
@@ -2051,7 +2051,8 @@ export const HELP_TOPICS = [
         <p>
           Dismissing a finding covers that one
           finding only -- a later missed cycle, or a different charge, is reported again. Anything
-          dismissed stays listed at the foot of the section and can be brought back.
+          dismissed or answered is listed under <strong>resolved</strong> at the foot of the view and can be
+          brought back.
         </p>
         <h4>When an amount changes</h4>
         <p>

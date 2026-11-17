@@ -443,7 +443,8 @@ preferences. `lib/savedFilters.js` holds the rules:
   widens to any payee series holding a paired row. Its rows reach `reconcile_series` as `reserved`, so a
   payee series holding them gives them up. It yields only to a rule-backed series
   (`_rule_backed_holdings`), and it reports a pairing tie instead of guessing
-  (`GET /recurring/transfer-review`).
+  (`GET /recurring/transfer-review`). An open tie is a section of the Recurring page's *Needs attention*
+  view and a Tasks item.
 
 - **Anomaly and forecast signals are a read-time projection** (`backend/services/recurring_signals.py`).
   An auto series gets a new id on every scan and an edit can change membership at any time, so a stored

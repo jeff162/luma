@@ -206,9 +206,10 @@ def auto_scan(window_months: int = 25):
 
 @router.get("/transfer-review")
 def transfer_review_route():
-    """The pairings the detector refused to make — see `recurring_detection.transfer_review`. Only ties
-    reach here: a movement itself needs no permission, it claims its rows outright. A tie is a genuine
-    question, which is why it is a report rather than something the scan settles on its own."""
+    """The pairings the detector refused to make, and the answers already given — see
+    `recurring_detection.transfer_review`. Only ties reach here: a movement itself needs no permission, it
+    claims its rows outright. A tie is a genuine question, which is why the user answers it rather than
+    the scan settling it on its own."""
     with get_db() as conn:
         return transfer_review(conn)
 
@@ -245,9 +246,8 @@ class RestoreDecision(BaseModel):
 
 @router.post("/transfer-review/restore")
 def restore_decision(body: RestoreDecision):
-    """Take back an answer to a tie, putting the question back in the report. The counterpart to every
-    hiding action on this page — a decision made once should not be permanent just because it was
-    made."""
+    """Take back an answer to a tie, putting the question back in *Needs attention*. A decision made once
+    should not be permanent just because it was made."""
     with get_db() as conn:
         conn.execute("DELETE FROM transfer_pair_decision WHERE paying_txn_id = ?", (body.paying_txn_id,))
         owe_full_recurring_scan(conn)

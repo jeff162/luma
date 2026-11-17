@@ -1284,7 +1284,10 @@ and the category.
   movement touching one of those rows defers whole.
 - **A tie is asked** (`GET /recurring/transfer-review`): two same-day, same-amount candidates.
   `transfer_pair_decision` stores the answer (`receiving_txn_id`, or NULL for a dismissal), and
-  `pair_money_movements` applies stored answers before it infers anything.
+  `pair_money_movements` applies stored answers before it infers anything. An answer is kept until it is
+  taken back or one of its rows is purged. The review lists it as resolved only while pairing still
+  applies it (its rows live, in the window and money movement), so a row restored from the trash brings
+  its answer back without asking again.
 - **A paired row is never payee material**, even when its pairs score no rhythm.
   `detect_transfer_series` returns every paired row id, and the payee pass runs over the pool without
   them.
