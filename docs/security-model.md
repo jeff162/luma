@@ -367,7 +367,9 @@ vault's passkeys, the sign-in passkeys and those of every other Luma database on
 - **Sign-in names its credentials** in `allowCredentials`, so the device offers only those. What that
   reveals — a count and opaque ids — is not what the perimeter protects. An empty list is never sent: to a
   browser it means *any* passkey.
-- **Each kind is labelled as what it is**, since the device's chooser shows nothing else.
+- **Each kind is labelled as what it is**, since the device's chooser shows nothing else. Both take the
+  site name from the server's `app_name()` rather than the interface's build-time name, so on an
+  installation renamed by `APP_NAME` the two kinds still name the site alike.
 
 **Their reach differs in the direction people expect least.** Sign-in needs only a plain assertion, while
 a vault slot needs the PRF extension, so the *login* feature works on more devices.
