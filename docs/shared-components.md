@@ -174,6 +174,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `AccountMatchSelect` | Choosing which existing account a source account maps to. | `components/importExport/AccountMatchSelect.jsx` |
 | `AmazonAccountPicker` | Choosing which Amazon account order files import into, with inline create. | `components/importExport/AmazonAccountPicker.jsx` |
 | `WatchPausedPill` | Marking a watched folder that is switched off, on any surface that lists one. | `components/importExport/WatchPausedPill.jsx` |
+| `RestoredFolderDecision` | The **Use here** / **Clear** answer to a folder a restore from another system switched off, on any surface that lists a watched source. | `components/importExport/RestoredFolderDecision.jsx` |
 | `ImportNewAccountFields` | The name and type fields for an account created while mapping. | `components/ImportNewAccountFields.jsx` |
 | `SourceAccountChip` / `OutcomeChip` | Reporting what each source account contributed to one import or sync. | `components/importExport/SourceAccountChip.jsx` |
 | `LastSyncSummary` / `StatusPill` | Reporting a connection's last sync. `StatusPill` also carries any at-a-glance state elsewhere: `danger`, `warning`, `accent2`, `review` for rows waiting to be reviewed, or `muted` for a state that is neither normal nor wrong. With `onClick` it ends in `›`, or in `↗` with `mark="report"` for a count that opens its report, as on the import cards. | `components/connections/ConnectionStatus.jsx` |

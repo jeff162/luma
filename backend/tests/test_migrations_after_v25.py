@@ -281,5 +281,26 @@ class LeafCategoryTypeAlignmentTests(MigrationCase):
         self.assertEqual(types, {"household": "expense", "groceries": "expense"})
 
 
+class RestoredWatchFolderMarkTests(MigrationCase):
+    """v95 marks the folders an earlier restore from another system switched off, whose only record was
+    the notice beside them, so they get the decision a restore now asks for."""
+
+    def test_only_a_paused_folder_carrying_the_restore_notice_is_marked(self):
+        notice = database._LEGACY_RESTORED_WATCH_NOTICE
+        self._database_at(94, f"""
+            CREATE TABLE csv_import_profile (
+                id TEXT PRIMARY KEY, watch_dir TEXT, watch_enabled INTEGER NOT NULL DEFAULT 0, watch_notice TEXT);
+            INSERT INTO csv_import_profile VALUES
+                ('restored', '/srv/orders', 0, '{notice}'),
+                ('missing',  '/srv/cards',  1, 'This folder is not there right now.'),
+                ('paused',   '/srv/bank',   0, NULL);
+        """)
+        self._upgrade()
+
+        marked = {row["id"]: row["watch_restore_pending"] for row in self.conn.execute(
+            "SELECT id, watch_restore_pending FROM csv_import_profile")}
+        self.assertEqual(marked, {"restored": 1, "missing": 0, "paused": 0})
+
+
 if __name__ == "__main__":
     unittest.main()

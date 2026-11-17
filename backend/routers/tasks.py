@@ -348,6 +348,32 @@ def _watched_folder_task(request: Request | None) -> dict | None:
     }
 
 
+def _restored_folder_task(request: Request | None) -> dict | None:
+    """Watched folders a restore from another system switched off, still waiting to be used here or
+    cleared (`watch.restore_pending_folders`). Shown to who can answer, for the reason
+    `_watched_folder_task` is."""
+    if request is None or not is_admin_or_local(request):
+        return None
+    from backend.routers.import_export.watch import restore_pending_folders
+    with get_db() as conn:
+        folders = restore_pending_folders(conn)
+    if not folders:
+        return None
+    named = "; ".join(f"{f['name']} ({f['watch_dir']})" for f in folders[:3])
+    more = f"; and {len(folders) - 3} more" if len(folders) > 3 else ""
+    return {
+        "id":          "watched_folder_restored",
+        "title":       "A restored watched folder needs a decision" if len(folders) == 1
+                       else "Restored watched folders need a decision",
+        "description": f"{named}{more}. These paths came from the system the backup was made on. Use each "
+                       "on this machine or clear it.",
+        "count":       len(folders),
+        "link":        "/import-export?tab=sources",
+        "link_label":  "Open File Sources",
+        "severity":    SEVERITY_WARNING,
+    }
+
+
 def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
@@ -526,6 +552,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     folder_task = _watched_folder_task(request)
     if folder_task:
         tasks.append(folder_task)
+
+    restored_folder_task = _restored_folder_task(request)
+    if restored_folder_task:
+        tasks.append(restored_folder_task)
 
     with get_db() as conn:
         owner_count = conn.execute("""

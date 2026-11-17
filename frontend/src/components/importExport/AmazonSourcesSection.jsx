@@ -11,6 +11,7 @@ import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import WatchedFolderDialog from './WatchedFolderDialog.jsx'
 import AmazonAccountPicker from './AmazonAccountPicker.jsx'
 import WatchPausedPill from './WatchPausedPill.jsx'
+import RestoredFolderDecision from './RestoredFolderDecision.jsx'
 
 // Amazon in the data-source list.
 //
@@ -177,9 +178,11 @@ export default function AmazonSourcesSection({ batches = [] }) {
               {profile.watch_dir && !profile.watch_enabled ? <WatchPausedPill /> : null}
             </span>
             <span style={{ ...cellValueStyle, ...TRUNCATED_CELL_STYLE }}
-              title={profile.watch_notice || folderSummary(profile)}>
+              title={profile.watch_notice ? `${folderSummary(profile)} · ${profile.watch_notice}` : folderSummary(profile)}>
               {folderSummary(profile)}
+              {profile.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {profile.watch_notice}</span> : null}
             </span>
+            <RestoredFolderDecision profile={profile} onSettled={load} style={{ marginTop: 2, justifySelf: 'start' }} />
           </div>
           <div style={{ display: 'grid', gap: 2 }}>
             <span style={labelStyle}>Imported</span>

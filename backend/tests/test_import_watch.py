@@ -381,20 +381,74 @@ class ImportWatchTests(_WatchFolderCase):
 
     def test_disabling_watching_keeps_the_path_and_drops_the_watermark(self):
         """What a restore from another machine does: the folders stop being read, and the paths stay
-        visible so the person can say what each one should be here."""
+        so the person can say whether each is right here."""
         self._create_source()
         self._drop("january.csv")
         self._scan()
         with get_db(str(self.db_path)) as conn:
-            self.assertEqual(watch.disable_watching(conn, "restored elsewhere"), 1)
+            self.assertEqual(watch.disable_watching(conn), 1)
             row = conn.execute(
-                "SELECT watch_dir, watch_enabled, watch_notice FROM csv_import_profile WHERE id = 'src-1'"
+                "SELECT watch_dir, watch_enabled, watch_notice, watch_restore_pending "
+                "FROM csv_import_profile WHERE id = 'src-1'"
             ).fetchone()
+            self.assertEqual([f["name"] for f in watch.restore_pending_folders(conn)], ["Bank"])
         self.assertEqual(row["watch_dir"], str(self.watched))
         self.assertEqual(row["watch_enabled"], 0)
-        self.assertIn("restored", row["watch_notice"])
+        self.assertTrue(row["watch_notice"])
+        self.assertEqual(row["watch_restore_pending"], 1)
         self.assertEqual(self._files(), {})
         self.assertEqual(self._scan()["sources"], [])
+
+    def _restored_source(self):
+        self._create_source()
+        with get_db(str(self.db_path)) as conn:
+            watch.disable_watching(conn)
+
+    def _restore_state(self):
+        with get_db(str(self.db_path)) as conn:
+            return dict(conn.execute(
+                "SELECT watch_dir, watch_enabled, watch_notice, watch_restore_pending "
+                "FROM csv_import_profile WHERE id = 'src-1'"
+            ).fetchone())
+
+    def test_using_a_restored_folder_that_exists_here_switches_it_back_on(self):
+        self._restored_source()
+        with self._use_db_path():
+            watch.settle_restored_folder("src-1", watch.RestoredFolderDecision(use=True))
+        self.assertEqual(self._restore_state(), {
+            "watch_dir": str(self.watched), "watch_enabled": 1, "watch_notice": None, "watch_restore_pending": 0,
+        })
+
+    def test_using_a_restored_folder_that_is_not_here_is_refused_and_stays_pending(self):
+        """The likely case for another machine's path, so the question stays open rather than turning
+        into a folder-cannot-be-read Task."""
+        self._restored_source()
+        with get_db(str(self.db_path)) as conn:
+            conn.execute("UPDATE csv_import_profile SET watch_dir = ? WHERE id = 'src-1'",
+                         (str(self.watched / "elsewhere"),))
+        with self._use_db_path(), self.assertRaises(HTTPException) as raised:
+            watch.settle_restored_folder("src-1", watch.RestoredFolderDecision(use=True))
+        self.assertEqual(raised.exception.status_code, 400)
+        state = self._restore_state()
+        self.assertEqual((state["watch_enabled"], state["watch_restore_pending"]), (0, 1))
+
+    def test_clearing_a_restored_folder_removes_the_path_and_the_question(self):
+        self._restored_source()
+        with self._use_db_path():
+            watch.settle_restored_folder("src-1", watch.RestoredFolderDecision(use=False))
+        self.assertEqual(self._restore_state(), {
+            "watch_dir": None, "watch_enabled": 0, "watch_notice": None, "watch_restore_pending": 0,
+        })
+
+    def test_naming_a_new_folder_also_settles_a_restored_one(self):
+        self._restored_source()
+        other = self.watched / "here"
+        other.mkdir()
+        with self._use_db_path():
+            watch.set_profile_watch("src-1", watch.WatchSettings(watch_dir=str(other)))
+        state = self._restore_state()
+        self.assertEqual((state["watch_dir"], state["watch_notice"], state["watch_restore_pending"]),
+                         (str(other), None, 0))
 
     def test_clearing_the_path_clears_the_switch_even_when_the_same_request_enables_it(self):
         """Two reasons to write one column, in one request. SQLite takes the last assignment without

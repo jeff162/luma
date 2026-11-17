@@ -3169,6 +3169,7 @@ def _amazon_profile_row(conn: sqlite3.Connection, row) -> dict:
         "watch_purge_mode": d.get("watch_purge_mode") or "never",
         "watch_purge_days": d.get("watch_purge_days"),
         "watch_notice": d.get("watch_notice"),
+        "watch_restore_pending": bool(d.get("watch_restore_pending")),
         "watch_last_scan_at": d.get("watch_last_scan_at"),
     }
 

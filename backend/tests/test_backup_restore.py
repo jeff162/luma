@@ -559,12 +559,13 @@ class BackupRestoreTests(BackupFixtureTestCase):
             restore_backup(RestoreRequest(data=payload, force=True))
             with get_db() as conn:
                 rows = conn.execute(
-                    "SELECT watch_dir, watch_enabled, watch_notice FROM csv_import_profile"
+                    "SELECT watch_dir, watch_enabled, watch_notice, watch_restore_pending FROM csv_import_profile"
                 ).fetchall()
         self.assertTrue(any(row["watch_dir"] == "/srv/statements" for row in rows),
-                        "the paths must survive so they can be corrected rather than rediscovered")
+                        "the paths must survive so they can be used here or cleared")
         self.assertTrue(all(row["watch_enabled"] == 0 for row in rows))
-        self.assertTrue(all(row["watch_notice"] for row in rows if row["watch_dir"]))
+        self.assertTrue(all(row["watch_notice"] and row["watch_restore_pending"]
+                            for row in rows if row["watch_dir"]))
 
     def test_restore_tolerates_since_removed_column(self):
         # A backup taken before a column was dropped (the real case: category_rule.priority, removed

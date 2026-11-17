@@ -151,6 +151,10 @@ OUTSIDE_WATCH_ROOTS = (
     "WATCH_FOLDER_ROOTS."
 )
 
+# Beside a folder a restore from another system switched off (`disable_watching`). The decision it waits
+# on is `watch_restore_pending`; this only says why the folder is paused.
+RESTORED_ELSEWHERE_NOTICE = "Watching was switched off when this data was restored from another system."
+
 IMPORTS_DIR_NAME = "imports"
 
 
@@ -384,6 +388,18 @@ def attention_counts(conn) -> dict:
         "purge_failed": int(row["purge_failed"] or 0),
         "unreadable": int(row["unreadable"] or 0),
     }
+
+
+def restore_pending_folders(conn) -> list[dict]:
+    """Folders a restore from another system switched off that nobody has yet said to use here or clear
+    (`disable_watching`). Each stays a Task until it is answered."""
+    return [dict(row) for row in conn.execute(
+        """
+        SELECT name, watch_dir FROM csv_import_profile
+        WHERE  watch_restore_pending = 1
+        ORDER  BY name
+        """
+    )]
 
 
 def unreadable_folders(conn) -> list[dict]:
@@ -937,18 +953,23 @@ def maybe_auto_scan() -> dict:
     return scan_watched_sources()
 
 
-def disable_watching(conn, reason: str) -> int:
-    """Switch every watched folder off, keeping the paths. Called when a restore has brought another
-    machine's settings in (see `backup.py`): the paths are the previous machine's, and a path that
-    resolves here means something else. The count is what the Task reports."""
+def disable_watching(conn) -> int:
+    """Switch every watched folder off, keeping the paths, and mark each as waiting for a decision.
+    Called when a restore has brought another machine's settings in (see `backup.py`): the paths are the
+    previous machine's, and a path that resolves here may mean something else or nothing. The person says
+    per source whether the path is right here (`settle_restored_folder`), and a Task asks until they do.
+    The count is the number of folders switched off."""
     rows = conn.execute(
         "SELECT id FROM csv_import_profile WHERE watch_enabled = 1"
     ).fetchall()
     if not rows:
         return 0
     conn.execute(
-        "UPDATE csv_import_profile SET watch_enabled = 0, watch_notice = ? WHERE watch_enabled = 1",
-        (reason,),
+        """
+        UPDATE csv_import_profile SET watch_enabled = 0, watch_notice = ?, watch_restore_pending = 1
+        WHERE  watch_enabled = 1
+        """,
+        (RESTORED_ELSEWHERE_NOTICE,),
     )
     conn.execute("DELETE FROM import_watch_file")
     return len(rows)
@@ -956,6 +977,11 @@ def disable_watching(conn, reason: str) -> int:
 
 # ---------------------------------------------------------------------------------------------
 # Endpoints
+
+
+class RestoredFolderDecision(BaseModel):
+    # True: the path is right on this machine, so watch it. False: it is not, so clear it.
+    use: bool
 
 
 class WatchSettings(BaseModel):
@@ -971,8 +997,8 @@ def watch_status():
     with get_db() as conn:
         sources = conn.execute(
             """
-            SELECT id, name, watch_dir, watch_enabled, watch_notice, watch_last_scan_at,
-                   watch_purge_mode, watch_purge_days
+            SELECT id, name, watch_dir, watch_enabled, watch_notice, watch_restore_pending,
+                   watch_last_scan_at, watch_purge_mode, watch_purge_days
             FROM   csv_import_profile
             WHERE  watch_dir IS NOT NULL AND TRIM(watch_dir) != ''
             ORDER  BY name
@@ -1165,9 +1191,13 @@ def set_profile_watch(profile_id: str, body: WatchSettings):
             refusal = watch_folder_refusal(target_dir)
             if refusal:
                 raise HTTPException(status_code=400, detail=refusal)
+        # Naming a folder or switching one on answers a restore's question about it, as the two buttons
+        # do, and the notice it left goes with it: the next scan writes whatever is true of the folder now.
+        if body.watch_dir is not None or enabled == 1:
+            fields += ["watch_notice = NULL", "watch_restore_pending = 0"]
         if body.watch_dir is not None:
             directory = body.watch_dir.strip()
-            fields += ["watch_dir = ?", "watch_notice = NULL"]
+            fields.append("watch_dir = ?")
             params.append(directory or None)
             # Clearing the path clears the switch, and wins over an enable in the same request: there is
             # nothing left to watch.
@@ -1187,6 +1217,48 @@ def set_profile_watch(profile_id: str, body: WatchSettings):
             conn.execute(f"UPDATE csv_import_profile SET {', '.join(fields)} WHERE id = ?", params)
         # A folder that has just changed says nothing about the files judged against the old one.
         if body.watch_dir is not None:
+            conn.execute("DELETE FROM import_watch_file WHERE profile_id = ?", (profile_id,))
+    return {"ok": True}
+
+
+@router.post("/profiles/{profile_id}/watch/restored", dependencies=[Depends(require_admin_or_local)])
+def settle_restored_folder(profile_id: str, body: RestoredFolderDecision):
+    """Answer a restore's question about one source's folder: use the path on this machine, or clear it.
+
+    Use is refused, and the question left open, when the folder is not one this server may watch or
+    cannot be listed right now: the folder came from another machine, so one that is not there is the
+    likely case rather than removable media that is briefly away, and switching it on would only turn
+    the restore's notice into a Task saying the folder cannot be read. Admin-or-local for the reason
+    `set_profile_watch` is."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, watch_dir, source_kind FROM csv_import_profile WHERE id = ?", (profile_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Data source not found")
+        if body.use:
+            if not str(row["watch_dir"] or "").strip():
+                raise HTTPException(status_code=400, detail="This data source has no folder to use.")
+            _entries, notice = _scan_directory(dict(row))
+            if notice:
+                raise HTTPException(status_code=400, detail=notice)
+            conn.execute(
+                """
+                UPDATE csv_import_profile
+                SET    watch_enabled = 1, watch_notice = NULL, watch_restore_pending = 0
+                WHERE  id = ?
+                """,
+                (profile_id,),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE csv_import_profile
+                SET    watch_dir = NULL, watch_enabled = 0, watch_notice = NULL, watch_restore_pending = 0
+                WHERE  id = ?
+                """,
+                (profile_id,),
+            )
             conn.execute("DELETE FROM import_watch_file WHERE profile_id = ?", (profile_id,))
     return {"ok": True}
 

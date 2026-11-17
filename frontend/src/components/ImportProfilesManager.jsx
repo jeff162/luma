@@ -51,6 +51,7 @@ import FileInput from './FileInput.jsx'
 import { PICKER_IDS } from '../lib/filePicker.js'
 import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
 import WatchPausedPill from './importExport/WatchPausedPill.jsx'
+import RestoredFolderDecision from './importExport/RestoredFolderDecision.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
@@ -1427,6 +1428,8 @@ export default function ImportProfilesManager({
                             {profile.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {profile.watch_notice}</span> : null}
                           </div>
                         ) : null}
+                        <RestoredFolderDecision profile={profile} onSettled={refreshManagerData}
+                          style={{ display: 'flex', marginTop: 4 }} />
                       </div>
                       <div style={{ display: 'grid', gap: 2 }}>
                         <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Last used</span>

@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { formatTimestamp } from '../../lib/utils.js'
 import { Button, Card } from '../ui.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import WatchPausedPill from './WatchPausedPill.jsx'
+import RestoredFolderDecision from './RestoredFolderDecision.jsx'
 
 // What the watched folders are doing, and what they could not take on their own.
 //
@@ -54,6 +55,19 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
   const [listOpen, setListOpen] = useState(null)
 
   const refresh = useCallback(() => api.getWatchStatus().then(setStatus).catch(() => { }), [])
+
+  // The notice lines' buttons sit in a column just past the longest line. The column only widens while
+  // the panel is mounted: answering one restored folder removes its line, and if that was the longest a
+  // plain `max-content` track would pull every remaining button out from under the pointer. Read back
+  // from the resolved track rather than measured from the text, so the browser's own sizing decides it.
+  const noticeGridRef = useRef(null)
+  const [noticeTextWidth, setNoticeTextWidth] = useState(0)
+  useLayoutEffect(() => {
+    const grid = noticeGridRef.current
+    if (!grid) return
+    const resolved = parseFloat(getComputedStyle(grid).gridTemplateColumns)
+    if (Number.isFinite(resolved) && resolved > noticeTextWidth) setNoticeTextWidth(Math.ceil(resolved))
+  }, [status, noticeTextWidth])
 
   // The scan below must run once per mount, and a host is free to pass a fresh arrow on every render —
   // holding the callback in a ref keeps that a rendering detail rather than a re-scan trigger.
@@ -103,6 +117,7 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
     file => file.state === 'parked' || file.state === 'error' || file.state === 'purge_failed',
   )
   const open = listOpen ?? waiting.length > 0
+  const noticed = sources.filter(source => source.watch_notice)
 
   return (
     <Card style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 20 }}>
@@ -147,13 +162,25 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
       {/* A folder that cannot be read is asking for something, so it never collapses: the roll-call
           below is the routine half, and this is the half that would otherwise be hidden behind a
           disclosure nobody opened. */}
-      {sources.filter(source => source.watch_notice).map(source => (
-        <div key={source.id} style={{ fontSize: 12, color: 'var(--muted)' }}>
-          <span style={{ color: 'var(--text)' }}>{source.name}</span>
-          {' — '}
-          <span style={{ color: 'var(--danger)' }}>{source.watch_notice}</span>
+      {noticed.length ? (
+        <div ref={noticeGridRef} style={{
+          display: 'grid', alignItems: 'center', columnGap: 8, rowGap: 6, fontSize: 12, color: 'var(--muted)',
+          // Capped below the card's width so a narrow window wraps the text rather than pushing the
+          // buttons out of the card.
+          gridTemplateColumns: `minmax(min(${noticeTextWidth}px, 70%), max-content) auto`,
+        }}>
+          {noticed.map(source => (
+            <Fragment key={source.id}>
+              <span>
+                <span style={{ color: 'var(--text)' }}>{source.name}</span>
+                {' — '}
+                <span style={{ color: 'var(--danger)' }}>{source.watch_notice}</span>
+              </span>
+              <span><RestoredFolderDecision profile={source} onSettled={refresh} /></span>
+            </Fragment>
+          ))}
         </div>
-      ))}
+      ) : null}
 
       {open ? (
         <div style={{ display: 'grid', gap: 8 }}>

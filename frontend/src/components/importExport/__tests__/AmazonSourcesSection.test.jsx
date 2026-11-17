@@ -76,4 +76,14 @@ describe('AmazonSourcesSection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.createAmazonProfile).toHaveBeenCalled())
   })
+
+  it('shows why a source stopped watching on the row, not only on hover', async () => {
+    mockApi()
+    api.getAmazonProfiles.mockResolvedValue({ profiles: [{
+      id: 'p-1', name: 'Household orders', watch_dir: '/srv/orders', watch_enabled: 0,
+      watch_notice: 'This folder is not there right now.',
+    }] })
+    render(<AppSessionProvider value={{ canAdminister: true }}><AmazonSourcesSection /></AppSessionProvider>)
+    expect(await screen.findByText(/not there right now/)).toBeTruthy()
+  })
 })

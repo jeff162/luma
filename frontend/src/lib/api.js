@@ -1277,6 +1277,10 @@ export const api = {
   autoScanWatchedFolders: (opts = {}) => request('/import-export/watch/auto-scan', { method: 'POST', ...opts }),
   updateImportProfileWatch: (id, data) =>
     request(`/import-export/profiles/${id}/watch`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // A restore from another system's question about one source's folder: `use` watches the path here,
+  // otherwise it is cleared.
+  settleRestoredWatchFolder: (id, use) =>
+    request(`/import-export/profiles/${id}/watch/restored`, { method: 'POST', body: JSON.stringify({ use }) }),
   // The subdirectories of one folder on the *server*, for the folder picker. Read-only and admin-gated,
   // like naming the folder itself. No path = the starting roots only. `profileId` decides which files
   // the listing names, since a source takes only its own kinds of file.

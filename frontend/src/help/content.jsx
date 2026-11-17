@@ -2910,8 +2910,11 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Restoring a backup taken on a different machine switches watching off and keeps the paths, since
-          those paths belong to the other machine. Turning it back on is a decision about where the
-          folders are here.
+          those paths belong to the other machine. Each such source shows <strong>Use here</strong> and{' '}
+          <strong>Clear</strong>, and a task lists them until each is answered. <strong>Use here</strong>{' '}
+          watches the same path on this machine, and is refused while that folder is not there;{' '}
+          <strong>Clear</strong> removes it. Choosing a different folder with <strong>Folder</strong>{' '}
+          answers it too.
         </p>
       </>
     ),

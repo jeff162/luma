@@ -360,13 +360,15 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `rule_alert_hit`, the transactions an alert caught as they arrived. v92 adds `account.wallet_match_text`
 # and carries the PayPal pairing's links, review layout and Tasks dismissal over to the wallet pairing.
 # v93 adds `connection_account.nickname`, a display name for a provider account. v94 drops it again and
-# adds `connection.nickname`, the name a connection is shown by.
+# adds `connection.nickname`, the name a connection is shown by. v95 adds
+# `csv_import_profile.watch_restore_pending`, a watched folder a restore from another system switched off
+# and nobody has yet said to use here or clear.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 94
+CURRENT_VERSION = 95
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2842,6 +2844,40 @@ def _move_nickname_to_connection(conn):
         conn.execute("ALTER TABLE connection ADD COLUMN nickname TEXT")
 
 
+# The notice a restore from another system wrote before `watch_restore_pending` existed. Kept as a literal
+# here rather than imported: it names what older databases and backups hold, which a later wording change
+# to the live notice must not move.
+_LEGACY_RESTORED_WATCH_NOTICE = "Watching was switched off when this data was restored from another system."
+
+
+def _mark_restored_watch_folders(conn):
+    """Mark the folders a restore from another system had already switched off, so they get the same
+    decision a restore made from now on asks for. Before the column, the notice text was the only record,
+    and only that restore wrote it on a source left switched off. Registered in `POST_RESTORE_DATA_INIT`,
+    so a restored backup older than this comes across the same way."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(csv_import_profile)")}
+    if not {"watch_notice", "watch_restore_pending"} <= columns:
+        return
+    conn.execute(
+        """
+        UPDATE csv_import_profile SET watch_restore_pending = 1
+        WHERE  watch_enabled = 0 AND watch_notice = ? AND watch_dir IS NOT NULL AND TRIM(watch_dir) != ''
+        """,
+        (_LEGACY_RESTORED_WATCH_NOTICE,),
+    )
+
+
+@migration(95)
+def _add_watch_restore_pending(conn):
+    # See the baseline CREATE. 0 on every source except the ones a restore had already switched off,
+    # which the data step marks.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(csv_import_profile)")}
+    if columns and "watch_restore_pending" not in columns:
+        conn.execute(
+            "ALTER TABLE csv_import_profile ADD COLUMN watch_restore_pending INTEGER NOT NULL DEFAULT 0")
+    _mark_restored_watch_folders(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2889,6 +2925,7 @@ POST_RESTORE_DATA_INIT = {
     88: _copy_shared_views_to_users,
     90: _backfill_amazon_charge_text,
     92: _adopt_wallet_pairs,
+    95: _mark_restored_watch_folders,
 }
 
 
@@ -3767,11 +3804,14 @@ def init_db(db_path: str | None = None):
                 -- see what it was set to before deciding what it should be here. `watch_notice` is the
                 -- source-level "this folder is not there right now", which is a notice rather than an
                 -- error because removable media and network shares come and go.
+                -- `watch_restore_pending` marks a folder that restore switched off and nobody has yet
+                -- said to use here or clear; it is what the Task and the two buttons follow.
                 watch_dir            TEXT,
                 watch_enabled        INTEGER NOT NULL DEFAULT 0,
                 watch_purge_mode     TEXT NOT NULL DEFAULT 'never',
                 watch_purge_days     INTEGER NOT NULL DEFAULT 30,
                 watch_notice         TEXT,
+                watch_restore_pending INTEGER NOT NULL DEFAULT 0,
                 watch_last_scan_at   TEXT,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );

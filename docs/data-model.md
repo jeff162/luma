@@ -1956,6 +1956,13 @@ unattended. The mechanism is in `architecture.md` → *Import / export*.
 **`watch_dir` and `watch_enabled` are separate.** A restore from another instance clears the switch and
 keeps the path, so the person can see what the folder was. Clearing the path clears the switch.
 
+**`watch_restore_pending` is a question, not a state of the folder.** That restore sets it on every folder
+it switched off; it clears when the person uses the path here, clears it, names another folder or switches
+watching back on. It drives a Task and the **Use here** / **Clear** answer on each surface listing the
+source. Use is refused, leaving the question open, while the folder cannot be listed here, since another
+machine's path is likely to name nothing. `watch_notice` carries the restore's sentence for display only;
+nothing reads it as the marker.
+
 **The scan never creates or guesses an account**, because an invented account splits a ledger in a way
 nothing later reports, while every other mistake is visible on the file's card. A file is parked when
 

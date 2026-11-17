@@ -2031,11 +2031,11 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     new_db_instance_id(conn)
 
     # A restored source carries the paths of the machine the backup came from, and a path that resolves
-    # here means something else — the installs in use include a source checkout and a portable build
+    # here may mean something else — the installs in use include a source checkout and a portable build
     # with their own layouts. Watching is switched off rather than repointed or guessed at, keeping the
-    # paths visible so the person can say what each folder should be on this machine.
+    # paths so the person can say per source whether each is right on this machine or should be cleared.
     if restoring_onto_another_instance:
-        disable_watching(conn, "Watching was switched off when this data was restored from another system.")
+        disable_watching(conn)
 
     # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
     # already current, so re-running migrations would be schema-only no-ops — what's missing is the

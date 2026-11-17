@@ -721,7 +721,9 @@ folder, although the upload expands one: an archive found on disk is one nobody 
   (beside the data database, created at startup) and `WATCH_FOLDER_ROOTS`. `watch_folder_refusal` is the one check, applied on save, in the picker, in the
   scan (a refused folder is a source notice, and its purge is skipped) and when a parked file is handed
   back (`operations.md` → *Watched folders on a server*). A restore from another instance switches watching
-  off; the verdict is taken before the wipe, since every restore gives the system a new `instance_id`.
+  off and marks each folder `watch_restore_pending` until it is used here or cleared
+  (`POST /import-export/profiles/{id}/watch/restored`); the verdict is taken before the wipe, since every
+  restore gives the system a new `instance_id`.
 - **The folder is picked by browsing the server, not the viewer's machine** (`GET
   /import-export/watch/browse`, same gate, read-only, creates nothing). The browser's own pickers
   (`webkitdirectory`, `showDirectoryPicker`) choose on the machine the page is open on and yield
