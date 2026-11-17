@@ -28,6 +28,11 @@ one file, not scan a monolith for the paragraph that applies.
 - [Showing what was bought on eBay](ebay-purchase-detail.md) — import eBay's purchase history and
   add the item to the card charge that paid for it, so the row reads `eBay: <item>`. No decisions owed.
 
+## Sign-in
+
+- [An administrator can require a second factor](require-second-factor.md) — a switch that makes every
+  account sign in with an authenticator code or a passkey. One design pass owed: the setup step at sign-in.
+
 ## Import and bank connections
 
 - [Importing Quicken files, spreadsheets and bank OFX downloads](import-input-formats.md) — QIF (the way

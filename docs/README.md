@@ -82,6 +82,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Recovery and compromise response](security-model.md#recovery-and-compromise-response)
 - [Best practices](security-model.md#best-practices)
 - [Obstacles](security-model.md#obstacles)
+- [Open](security-model.md#open)
 
 ### [Mechanism index](mechanism-index.md)
 

@@ -37,6 +37,7 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 - [Recovery and compromise response](#recovery-and-compromise-response)
 - [Best practices](#best-practices)
 - [Obstacles](#obstacles)
+- [Open](#open)
 
 ---
 
@@ -747,3 +748,11 @@ What a second attempt hits, whether or not it is planned.
 - **Tightening the strength rule or the KDF reaches a slot only when its passphrase is next typed.** A
   member who never unlocks keeps the old verdict and the old wrap, and a backup already written keeps the
   wrap it was written with for good — only a new backup carries the stronger one.
+
+---
+
+## Open
+
+- **An administrator requiring a second factor**, once the setup step a password-only account passes
+  through at sign-in is designed.
+  → [`backlog/require-second-factor.md`](backlog/require-second-factor.md)
