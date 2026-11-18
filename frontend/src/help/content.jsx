@@ -2452,7 +2452,11 @@ export const HELP_TOPICS = [
           <li>
             <strong>Reconnect needed</strong> means
             the provider no longer accepts the stored credential, usually because access was revoked or
-            expired at the provider. Syncing stays stopped until it is connected again.
+            expired at the provider, or that no credential is stored at all, which is how a vault reset
+            or a restore without the credentials leaves a connection. Syncing stays stopped until it is
+            connected again, and <strong>Sync now</strong> passes over a connection with no credential.
+            For one with no credential, <strong>+ Connect</strong> with the choice to replace that
+            connection puts the new credential on it, keeping its accounts and history.
           </li>
           <li>
             A <strong>provider notice</strong> is a problem the provider reported that did not stop the

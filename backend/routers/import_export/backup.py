@@ -1451,6 +1451,9 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
       credential — the state a vault reset leaves, "waiting to be re-linked" — so the accounts, mappings and
       import cards that belong to it survive instead of being dropped for want of a parent. A credentials
       restore later fills the credential in on this same row.
+    - **Either way, a row left with no credential is flagged `reauth_required`**, as a vault reset flags
+      it: the backup's flag described a connection that had one, and without the flag the card reads as
+      healthy until a sync fails on it.
     - **Here but not in the backup**: its synced rows were just wiped with the rest of the ledger, so it
       returns to its never-synced state (`forget_synced_state`), as *Remove synced transactions* leaves it.
       Its credential and spending stay. A backup older than this section names no connections, so every
@@ -1539,6 +1542,15 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
             id_map[backup_id] = local["id"]
 
     restored = sorted(set(id_map.values()))
+    # Not in replace mode: there the credentials are written next, and the credentials restore flags each
+    # connection the file holds none for.
+    if restored and not replace:
+        conn.execute(
+            "UPDATE connection SET reauth_required = 1 "
+            f"WHERE id IN ({', '.join('?' * len(restored))}) "
+            "AND COALESCE(credential_enc, '') = '' AND COALESCE(credential, '') = ''",
+            restored,
+        )
     unnamed = conn.execute(
         "SELECT id FROM connection"
         + (f" WHERE id NOT IN ({', '.join('?' * len(restored))})" if restored else ""),

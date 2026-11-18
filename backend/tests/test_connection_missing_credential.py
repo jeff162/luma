@@ -125,6 +125,28 @@ class CredentiallessConnectionTests(unittest.TestCase):
             self.assertEqual(r.status_code, 409)
             self.assertEqual(r.json()["detail"]["code"], "credential_unreadable")
 
+    def test_a_sync_of_everything_passes_it_over_and_one_naming_it_says_why(self):
+        # Nothing is stored to pull with, and it is already flagged for reconnecting. A routine sync that
+        # attempted it recorded the same failure on every run; one that names it is told the reason.
+        with api_client() as (client, _):
+            connection_id = self._reset_leftover(client)
+            for scope in ("", "?provider=plaid"):
+                with self.subTest(scope=scope):
+                    r = client.post(f"/api/sync{scope}")
+                    self.assertEqual(r.status_code, 200, r.text)
+                    with get_db() as conn:
+                        row = conn.execute("SELECT consecutive_sync_failures, last_sync_error FROM connection "
+                                           "WHERE id = ?", (connection_id,)).fetchone()
+                    self.assertEqual((row[0], row[1]), (0, None))
+
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post(f"/api/sync?connection_id={connection_id}")
+            self.assertEqual(r.status_code, 200, r.text)
+            with get_db() as conn:
+                row = conn.execute("SELECT consecutive_sync_failures, reauth_required FROM connection "
+                                   "WHERE id = ?", (connection_id,)).fetchone()
+            self.assertEqual((row[0], row[1]), (1, 1))
+
     def test_refreshing_accounts_is_refused_rather_than_attempted(self):
         with api_client() as (client, _):
             self._reset_leftover(client)

@@ -1067,6 +1067,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         # What stays with the target: the credential, and the marker of a sync belonging to this process.
         self.assertEqual(row["credential_enc"], "sealed-token")
         self.assertEqual(row["sync_progress"], '{"pages": 3}')
+        self.assertEqual(row["reauth_required"], 0, "a connection that keeps its credential is not flagged")
 
     def test_the_request_budget_kept_is_the_copy_written_last(self):
         # The spending belongs to the credential, so the current copy is on whichever system used it most
@@ -1105,6 +1106,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self.assertEqual(row["initial_sync_complete"], 0)
         self.assertIsNone(row["last_sync_outcome"])
         self.assertIsNone(row["last_sync_summary"])
+        self.assertIsNone(row["last_synced_at"], "the data it vouched for is gone")
         self.assertEqual(row["credential_enc"], "later-token")
         self.assertEqual(row["provider_request_budget"], '{"spent": 3}')
         self.assertEqual(result["removed_connections"], [], "a ledger-only restore removes no connection")
@@ -1168,6 +1170,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
             self.assertEqual((husk["credential"], husk["credential_enc"]), ("", None),
                              "no credential until the credentials backup is restored")
             self.assertEqual(husk["last_sync_outcome"], "ok")
+            self.assertEqual(husk["reauth_required"], 1, "flagged, so the card does not read as healthy")
 
             self._restore_credentials_file([{"id": "fixture-conn", "provider": "plaid",
                                              "external_id": "item-fixture", "credential": "",

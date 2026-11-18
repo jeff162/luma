@@ -222,6 +222,21 @@ export function syncNavLabel({ driving = false, finished = false, added = 0, rel
   return relativeLabel ? `Sync · ${relativeLabel}` : 'Sync · never run'
 }
 
+// Why a connection flagged `reauth_required` needs reconnecting. A connection with no stored credential is
+// told apart from one the provider refused: the remedies differ (re-linking a fresh authorization onto this
+// row, as against signing in again), and the row may never have failed a sync to have an error to show,
+// since a vault reset and a restore without the credentials flag it directly. Where the provider's handle
+// comes from the credential (`relinkCandidates`), the connect dialog can put a new credential on this same
+// row; elsewhere a fresh connect is a new connection and this one is removed after.
+export function reconnectReason(connection, provider) {
+  if (connection?.has_credential !== false) {
+    return connection?.last_sync_error || 'The provider no longer accepts this connection.'
+  }
+  return relinkCandidates(provider).length
+    ? 'This connection has no stored credential. Use + Connect and choose to replace this connection.'
+    : 'This connection has no stored credential. Use + Connect to connect it again, then remove this one.'
+}
+
 // A provider account as `GET /connections/{id}/accounts` lists it, reduced to what `LastSyncSummary`'s chips
 // read: the provider's label, and for a mapped account the local account its rows land in, which the chip
 // shows after it as an import card's chip does.

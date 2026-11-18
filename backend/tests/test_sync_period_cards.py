@@ -40,7 +40,7 @@ class SyncPeriodCardTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES (?, 'plaid', 'item-1', '', 'Example Bank')",
+                "VALUES (?, 'plaid', 'item-1', 'stored-token', 'Example Bank')",
                 (self.connection_id,),
             )
             conn.execute(
@@ -832,7 +832,7 @@ class SyncPeriodCardTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES ('conn-2', 'plaid', 'item-2', '', 'Other Bank')"
+                "VALUES ('conn-2', 'plaid', 'item-2', 'stored-token', 'Other Bank')"
             )
         scoped = _FakeAdapter(pages=[{}])
         with self._driven_sync(adapter=scoped, connection_id=self.connection_id):
@@ -918,7 +918,7 @@ class RefreshAccountsTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES ('conn-1', 'plaid', 'item-1', '', 'Cambridge Savings Bank')"
+                "VALUES ('conn-1', 'plaid', 'item-1', 'stored-token', 'Harborline Savings')"
             )
 
     def tearDown(self):

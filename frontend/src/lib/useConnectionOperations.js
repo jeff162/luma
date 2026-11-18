@@ -120,7 +120,8 @@ export function useConnectionOperations({ onChanged } = {}) {
     const fresh = await refreshConnections()
     if (fresh?.running) return
     const listing = fresh?.providers || knownProviders || []
-    const list = listing.filter(p => (p.connections || []).length).map(p => p.provider)
+    // A connection with no stored credential cannot be pulled, and the server leaves it out of the run.
+    const list = listing.filter(p => (p.connections || []).some(c => c.has_credential !== false)).map(p => p.provider)
     if (!list.length) return
     const lastSynced = recentFullSync(listing)
     if (lastSynced) { setResyncConfirm({ lastSynced, list }); return }

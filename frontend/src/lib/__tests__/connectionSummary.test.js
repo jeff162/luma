@@ -2,7 +2,7 @@
 // sitting beside it.
 
 import { describe, expect, it } from 'vitest'
-import { connectionAccountsLabel, providerSummaryLine, connectionProviderLabel, providerConnectionStates, recentFullSync, relinkCandidates, syncedSince, syncFreshness, syncNavLabel } from '../connectionSummary.js'
+import { connectionAccountsLabel, providerSummaryLine, connectionProviderLabel, providerConnectionStates, reconnectReason, recentFullSync, relinkCandidates, syncedSince, syncFreshness, syncNavLabel } from '../connectionSummary.js'
 
 describe('providerSummaryLine', () => {
   it('reports a running sync instead of the freshness it supersedes', () => {
@@ -70,6 +70,28 @@ describe('relinkCandidates', () => {
     // `!== false` precisely so an absent field cannot read as "ask".
     expect(relinkCandidates({ connections })).toEqual([])
     expect(relinkCandidates(null)).toEqual([])
+  })
+})
+
+describe('reconnectReason', () => {
+  // A connection with nothing stored may never have failed a sync, and its remedy depends on whether the
+  // provider can put a new credential on the same row.
+  const relinkable = { stable_external_id: false, connections: [{ id: 'a' }] }
+  const stable = { stable_external_id: true, connections: [{ id: 'a' }] }
+
+  it('names the replace choice only where the connect dialog offers it', () => {
+    expect(reconnectReason({ has_credential: false }, relinkable)).toMatch(/replace/)
+    expect(reconnectReason({ has_credential: false }, stable)).not.toMatch(/replace/)
+  })
+
+  it('does not report a stale provider error for a connection with no credential', () => {
+    expect(reconnectReason({ has_credential: false, last_sync_error: 'ITEM_LOGIN_REQUIRED' }, stable))
+      .not.toMatch(/ITEM_LOGIN_REQUIRED/)
+  })
+
+  it('shows the provider’s own error for a connection it refused', () => {
+    expect(reconnectReason({ has_credential: true, last_sync_error: 'ITEM_LOGIN_REQUIRED' }, stable))
+      .toBe('ITEM_LOGIN_REQUIRED')
   })
 })
 

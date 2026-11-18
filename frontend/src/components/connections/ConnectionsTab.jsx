@@ -20,7 +20,7 @@ import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../../lib/useVaultPa
 import {
   connectionAccountsLabel, connectionProviderLabel as providerLabel, lastSyncReportCards,
   providerAccountChip, providerConnectionStates,
-  providerSummaryLine, relinkCandidates,
+  providerSummaryLine, reconnectReason, relinkCandidates,
 } from '../../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../accounts/ConnectionAccountMapDialog.jsx'
 import RevokeChoiceDialog from './RevokeChoiceDialog.jsx'
@@ -1294,7 +1294,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                     // resolves itself or does not; this one waits on the user, and a count of attempts is
                     // exactly the wrong thing to show for a connection that will never succeed again.
                     <StatusPill tone="danger"
-                      title={s.reauth.map(c => `${c.name || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
+                      title={s.reauth.map(c => `${c.name || 'Connection'}: ${reconnectReason(c, p)}`).join('\n')}>
                       ⚠ {s.reauth.length === 1 ? 'reconnect needed' : `${s.reauth.length} need reconnecting`}
                     </StatusPill>
                   ) : null}
@@ -1468,12 +1468,15 @@ export default function ConnectionsTab({ onShowHistory }) {
                                 confirmed by data arriving, and the effect of an action belongs where the
                                 action was taken. Scoped to this connection alone, and its outcome lands
                                 on the line below rather than sending the user elsewhere to look. */}
-                              <Button variant="secondary"
-                                onClick={() => sync(p.provider, { connectionId: c.id })}
-                                disabled={ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}
-                                title={`Check this connection by pulling anything new from ${c.name || 'it'} now`}>
-                                {c.syncing ? 'Syncing…' : '↻ Sync'}
-                              </Button>
+                              <Tooltip describeTrigger content={c.has_credential === false
+                                ? 'This connection has no stored credential to sync with'
+                                : `Check this connection by pulling anything new from ${c.name || 'it'} now`}>
+                                <Button variant="secondary"
+                                  onClick={() => sync(p.provider, { connectionId: c.id })}
+                                  disabled={c.has_credential === false || ss.syncing || serverSyncing || !!refreshingConnId || !!fetchingHistoryConnId}>
+                                  {c.syncing ? 'Syncing…' : '↻ Sync'}
+                                </Button>
+                              </Tooltip>
                               <ActionMenuButton
                                 open={cardMenu?.connectionId === c.id}
                                 title={`Actions for ${c.name || 'this connection'}`}
@@ -1493,7 +1496,7 @@ export default function ConnectionsTab({ onShowHistory }) {
                               border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
                               color: 'var(--danger)',
                             }}>
-                              {c.last_sync_error || 'The provider no longer accepts this connection.'}
+                              {reconnectReason(c, p)}
                               {' '}Syncing stays stopped until it is connected again.
                               {/* Both ways out, side by side and where the problem is stated — this is one
                                 of the few things on a card that is actually asking to be acted on, and

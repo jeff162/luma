@@ -32,7 +32,7 @@ import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.
 import { ConnectionSyncLogDialog } from './ConnectionSyncLogDialog.jsx'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
 import { useConnectionOperations } from '../../lib/useConnectionOperations.js'
-import { providerAccountChip, providerSummaryLine } from '../../lib/connectionSummary.js'
+import { providerAccountChip, providerSummaryLine, reconnectReason } from '../../lib/connectionSummary.js'
 import { formatTimestamp } from '../../lib/utils.js'
 
 // `batches` is the host's own list of import cards, which is where the count of synced rows waiting on
@@ -87,6 +87,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
     || watching
     || connected.some(p => p.connections.some(c => c.syncing))
   const allConnections = connected.flatMap(p => p.connections.map(c => ({ ...c, provider: p.provider })))
+  const providerByKey = Object.fromEntries(connected.map(p => [p.provider, p]))
   // Oldest, not newest — the card speaks for every connection under it, so the honest headline is the one
   // furthest behind.
   const oldest = allConnections.map(c => c.last_synced_at).filter(Boolean).sort()[0] || null
@@ -145,7 +146,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
           </button>
           {needsReconnect ? (
             <StatusPill tone="danger" onClick={onShowConnections}
-              title="The provider no longer accepts the connection — reconnect it on the Connections tab">
+              title="A connection cannot sync until it is connected again — on the Connections tab">
               ⚠ {needsReconnect} need{needsReconnect === 1 ? 's' : ''} reconnecting
             </StatusPill>
           ) : null}
@@ -194,7 +195,7 @@ export function DataConnectionsPanel({ style, batches, onShowHistory, onShowConn
                         saying so beats a stale timestamp that suggests nothing is wrong. */}
                     {c.reauth_required ? (
                       <StatusPill tone="danger" onClick={onShowConnections}
-                        title={c.last_sync_error || 'The provider no longer accepts this connection — reconnect it on the Connections tab.'}>
+                        title={`${reconnectReason(c, providerByKey[c.provider])} (Connections tab)`}>
                         ⚠ reconnect needed
                       </StatusPill>
                     ) : <LastSyncedLine lastSyncedAt={c.last_synced_at} requestAllowance={c.request_allowance} />}

@@ -137,13 +137,15 @@ def forget_synced_state(conn, connection_ids: list[str]) -> None:
 
     Every operation that removes a connection's synced rows wholesale (*Remove synced transactions*, a
     ledger restore that wipes a connection the backup does not hold) owes this in the same transaction.
-    The resume point would otherwise leave every removed row beyond the reach of a later sync, and the
-    last-sync record would keep naming rows and cards that no longer exist."""
+    The resume point would otherwise leave every removed row beyond the reach of a later sync, the
+    last-sync record would keep naming rows and cards that no longer exist, and `last_synced_at` would
+    keep vouching for the freshness of data that is gone. The failure fields stay: they describe the
+    credential and the provider, which the removal did not touch."""
     if not connection_ids:
         return
     conn.execute(
         "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0, "
-        "last_sync_outcome = NULL, last_sync_summary = NULL "
+        "last_sync_outcome = NULL, last_sync_summary = NULL, last_synced_at = NULL "
         f"WHERE id IN ({', '.join('?' * len(connection_ids))})",
         connection_ids,
     )

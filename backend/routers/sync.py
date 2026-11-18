@@ -909,15 +909,23 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         set_sync_running(marked, False)
 
 
+# A connection with nothing stored to authenticate with — the state a vault reset or a restore without the
+# credentials leaves — is not part of a sync by provider or of everything. It cannot be pulled, and a run
+# that tried would only record the same failure again; it is already flagged `reauth_required`, which is
+# what tells the user. Named by id it is still attempted, so the refusal is reported to whoever asked.
+# The SQL twin of `crypto_service.connection_has_credential`.
+_HAS_CREDENTIAL = "(COALESCE(credential_enc, '') != '' OR COALESCE(credential, '') != '')"
+
+
 def _connections_in_scope(connection_id: str | None, provider: str | None) -> list[str]:
     """The connection ids this call will touch. Read in its own short transaction, before the pull opens
     the long one — the ids are needed to announce the run, and the pull's own connection cannot publish
     anything until it commits."""
-    where, params = "", []
+    where, params = f"WHERE {_HAS_CREDENTIAL}", []
     if connection_id:
         where, params = "WHERE id = ?", [connection_id]
     elif provider:
-        where, params = "WHERE provider = ?", [provider]
+        where, params = f"WHERE provider = ? AND {_HAS_CREDENTIAL}", [provider]
     with get_db() as conn:
         return [r["id"] for r in conn.execute(f"SELECT id FROM connection {where}", params).fetchall()]
 
@@ -980,9 +988,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         if connection_id:
             connections = conn.execute(f"{_SELECT_CONNECTIONS} WHERE id = ?", (connection_id,)).fetchall()
         elif provider:
-            connections = conn.execute(f"{_SELECT_CONNECTIONS} WHERE provider = ?", (provider,)).fetchall()
+            connections = conn.execute(
+                f"{_SELECT_CONNECTIONS} WHERE provider = ? AND {_HAS_CREDENTIAL}", (provider,)).fetchall()
         else:
-            connections = conn.execute(_SELECT_CONNECTIONS).fetchall()
+            connections = conn.execute(f"{_SELECT_CONNECTIONS} WHERE {_HAS_CREDENTIAL}").fetchall()
 
         # Syncing decrypts each connection's credential under the workspace DEK, so the vault must be
         # unlocked. Fail the whole sync up front rather than silently skipping every connection in the loop.
@@ -1710,10 +1719,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             except crypto_service.MissingCredential:
                 # Nothing is stored to authenticate with — the state a vault reset leaves behind, since it
                 # clears the credentials and keeps the connection rows so a re-link lands back on them.
-                # `reauth_required` is already set by whatever cleared it, and is set again here so a row
-                # that arrived in this state by any other route says the same thing.
-                message = ("This connection has no stored credential. Connect the provider again to "
-                           "store a fresh one.")
+                # Reached only by a sync that names this connection; the wider scopes leave it out
+                # (`_HAS_CREDENTIAL`). `reauth_required` is already set by whatever cleared it, and is set
+                # again here so a row that arrived in this state by any other route says the same thing.
+                message = ("This connection has no stored credential. Use + Connect on the provider's "
+                           "card to connect it again.")
                 log_warning(f"[sync] connection {connection['id']} has no stored credential")
                 _record_sync_failure(conn, connection["id"], message, reauth_required=True)
                 _record(error=message)

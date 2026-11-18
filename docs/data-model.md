@@ -2466,9 +2466,11 @@ row. A data restore without the credentials reconciles:
   state and keeps its credential.
 - **One only in the backup** is created without a credential, so its accounts, mappings and cards have
   a parent. A later restore of the accounts part fills it in.
+- **Any row the restore leaves without a credential is flagged `reauth_required`**, as a vault reset
+  flags it, because the backup's flag described a connection that still had one.
 - **One only on the install** keeps its credential and returns to its never-synced state
   (`forget_synced_state`): its synced rows and `connection_account` rows went with the old ledger, so its
-  resume point and last-sync record would describe rows that are gone. *Refresh accounts* rebuilds the
+  resume point, last-sync record and `last_synced_at` would describe rows that are gone. *Refresh accounts* rebuilds the
   account list; Tasks reports the state (`connections_without_accounts`).
 
 The backup's resume point is reset, not restored, when the backup is older than
@@ -2489,8 +2491,9 @@ its row, loses its credential and is flagged `reauth_required`. `connection_acco
 **A connection may hold no credential.** A vault reset clears credentials and keeps the rows, because
 the mappings, coverage and cards hang off `connection_id`. `crypto_service.connection_has_credential`
 asks without decrypting, and `decrypt_connection_credential` raises `MissingCredential`. A disconnect
-then removes the row locally and reports `revoked: false`; re-authorize and refresh-accounts refuse; a
-sync skips and flags `reauth_required`.
+then removes the row locally and reports `revoked: false`; re-authorize and refresh-accounts refuse. A
+sync of everything or of one provider leaves it out, since it is already flagged and could only fail
+again; a sync naming it records that refusal and flags `reauth_required`.
 
 ### The accounts part
 
