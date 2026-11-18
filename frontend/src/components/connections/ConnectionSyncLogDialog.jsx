@@ -18,6 +18,7 @@
 // nowhere else).
 
 import { useCallback, useEffect, useState } from 'react'
+import { useFlash } from '../../lib/useFlash.js'
 import { api } from '../../lib/api.js'
 import { Button, RefreshButton, FilterChip, LinkButton } from '../ui.jsx'
 import FloatingDialog from '../FloatingDialog.jsx'
@@ -358,7 +359,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [clearing, setClearing] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash()
   // What the list is scoped to — seeded by whatever opened it (one connection, or one provider's card),
   // then adjustable here with the pills below. Two kinds, and a row matching either is shown: `subjects`
   // are pill keys (a connection id, or `connect:<provider>` for connect attempts), and `providers` take in
@@ -454,8 +455,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
   async function copyForSupport() {
     try {
       await navigator.clipboard.writeText(syncLogAsText(entries || [], scopeLabel))
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flashCopied(true)
     } catch (e) {
       setError(e.message || 'Could not copy the log.')
     }

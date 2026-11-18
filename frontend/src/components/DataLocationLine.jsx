@@ -11,7 +11,7 @@
 // that could already read it from the configuration report, so this component renders nothing for
 // everyone else without holding a second copy of that rule.
 
-import { useEffect, useRef, useState } from 'react'
+import { useFlash } from '../lib/useFlash.js'
 import { Tooltip } from './ui.jsx'
 import { useShownDataLocation } from '../lib/dataLocation.js'
 
@@ -22,24 +22,20 @@ const COPIED_MESSAGE_MS = 1400
 const LTR_MARK = '\u200E'
 
 export default function DataLocationLine({ dataLocation }) {
-  const [copied, setCopied] = useState(null)
-  const timerRef = useRef(null)
-  useEffect(() => () => clearTimeout(timerRef.current), [])
+  const [copied, flashCopied] = useFlash(COPIED_MESSAGE_MS)
 
   const described = useShownDataLocation(dataLocation)
   if (!described) return null
 
   async function copyPath() {
-    clearTimeout(timerRef.current)
     try {
       await navigator.clipboard.writeText(described.path)
-      setCopied('Copied')
+      flashCopied('Copied')
     } catch {
       // A blocked clipboard is a normal outcome (an insecure origin, a browser policy), and silence
       // here reads as a dead control — the path is on screen to select by hand either way.
-      setCopied('Could not copy')
+      flashCopied('Could not copy')
     }
-    timerRef.current = setTimeout(() => setCopied(null), COPIED_MESSAGE_MS)
   }
 
   return (

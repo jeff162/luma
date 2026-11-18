@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'react'
+import { useFlash } from '../../lib/useFlash.js'
 import { api } from '../../lib/api.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../../lib/appConfig.js'
 import { describeBrowser, installationDetailsAsText } from '../../lib/installationDetails.js'
@@ -10,17 +10,12 @@ import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../../lib/useBusyIndicato
 import { useUpdateCheck } from '../../lib/useUpdateCheck.js'
 import { UpdateCheckControls, UpdateCheckStatus } from '../UpdateCheck.jsx'
 
-const COPY_MESSAGE_MS = 2000
-
 // Copies the installation's version, platform and setup, for a bug report. Asked of the server on the
 // click rather than when the panel opens, since only the click needs it.
 function CopyDetailsButton() {
-  const [message, setMessage] = useState(null)
-  const timerRef = useRef(null)
-  useEffect(() => () => clearTimeout(timerRef.current), [])
+  const [message, flashMessage] = useFlash()
 
   async function copy() {
-    clearTimeout(timerRef.current)
     const text = Promise.all([api.getInstallationDetails(), describeBrowser()])
       .then(([details, browser]) => installationDetailsAsText(details, { appName: APP_NAME, browser }))
     try {
@@ -33,11 +28,10 @@ function CopyDetailsButton() {
       } else {
         await navigator.clipboard.writeText(await text)
       }
-      setMessage('Copied')
+      flashMessage('Copied')
     } catch {
-      setMessage('Could not copy')
+      flashMessage('Could not copy')
     }
-    timerRef.current = setTimeout(() => setMessage(null), COPY_MESSAGE_MS)
   }
 
   return (

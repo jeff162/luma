@@ -35,6 +35,7 @@
 // this moment — so the "your transactions are kept" line sits above every warning here, not below them.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useFlash } from '../lib/useFlash.js'
 import { AppDialog, Button, Input, InsetPanel, PasswordInput, PasswordManagerUsername, SectionEyebrow, Spinner } from './ui.jsx'
 import { NEW_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
 import { passphraseLimits, passphraseMeetsFloor, usePassphraseStrength } from '../lib/vaultPassphrase.js'
@@ -82,14 +83,13 @@ function backupOpensWith(backup) {
 // the user the same three things: the code itself, the fact that it will not be shown again, and a way
 // to get it somewhere safe without retyping it.
 export function RecoveryCodeReveal({ code, onDismiss }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash()
   const [copyError, setCopyError] = useState('')
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flashCopied(true)
     } catch {
       // The clipboard is refused outright in some contexts, and a silent no-op here would look like the
       // copy worked — the one failure that matters for a secret shown exactly once.

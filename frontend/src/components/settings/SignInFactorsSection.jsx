@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState, useEffect, useId, useRef } from 'react'
+import { useFlash } from '../../lib/useFlash.js'
 import { api } from '../../lib/api.js'
 import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../../lib/sensitiveFields.js'
 import { Card, Button, FieldIssue, InsetPanel, PasswordInput, PasswordManagerUsername, Tooltip, getFormControlStyle } from '../ui.jsx'
@@ -231,15 +232,14 @@ export default function SignInFactorsSection({ passwordPolicy }) {
   const [disableCode, setDisableCode] = useState('')
   const [regenCode, setRegenCode] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState([])
-  const [copiedCodes, setCopiedCodes] = useState(false)
+  const [copiedCodes, flashCopiedCodes] = useFlash()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   async function copyRecoveryCodes() {
     try {
       await navigator.clipboard.writeText(recoveryCodes.join('\n'))
-      setCopiedCodes(true)
-      setTimeout(() => setCopiedCodes(false), 2000)
+      flashCopiedCodes(true)
     } catch {
       setError('Could not reach the clipboard — select the codes above and copy them manually.')
     }
@@ -464,7 +464,7 @@ export default function SignInFactorsSection({ passwordPolicy }) {
             <Button type="button" onClick={copyRecoveryCodes}>
               {copiedCodes ? 'Copied' : 'Copy codes'}
             </Button>
-            <Button variant="secondary" type="button" onClick={() => { setRecoveryCodes([]); setCopiedCodes(false) }}>
+            <Button variant="secondary" type="button" onClick={() => { setRecoveryCodes([]); flashCopiedCodes(null) }}>
               Dismiss codes
             </Button>
           </div>

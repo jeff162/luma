@@ -21,6 +21,7 @@
 // whose public half was thrown away. The private half lives in dialog state until the dialog closes.
 
 import { useState, useEffect, useRef, useId } from 'react'
+import { useFlash } from '../../lib/useFlash.js'
 import { api, saveBlob } from '../../lib/api.js'
 import {
   Card, Button, Spinner, Input, PasswordInput, AppDialog, AppConfirmDialog,
@@ -367,7 +368,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   // State cannot stop a second save landing before the re-render (Download, then Copy straight after),
   // and each would otherwise create the recipient again.
   const addStarted = useRef(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash()
   const [error, setError] = useState('')
   const inputStyle = { ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%' }
   // A typo here produces a perfectly valid key file that cannot be opened, and says nothing about it
@@ -400,8 +401,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   async function copyPrivateKey() {
     try {
       await navigator.clipboard.writeText(generated.private_key)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flashCopied(true)
       addRecipient()
     } catch {
       setError('Could not reach the clipboard — select the key above and copy it manually.')
