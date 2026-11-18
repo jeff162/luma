@@ -277,9 +277,22 @@ class SyncPeriodCardTests(unittest.TestCase):
         with self._driven_sync(pages=[{"removed": ["t1"]}]) as res:
             self.assertEqual(res["removed"], 1)
         with self._use_db_path(), get_db() as conn:
-            self.assertIsNotNone(
-                conn.execute("SELECT trashed_at FROM txn WHERE external_transaction_id = 't1'").fetchone()["trashed_at"]
-            )
+            row = conn.execute(
+                "SELECT id, trashed_at, rejection_reason FROM txn WHERE external_transaction_id = 't1'"
+            ).fetchone()
+        self.assertIsNotNone(row["trashed_at"])
+        self.assertEqual(row["rejection_reason"], "provider_removed")
+        # Restored, it is an ordinary row again: left tagged, live-row reads that require a NULL reason
+        # (duplicate detection's candidates) would go on skipping it.
+        from backend.routers.transactions import restore_transaction
+        with self._use_db_path():
+            restore_transaction(row["id"])
+            with get_db() as conn:
+                back = conn.execute(
+                    "SELECT trashed_at, rejection_reason FROM txn WHERE id = ?", (row["id"],)
+                ).fetchone()
+        self.assertIsNone(back["trashed_at"])
+        self.assertIsNone(back["rejection_reason"])
 
     def test_pending_transaction_posts_in_place_preserving_edits(self):
         # A pending row lands and the user renames it.

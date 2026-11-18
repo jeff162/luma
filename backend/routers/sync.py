@@ -1371,13 +1371,18 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 
         def _apply_removed(external_transaction_id) -> None:
             """The provider dropped a transaction (a canceled pending charge, or a correction): trash the
-            local row so it leaves the active ledger. No-op if we never had it."""
+            local row so it leaves the active ledger. No-op if we never had it. Tagged so the Trash can say
+            the bank dropped it — untagged, it reads as a row the user deleted."""
             nonlocal removed
-            removed += len(trash_txns(conn, [
+            moved = trash_txns(conn, [
                 r["id"] for r in conn.execute(
                     "SELECT id FROM txn WHERE external_transaction_id = ?", (external_transaction_id,),
                 ).fetchall()
-            ]))
+            ])
+            conn.executemany(
+                "UPDATE txn SET rejection_reason = 'provider_removed' WHERE id = ?", [(i,) for i in moved],
+            )
+            removed += len(moved)
 
         for connection in connections:
             initial = not connection["initial_sync_complete"]

@@ -480,7 +480,10 @@ flag (see [Soft duplicates](#soft-duplicates)).
 
 **`rejection_reason`** says why a trashed row left the ledger. NULL is ordinary trash.
 `'duplicate_confirmed'` means a soft-flag suspect was accepted as a real duplicate. The pointer in
-`suspect_duplicate_of` is kept as the record of which row was canonical.
+`suspect_duplicate_of` is kept as the record of which row was canonical. `'provider_removed'` means a
+sync trashed the row because its provider stopped reporting it (a change feed's `removed`, or a pending
+row gone from a complete listing). It sits in the Trash's deleted section, labelled so it does not read
+as the user's delete, and Restore clears it, since live-row reads require the column to be NULL.
 
 **`dedupe_resolved_by`** says who confirmed it:
 

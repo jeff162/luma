@@ -133,11 +133,28 @@ function useTrashedTransactions(filter, scope, onChanged) {
   return { items, loading, workingId, emptying, error, confirmEmpty, setConfirmEmpty, openConfirm, timeframe, setTimeframe, restoreItem, emptyTrash }
 }
 
+// Why a sync trashed a row (`rejection_reason = 'provider_removed'`), so it does not read as a row the
+// user deleted. Pending is the common case; a posted row is withdrawn only by a provider that reports
+// removals (Plaid).
+function bankDroppedReason(item) {
+  if (item.rejection_reason !== 'provider_removed') return null
+  return item.is_pending
+    ? {
+        label: 'Pending, dropped by the bank',
+        title: 'The bank stopped listing this pending transaction — usually a hold released or reversed, or a charge that posted at a different amount. Restore it if it should still be in the ledger.',
+      }
+    : {
+        label: 'Withdrawn by the bank',
+        title: 'The bank removed this transaction after it posted. Restore it if it should still be in the ledger.',
+      }
+}
+
 // One trashed transaction, shared by both sections (they differ only in list structure around it).
 function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
   const merchant = item.display_name || item.merchant_name || item.raw_name || '—'
   const account = item.account_display_name || item.account_name || '—'
   const amount = Number(item.amount) || 0
+  const dropped = bankDroppedReason(item)
   return (
     <div
       style={{
@@ -156,6 +173,7 @@ function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
         </div>
         <div style={{ marginTop: 2, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
           {formatDate(item.date)} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {formatTimestamp(item.trashed_at) || 'recently'}
+          {dropped ? <> · <span title={dropped.title}>{dropped.label}</span></> : null}
         </div>
       </div>
       <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
@@ -206,7 +224,7 @@ export function TransactionsTrashSection({ count, onChanged }) {
       <Card style={{ display: 'grid', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
-            Transactions you&apos;ve sent to the trash live here until you restore them or empty the trash.
+            Deleted transactions, and pending ones the bank dropped, stay here until restored or the trash is emptied.
           </div>
           <Button
             variant="secondary"

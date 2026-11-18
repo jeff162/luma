@@ -2344,6 +2344,12 @@ def restore_transaction(txn_id: str):
                WHERE id = ? AND rejection_reason = 'duplicate_confirmed'""",
             (txn_id,),
         )
+        # A row the provider dropped comes back as an ordinary one; left tagged, it would stay out of the
+        # live-row reads that require `rejection_reason IS NULL` (duplicate detection's candidates).
+        conn.execute(
+            "UPDATE txn SET rejection_reason = NULL WHERE id = ? AND rejection_reason = 'provider_removed'",
+            (txn_id,),
+        )
         restore_txns(conn, [txn_id])
     settle_owed_rescans()
     return {"ok": True}
@@ -2366,8 +2372,8 @@ def list_trashed_transactions(limit: int = Query(200, le=1000), scope: str = "al
         rows = conn.execute(
             f"""
             SELECT t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-                   t.account_id, t.category_id, t.trashed_at, t.notes,
-                   t.dedupe_resolved_by,
+                   t.account_id, t.category_id, t.trashed_at, t.notes, t.is_pending,
+                   t.dedupe_resolved_by, t.rejection_reason,
                    a.name AS account_name, a.display_name AS account_display_name, a.mask AS account_mask,
                    c.name AS category_name,
                    p.name AS group_name, p.id AS group_id,

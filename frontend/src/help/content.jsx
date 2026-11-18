@@ -3891,8 +3891,10 @@ export const HELP_TOPICS = [
             See <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>.
           </li>
           <li>
-            <strong>Trash</strong> holds deleted items to serve as a undo
-            mechanism. Items can be purged from the trash which is not reversible.
+            <strong>Trash</strong> holds deleted items to serve as an undo
+            mechanism. Items can be purged from the trash which is not reversible. A transaction a data
+            connection stopped reporting is moved here too, marked <em>Pending, dropped by the
+            bank</em> or <em>Withdrawn by the bank</em>.
           </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
