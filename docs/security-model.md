@@ -707,6 +707,12 @@ connections the user has to finish by hand.
 
 **A reset ends every member's access**, because there is one DEK per workspace. It says so.
 
+**A vault that holds nothing can be erased without the reset's questions.** With no credential and no app
+secret stored, deleting every slot costs only the members' access: there is nothing to revoke or reconnect
+and every backup still restores. So it asks for no proof and no typed phrase, which *Removals need the same gate as
+additions* would otherwise demand, and it is admin-gated like the reset because it ends everyone's access.
+It retires the key as `lost`, since nothing was exposed.
+
 **A single recovery code is safe because recovery is one request.** The replacement slot is written
 *before* the recovery slot is deleted, so a failure leaves the code live, and a fresh code is issued on the
 way out.

@@ -898,7 +898,9 @@ has several requests in flight.
   account id).
 - `POST /auth/passkey/register/begin|complete` needs a signed-in session. `GET /auth/passkey/params` and
   `POST /auth/passkey/login/begin|complete` are public (in the sign-in session middleware's `public_paths`),
-  because the sign-in screen runs them before a session exists. `DELETE /auth/passkey/{id}` removes one.
+  because the sign-in screen runs them before a session exists. `DELETE /auth/passkey/{id}` removes one, and
+  `PATCH` renames it: the label is this install's, while the name in the device's passkey list is fixed at
+  registration.
 - **The challenge lives in the signed session**, which makes it single-use (popped on use) and bound to
   the browser that asked.
 - A passkey sign-in completes without the TOTP step, since required user verification is the second
@@ -945,7 +947,8 @@ custody*; this section is the mechanism.
 - **Unlocking** holds the DEK in a server-side, in-process cache keyed by `user_id` and the sign-in
   session, with an idle TTL (`UNLOCK_TTL_SECONDS`). It is never put in the session cookie, and is
   dropped on logout and restart. Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,unlock,
-  lock}`, `/auth/vault/passkey/{params,register,unlock,set-passphrase}`, `/auth/vault/reenrol`. Status:
+  lock}`, `/auth/vault/passkey/{params,register,unlock,set-passphrase}`, `PATCH|DELETE
+  /auth/vault/passkey/{slot_id}` (rename needs no proof, since it changes no way in), `/auth/vault/reenrol`. Status:
   `vault_configured`, `vault_has_passphrase`, `vault_unlocked`, `vault_access_pending`. Connect, sync
   and a credentials restore that has to re-key need an unlocked vault (`423`; connect on an unconfigured
   vault `409`); the credentials export copies ciphertext and needs none. There is no plaintext path and
@@ -1020,6 +1023,10 @@ custody*; this section is the mechanism.
      connected (`app_secret`) since deleting the old app secret stops a copy reaching the provider, with
      per-connection outcomes. The preview names other members and the caller's passkeys, and the result
      reports `also_locked_out`, since one DEK per workspace means a reset ends every member's access.
+- **Erasing an empty vault** (`POST /auth/vault/erase`, admin-gated, `crypto_service.erase_empty_vault`)
+  deletes every slot and retires the key as `lost`, with no typed phrase and no lost-or-compromised
+  question, and is refused while anything a reset would clear is stored (`holds_stored_secrets`). Vault
+  settings offers it only then (`holds_secrets` on `/auth/vault/members`).
 - `VaultDecryptError` during a sync is classified as `reauth_required`, because retrying cannot fix it.
 - **Transport is a per-topology property.** The backend always speaks HTTP; a client-server deployment
   terminates TLS at a reverse proxy with uvicorn on `--proxy-headers`. `backend/transport.py` detects

@@ -350,6 +350,17 @@ class PasskeySignInTests(unittest.TestCase):
             listed = {entry["id"] for entry in begun.json()["options"]["allowCredentials"]}
             self.assertEqual(listed, {b64url(laptop.credential_id), b64url(phone.credential_id)})
 
+    def test_a_passkey_is_renamed_as_this_install_shows_it(self):
+        with api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            self._register(client, SoftwareAuthenticator())
+            passkey_id = client.get("/api/auth/me").json()["user"]["app_passkeys"][0]["id"]
+            r = client.patch(f"/api/auth/passkey/{passkey_id}", json={"label": "Phone"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual([p["label"] for p in r.json()["user"]["app_passkeys"]], ["Phone"])
+            self.assertEqual(client.patch("/api/auth/passkey/not-mine", json={"label": "x"}).status_code, 404)
+
     def test_a_passkey_registered_under_another_host_name_is_not_offered(self):
         """It can never answer here, so offering it only puts a prompt on the device that must fail."""
         with api_client(base_url=BASE_URL) as (client, _):

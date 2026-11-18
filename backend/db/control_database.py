@@ -1227,6 +1227,17 @@ def get_vault_slot(user_id: str, method: str = "passphrase") -> dict | None:
     return dict(row) if row else None
 
 
+def rename_vault_passkey(user_id: str, slot_id: str, label: str | None) -> bool:
+    """Change the name this install shows for one of this user's vault passkeys, scoped to the owner in
+    the statement. It is not part of any wrap, so nothing is re-sealed."""
+    with get_control_db() as conn:
+        cursor = conn.execute(
+            "UPDATE vault_slot SET label = ? WHERE id = ? AND user_id = ? AND method = 'passkey'",
+            (label, slot_id, user_id),
+        )
+    return cursor.rowcount > 0
+
+
 def get_vault_slot_by_id(slot_id: str) -> dict | None:
     with get_control_db() as conn:
         row = conn.execute("SELECT * FROM vault_slot WHERE id = ?", (slot_id,)).fetchone()
@@ -1810,6 +1821,17 @@ def record_app_passkey_use(passkey_id: str, sign_count: int, rp_id: str):
             "UPDATE app_passkey SET sign_count = ?, rp_id = ?, last_used_at = datetime('now') WHERE id = ?",
             (sign_count, rp_id, passkey_id),
         )
+
+
+def rename_app_passkey(user_id: str, passkey_id: str, label: str | None) -> bool:
+    """Change the name this install shows for one of this user's passkeys. Scoped to the owner in the
+    statement itself, as the delete is. The name the device's own passkey list shows was set at
+    registration and is not this."""
+    with get_control_db() as conn:
+        cursor = conn.execute(
+            "UPDATE app_passkey SET label = ? WHERE id = ? AND user_id = ?", (label, passkey_id, user_id),
+        )
+    return cursor.rowcount > 0
 
 
 def delete_app_passkey(user_id: str, passkey_id: str) -> bool:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from backend.db import control_database as cdb
 from backend.db.database import get_db
 from backend.services import attempt_limiter
 from backend.services import crypto_service as cs
@@ -558,6 +559,43 @@ class VaultRecoveryEndpointTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["revocations"], [])
             self.assertFalse(r.json()["user"]["vault_configured"])
+
+    def test_a_vault_passkey_is_renamed_only_by_its_owner(self):
+        with api_client(base_url="https://luma.local") as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post("/api/auth/vault/passkey/register", json={
+                "credential_id": "cred-1", "prf_output": "Wlpa" * 11, "prf_salt": "c2FsdA==", "label": "Laptop",
+            })
+            self.assertEqual(r.status_code, 200, r.text)
+            slot_id = r.json()["passkey"]["slot_id"]
+            r = client.patch(f"/api/auth/vault/passkey/{slot_id}", json={"label": "  Work laptop "})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual([p["label"] for p in r.json()["user"]["vault_passkeys"]], ["Work laptop"])
+
+            other = client.post("/api/auth/identities", json={"name": "Robin"}).json()["identity"]["id"]
+            client.post("/api/auth/select-identity", json={"user_id": other})
+            self.assertEqual(client.patch(f"/api/auth/vault/passkey/{slot_id}", json={"label": "Mine"}).status_code, 404)
+            self.assertEqual(cdb.get_vault_slot_by_id(slot_id)["label"], "Work laptop")
+
+    def test_an_empty_vault_erases_without_the_resets_questions_and_old_backups_still_restore(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self.assertFalse(client.get("/api/auth/vault/members").json()["holds_secrets"])
+            r = client.post("/api/auth/vault/erase")
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertFalse(r.json()["user"]["vault_configured"])
+            with cdb.get_control_db() as conn:
+                self.assertEqual({row[0] for row in conn.execute("SELECT reason FROM retired_vault_key")}, {"lost"})
+
+    def test_a_vault_holding_a_credential_is_not_erased(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self._connection("c-1", "plaid")
+            self.assertTrue(client.get("/api/auth/vault/members").json()["holds_secrets"])
+            self.assertEqual(client.post("/api/auth/vault/erase").status_code, 409)
+            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_configured"])
+            with get_db() as conn:
+                self.assertEqual(conn.execute("SELECT credential_enc FROM connection").fetchone()[0], "stored")
 
     def _connection(self, conn_id: str, provider: str):
         with get_db() as conn:

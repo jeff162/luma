@@ -2590,7 +2590,9 @@ export const HELP_TOPICS = [
         <p>
           The passphrase, and any number of passkeys. Any one of them opens the vault. A passkey is
           added per device and is the convenient everyday unlock; the passphrase stays as it was. The
-          last remaining method cannot be removed.
+          last remaining method cannot be removed. Clicking a passkey&apos;s name renames it
+          in {APP_NAME}; the name in the device&apos;s own passkey list was set when it was added and
+          does not change.
         </p>
         <p>
           A vault passkey is separate from a passkey used to sign in to {APP_NAME} (see{' '}
@@ -2680,6 +2682,13 @@ export const HELP_TOPICS = [
             credentials&hellip;</strong> has each provider issue a new account connection credential
           where it supports that, and lists what is left to replace at the provider. It is the first step
           of <HelpLink to="/help/copied-database">responding to a copied database</HelpLink>.
+        </p>
+        <HelpHeading anchor="erase">Erase the vault</HelpHeading>
+        <p>
+          *needs review* Shown to an administrator once nothing is stored in the vault: no account
+          connection credential and no data provider app secret. It deletes every member&apos;s unlock
+          methods, and setting a passphrase afterwards starts a new vault. Backups taken before still
+          restore the credentials they hold.
         </p>
       </>
     ),
@@ -4583,7 +4592,8 @@ export const HELP_TOPICS = [
           in addition to a password; they do not replace it.
         </p>
         <p>
-          Passkeys for signing in are separate from passkeys used to unlock the vault.
+          Passkeys for signing in are separate from passkeys used to unlock the vault. Clicking a
+          passkey&apos;s name renames it in {APP_NAME}, not in the device&apos;s own passkey list.
         </p>
         <p>
           <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.

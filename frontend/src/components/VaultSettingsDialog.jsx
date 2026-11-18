@@ -17,6 +17,7 @@ import { AppConfirmDialog, AppDialog, AppNoticeDialog, Button, DialogActions, In
 import { NO_AUTOFILL_PROPS } from '../lib/sensitiveFields.js'
 import { PASSKEY_UNAVAILABLE, passkeyAvailability, registerPasskey } from '../lib/vaultPasskey.js'
 import { passkeyAnswersHere } from '../lib/passkeyHost.js'
+import InlineRename from './InlineRename.jsx'
 import { RecoveryCodeReveal } from './VaultRecoveryDialog.jsx'
 import { VaultPassphraseDialog } from './VaultPassphraseDialog.jsx'
 import { api } from '../lib/api.js'
@@ -84,6 +85,13 @@ function Row({ children, style }) {
   )
 }
 
+// Every other member's access ends with it, which is the one cost an empty vault's erase has.
+function eraseDescription(others) {
+  const names = others.map(m => m.display_name)
+  const also = names.length ? `, including ${names.join(', ')}’s` : ''
+  return `Every unlock method is deleted${also}.`
+}
+
 export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase, onChanged, onClose }) {
   const [requests, setRequests] = useState(null)
   const [members, setMembers] = useState(null)
@@ -113,6 +121,10 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   // is frequently the *only* rung between a forgotten passphrase and rebuilding every connection, and
   // that asymmetry is worth one dialog.
   const [confirmingDiscard, setConfirmingDiscard] = useState(false)
+  // Whether anything is sealed under the vault. Only an empty one can be erased from here; one holding
+  // credentials goes through the reset, which asks what that costs.
+  const [holdsSecrets, setHoldsSecrets] = useState(true)
+  const [confirmingErase, setConfirmingErase] = useState(false)
   // The action waiting on a secret, and which question to ask for it: `{ action, mode }`. The two are not
   // the same ask. 'confirm' means the vault is open and only the *recency* of the proof has lapsed;
   // 'unlock' means it is genuinely shut. Wording them alike would tell a user with a locked vault that it
@@ -136,6 +148,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
     ])
     setRequests(reqs.requests || [])
     setMembers(mems.members || [])
+    setHoldsSecrets(mems.holds_secrets !== false)
     setPasskeyParams(params)
     setRecoveryCode(me?.user
       ? { has: !!me.user.vault_has_recovery_code, issuedAt: me.user.vault_recovery_code_issued_at }
@@ -303,7 +316,11 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
 
           {passkeys.map(pk => (
             <Row key={pk.slot_id}>
-              <span>{pk.label || 'Passkey'}</span>
+              <InlineRename
+                value={pk.label || ''} shown={pk.label || 'Passkey'} ariaLabel="Passkey name"
+                title="Rename this passkey"
+                onRename={async label => { await api.renameVaultPasskey(pk.slot_id, label); await load() }}
+              />
               {pk.pending ? (
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>awaiting approval</span>
               ) : null}
@@ -515,9 +532,49 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           ) : null}
         </Section>
 
+        {isAdmin && !holdsSecrets ? (
+          <Section
+            title="Erase the vault"
+            description="Nothing is stored in the vault, so it can be deleted outright. Setting a passphrase afterwards starts a new one."
+          >
+            <div>
+              <Button variant="danger" disabled={busy === 'erase'} onClick={() => setConfirmingErase(true)}>
+                Erase vault…
+              </Button>
+            </div>
+          </Section>
+        ) : null}
+
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
         {status ? <div style={{ fontSize: 13, color: 'var(--muted)' }}>{status}</div> : null}
       </div>
+
+      {confirmingErase ? (
+        <AppConfirmDialog
+          title="Erase the vault?"
+          description={eraseDescription((members || []).filter(m => m.user_id !== currentUserId))}
+          confirmLabel={busy === 'erase' ? 'Erasing…' : 'Erase vault'}
+          confirmVariant="danger"
+          confirmDisabled={busy === 'erase'}
+          cancelDisabled={busy === 'erase'}
+          onConfirm={async () => {
+            setBusy('erase')
+            setError('')
+            try {
+              const resp = await api.eraseVault()
+              if (resp?.user) session?.setCurrentUser?.(resp.user)
+              await onChanged?.()
+              onClose()
+            } catch (e) {
+              setError(e?.message || 'The vault was not erased.')
+              setConfirmingErase(false)
+            } finally {
+              setBusy('')
+            }
+          }}
+          onCancel={() => setConfirmingErase(false)}
+        />
+      ) : null}
 
       {confirmingReissue ? (
         <AppConfirmDialog

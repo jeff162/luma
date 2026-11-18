@@ -23,6 +23,8 @@ from backend.db.control_database import (
     bootstrap_required,
     consume_totp_code,
     delete_app_passkey,
+    rename_app_passkey,
+    rename_vault_passkey,
     credentials_exports_any,
     credentials_exports_for_fingerprint,
     enable_auth_mode,
@@ -164,6 +166,11 @@ class VaultRotateRequest(BaseModel):
     # `crypto_service.ROTATION_REASONS`: 'replaced' to end someone's access, 'routine' otherwise. Only the
     # user knows which, and it decides whether backups under the old key still restore their credentials.
     reason: str
+
+
+class PasskeyRenameRequest(BaseModel):
+    # Empty clears it, and the lists fall back to "Passkey".
+    label: str
 
 
 class VaultPasskeyRegisterRequest(BaseModel):
@@ -1087,6 +1094,16 @@ def passkey_login_complete(body: PasskeyLoginRequest, request: Request):
     return {"user": _session_payload(user)}
 
 
+@router.patch("/passkey/{passkey_id}")
+def passkey_rename(passkey_id: str, body: PasskeyRenameRequest, request: Request):
+    """Rename one of this user's login passkeys, as this install shows it. A name grants nothing, so like
+    the removal it needs only a signed-in session."""
+    user = _require_current_user(request)
+    if not rename_app_passkey(user["id"], passkey_id, body.label.strip() or None):
+        raise HTTPException(status_code=404, detail="No such passkey")
+    return {"user": _session_payload(user)}
+
+
 @router.delete("/passkey/{passkey_id}")
 def passkey_remove(passkey_id: str, request: Request):
     """Remove one of this user's login passkeys.
@@ -1454,6 +1471,20 @@ def vault_reset(body: VaultResetRequest, request: Request):
     }
 
 
+@router.post("/vault/erase")
+def vault_erase(request: Request):
+    """Delete a vault that holds nothing, so the next passphrase starts a new one
+    (`crypto_service.erase_empty_vault`). Admin-gated like the reset, since it ends every member's access;
+    refused with 409 while a credential or app secret is stored."""
+    user = require_admin_or_local(request)
+    others = [m["display_name"] for m in crypto_service.vault_members() if m["user_id"] != user["id"]]
+    try:
+        crypto_service.erase_empty_vault()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"also_locked_out": others, "user": _session_payload(user)}
+
+
 @router.post("/vault/reissue-credentials")
 def vault_reissue_credentials(request: Request):
     """Respond to an exposed database without destroying anything: replace every connection's credential
@@ -1524,7 +1555,11 @@ def vault_members(request: Request):
     already in the workspace and carries no key material, and "who holds the credentials" is a question
     a household member is entitled to an answer to."""
     _require_current_user(request)
-    return {"members": crypto_service.vault_members()}
+    with get_db() as conn:
+        # Whether anything is sealed under the vault, which decides whether it can be erased outright
+        # (`/vault/erase`) or only reset.
+        holds_secrets = crypto_service.holds_stored_secrets(conn)
+    return {"members": crypto_service.vault_members(), "holds_secrets": holds_secrets}
 
 
 @router.post("/vault/access-requests/{slot_id}/approve")
@@ -1666,6 +1701,16 @@ def vault_passkey_unlock(body: VaultPasskeyUnlockRequest, request: Request):
         # a different identity, so this is refused rather than quietly honoured.
         crypto_service.lock(owner_id)
         raise HTTPException(status_code=403, detail="That passkey belongs to a different user")
+    return {"user": _session_payload(user)}
+
+
+@router.patch("/vault/passkey/{slot_id}")
+def vault_passkey_rename(slot_id: str, body: PasskeyRenameRequest, request: Request):
+    """Rename one of this user's vault passkeys, as this install shows it. Unlike adding or removing one it
+    changes no way into the vault, so it asks for no recent proof."""
+    user = _require_current_user(request)
+    if not rename_vault_passkey(user["id"], slot_id, body.label.strip() or None):
+        raise HTTPException(status_code=404, detail="No such passkey")
     return {"user": _session_payload(user)}
 
 

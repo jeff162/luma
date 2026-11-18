@@ -1941,6 +1941,31 @@ def reset_vault(user_id: str, *, reason: str) -> dict:
     return {"connections_needing_relink": _retire_vault([], reason), "reason": reason}
 
 
+def holds_stored_secrets(conn) -> bool:
+    """Whether anything a vault reset would clear is stored (`clear_stored_secrets`). `conn` is the data
+    database."""
+    return any(
+        conn.execute(f"SELECT 1 FROM {spec.table} WHERE {spec.column} IS NOT NULL LIMIT 1").fetchone()
+        for spec in ENCRYPTED_COLUMNS
+    ) or bool(
+        conn.execute("SELECT 1 FROM connection WHERE credential != '' LIMIT 1").fetchone()
+        or conn.execute("SELECT 1 FROM provider_config WHERE secret != '' LIMIT 1").fetchone()
+    )
+
+
+def erase_empty_vault() -> None:
+    """Delete every slot of a vault nothing is stored under, so the next passphrase starts a new one.
+
+    The reset without its cost: with no credential and no app secret sealed under the key, deleting the
+    slots loses nothing but the members' access, so it needs no typed phrase and no lost-or-compromised
+    answer. The key is retired as `lost`, since nothing was exposed and a backup taken under it should
+    still restore. Raises `ValueError` when anything is stored, which is the reset's job."""
+    with get_db() as conn:
+        if holds_stored_secrets(conn):
+            raise ValueError("The vault still holds credentials. Disconnect them first, or reset the vault.")
+    _retire_slots([], "lost")
+
+
 def _retire_vault(removed_seals: list[str], reason: str) -> int:
     """Clear the stored secrets and every slot, retiring the key for `reason`. `removed_seals` are seals of
     slots already gone, which only the caller saw. Returns how many connections need re-linking."""
@@ -1949,9 +1974,14 @@ def _retire_vault(removed_seals: list[str], reason: str) -> int:
 
     # Last, and only once the ciphertext is gone. Reversed, an interruption between the two would leave
     # unopenable rows behind a vault that still looked configured — a state with no way out but a second
-    # reset, and no screen that would say so. The key is recorded as retired before its slots go, since
-    # they are the only record of which seals held it.
+    # reset, and no screen that would say so.
+    _retire_slots(removed_seals, reason)
+    return connections
+
+
+def _retire_slots(removed_seals: list[str], reason: str) -> None:
+    """Delete every slot and lock, retiring the key for `reason`. The key is recorded as retired before
+    its slots go, since they are the only record of which seals held it."""
     cdb.record_retired_vault_seals(removed_seals + _slot_seal_digests(cdb.list_vault_slots()), reason)
     cdb.delete_all_vault_slots()
     lock_all()
-    return connections

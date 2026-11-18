@@ -263,6 +263,8 @@ export const api = {
   unlockVaultWithPasskey: (credential_id, prf_output) =>
     request('/auth/vault/passkey/unlock', { method: 'POST', body: JSON.stringify({ credential_id, prf_output }) }),
   removeVaultPasskey: (slotId) => request(`/auth/vault/passkey/${slotId}`, { method: 'DELETE' }),
+  renameVaultPasskey: (slotId, label) =>
+    request(`/auth/vault/passkey/${slotId}`, { method: 'PATCH', body: JSON.stringify({ label }) }),
   // Passkeys for *sign-in*, which are a separate feature from the vault passkeys above and share no
   // storage, no endpoint and no ceremony with them. `params` is public: the sign-in screen has to decide
   // whether to offer the button before there is a session.
@@ -274,6 +276,8 @@ export const api = {
   completePasskeySignIn: (credential) =>
     request('/auth/passkey/login/complete', { method: 'POST', body: JSON.stringify({ credential }) }),
   removeSignInPasskey: (passkeyId) => request(`/auth/passkey/${passkeyId}`, { method: 'DELETE' }),
+  renameSignInPasskey: (passkeyId, label) =>
+    request(`/auth/passkey/${passkeyId}`, { method: 'PATCH', body: JSON.stringify({ label }) }),
   // Recovery code — one per user, and the only rung between a forgotten passphrase and rebuilding every
   // connection on a single-user install. Issuing returns the code in the clear exactly once; nothing
   // else ever can, since only its KEK is stored.
@@ -288,6 +292,7 @@ export const api = {
   vaultResetPreview: () => request('/auth/vault/reset-preview'),
   // Irreversible. `reason` is 'lost' or 'compromised' — only the latter can revoke at the provider, and
   // only the former is refused while another member can still open the vault.
+  eraseVault: () => request('/auth/vault/erase', { method: 'POST' }),
   resetVault: (reason, confirm) =>
     request('/auth/vault/reset', { method: 'POST', body: JSON.stringify({ reason, confirm }) }),
   // Per-provider app-level credentials (the Configure card). Status never returns the secret.

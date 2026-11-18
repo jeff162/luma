@@ -9,6 +9,7 @@ import { PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicy
 import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../../lib/appPasskey.js'
 import { formatDate } from '../../lib/utils.js'
 import { passkeyAnswersHere } from '../../lib/passkeyHost.js'
+import InlineRename from '../InlineRename.jsx'
 
 // Password fields don't need the full card width.
 const PASSWORD_FIELD_WIDTH = { maxWidth: 360 }
@@ -175,7 +176,11 @@ function SignInPasskeysPanel({ user, onUserChange }) {
           {passkeys.map(passkey => (
             <InsetPanel key={passkey.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div>
-                <div style={{ fontSize: 13 }}>{passkey.label || 'Passkey'}</div>
+                <InlineRename
+                  value={passkey.label || ''} shown={passkey.label || 'Passkey'} ariaLabel="Passkey name"
+                  title="Rename this passkey" style={{ fontSize: 13 }}
+                  onRename={async name => onUserChange((await api.renameSignInPasskey(passkey.id, name)).user)}
+                />
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
                   Added {formatDate(passkey.created_at)}
                   {passkey.last_used_at ? ` · Last used ${formatDate(passkey.last_used_at)}` : ' · Not used yet'}
