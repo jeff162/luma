@@ -434,12 +434,14 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     if (sourceBatch) onShowHistory({ batchIds: [targetBatchId] })
   }, [location.search, batches, navigate, openBatchDetail, onShowHistory])
 
-  // `?review=wallet` is the Tasks entry's way into the wallet reconciliation, which is about the whole
-  // ledger rather than one file. Honored once on arrival, then cleaned from the URL like the one above.
+  // `?review=wallet&account=<id>` is a wallet account's Tasks entry's way into its reconciliation, which is
+  // about the account's whole history rather than one file. Honored once on arrival, then cleaned from the
+  // URL like the one above.
   const openReconciliation = reconciliationViewer.open
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('review') !== 'wallet') return
-    openReconciliation({ vendor: 'wallet', title: '' })
+    const params = new URLSearchParams(location.search)
+    if (params.get('review') !== 'wallet') return
+    openReconciliation({ vendor: 'wallet', walletId: params.get('account') || undefined, title: '' })
     navigate('/import-export', { replace: true })
   }, [location.search, navigate, openReconciliation])
 

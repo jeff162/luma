@@ -52,7 +52,7 @@ from backend.db.control_database import (
     latest_vault_key_retirement,
 )
 from backend import app_log_file, runtime_config, transport
-from backend.services import crypto_service, proxy_certificate, rule_alerts, rule_conflicts, update_check
+from backend.services import crypto_service, proxy_certificate, rule_alerts, rule_conflicts, update_check, wallet_pairs
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens, transfer_review
@@ -692,23 +692,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "severity":    SEVERITY_WARNING,
             })
 
-        # The wallet reconciliation is about the whole ledger rather than one file — matches are made after
-        # syncs as well as imports — so it has one entry, and its link opens the review itself.
-        from backend.services.wallet_pairs import ledger_attention_count
-        wallet_attention = ledger_attention_count(conn)
-        if wallet_attention:
-            tasks.append({
-                "id":          "wallet_pairs",
-                "title":       "Wallet transactions to reconcile",
-                "description": f"{wallet_attention} item{'s need' if wallet_attention != 1 else ' needs'} a look: a "
-                               "wallet transaction (PayPal, or a payment app) with more than one possible bank or "
-                               "card match, one that moved money with no matching transaction found, or a "
-                               "wallet charge on a bank or card account with no wallet record.",
-                "count":       wallet_attention,
-                "link":        "/import-export?review=wallet",
-                "link_label":  "Open the wallet review",
-                "severity":    SEVERITY_WARNING,
-            })
+        tasks.extend(_wallet_pair_tasks(conn))
 
         owed_rescan_task = _owed_rescan_task(conn)
         if owed_rescan_task:
@@ -928,6 +912,34 @@ def _rule_conflict_tasks(conn) -> list[dict]:
     }]
 
 
+WALLET_PAIRS_TASK_PREFIX = "wallet_pairs_"
+
+
+def _wallet_pair_tasks(conn) -> list[dict]:
+    """One task per wallet account with rows to reconcile. A wallet is one account, possibly someone
+    else's, so each has its own entry named for it, and its link opens that account's review. Matches are
+    made after syncs as well as imports, so the review is about the account's whole history rather than
+    one file."""
+    counts = wallet_pairs.wallet_attention_counts(conn)
+    labels = wallet_pairs.wallet_labels(conn, counts)
+    tasks = []
+    for wallet_id, n in sorted(counts.items(), key=lambda kv: labels.get(kv[0], {}).get("name", "").casefold()):
+        name = labels.get(wallet_id, {}).get("name") or "Wallet"
+        tasks.append({
+            "id":          f"{WALLET_PAIRS_TASK_PREFIX}{wallet_id}",
+            "title":       f"{name} transactions to reconcile",
+            "description": f"{n} item{'s need' if n != 1 else ' needs'} a look: a {name} transaction with more "
+                           "than one possible bank or card match, one that moved money with no matching "
+                           f"transaction found, or a {name} charge on a bank or card account with no {name} "
+                           "record.",
+            "count":       n,
+            "link":        f"/import-export?review=wallet&account={wallet_id}",
+            "link_label":  "Open the reconciliation",
+            "severity":    SEVERITY_WARNING,
+        })
+    return tasks
+
+
 RULE_ALERT_TASK_PREFIX = "rule_alert_"
 
 
@@ -1061,6 +1073,11 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
                     signal_counts = narrow_signals(compute_signals(conn), shown)["counts"]
                 fresh = next((t for t in _recurring_signal_tasks(conn, signal_counts) if t["id"] == task["id"]), None)
                 task = _keep_dismissal(task, fresh)
+            elif task["id"].startswith(WALLET_PAIRS_TASK_PREFIX):
+                # One task per wallet account already; it shows to the account's owner.
+                wallet_id = task["id"].removeprefix(WALLET_PAIRS_TASK_PREFIX)
+                owner = (wallet_pairs.wallet_labels(conn, [wallet_id]).get(wallet_id) or {}).get("owner_id")
+                task = task if owner_lens_admits([owner] if owner else [], lens) else None
             elif task["id"].startswith(RULE_ALERT_TASK_PREFIX):
                 # Counted over the caught rows' owners, so a rule scoped to an account shows to that
                 # account's owner and one applying to everyone shows each owner their own rows.

@@ -240,7 +240,7 @@ function useColumns({ busy, run, openPicker, reportError }) {
 }
 
 export const walletReconciliation = {
-  subtitle: 'How wallet transactions match the bank and card transactions on the other side, so the money counts once.',
+  subtitle: "Pairs this account's transactions with the bank or card transactions on their other side, so the money counts once.",
   explainerTopic: 'wallet-reconciliation',
   panelPrefKey: 'ui.walletPairs.panel',
   sortPrefKey: 'ui.walletPairs.sort',

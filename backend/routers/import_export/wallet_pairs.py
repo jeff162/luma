@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""The wallet reconciliation's HTTP surface: the report (for the whole ledger, or one import's rows) and
+"""The wallet reconciliation's HTTP surface: the report (for the whole ledger, one wallet account, or one
+import's rows) and
 the decisions the user makes in it. The pairing and every rule it follows live in
 `services/wallet_pairs.py`; this module only carries requests to it.
 
@@ -23,13 +24,16 @@ router = APIRouter()
 
 
 @router.get("/wallet-pairs/report")
-async def wallet_pair_report_endpoint(batch_id: Optional[str] = None):
+async def wallet_pair_report_endpoint(batch_id: Optional[str] = None, wallet_id: Optional[str] = None):
     """The review: matched pairs, rows with several candidates, rows with none, and bank or card rows
-    naming a wallet that nothing accounts for. `batch_id` scopes it to one import's wallet rows."""
+    naming a wallet that nothing accounts for. `batch_id` scopes it to one import's wallet rows, and
+    `wallet_id` to one wallet account's."""
     with get_db() as conn:
         if batch_id and not conn.execute("SELECT 1 FROM import_batch WHERE id = ?", (batch_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Unknown batch")
-        return wallet_pairs.wallet_pair_report(conn, batch_id)
+        if wallet_id and not wallet_pairs.wallet_root_id(conn, wallet_id):
+            raise HTTPException(status_code=404, detail="Not a wallet account")
+        return wallet_pairs.wallet_pair_report(conn, batch_id, wallet_id)
 
 
 @router.get("/wallet-pairs/candidates/{wallet_txn_id}")

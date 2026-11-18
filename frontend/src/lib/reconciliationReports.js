@@ -13,11 +13,12 @@ export const RECONCILIATION_REPORTS = {
     load: ({ batchId }) => api.getAmazonReconciliation(batchId),
     problemCount: data => (data?.duplicate?.length || 0) + (data?.amazon_unmatched?.length || 0),
   },
-  // Opened without a batch it covers the whole ledger, since matches are made after syncs as well as imports.
-  // Named for its one wallet when it covers only one.
+  // Opened for one wallet account (from its Tasks entry) it covers that account's whole history, since
+  // matches are made after syncs as well as imports; opened for an import, that import's rows. Named for the
+  // wallets it covers, which is one unless a sync brought in several.
   wallet: {
-    title: data => (data?.wallet_names?.length === 1 ? `${data.wallet_names[0]} reconciliation` : 'Wallet reconciliation'),
-    load: ({ batchId }) => api.getWalletPairReport(batchId),
+    title: data => (data?.wallet_names?.length ? `${data.wallet_names.join(', ')} reconciliation` : 'Reconciliation'),
+    load: ({ batchId, walletId }) => api.getWalletPairReport({ batchId, walletId }),
     problemCount: data => (data?.choice?.length || 0)
       + (data?.unmatched || []).filter(r => !r.reviewed).length
       + (data?.unaccounted || []).filter(r => !r.reviewed).length,

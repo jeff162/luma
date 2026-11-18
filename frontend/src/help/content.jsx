@@ -3425,10 +3425,12 @@ export const HELP_TOPICS = [
         <p>
           A match is made only when it is unambiguous: one matching amount within a few days, on an account
           belonging to the same person or a shared one. A transaction a reimbursement claims is never moved, and
-          is not offered. The <strong>wallet reconciliation</strong> shows the result, for one import or sync
-          from its card&apos;s <strong>Reconciliation</strong> pill (a collapsed data source or connection shows
-          <strong> &#9888; N to resolve</strong> when one of its cards needs a look), or for the whole ledger
-          from the Tasks entry:
+          is not offered. The <strong>reconciliation</strong> shows the result, for one import or sync from its
+          card&apos;s <strong>Reconciliation</strong> pill (a collapsed data source or connection shows
+          <strong> &#9888; N to resolve</strong> when one of its cards needs a look), or for one wallet
+          account&apos;s whole history from that account&apos;s own Tasks entry. Each wallet account has its own
+          entry and its own reconciliation, named for the account. A transaction on a shared account that could
+          belong to either of two wallets is listed under both, and settling it in one settles it in the other:
         </p>
         <ul>
           <li><strong>Several possible matches</strong> &mdash; more than one transaction could be the other side.

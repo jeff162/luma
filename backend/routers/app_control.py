@@ -254,7 +254,7 @@ def warm_derived_caches(rule_reach: bool = False):
         ).fetchall()
         for row in amazon_batches:
             reconciliation_attention_count(conn, row["id"])
-        wallet_pairs.ledger_attention_count(conn)
+        wallet_pairs.wallet_attention_counts(conn)
         wallet_pairs.card_counts(conn)
         if rule_reach:
             rule_owner_reach(conn)

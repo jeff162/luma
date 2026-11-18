@@ -14,7 +14,7 @@ write can dodge a trigger. Callers asking for the same stale count together shar
 value cached by earlier code is never served to the code that replaced it.
 
 Two scopes share the mechanism: a count per import batch, cached on the batch row, and a value derived
-from the whole ledger — for a report that is not about one file, such as the PayPal reconciliation —
+from the whole ledger — for a report that is not about one file, such as the wallet reconciliation —
 cached in `db_meta`. Neither cache write touches a table with a trigger, so a write never invalidates itself.
 
 **A cache write commits at once when the caller had no transaction open**, which is the case on the read
@@ -94,8 +94,3 @@ def ledger_cached(conn: sqlite3.Connection, key: str, compute: Callable[[sqlite3
         return value
 
     return fill_once(conn, key, read, fill)
-
-
-def ledger_attention(conn: sqlite3.Connection, key: str, compute: Callable[[sqlite3.Connection], int]) -> int:
-    """A whole-ledger report's attention count, cached in `db_meta` under `key`."""
-    return int(ledger_cached(conn, key, compute))

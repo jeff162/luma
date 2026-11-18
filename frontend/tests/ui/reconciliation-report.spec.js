@@ -117,8 +117,8 @@ test('two PayPal transactions cornered on one card charge are one row, settled b
   const { batch_id: batchId } = await imported.json()
 
   try {
-    await page.goto('/import-export?review=wallet')
-    // Named for the one wallet the ledger holds.
+    await page.goto(`/import-export?review=wallet&account=${paypal.id}`)
+    // Named for the wallet account it was opened for.
     await expect(page.getByText(`${paypal.name} reconciliation`, { exact: true })).toBeVisible()
     // One row, not two: both rivals are on it, each with the button that gives the charge to it.
     await expect(page.getByRole('button', { name: 'Two transactions, one match (1)' })).toBeVisible()
@@ -164,8 +164,8 @@ test('a PayPal import pairs with the card charge, and the review opens from its 
   const { batch_id: batchId } = await imported.json()
 
   try {
-    await page.goto('/import-export?review=wallet')
-    // Named for the one wallet the ledger holds.
+    await page.goto(`/import-export?review=wallet&account=${paypal.id}`)
+    // Named for the wallet account it was opened for.
     await expect(page.getByText(`${paypal.name} reconciliation`, { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Matched (1)' })).toBeVisible()
     await expect(page.getByText('PAYPAL *HARBOR RELIEF')).toBeVisible()

@@ -96,7 +96,7 @@ from backend.services.money_movement import (
     money_movement_category_id_if_exists,
 )
 from backend.services.money_movement import LINK_KIND as WALLET_FUNDING_KIND
-from backend.services.reconciliation_attention import ledger_attention, ledger_cached
+from backend.services.reconciliation_attention import ledger_cached
 from backend.services.reimbursements import REIMBURSEMENT_LINK_KIND, claimed_txn_ids
 from backend.services.review_flagging import REVIEW_PRIOR_KEY, restore_review_flag
 from backend.services.txn_summaries import txn_summaries
@@ -595,16 +595,21 @@ def pair_after_ingest(connection) -> None:
 
 # --- The review ------------------------------------------------------------------------------------------
 
-def _scoped(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> dict:
-    """The review's rows as ids, over the whole ledger or one import's wallet rows."""
+def _scoped(ledger: _Ledger, analysis: dict, batch_id: Optional[str] = None,
+            wallet_root: Optional[str] = None) -> dict:
+    """The review's rows as ids, over the whole ledger, one import's wallet rows, or one wallet account's.
+    Only what is shown is narrowed: the analysis always covers every wallet, since rows of two wallets can
+    want the same bank or card row and which one gets it decides both."""
     def in_scope(wallet_id: str) -> bool:
-        return batch_id is None or ledger.wallet_by_id.get(wallet_id, {}).get("import_batch_id") == batch_id
+        row = ledger.wallet_by_id.get(wallet_id, {})
+        return ((batch_id is None or row.get("import_batch_id") == batch_id)
+                and (wallet_root is None or row.get("root_id") == wallet_root))
 
     return {
         "matched": [(link_id, pair) for link_id, pair in ledger.pairs.items() if in_scope(pair["wallet"])],
         "choice": {p: cands for p, cands in analysis["choice"].items() if in_scope(p)},
         "unmatched": [p for p in analysis["unmatched"] if in_scope(p)],
-        "unaccounted": _unaccounted(ledger, analysis, batch_id),
+        "unaccounted": _unaccounted(ledger, analysis, batch_id, wallet_root),
     }
 
 
@@ -628,8 +633,10 @@ def _attention(ledger: _Ledger, scoped: dict) -> int:
     return len(_attention_ids(ledger, scoped))
 
 
-def wallet_pair_report(conn: sqlite3.Connection, batch_id: Optional[str] = None) -> dict:
-    """The review of every wallet row's pairing, or — with `batch_id` — of the rows one import brought in.
+def wallet_pair_report(conn: sqlite3.Connection, batch_id: Optional[str] = None,
+                       wallet_id: Optional[str] = None) -> dict:
+    """The review of every wallet row's pairing, or of the rows one import brought in (`batch_id`), or of
+    one wallet account's rows (`wallet_id`, any account of its merge group).
 
       * matched          — a wallet row and the bank or card row paired with it
       * choice           — a wallet row with several candidates, none preferred
@@ -642,7 +649,8 @@ def wallet_pair_report(conn: sqlite3.Connection, batch_id: Optional[str] = None)
     if not has_wallet_account(conn):
         return {"matched": [], "choice": [], "unmatched": [], "unaccounted": [], "wallet_names": []}
     ledger = _Ledger(conn)
-    scoped = _scoped(ledger, _analyze(ledger), batch_id)
+    wallet_root = wallet_root_id(conn, wallet_id) if wallet_id else None
+    scoped = _scoped(ledger, _analyze(ledger), batch_id, wallet_root)
     matched, choice = scoped["matched"], scoped["choice"]
 
     ids = {pair["wallet"] for _, pair in matched} | {pair["counterpart"] for _, pair in matched}
@@ -663,27 +671,52 @@ def wallet_pair_report(conn: sqlite3.Connection, batch_id: Optional[str] = None)
         ],
         "unmatched": [{"wallet": summaries.get(p), "reviewed": p in ledger.reviewed} for p in scoped["unmatched"]],
         "unaccounted": [{**summaries.get(c, {}), "reviewed": c in ledger.reviewed} for c in scoped["unaccounted"]],
-        "wallet_names": _wallet_names(conn, ledger, batch_id),
+        "wallet_names": _wallet_names(conn, ledger, batch_id, wallet_root),
     }
 
 
-def _wallet_names(conn: sqlite3.Connection, ledger: _Ledger, batch_id: Optional[str]) -> list[str]:
-    """The display names of the wallets whose rows the review covers, by name."""
-    roots = sorted({r["root_id"] for r in ledger.wallet_rows if batch_id is None or r["import_batch_id"] == batch_id})
+def wallet_root_id(conn: sqlite3.Connection, account_id: str) -> Optional[str]:
+    """The wallet account a row of `account_id` belongs to — the account it is merged into, if any — or None
+    when it is not a wallet."""
+    row = conn.execute(
+        f"""SELECT COALESCE(a.parent_account_id, a.id) AS root_id
+            FROM   account a LEFT JOIN account pa ON pa.id = a.parent_account_id
+            WHERE  a.id = ? AND {wallet_account_clause('a', 'pa')}""",
+        (account_id,),
+    ).fetchone()
+    return row["root_id"] if row else None
+
+
+def wallet_labels(conn: sqlite3.Connection, roots: Iterable[str]) -> dict[str, dict]:
+    """Each wallet account's name as the app shows it, and its owner, by id."""
+    roots = list(roots)
     if not roots:
-        return []
+        return {}
     rows = conn.execute(
-        f"SELECT DISTINCT COALESCE(display_name, name) AS label FROM account WHERE id IN ({','.join('?' * len(roots))})",
+        f"""SELECT id, COALESCE(display_name, name) AS label, owner_id FROM account
+            WHERE  id IN ({','.join('?' * len(roots))})""",
         roots,
     ).fetchall()
-    return sorted({r["label"] for r in rows if r["label"]}, key=str.casefold)
+    return {r["id"]: {"name": r["label"] or "", "owner_id": r["owner_id"]} for r in rows}
 
 
-def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> list[str]:
+def _wallet_names(conn: sqlite3.Connection, ledger: _Ledger, batch_id: Optional[str],
+                  wallet_root: Optional[str]) -> list[str]:
+    """The display names of the wallets whose rows the review covers, by name."""
+    roots = {r["root_id"] for r in ledger.wallet_rows
+             if (batch_id is None or r["import_batch_id"] == batch_id)
+             and (wallet_root is None or r["root_id"] == wallet_root)}
+    return sorted({w["name"] for w in wallet_labels(conn, roots).values() if w["name"]}, key=str.casefold)
+
+
+def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str],
+                 wallet_root: Optional[str] = None) -> list[str]:
     """Bank and card rows naming a wallet that nothing pairs with. Only accounts already paired with that
     wallet are looked at, and only within the dates the wallet's rows cover: such a charge elsewhere
     belongs to a wallet the ledger does not track, where it is the only record and is counted correctly as
-    it is. Scoped to one import, the dates are that import's."""
+    it is. Scoped to one import, the dates are that import's; scoped to one wallet, only that wallet's
+    funding accounts are looked at, so a row two wallets could own (a shared card funding both) is listed
+    under each."""
     funds: dict[str, set[str]] = defaultdict(set)   # funding account root → wallet account roots
     for pair in ledger.pairs.values():
         wallet, other = ledger.wallet_by_id.get(pair["wallet"]), ledger.other_by_id.get(pair["counterpart"])
@@ -701,9 +734,11 @@ def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> li
     for other in ledger.other_rows:
         if other["id"] in analysis["wanted"] or not ledger.pairable_other(other):
             continue
-        for wallet_root in funds.get(other["root_id"], ()):
-            span = spans.get(wallet_root)
-            if span and span[0] <= other["date"] <= span[1] and ledger.reads_as(other, wallet_of_root[wallet_root]):
+        for root in funds.get(other["root_id"], ()):
+            if wallet_root is not None and root != wallet_root:
+                continue
+            span = spans.get(root)
+            if span and span[0] <= other["date"] <= span[1] and ledger.reads_as(other, wallet_of_root[root]):
                 out.append(other["id"])
                 break
     return sorted(out, key=lambda i: ledger.other_by_id[i]["date"])
@@ -712,14 +747,23 @@ def _unaccounted(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> li
 LEDGER_ATTENTION_KEY = "wallet_pair_attention"
 
 
-def ledger_attention_count(conn: sqlite3.Connection) -> int:
-    """The whole review's attention count — the Tasks nag — cached against the reconciliation epoch."""
-    def compute(c: sqlite3.Connection) -> int:
+def wallet_attention_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Each wallet account's attention count, for its own Tasks entry, as `{account id: n}` with the
+    accounts that need nothing left out. A wallet is one account, possibly someone else's, so its review
+    is its own; a row two wallets could own counts for each. One analysis serves every wallet, cached
+    against the reconciliation epoch."""
+    def compute(c: sqlite3.Connection) -> dict:
         if not has_wallet_account(c):
-            return 0
+            return {}
         ledger = _Ledger(c)
-        return _attention(ledger, _scoped(ledger, _analyze(ledger), None))
-    return ledger_attention(conn, LEDGER_ATTENTION_KEY, compute)
+        analysis = _analyze(ledger)
+        out = {}
+        for root in sorted({r["root_id"] for r in ledger.wallet_rows}):
+            n = _attention(ledger, _scoped(ledger, analysis, wallet_root=root))
+            if n:
+                out[root] = n
+        return out
+    return ledger_cached(conn, LEDGER_ATTENTION_KEY, compute)
 
 
 CARDS_KEY = "wallet_pair_cards"

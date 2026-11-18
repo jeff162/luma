@@ -1109,7 +1109,10 @@ export const api = {
   addAmazonOrderCharge:     (body) => request('/import-export/amazon/add-order-charge', { method: 'POST', body: JSON.stringify(body) }),
   removeAmazonOrderCharge:  (body) => request('/import-export/amazon/remove-order-charge', { method: 'POST', body: JSON.stringify(body) }),
   // The wallet reconciliation (docs/data-model.md → Wallet funding pairs): the whole ledger, or one import's rows.
-  getWalletPairReport:        (batchId) => request(`/import-export/wallet-pairs/report${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ''}`),
+  getWalletPairReport: ({ batchId, walletId } = {}) => {
+    const q = new URLSearchParams(Object.entries({ batch_id: batchId, wallet_id: walletId }).filter(([, v]) => v != null))
+    return request(`/import-export/wallet-pairs/report${q.size ? `?${q}` : ''}`)
+  },
   getWalletPairCandidates:    (walletTxnId) => request(`/import-export/wallet-pairs/candidates/${walletTxnId}`),
   pairWalletRows:             (body) => request('/import-export/wallet-pairs/pair', { method: 'POST', body: JSON.stringify(body) }),
   unpairWalletRows:           (body) => request('/import-export/wallet-pairs/unpair', { method: 'POST', body: JSON.stringify(body) }),

@@ -2277,8 +2277,13 @@ until one claims nothing. Two rows cornered on one candidate are a shortage, and
   that, the next pass releases it as an unpairing would, restoring what the pairing changed. Declines and
   reviews are kept, inert until the account is set back. A change of match text releases nothing: it
   decides what is offered, not whether a pair already made stands.
-- **The review is named for its wallet** when it covers one (`wallet_names`), and "Wallet reconciliation"
-  otherwise.
+- **Each wallet account has its own review**, since a wallet is one account and may be someone else's:
+  Tasks shows one entry per wallet account (`wallet_attention_counts`), and its link opens that account's
+  review (`wallet_id`). Only what is shown is narrowed; the analysis always covers every wallet, because
+  rows of two wallets can want one bank or card row. Owners keep most rows to one wallet, so a row is
+  listed under two only when it is on a shared or ownerless account both could draw on.
+- **The review is named for the wallets it covers** (`wallet_names`): one, unless an import or sync
+  brought in several.
 - **Attention** counts each row with a choice of candidates, each contested bank or card row once, and
   each unreviewed row of the other kinds. It is cached in `db_meta` against `recon_epoch`
   (`services/reconciliation_attention.py`). `card_counts` gives per batch the rows its review lists.

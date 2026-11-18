@@ -374,7 +374,7 @@ class WalletPairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c["wallet"]["id"] for c in report["choice"]], [payment])
         self.assertEqual({c["id"] for c in report["choice"][0]["candidates"]}, {first, second})
         with self._db() as conn:
-            self.assertEqual(pf.ledger_attention_count(conn), 1)
+            self.assertEqual(pf.wallet_attention_counts(conn), {self.paypal: 1})
             pf.pair_rows(conn, payment, second)
         self.assertEqual(self._report()["choice"], [])
         self.assertEqual(self._report()["matched"][0]["matched_by"], "user")
@@ -422,7 +422,7 @@ class WalletPairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([[x["id"] for x in c["candidates"]] for c in choice], [[charge], [charge]])
         # One decision, not two: settling either one settles both, and the review lists them as one row.
         with self._db() as conn:
-            self.assertEqual(pf.ledger_attention_count(conn), 1)
+            self.assertEqual(pf.wallet_attention_counts(conn), {self.paypal: 1})
         # Settling one of them leaves the other with nothing to pair with, rather than a second claim.
         with self._db() as conn:
             pf.pair_rows(conn, payments[0], charge)
@@ -484,10 +484,32 @@ class WalletPairTests(unittest.IsolatedAsyncioTestCase):
         report = self._report()
         self.assertEqual([(u["wallet"]["id"], u["reviewed"]) for u in report["unmatched"]], [(withdrawal, False)])
         with self._db() as conn:
-            self.assertEqual(pf.ledger_attention_count(conn), 1)
+            self.assertEqual(pf.wallet_attention_counts(conn), {self.paypal: 1})
             pf.set_reviewed(conn, [withdrawal], reviewed=True)
-            self.assertEqual(pf.ledger_attention_count(conn), 0)
+            self.assertEqual(pf.wallet_attention_counts(conn), {})
         self.assertEqual(self._report()["unmatched"][0]["reviewed"], True)
+
+    def test_each_wallet_account_has_its_own_review(self):
+        # Two people's PayPal accounts read the same on a bank row, so owners keep each one's charges to it;
+        # only a row on a shared account could belong to either, and it is listed under both.
+        with self._db() as conn:
+            sams_paypal = self._account(conn, "Sam's PayPal", "paypal", self.other_owner)
+        robins = self._txn(self.paypal, "2026-05-02", 30.0, "Bookshop")
+        self._txn(self.card, "2026-05-01", 30.0, "PAYPAL *BOOKSHOP")
+        self._txn(self.checking, "2026-05-03", 30.0, "PAYPAL BOOKSHOP")
+        sams = self._txn(sams_paypal, "2026-05-02", 30.0, "Garden Centre")
+        self._txn(self.sams_checking, "2026-05-01", 30.0, "PAYPAL *GARDEN")
+        self._txn(self.sams_checking, "2026-05-03", 30.0, "PAYPAL GARDEN")
+        cornered = [self._txn(self.paypal, "2026-06-10", 60.0, "Concert"),
+                    self._txn(sams_paypal, "2026-06-10", 60.0, "Concert")]
+        self._txn(self.joint, "2026-06-11", 60.0, "PAYPAL INST XFER")
+        self.assertEqual(self._pass()["paired"], 0)
+        with self._db() as conn:
+            self.assertEqual(pf.wallet_attention_counts(conn), {self.paypal: 2, sams_paypal: 2})
+            report = pf.wallet_pair_report(conn, wallet_id=sams_paypal)
+        self.assertEqual({c["wallet"]["id"] for c in report["choice"]}, {sams, cornered[1]})
+        self.assertEqual(report["wallet_names"], ["Sam's PayPal"])
+        self.assertNotIn(robins, {c["wallet"]["id"] for c in report["choice"]})
 
     def test_a_charge_with_no_paypal_record_is_listed_only_on_a_funding_account(self):
         self._txn(self.paypal, "2026-01-10", 20.0, "Bike Shop")
