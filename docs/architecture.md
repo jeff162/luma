@@ -1204,7 +1204,9 @@ import card. The full rule is in `data-model.md`.
 
 - **Captured fields are declared by the adapter.** `ProviderAdapter.capture_fields()` returns `[{key,
   label, locked, default_on}]`. Locked fields are the ones duplicate detection depends on; optional ones
-  persist as `connection.captured_fields`. `posted_date` is a `txn` column; everything else goes into
+  persist as `connection.captured_fields`. `GET /api/providers` reports `has_optional_capture_fields`,
+  which names the card's menu entry: "Connection settings…" when there is a choice to make, otherwise
+  "Account mapping…", whose dialog omits the all-locked list. `posted_date` is a `txn` column; everything else goes into
   `import_evidence_json` in the shape a CSV import writes, which is what makes a synced row visible to
   the text matcher. Plaid's `personal_finance_category`, `payment_channel` and `transaction_code` are
   not captured, because the app's own rules own categorization.

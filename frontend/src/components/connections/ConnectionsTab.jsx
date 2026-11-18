@@ -1793,11 +1793,19 @@ export default function ConnectionsTab({ onShowHistory }) {
             onClose={() => setCardMenu(null)}
             minWidth={220}
             items={[
-              {
-                label: 'Connection settings…',
-                title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
-                onClick: () => openAccountMap(cardMenu.connection),
-              },
+              // Named for what the dialog can change: only a provider with optional capture fields has
+              // settings beyond the mapping.
+              providerById[cardMenu.provider]?.has_optional_capture_fields
+                ? {
+                    label: 'Connection settings…',
+                    title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
+                    onClick: () => openAccountMap(cardMenu.connection),
+                  }
+                : {
+                    label: 'Account mapping…',
+                    title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped. The mapping is also how Luma recognizes transactions already imported from a file.',
+                    onClick: () => openAccountMap(cardMenu.connection),
+                  },
               {
                 label: '↻ Fetch more history',
                 separatorBefore: true,

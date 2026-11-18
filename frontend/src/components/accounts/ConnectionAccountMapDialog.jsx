@@ -64,6 +64,7 @@ export default function ConnectionAccountMapDialog({
   const rows = providerAccounts || []
   const undecided = rows.filter(pa => !entryToMapping(entries[pa.external_account_id]))
   const blocked = requireAll && undecided.length > 0
+  const hasOptionalCapture = captureFields.some(f => !f.locked)
 
   function save() {
     const mappings = {}
@@ -76,18 +77,22 @@ export default function ConnectionAccountMapDialog({
 
   return (
     <>
-      {/* Two modes, two titles. Post-Link the mapping IS the job — the backfill is waiting on it — so the
-          title names that one task. Reopened from the connection card it is a settings surface covering
-          both the mapping and what the source captures, and a title naming only the mapping would leave
-          the second section undiscoverable. */}
+      {/* Post-Link the mapping IS the job — the backfill is waiting on it — so the title names that one
+          task. Reopened from the connection card it is a settings surface when the provider has optional
+          capture fields, and a title naming only the mapping would leave that section undiscoverable;
+          without them it is only the mapping again, and is titled as such. */}
       <AppDialog
         title={requireAll
           ? `Map accounts from ${connection?.name || connection?.institution || 'this connection'}`
-          : `${connection?.name || connection?.institution || 'Connection'} settings`}
+          : hasOptionalCapture
+            ? `${connection?.name || connection?.institution || 'Connection'} settings`
+            : `Account mapping for ${connection?.name || connection?.institution || 'this connection'}`}
         description={
           requireAll
             ? 'Choose what each account from this connection is. Transactions are pulled once every account has a destination — mapping an account onto one already in Luma is also what lets duplicate detection recognize transactions imported from a file.'
-            : 'Adjust what each account from this connection maps to, and which details future syncs capture. Changing a mapping re-checks the transactions already pulled for duplicates.'
+            : hasOptionalCapture
+              ? 'Adjust what each account from this connection maps to, and which details future syncs capture. Changing a mapping re-checks the transactions already pulled for duplicates.'
+              : 'Adjust what each account from this connection maps to. Changing a mapping re-checks the transactions already pulled for duplicates.'
         }
         width="min(760px, 100%)"
         onClose={saving ? undefined : onClose}
@@ -154,7 +159,8 @@ export default function ConnectionAccountMapDialog({
             />
           </div>
         )}
-        {captureFields.length > 0 ? (
+        {/* All-locked is a list of disabled checkboxes with nothing to decide, so it is not shown. */}
+        {hasOptionalCapture ? (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Details captured from this connection</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.5 }}>

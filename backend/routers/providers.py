@@ -343,6 +343,9 @@ def list_providers(request: Request):
             # Drives the re-link question in the connect dialog: False means a fresh credential produces a
             # fresh handle, so the UI must ask which connection this replaces before the provider is called.
             "stable_external_id": adapter.stable_external_id,
+            # Names the card's menu entry: with nothing optional to capture, the dialog it opens is only
+            # the account mapping, and "settings" would promise choices it does not have.
+            "has_optional_capture_fields": any(not f.get("locked") for f in adapter.capture_fields()),
         })
     return {"providers": out}
 

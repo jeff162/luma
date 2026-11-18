@@ -2359,8 +2359,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Data connections are established and managed on the <strong>Connections</strong> tab on
-          the <strong>Accounts</strong> page. Connection settings and Disconnect connection are on
-          the per-connection menu.
+          the <strong>Accounts</strong> page. Account mapping and Disconnect are on the per-connection
+          menu.
         </p>
         <h4>Secrets Vault</h4>
         <p>
@@ -2394,8 +2394,9 @@ export const HELP_TOPICS = [
           as the transactions all map to the same account from both sources.
         </p>
         <p>
-          The mapping, and the set of extra details to capture can be changed
-          from <strong>Connection settings&hellip;</strong> in the card's menu. An account added at the
+          The mapping can be changed from <strong>Account mapping&hellip;</strong> in the card's menu;
+          for a provider with optional details to capture (Plaid), the entry
+          is <strong>Connection settings&hellip;</strong> and covers those as well. An account added at the
           provider later has to be mapped as well (see <em>When a connection needs attention</em> below).
         </p>
         <p>
@@ -2465,7 +2466,8 @@ export const HELP_TOPICS = [
           <li>
             <strong>To map</strong> means an account was added at the provider after the initial
             mapping. Its transactions are skipped until it is mapped
-            from <strong>Connection settings&hellip;</strong> in the card's menu.
+            from <strong>Account mapping&hellip;</strong> (or <strong>Connection settings&hellip;</strong>)
+            in the card's menu.
           </li>
           <li>
             A sync that did not complete is reported with what the provider said in
