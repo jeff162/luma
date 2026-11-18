@@ -208,8 +208,10 @@ def passkey_host_names(page_rp_id: str | None) -> set[str]:
     opened under (`note_served_host`), and the page asking.
 
     A passkey registered under any other name can never work here. The vault's own passkeys are not
-    evidence of a name: a copied database brings the ones registered where it came from. A name configured
-    only in a reverse proxy and never opened in a browser is not known either."""
+    evidence of a name: a copied database brings the ones registered where it came from. Nor is
+    `MDNS_NAME`: it has a default on every install, so counting it would make each one claim that name and
+    keep exactly the passkeys a restore from another machine must leave behind. A name configured only in a
+    reverse proxy and never opened in a browser is not known either."""
     names = set(control_database.list_served_hosts())
     if page_rp_id:
         names.add(page_rp_id)
