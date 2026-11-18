@@ -39,21 +39,21 @@ Anyone whose main requirement is either of these will be better served by some o
 
 **Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
-**Phones.** Luma is built for a laptop or desktop sized screen, and its pages do not adapt to a small one. A tablet is about the smallest device it is comfortable on although a device with a keyboard seem helpful.
+**Phones.** Luma is built for a laptop or desktop sized screen, and its pages do not adapt to a small one. A tablet is about the smallest device it is comfortable on, although a device with a keyboard seems helpful.
 
 ## What Luma is good at
 
-- **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. Overlapping imports sort themselves out, and rules exists to apply categorization or edits to incoming data. Rules can be derived from imported data which is already curated to help make migration less painful.
+- **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. Overlapping imports sort themselves out, and rules exist to apply categorization or edits to incoming data. Rules can be derived from imported data which is already curated to help make migration less painful.
 
 - **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. If they are useful, they are available.
 
-- **Recurring series detection** — automatic and helpful to pick up unwanted subscriptions,  subscription that quietly went up, a missing bill, a charge outside the range of the rule that used to catch it.
+- **Recurring series detection** — automatic and helpful to pick up unwanted subscriptions, a subscription that quietly went up, a missing bill, a charge outside the range of the rule that used to catch it.
 
 - **Staying out of the way** — if something needs changing, it can usually be changed right there without having to switch to a different page for editing.
 
 ## Quick start
 
-1. Download the build from the [releases page](https://github.com/jeff162/luma/releases), extract it to a directory, run `luma`and Luma will open in the browser.
+1. Download the build from the [releases page](https://github.com/jeff162/luma/releases), extract it to a directory, run `luma` and Luma will open in the browser.
 2. Enter a user name and choose **Load demo data**.
 3. Look around. The demo data is crafted so most features can be explored.
 4. When ready, use **Clear demo data** and bring in real data — see [Getting started with real data](#getting-started-with-real-data). Load demo data is on the Import page if it gets cleared by accident.
@@ -71,19 +71,17 @@ Anyone whose main requirement is either of these will be better served by some o
 
   ![The cash-flow view: income on the left flowing out to spending groups and net saved on the right](docs/images/cash-flow.png)
 
-  ![The cash-flow trend: each month's money in above the line and money out below it, with the net drawn across them](docs/images/cash-flow-trends.png)
-
 - **Getting data in** — a CSV file exported from a bank or card or a connected data source (e.g. SimpleFIN Bridge). Folder watching loads downloaded files automatically to make using CSV exports easier.
 
 - **Re-importing just works.** Importing overlapping exports or statements from a single source ignores the already imported transactions. Activity that arrives from a different source for the same account but with slight differences is flagged as a likely duplicate for review.
 
-- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data and as part of the categorization process.
+- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data and as part of the categorization process. A rule can also raise a task when a matching transaction arrives, for something worth knowing about as it happens.
 
 - **Filling in detail for marketplace purchases** — Amazon/PayPal purchases typically arrive with just the marketplace name, the amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with the transaction details. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending". Charges which represent multiple purchases can be split into multiple items for categorization purposes.
 
   ![The Amazon reconciliation report: each order matched to its card charge, and one charge no order accounts for](docs/images/amazon-reconciliation.png)
 
-- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them rather than filing the whole amount under one category. Each part can be labelled with what it covered. The Amazon reconcilliation report offers to split charges which contain multiple items to record details for the individual items.
+- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them rather than filing the whole amount under one category. Each part can be labelled with what it covered. The Amazon reconciliation report offers to split charges which contain multiple items to record details for the individual items.
 
 - **Keep track of receipts** — receipt or invoice can be added to a transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt contains readable text so these are searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
 
@@ -93,11 +91,11 @@ Anyone whose main requirement is either of these will be better served by some o
 
   ![The Recurring page's Needs attention view: a missing subscription charge and two price changes](docs/images/recurring.png)
 
-- **Reimbursable Expenses** — Expenses which are reimbursable can be flagged so the reimbursable portion is exluded from spending. When the reimbursement arrives it is paired with the expense and it is not treated as income. Alerts exist to indicate if reimbursement is not received within the expected timeframe.
+- **Reimbursable Expenses** — Expenses which are reimbursable can be flagged so the reimbursable portion is excluded from spending. When the reimbursement arrives it is paired with the expense and it is not treated as income. Alerts exist to indicate if reimbursement is not received within the expected timeframe.
 
-- **Multiple owners** — track personal and shared finances across several people in one ledger, with owner as a reporting axis rather than a separate set of books.
+- **Multiple owners** — track personal and shared finances across several people in one ledger, with owner as a reporting axis rather than a separate set of books. Owner view narrows most pages to one person's accounts.
 
-- **Backup and restore** — Backup the data, the sign-in accounts and data source credentials, with optional encryption under a key of the user's choosing, and choose what to put back when restoring. Export the data as a csv file for moving to another app or using with another too.
+- **Backup and restore** — Backup the data, the sign-in accounts and data source credentials, with optional encryption under a key of the user's choosing, and choose what to put back when restoring. Export the data as a csv file for moving to another app or using with another tool.
 
 - **Tasks** — a running list of what needs attention, such as uncategorized transactions, issues with recurring payments, late reimbursements.
 
@@ -133,7 +131,7 @@ What comes in, what stays and what leaves are all the user's decision. Luma is b
 
 Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
 
-- **Transaction data is stored unencrypted on disk.** The ledger lives unencrypted in a local SQLite database, so the database files — and any **unencrypted** backup — are the artifacts to protect. Access to the machine and its files are responsible for securing these assets if they are considered sensitive. **Encrypted backup** (protected with a user-supplied key) can be generted for anything that will leave the machine.
+- **Transaction data is stored unencrypted on disk.** The ledger lives unencrypted in a local SQLite database, so the database files — and any **unencrypted** backup — are the artifacts to protect. Access to the machine and its files are responsible for securing these assets if they are considered sensitive. **Encrypted backup** (protected with a user-supplied key) can be generated for anything that will leave the machine.
 
 - **The optional sign-in password is application access control.** It governs who on the local machine or network (for server installs) can reach a running instance. It does not encrypt the database, does not prevent someone from examining the database file directly with SQLite. 2FA is available for use with sign-in passwords, passkeys are available as a convenience.
 
@@ -163,7 +161,7 @@ Luma for a single machine is distributed as a self-contained download. The curre
 
 **macOS (Intel) is built but not published**, because it has not been tested on an Intel Mac. A tagged release's build of it is downloadable from that run of the [Release workflow](https://github.com/jeff162/luma/actions/workflows/release.yml) (a GitHub sign-in is needed, and the files expire after 90 days), and a fresh one can be built by running the workflow with the `macos-15-intel` platform.
 
-**The builds are unsigned.** so Windows and macOS both generate warnings about untrusted software on first run.
+**The builds are unsigned**, so Windows and macOS both generate warnings about untrusted software on first run.
 
 ### Windows and Linux — portable
 
@@ -344,7 +342,7 @@ To be sure a computer received the server's own certificate, compare the fingerp
 
 ## Locked out
 
-A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with`--reset-password`:
+A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with `--reset-password`:
 
 | Installation              | Command                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
@@ -372,7 +370,7 @@ It shows both files and what the financial database holds, and asks before chang
 
 ## Running from source
 
-Running from a checkout needs Python 3.12 or newer and Node.js 22.12+, and is the arrangement for working *on* Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project conventions.
+Running from a checkout needs Python 3.12 or newer and Node.js 22.12+, 24 or 26+, and is the arrangement for working *on* Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project conventions.
 
 An optional `.env` file overrides the handful of values resolved before the app is running — the ports, the data directory (`DATA_DIR`, holding both databases, the `documents` folder of attachments and the `luma.log` error log), and the developer-options gate. Copy `env_example.txt` to `.env` to use it.
 

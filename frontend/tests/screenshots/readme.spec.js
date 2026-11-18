@@ -73,21 +73,6 @@ test('cash flow', async ({ page }) => {
   })
 })
 
-test('cash flow trends', async ({ page }) => {
-  await openDashboard(page)
-  await page.getByRole('button', { name: 'Cash flow' }).click()
-  await page.getByRole('button', { name: 'Trends' }).click()
-  // The innermost element holding both the card's title and its chart.
-  const card = page.locator('div')
-    .filter({ has: page.getByText('Monthly trend', { exact: true }) })
-    .filter({ has: page.locator('.recharts-wrapper') })
-    .last()
-  await expect(card).toBeVisible()
-  await hideDemoBanner(page)
-  await settle(page)
-  await card.screenshot({ path: path.join(OUT_DIR, 'cash-flow-trends.png') })
-})
-
 test('transactions', async ({ page }) => {
   await page.goto('/transactions')
   // A row part-way down, so the rows above it still show their categories beside the open picker.
@@ -99,6 +84,8 @@ test('recurring', async ({ page }) => {
   await page.goto('/recurring')
   await page.getByRole('button', { name: /Needs attention/ }).first().click()
   await expect(page.getByRole('button', { name: 'Dismiss' }).first()).toBeVisible()
+  // The click leaves the pointer where the filter pills render, which draws one hovered.
+  await page.mouse.move(0, 0)
   await shoot(page, 'recurring')
 })
 
