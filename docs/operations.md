@@ -474,7 +474,7 @@ perimeter*.
 | Settings → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
 | Settings → About | the version, and for a packaged build the commit it was built from. **Copy details** copies those with how the copy runs, the platform and the browser, for a bug report, leaving out paths, host names and data |
-| The connection sync log (**Sync log** on Import → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
+| The connection sync log (**Sync log** on Accounts → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 | Settings → **Database** | whether either database file is damaged, the space each uses table by table, and compacting the data file |

@@ -1828,15 +1828,22 @@ export const HELP_TOPICS = [
     section: 'accounts',
     title: 'The Accounts page',
     surfaces: ['Accounts'],
-    summary: 'Accounts and Owners. Transactions identify the account they came from, and owners are matched to accounts for reporting. ',
+    summary: 'Accounts, Owners and Connections. Transactions identify the account they came from, owners are matched to accounts for reporting, and connections feed accounts from a data provider.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
           <strong>Accounts</strong> are created during the import process. The various sources of transaction data tend to
           either supply account information with the transaction or all the transactions are from a single
-          account and the user identifies that account when the data is imported. <strong>Connections</strong>,
-          beside <strong>+New account</strong>, opens the bank connections on the Import page.
+          account and the user identifies that account when the data is imported.
+        </p>
+        <p>
+          The <strong>Connections</strong> tab is where a <HelpLink to="/help/data-providers">data
+          provider</HelpLink> is linked and maintained, including which account each of the
+          provider&apos;s accounts feeds. <strong>Sync now</strong> pulls new transactions from every
+          connection, and what each sync brings in joins the import history on the Import
+          page&apos;s Data Import tab &mdash; <strong>View in import history</strong>, on a finished
+          sync, opens the cards it added to.
         </p>
         <p>
           Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
@@ -2147,7 +2154,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'The Import page',
     surfaces: ['Import'],
-    summary: 'Where transactions come in. The Data Import tab takes files and syncs and keeps a card per file or sync recording what it did. File Sources and Connections are where each is set up.',
+    summary: 'Where transactions come in. The Data Import tab takes files and syncs and keeps a card per file or sync recording what it did. File Sources is where a file\'s mapping is kept.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2155,7 +2162,7 @@ export const HELP_TOPICS = [
             what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
             are how the page itself is divided. */}
         <p>
-          Where transactions come in. The page has three tabs, and the sections
+          Where transactions come in. The page has two tabs, and the sections
           below follow them: each row names something on the page, says what it is for, and links the
           topic that explains it.
         </p>
@@ -2185,7 +2192,7 @@ export const HELP_TOPICS = [
                 <td>Shown once a <HelpLink to="/help/data-providers">data provider</HelpLink> is
                   connected. <strong>Sync now</strong> pulls new transactions from every connection,
                   and <strong>Connections</strong> lists each one with when it last synced and anything
-                  waiting on it. Connecting and mapping are on the Connections tab.</td>
+                  waiting on it. Connecting and mapping are on the Accounts page&apos;s Connections tab.</td>
               </tr>
               <tr>
                 <td><strong>Watched folders</strong></td>
@@ -2315,15 +2322,6 @@ export const HELP_TOPICS = [
           from a <HelpLink to="/help/watched-folders">watched folder</HelpLink> on its own. Amazon is
           listed here as well; it has no mapping to edit.
         </p>
-
-        <HelpHeading anchor="connections-tab">Connections</HelpHeading>
-        <p>
-          Where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
-          and maintained. This is also where the mapping of accounts from the provider to accounts in
-          the application occurs. <strong>Sync now</strong> pulls new transactions from every connection,
-          and what each sync brings in joins the import history on the Data Import tab &mdash; <strong>View
-            in import history</strong>, on a finished sync, opens the cards it added to.
-        </p>
       </>
     ),
   },
@@ -2331,7 +2329,7 @@ export const HELP_TOPICS = [
     id: 'data-providers',
     section: 'importing',
     title: 'Data providers and connections',
-    surfaces: ['Import (Connections)', 'Import (Data Import → Data connections)'],
+    surfaces: ['Accounts (Connections)', 'Import (Data Import → Data connections)'],
     summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
     body: () => (
       <>
@@ -2361,7 +2359,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Data connections are established and managed on the <strong>Connections</strong> tab on
-          the <strong>Import</strong> page. Connection settings and Disconnect connection are on
+          the <strong>Accounts</strong> page. Connection settings and Disconnect connection are on
           the per-connection menu.
         </p>
         <h4>Secrets Vault</h4>
@@ -2410,8 +2408,8 @@ export const HELP_TOPICS = [
         <h4>Syncing</h4>
         <p>
           New transactions are pulled on request using the sync control in the navigation pane or
-          from <strong>Sync now</strong> on the <strong>Data Import</strong> or <strong>Connections</strong> tab
-          of the Import page. Per-connection Import cards on the Import page records
+          from <strong>Sync now</strong> on the Import page&apos;s <strong>Data Import</strong> tab or the
+          Accounts page&apos;s <strong>Connections</strong> tab. Per-connection Import cards on the Import page records
           what arrived, similar to an imported file. Importing a file generates a single card, the
           data connections create a card for the <strong>Initial import</strong> and then one
           per month.
@@ -2499,7 +2497,7 @@ export const HELP_TOPICS = [
     id: 'credential-vault',
     section: 'importing',
     title: 'The credential vault',
-    surfaces: ['Import (Connections, the vault strip)'],
+    surfaces: ['Accounts (Connections, the vault strip)'],
     summary: 'The vault encrypts the data provider credentials stored on disk. It is opened with a passphrase or a passkey, and has to be open to connect or sync.',
     body: () => (
       <>
@@ -2574,7 +2572,7 @@ export const HELP_TOPICS = [
     id: 'vault-settings',
     section: 'importing',
     title: 'Vault settings',
-    surfaces: ['Vault settings (Import, Connections)'],
+    surfaces: ['Vault settings (Accounts, Connections)'],
     summary: 'How the vault is opened, who else can open it, and what to do when a passphrase or a copy of the database may have been exposed.',
     body: () => (
       <>

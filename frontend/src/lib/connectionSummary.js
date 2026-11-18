@@ -3,6 +3,11 @@
 
 import { parseTimestamp } from './utils.js'
 
+// Where data connections are set up: a tab of the Accounts page, because what is done there is decide which
+// ledger account each provider account feeds. Syncing is not here; it sits on the Import page's Data
+// Import tab beside the file drop zone and over the import history, where both kinds of arrival land.
+export const CONNECTIONS_ROUTE = '/accounts?tab=connections'
+
 // The one line a provider's card shows about itself, in the header — the text that has to stand alone
 // when the card is collapsed.
 //

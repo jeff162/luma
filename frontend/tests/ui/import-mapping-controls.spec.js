@@ -200,7 +200,7 @@ test('an import in progress holds the rest of the app until it is imported or ca
     const box = el.getBoundingClientRect()
     return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
   })
-  const tab = page.getByRole('button', { name: 'Connections', exact: true })
+  const tab = page.getByRole('button', { name: 'File Sources', exact: true })
   const navLink = page.getByRole('link', { name: 'Transactions' })
   expect(await reachable(tab)).toBe(false)
   expect(await reachable(navLink)).toBe(false)

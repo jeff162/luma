@@ -145,7 +145,7 @@ Local-first also means the security model is easy to reason about — but it's w
   - **Passkeys** can be added as an alternative access method, so a fingerprint or face check replaces retyping a long passphrase. Browsers require a secure connection to use a Passkey. The desktop app's `localhost` address works. This is part of why setting up HTTPS for a server configuration is desirable.
   - **A recovery code** can be added if there is a secure location separate from where the vault passphrase is stored. The recovery code is for when the passphrase is lost and if they are stored together, they are likely to get lost together. Printed or kept in separate secure storage is what makes it useful to have. A new recovery code is generated when it is used.
 
-- **If a database or backup is lost or copied by someone else** and data connections are configured, the provider connection credentials should be replaced at each data provider so the copied ones cannot pull anything new, or worse, be used to move money around. The process is described in **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked). `SECURITY.md` has the full response.
+- **If a database or backup is lost or copied by someone else** and data connections are configured, the provider connection credentials should be replaced at each data provider so the copied ones cannot pull anything new, or worse, be used to move money around. The process is described in **Respond to an exposure** in Vault settings (Accounts → Connections, with the vault unlocked). `SECURITY.md` has the full response.
 
 ## Installing Luma
 

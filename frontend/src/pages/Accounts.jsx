@@ -10,6 +10,7 @@ import { notifyAccountsChanged } from '../App.jsx'
 import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, PencilGlyph, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
 import SectionCard from '../components/SectionCard.jsx'
+import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -70,7 +71,9 @@ const ACCOUNTS_LIST_MAX_WIDTH = 960
 const OWNERS_PANEL_WIDTH = 720
 // In-page tabs (mirroring the Import page). The active tab is session-scoped: it sticks while the
 // app is open but resets to Accounts next launch (a within-session convenience, not a durable preference).
-const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners']]
+// Connections is here rather than on the Import page because setting one up is deciding which account each
+// provider account feeds (`CONNECTIONS_ROUTE`).
+const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners'], ['connections', 'Connections']]
 const ACCOUNTS_TAB_STORAGE_KEY = 'luma.accounts.tab'
 const ACCOUNT_TYPE_ORDER = Object.fromEntries(ACCOUNT_TYPES.map((type, index) => [type.value, index]))
 const ACCOUNT_SORT_KEYS = ['name', 'type', 'owner']
@@ -1521,9 +1524,18 @@ export default function Accounts() {
     return ACCOUNT_TABS.some(([id]) => id === stored) ? stored : 'accounts'
   })
   function setTab(next) {
+    // Setting up a connection can create accounts and remap them, and the list here was loaded before.
+    if (tab === 'connections' && next !== 'connections') reloadAccounts().catch(() => { })
     setTabState(next)
     sessionStore.set(ACCOUNTS_TAB_STORAGE_KEY, next)
   }
+  // A connection's cards are on the Import page's Data Import tab, which is what a sync writes to.
+  const showInImportHistory = useCallback(({ batchIds = [], connectionIds = [] } = {}) => {
+    const params = new URLSearchParams({ tab: 'import' })
+    if (batchIds.length) params.set('batch', batchIds.join(','))
+    if (connectionIds.length) params.set('connection', connectionIds.join(','))
+    navigate(`/import-export?${params}`)
+  }, [navigate])
   // Honor a `?tab=` deep-link, then strip it so it doesn't linger in the URL or override later manual tab
   // switches. Runs on arrival and also if a new `?tab=` link is followed while the page is already mounted.
   useEffect(() => {
@@ -2363,7 +2375,7 @@ export default function Accounts() {
             maxWidth: '100%',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <FeatureExplainer topic="page-accounts" placement="bottom-left" />
+              <FeatureExplainer topic={tab === 'connections' ? 'data-providers' : 'page-accounts'} placement="bottom-left" />
               <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
             </div>
           </div>
@@ -2385,11 +2397,6 @@ export default function Accounts() {
             ))}
             {tab === 'accounts' ? (
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
-                {/* Connections create and feed accounts, so they are reachable from here as well as
-                    from the Import page that holds them. */}
-                <Button variant="secondary" onClick={() => navigate('/import-export?tab=connections')}>
-                  Connections
-                </Button>
                 <Button onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
                   +New account
                 </Button>
@@ -2760,6 +2767,12 @@ export default function Accounts() {
               width={OWNERS_PANEL_WIDTH}
               collapsible={false}
             />
+          )}
+
+          {tab === 'connections' && (
+            <div style={{ paddingTop: 24 }}>
+              <ConnectionsTab onShowHistory={showInImportHistory} />
+            </div>
           )}
 
           {accountDetailPanelsNode}

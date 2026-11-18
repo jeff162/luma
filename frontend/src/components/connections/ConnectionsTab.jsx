@@ -37,7 +37,7 @@ import { LABEL_PILL_COLORS } from '../pillStyles.js'
 
 // --- Data-source connections --------------------------------------------------------------------
 //
-// The Import page's Connections tab: everything about a data connection. Across the top, the routine
+// The Accounts page's Connections tab: everything about a data connection. Across the top, the routine
 // pull for every connection and the whole sync log; below, one card per supported aggregator, plus the
 // vault affordance the cards depend on.
 // Provider *configuration* (the app credential) lives here, not in Settings; the app secret is vaulted,
@@ -507,7 +507,7 @@ function loadPlaidScript() {
   return plaidScriptPromise
 }
 
-// `onShowHistory({ connectionIds })` opens the Data Import tab's history on those connections' cards, which
+// `onShowHistory({ connectionIds })` opens the Import page's Data Import history on those connections' cards, which
 // are what a sync writes to.
 export default function ConnectionsTab({ onShowHistory }) {
   const { currentUser } = useAppSession()

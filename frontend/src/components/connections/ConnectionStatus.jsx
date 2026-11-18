@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// What a data connection says about itself on the Import page's Connections tab: the outcome pill, the
+// What a data connection says about itself on the Connections tab: the outcome pill, the
 // last-synced line, and the per-account chips, which are the same chips an import card's outcome row
 // uses — so a user reading a connection's card and then the cards its sync wrote cannot be told two
 // stories about one pull.

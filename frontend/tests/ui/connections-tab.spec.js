@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The Import page's Connections tab. Two things here cross a boundary nothing else checks: the Tasks
-// entries reach the tab through a link string the backend writes, and a connection's account row opens
-// the account panel on a page that is not the Accounts page. The demo ledger has no data connection, so
+// The Accounts page's Connections tab, and the Import page's Data Import card that syncs. Two things here
+// cross a boundary nothing else checks: the Tasks entries reach the tab through a link string the backend
+// writes, and a remembered route or bookmark from when the tab was on the Import page still reaches it. The demo ledger has no data connection, so
 // one is supplied to the browser — the provider listing whole, and one real account marked as fed by it.
 
 import { test, expect } from '@playwright/test'
@@ -59,7 +59,7 @@ test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreEr
 
 test('a ?tab=connections link lands on the Connections tab', async ({ page }) => {
   await supplyConnection(page)
-  await page.goto('/import-export?tab=connections')
+  await page.goto('/accounts?tab=connections')
 
   await expect(page.getByRole('button', { name: /SimpleFIN/ })).toBeVisible()
   // Consumed, so it cannot override a tab chosen by hand afterwards.
@@ -73,16 +73,24 @@ test('a ?tab=connections link lands on the Connections tab', async ({ page }) =>
 
 })
 
-test('a connection’s account row opens the account panel in place', async ({ page }) => {
+test('the Import page’s old Connections link reaches the tab on the Accounts page', async ({ page }) => {
   await supplyConnection(page)
   await page.goto('/import-export?tab=connections')
+
+  await expect(page).toHaveURL(/\/accounts$/)
+  await openProviderCard(page)
+})
+
+test('a connection’s account row opens the account panel in place', async ({ page }) => {
+  await supplyConnection(page)
+  await page.goto('/accounts?tab=connections')
 
   await openProviderCard(page)
   await page.getByRole('button', { name: 'Accounts (1)' }).click()
   await page.getByTitle(`View ${ACCOUNT}`).click()
 
   await expect(page.getByText(`Monthly activity — ${ACCOUNT}`)).toBeVisible()
-  await expect(page).toHaveURL(/\/import-export$/)
+  await expect(page).toHaveURL(/\/accounts$/)
 })
 
 test('the Data Import tab offers the sync above the import history, and the page reopens on the tab last chosen', async ({ page }) => {

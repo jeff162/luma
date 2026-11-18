@@ -66,6 +66,10 @@ router = APIRouter()
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO    = "info"
 
+# The Accounts page's Connections tab, where a connection is set up and repaired and the vault strip is.
+# The frontend's `CONNECTIONS_ROUTE` names the same place.
+CONNECTIONS_LINK = "/accounts?tab=connections"
+
 # Where the per-user dismissal marks live: the data DB's `ui_preference` table, so they ride data
 # backups and stay with the ledger they describe.
 DISMISSED_PREF_KEY = "ui.tasks.dismissed"
@@ -135,7 +139,7 @@ def _vault_access_task(request: Request | None) -> dict | None:
                        + ("" if crypto_service.is_unlocked(user["id"])
                           else " Unlock the vault first — approving shares the key, so it has to be in hand."),
         "count":       len(waiting),
-        "link":        "/import-export?tab=connections",
+        "link":        CONNECTIONS_LINK,
         "link_label":  "Review vault access",
         "severity":    SEVERITY_INFO,
     }
@@ -377,7 +381,7 @@ def _restored_folder_task(request: Request | None) -> dict | None:
 def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
-    The Import page's Connections tab shows these states, but a user only sees them by visiting it — and
+    The Connections tab shows these states, but a user only sees them by visiting it — and
     the whole point of these is that they are discovered by a sync and cost the user data until
     acted on. The nav badge is the surface that finds the user instead, which is what the Tasks page is for.
 
@@ -409,7 +413,7 @@ def _connection_tasks(conn) -> list[dict]:
                            "no new transactions are arriving. Reconnecting restores it in place, keeping "
                            "the accounts, their mapping and the history already fetched.",
             "count":       len(reauth),
-            "link":        "/import-export?tab=connections",
+            "link":        CONNECTIONS_LINK,
             "link_label":  "Reconnect",
             "severity":    SEVERITY_WARNING,
         })
@@ -446,7 +450,7 @@ def _connection_tasks(conn) -> list[dict]:
                            f"skips {'it' if unmapped == 1 else 'them'} — silently, since a skipped "
                            "account appears nowhere else in the app.",
             "count":       unmapped,
-            "link":        "/import-export?tab=connections",
+            "link":        CONNECTIONS_LINK,
             "link_label":  "Choose destinations",
             "severity":    SEVERITY_WARNING,
         })
@@ -468,7 +472,7 @@ def _connection_tasks(conn) -> list[dict]:
                            "backup can leave a connection. A sync has nowhere to import into until "
                            "Refresh accounts, in the connection's menu, fetches the list.",
             "count":       len(accountless),
-            "link":        "/import-export?tab=connections",
+            "link":        CONNECTIONS_LINK,
             "link_label":  "Refresh accounts",
             "severity":    SEVERITY_WARNING,
         })

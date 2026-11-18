@@ -128,7 +128,7 @@ def _get_client(app_config: dict):
     if not client_id or not secret:
         raise RuntimeError(
             "Plaid is not configured. Add your Plaid client ID and secret on the data provider's "
-            "Configure card (Import → Connections)."
+            "Configure card (Accounts → Connections)."
         )
     configuration = plaid.Configuration(
         host=_ENV_MAP.get(env, plaid.Environment.Sandbox),

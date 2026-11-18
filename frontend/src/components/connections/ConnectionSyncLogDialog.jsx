@@ -580,7 +580,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
 }
 
 
-// Opened from a button rather than standing on a page, all on the Import page's Connections tab: the
+// Opened from a button rather than standing on a page, all on the Connections tab: the
 // whole log from the top of the tab, a provider's from its card, and a connection's from its last-sync
 // pill.
 //

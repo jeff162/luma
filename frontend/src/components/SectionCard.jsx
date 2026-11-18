@@ -3,9 +3,10 @@
 
 import { Card } from './ui.jsx'
 
-// A section panel with an optional collapse toggle. On the tabbed Accounts page each section is the only
-// thing on its tab, so it is rendered `collapsible={false}`: a static header (no toggle) with the content
-// always shown. The collapsible form is what the Import page's Connections tab uses, one per provider.
+// A section panel with an optional collapse toggle. On the Accounts page's Accounts and Owners tabs each
+// section is the only thing on its tab, so it is rendered `collapsible={false}`: a static header (no
+// toggle) with the content always shown. The collapsible form is what the Connections tab uses, one per
+// provider.
 // `headerActions` are controls that live in the header but must NOT toggle the card — a "Sync now" that
 // stays reachable while collapsed. They cannot be part of `headerInner`: a collapsible header *is* a
 // <button>, so nesting one inside it is invalid HTML and every click would also collapse the card. They

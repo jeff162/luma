@@ -31,6 +31,7 @@ import {
   ImportedCategoryUsageInline,
 } from '../components/importExport/importPresentational.jsx'
 import { ImportErrorBoundary } from '../components/importExport/ImportErrorBoundary.jsx'
+import { CONNECTIONS_ROUTE } from '../lib/connectionSummary.js'
 import AccountMappingGrid from '../components/importExport/AccountMappingGrid.jsx'
 import {
   DataSourceMismatchDialog,
@@ -48,7 +49,6 @@ import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
-import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
 import { DataConnectionsPanel } from '../components/connections/DataConnectionsPanel.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
@@ -3994,13 +3994,18 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
 // control follows the "creating is available wherever assigning is" rule (inline create). The drop zone is
 // a small local control, not the CSV `ImportUploadStage`, which is coupled to the data-source /
 // header-fingerprint flow this import does not use.
-const IMPORT_TABS = [['import', 'Data Import'], ['sources', 'File Sources'], ['connections', 'Connections']]
+const IMPORT_TABS = [['import', 'Data Import'], ['sources', 'File Sources']]
 const IMPORT_TAB_STORAGE_KEY = 'import.activeTab'
 // `?tab=history` is the Data Import tab under the name it had while the history was a tab of its own.
 const tabFromLink = value => (value === 'history' ? 'import' : IMPORT_TABS.some(([id]) => id === value) ? value : null)
+// `?tab=connections` is the Connections tab from when it was on this page. A remembered startup route or a
+// bookmark can still carry it, so it is sent on to where that tab is now.
+const movedTabRoute = value => (value === 'connections' ? CONNECTIONS_ROUTE : null)
 
 export default function ImportExport() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const movedTo = movedTabRoute(searchParams.get('tab'))
   // Active in-page tab, session-scoped as on the Accounts page (sticks while the app is open, resets to
   // Data Import next launch). `?tab=` is how a link from elsewhere (a Tasks entry, the welcome flow)
   // lands on a particular tab, and takes precedence on arrival.
@@ -4027,11 +4032,15 @@ export default function ImportExport() {
   }, [setTab])
   const chooseTab = useCallback((id) => { setHistoryFocus(null); setTab(id) }, [setTab])
   const showFileImport = useCallback(() => chooseTab('import'), [chooseTab])
-  const showConnections = useCallback(() => chooseTab('connections'), [chooseTab])
+  const showConnections = useCallback(() => navigate(CONNECTIONS_ROUTE), [navigate])
   // Honor a `?tab=` link followed while the page is already mounted, then strip it so it neither lingers
   // in the URL nor overrides later manual tab switches. A link to the Data Import tab may name its
   // landing with `batch=` or `connection=` (comma-separated ids).
   useEffect(() => {
+    if (movedTo) {
+      navigate(movedTo, { replace: true })
+      return
+    }
     if (!searchParams.get('tab')) return
     const fromUrl = tabFromLink(searchParams.get('tab'))
     if (fromUrl === 'import') {
@@ -4046,12 +4055,12 @@ export default function ImportExport() {
     next.delete('batch')
     next.delete('connection')
     setSearchParams(next, { replace: true })
-  }, [searchParams, setSearchParams, showInHistory, chooseTab])
+  }, [searchParams, setSearchParams, showInHistory, chooseTab, movedTo, navigate])
+  if (movedTo) return null
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        {/* The header's help follows the tab: the Connections tab is a subject of its own, with its own topic. */}
-        <PageHeader title="Import" help={<FeatureExplainer topic={tab === 'connections' ? 'data-providers' : 'page-import-export'} placement="bottom-left" />} />
+        <PageHeader title="Import" help={<FeatureExplainer topic="page-import-export" placement="bottom-left" />} />
         {/* Outside the scroll area, so the tabs stay put while a tab's content scrolls. */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
           {IMPORT_TABS.map(([id, label]) => (
@@ -4070,7 +4079,6 @@ export default function ImportExport() {
             <ImportTab view={tab} historyFocus={historyFocus} onShowHistory={showInHistory} onShowImport={showFileImport} onShowConnections={showConnections} />
           </ImportErrorBoundary>
         )}
-        {tab === 'connections' && <ImportErrorBoundary><ConnectionsTab onShowHistory={showInHistory} /></ImportErrorBoundary>}
         </div>
       </div>
     </div>

@@ -4,7 +4,7 @@
 // The things you *do* to a data connection that are not configuration: sync it, pull more of its history,
 // rebuild its accounts, take its synced transactions back out, and rename it.
 //
-// Kept apart from the Import page's Connections tab that calls them (`ConnectionsTab.jsx`), which holds
+// Kept apart from the Connections tab that calls them (`ConnectionsTab.jsx`), which holds
 // the configuration — connect, disconnect, account mapping, the provider credential — and the Plaid
 // Link handler that cannot be unmounted mid-connect. The tab offers these at two levels: one Sync now
 // for every connection, and per connection a small sync (so a mapping change can be verified where it

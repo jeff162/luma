@@ -29,6 +29,7 @@ import {
   applyDisplayFormat, DATE_ORDER_PREF_KEY, DEFAULT_DATE_ORDER, NUMBER_FORMAT_PREF_KEY, DEFAULT_NUMBER_FORMAT,
 } from './lib/displayFormat.js'
 import { safeStartupRoute } from './lib/startupRoute.js'
+import { CONNECTIONS_ROUTE } from './lib/connectionSummary.js'
 import AppRoutes, { RouteLoadingFallback } from './AppRoutes.jsx'
 import { ROUTE_PREFETCHERS } from './lib/routeChunks.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
@@ -296,7 +297,6 @@ const NAV_LINKS = [
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
-const DATA_PROVIDER_STARTUP_ROUTE = '/import-export?tab=connections'
 // Severity-to-color mapping for the nav Tasks badge. Mirrors the palette used by
 // `SEVERITY_COLORS` in Tasks.jsx so the badge in the nav reads as the same severity
 // the task cards on the page render with. Ordered by ascending urgency so that
@@ -674,7 +674,7 @@ function LocalPreferenceProfileScreen({
       key: 'connect',
       title: 'Connect a data provider',
       summary: 'Link an account/accounts through a data provider.',
-      destination: DATA_PROVIDER_STARTUP_ROUTE,
+      destination: CONNECTIONS_ROUTE,
     },
     {
       key: 'demo',

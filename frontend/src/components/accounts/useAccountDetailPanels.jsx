@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import AccountDetail from '../AccountDetail.jsx'
 
 // The stack of floating account panels a surface opens from its own `↗` launchers — the Accounts list,
-// and a connection's account list on the Import page's Connections tab. The hook owns the stack and its
+// and a connection's account list on the Connections tab. The hook owns the stack and its
 // render, the same shape as `useBatchDetailPanels`, so an account opens the same way from either place.
 //
 // `accounts` is the caller's live list: an open panel's title follows a rename made underneath it.

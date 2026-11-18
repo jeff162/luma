@@ -543,7 +543,7 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         # Naming it is the point: with several connected, "a connection" leaves the user hunting.
         self.assertIn("Harborline Savings", task["description"])
         # The remedy is a re-authorization, which lives with the configuration.
-        self.assertEqual(task["link"], "/import-export?tab=connections")
+        self.assertEqual(task["link"], "/accounts?tab=connections")
 
     def test_a_reauth_connection_is_not_also_counted_as_failing(self):
         # Two entries would name one problem twice, and only one of them says what to do. Same rule the
@@ -583,7 +583,7 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         self.assertIsNotNone(task)
         self.assertEqual(task["count"], 1)
         self.assertIn("Harborline Savings", task["description"])
-        self.assertEqual(task["link"], "/import-export?tab=connections")
+        self.assertEqual(task["link"], "/accounts?tab=connections")
 
     def test_a_healthy_connection_raises_nothing(self):
         # A fresh install with a working connection must not be greeted with warnings.
