@@ -141,7 +141,7 @@ function bankDroppedReason(item) {
   return item.is_pending
     ? {
         label: 'Pending, dropped by the bank',
-        title: 'The bank stopped listing this pending transaction — usually a hold released or reversed, or a charge that posted at a different amount. Restore it if it should still be in the ledger.',
+        title: 'The bank stopped listing this pending transaction. Usually a hold released or reversed, or a charge that posted at a different amount. Restore it if it should still be in the ledger.',
       }
     : {
         label: 'Withdrawn by the bank',
