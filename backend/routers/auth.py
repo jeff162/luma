@@ -578,7 +578,7 @@ def clear_demo_data_endpoint():
             })
         # Mirror restore's wipe: one transaction, FK checks deferred to commit. The wipe clears
         # import_workflow_state (so the demo marker goes with it); reseed the first-run skeleton.
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("PRAGMA defer_foreign_keys = ON")
         _wipe_user_data_tables(conn)
         _seed_default_categories(conn)

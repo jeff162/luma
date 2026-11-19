@@ -18,6 +18,7 @@ async function clearAllImportProfiles(request) {
   if (!response.ok()) return
   const profiles = await response.json()
   for (const profile of Array.isArray(profiles) ? profiles : []) {
+    // Clears what it can before the spec; the system PayPal source refuses deletion by design.
     await request.delete(`/api/import-export/profiles/${profile.id}`)
   }
 }

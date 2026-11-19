@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // The CSV upload flow: how a dropped file is matched to a data source, and what the mapping screen
 // offers once it is.
@@ -470,7 +471,7 @@ test('the data source editor can create its account, and saving keeps what impor
     // The last spec here relies on the tenant holding no accounts.
     const accounts = await (await request.get('/api/accounts?include_children=true')).json()
     for (const account of accounts.filter(a => a.name === accountName)) {
-      await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+      await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
     }
   }
 })
@@ -538,7 +539,7 @@ test('the data source editor re-points, skips and creates the accounts imports r
     // The last spec here relies on the tenant holding no accounts.
     const accounts = await (await request.get('/api/accounts?include_children=true')).json()
     for (const account of accounts.filter(a => [checking.id, card.id].includes(a.id) || a.name === newAccountName)) {
-      await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+      await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
     }
   }
 })
@@ -636,9 +637,9 @@ test('a finished import lands on its card in the import history and frees the im
     await expect(page.getByRole('button', { name: 'choose a data source' })).toBeVisible()
   } finally {
     const batches = await (await request.get('/api/import-export/batches')).json()
-    for (const batch of batches) await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+    for (const batch of batches) await removeFixture(request, `/api/import-export/batches/${batch.id}?force=true`)
     const accounts = await (await request.get('/api/accounts?include_children=true')).json()
-    for (const account of accounts) await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    for (const account of accounts) await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
   }
 })
 
@@ -666,8 +667,8 @@ test('a comma-decimal file is read as one and imports at full value', async ({ p
     expect(feed.transactions.map(t => t.amount).sort((a, b) => a - b)).toEqual([-12.5, 1234.56])
   } finally {
     const batches = await (await request.get('/api/import-export/batches')).json()
-    for (const batch of batches) await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+    for (const batch of batches) await removeFixture(request, `/api/import-export/batches/${batch.id}?force=true`)
     const accounts = await (await request.get('/api/accounts?include_children=true')).json()
-    for (const account of accounts) await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    for (const account of accounts) await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
   }
 })

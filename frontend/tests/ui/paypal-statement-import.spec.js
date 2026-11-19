@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // A PayPal statement dropped on the general importer: the page sends a PDF to the statement import rather
 // than the CSV mapping, the dialog asks which PayPal account the statement's PayPal account goes into, and
@@ -59,7 +60,7 @@ test('a dropped PayPal statement imports into the PayPal account chosen for it',
     expect(card?.source_kind).toBe('source:paypal')
     batchId = card?.id
   } finally {
-    if (batchId) await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
+    if (batchId) await removeFixture(request, `/api/import-export/batches/${batchId}?force=true`)
+    await removeFixture(request, `/api/accounts/${paypal.id}?transactions=delete`)
   }
 })

@@ -1230,6 +1230,14 @@ closes it at the end of the block; there is no pool. The concurrency that matter
 **WAL: readers never block, writers serialize.** A blocked writer waits out `_BUSY_TIMEOUT_SECONDS` and
 then fails with `database is locked`.
 
+**A write transaction takes the lock when it opens** (`WRITE_TRANSACTION_ISOLATION`, on both databases'
+connections; an explicit one is `BEGIN IMMEDIATE`). SQLite will not let a transaction that has already
+read wait for the write lock, so behind a deferred `BEGIN` a read before the first write — including the
+one preparing a DELETE on `txn` makes, since its full-text index reads its settings — turns another
+request's brief write into an immediate failure that skips the busy wait. Python opens the transaction
+before any INSERT, UPDATE or DELETE, and before an `executemany` of one with nothing to insert.
+`backend/tests/test_write_transactions.py` pins both openings.
+
 **A write transaction contains only the work it exists to do.** Gather what the update needs before
 opening it, write, commit, then continue. Anything else held inside makes every other writing request
 wait or fail for its duration. In particular:

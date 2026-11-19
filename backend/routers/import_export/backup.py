@@ -1985,7 +1985,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     same_system = bool(backup_instance) and backup_instance == get_db_instance_id(conn)
     restoring_onto_another_instance = not same_system or not _target_has_data(conn)
 
-    conn.execute("BEGIN")
+    conn.execute("BEGIN IMMEDIATE")
     conn.execute("PRAGMA defer_foreign_keys = ON")
     previous_preferences = [dict(row) for row in conn.execute(
         "SELECT * FROM ui_preference WHERE scope_id != ?", (SHARED_SCOPE_ID,))]

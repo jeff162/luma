@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // Watched folders, end to end through the real stack. The unit tests cover which calls the panel makes
 // and which files the scan refuses; what only a browser can show is the join between them — that a file
@@ -112,10 +113,10 @@ test('a watched folder imports what it can and hands back what it cannot', async
     await expect(mapping.getByRole('button', { name: 'Spec Watched Source', exact: true })).toBeVisible()
     await expect(mapping.getByText(UNMAPPED).first()).toBeVisible()
   } finally {
-    if (takenBatchId) await request.delete(`/api/import-export/batches/${takenBatchId}?force=true`)
-    await request.delete(`/api/import-export/batches/${proofBatchId}?force=true`)
-    await request.delete(`/api/import-export/profiles/${source.id}`)
-    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    if (takenBatchId) await removeFixture(request, `/api/import-export/batches/${takenBatchId}?force=true`)
+    await removeFixture(request, `/api/import-export/batches/${proofBatchId}?force=true`)
+    await removeFixture(request, `/api/import-export/profiles/${source.id}`)
+    await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
     fs.rmSync(folder, { recursive: true, force: true })
   }
 })

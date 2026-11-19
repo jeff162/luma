@@ -104,6 +104,9 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
 # invisible stall, which is the worse failure for a request a user is waiting on.
 _BUSY_TIMEOUT_SECONDS = 15
 
+# How the transaction Python opens before a write begins; why it is IMMEDIATE is on `get_db`.
+WRITE_TRANSACTION_ISOLATION = "IMMEDIATE"
+
 
 @contextmanager
 def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
@@ -119,12 +122,21 @@ def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
     connection is not reliably the one that reads the next row or closes it, and sqlite3 refuses a
     connection outside its creating thread unless told otherwise. It is safe only because such a generator
     is advanced one step at a time: the connection changes hands, it is never shared.
+
+    **A transaction starts by taking the write lock** (`WRITE_TRANSACTION_ISOLATION`). Python opens one
+    before the first INSERT, UPDATE or DELETE — or an `executemany` of one, even with nothing to insert —
+    and a deferred `BEGIN` would let what follows read before writing. SQLite will not let a transaction
+    that has read wait for the write lock: if another request holds it, the write fails at once with
+    `database is locked` and `_BUSY_TIMEOUT_SECONDS` never applies. Preparing a statement can read too
+    (a full-text index reads its settings), so no ordering of the caller's own statements avoids it.
+    Reads outside a transaction are unaffected; a code path that opens one itself writes `BEGIN IMMEDIATE`.
     """
     resolved_path = _normalize_db_path(db_path)
     Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
     traced = contention_trace.enabled()
     conn = sqlite3.connect(
         resolved_path, timeout=_BUSY_TIMEOUT_SECONDS, check_same_thread=not handed_between_threads,
+        isolation_level=WRITE_TRANSACTION_ISOLATION,
         **({"factory": contention_trace.TracedConnection} if traced else {}),
     )
     if traced:

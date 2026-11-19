@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // Runs a picker action and waits for the server to store the category it sets. The cell updates before the
 // save lands, so asserting on it alone let a test end with its restore still in flight — and the next test
@@ -77,8 +78,8 @@ test('a category created from the inline picker is listed once afterwards', asyn
     const categories = await (await request.get('/api/categories')).json()
     const created = categories.find(category => category.name === name)
     if (created) {
-      await request.delete(`/api/categories/${created.id}`)
-      await request.delete(`/api/categories/${created.id}/forever`)
+      await removeFixture(request, `/api/categories/${created.id}`)
+      await removeFixture(request, `/api/categories/${created.id}/forever`)
     }
   }
 })

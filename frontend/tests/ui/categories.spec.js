@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // Uncategorized income is listed under an "Unassigned" income group that exists only on the page. Saving
 // the group order after a create once sent an update for it too, the server answered "Not found", and
@@ -21,6 +22,6 @@ test('an income group can be created while uncategorized income exists', async (
     // Remove the group, so the shared demo baseline is unchanged.
     const categories = await (await request.get('/api/categories')).json()
     const created = categories.find(category => category.name === name)
-    if (created) await request.delete(`/api/categories/${created.id}`)
+    if (created) await removeFixture(request, `/api/categories/${created.id}`)
   }
 })

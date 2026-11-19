@@ -28,7 +28,7 @@ from pathlib import Path
 
 from backend import password_strength
 from backend.db.database import (
-    DB_PATH, current_db_path, get_db, get_workspace_id, init_db, set_workspace_id,
+    DB_PATH, WRITE_TRANSACTION_ISOLATION, current_db_path, get_db, get_workspace_id, init_db, set_workspace_id,
 )
 from backend.app_logging import log_warning
 from backend.runtime_config import app_name, is_frozen, resolve_control_db_path
@@ -195,7 +195,8 @@ def build_totp_uri(username: str, secret: str, issuer: str | None = None) -> str
 @contextmanager
 def get_control_db():
     Path(CONTROL_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(CONTROL_DB_PATH)
+    # Writes take the lock when their transaction opens, as on the data database (`database.get_db`).
+    conn = sqlite3.connect(CONTROL_DB_PATH, isolation_level=WRITE_TRANSACTION_ISOLATION)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

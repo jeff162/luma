@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // The reconciliation reports as the app actually hosts them: opened from an import's file card or a deep
 // link, floating above the page, stashed to the navigation pane and restored with its data intact, and
@@ -45,8 +46,8 @@ test('an Amazon import opens its reconciliation report, which minimizes, restore
     await page.getByRole('button', { name: 'Mark reviewed', exact: true }).click()
     await expect(page.getByText('✓ Reviewed')).toBeVisible()
   } finally {
-    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    await removeFixture(request, `/api/import-export/batches/${batchId}?force=true`)
+    await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
   }
 })
 
@@ -74,9 +75,9 @@ test('an Amazon export dropped on the importer opens its form and lands on its c
   } finally {
     const batches = await (await request.get('/api/import-export/batches')).json()
     for (const batch of batches.filter(b => b.filename === 'spec-dropped-orders.csv')) {
-      await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+      await removeFixture(request, `/api/import-export/batches/${batch.id}?force=true`)
     }
-    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+    await removeFixture(request, `/api/accounts/${account.id}?transactions=delete`)
   }
 })
 
@@ -134,9 +135,9 @@ test('two PayPal transactions cornered on one card charge are one row, settled b
     await expect(page.getByRole('button', { name: 'Matched (1)' })).toBeVisible()
     await expect(page.getByRole('button', { name: /Two transactions, one match/ })).toHaveCount(0)
   } finally {
-    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
-    await request.delete(`/api/accounts/${card.id}?transactions=delete`)
+    await removeFixture(request, `/api/import-export/batches/${batchId}?force=true`)
+    await removeFixture(request, `/api/accounts/${paypal.id}?transactions=delete`)
+    await removeFixture(request, `/api/accounts/${card.id}?transactions=delete`)
   }
 })
 
@@ -170,8 +171,8 @@ test('a PayPal import pairs with the card charge, and the review opens from its 
     await expect(page.getByRole('button', { name: 'Matched (1)' })).toBeVisible()
     await expect(page.getByText('PAYPAL *HARBOR RELIEF')).toBeVisible()
   } finally {
-    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
-    await request.delete(`/api/accounts/${card.id}?transactions=delete`)
+    await removeFixture(request, `/api/import-export/batches/${batchId}?force=true`)
+    await removeFixture(request, `/api/accounts/${paypal.id}?transactions=delete`)
+    await removeFixture(request, `/api/accounts/${card.id}?transactions=delete`)
   }
 })

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { removeFixture } from './cleanup.js'
 
 // The file report's *Not imported* view, in the real tree. The unit tests cover which rows the view
 // asks for and what it does with them; what only a browser can show is that the table renders at all
@@ -60,7 +61,7 @@ test('a file report lists the rows the import left out, with the reason for each
     await expect(page.getByText("Skipped account 'Savings'")).toBeVisible()
     await expect(page.getByText("Invalid date: 'not-a-date'")).toHaveCount(0)
   } finally {
-    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${checking.id}?transactions=delete`)
+    await removeFixture(request, `/api/import-export/batches/${batchId}?force=true`)
+    await removeFixture(request, `/api/accounts/${checking.id}?transactions=delete`)
   }
 })
