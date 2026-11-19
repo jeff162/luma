@@ -39,6 +39,7 @@ a metered provider may not even be possible).
 import json
 import sqlite3
 import uuid
+from datetime import date
 from typing import Optional
 
 from backend.services.account_groups import effective_account_id, set_account_parent
@@ -145,9 +146,10 @@ def provider_account_index(conn: sqlite3.Connection, connection_id: str) -> dict
 
 
 def list_connection_accounts(conn: sqlite3.Connection, connection_id: str) -> list[dict]:
-    """The connection's provider accounts with their current mapping, for the mapping UI and for
-    building a sync's dedupe context. `account_name` reflects the *local* account (which the user may
-    have renamed); the `provider_*` fields keep what the bank called it."""
+    """The connection's provider accounts with their current mapping, for the mapping UI. `account_name`
+    reflects the *local* account (which the user may have renamed); the `provider_*` fields keep what the
+    bank called it. A replaced provider account is left out: it is a decision already made, and listing it
+    beside its replacement reads as the same account offered twice."""
     rows = conn.execute(
         """
         SELECT ca.*,
@@ -157,7 +159,7 @@ def list_connection_accounts(conn: sqlite3.Connection, connection_id: str) -> li
         FROM   connection_account ca
         LEFT   JOIN account a  ON a.id  = ca.account_id
         LEFT   JOIN account ct ON ct.id = ca.target_account_id
-        WHERE  ca.connection_id = ?
+        WHERE  ca.connection_id = ? AND ca.replaced_by IS NULL
         ORDER  BY LOWER(COALESCE(ca.provider_name, '')), ca.external_account_id
         """,
         (connection_id,),
@@ -241,6 +243,99 @@ def _create_local_account(conn, *, name: str, account_type: Optional[str], subty
     return account_id
 
 
+class SharedAccountClaim(ValueError):
+    """Two provider accounts were newly mapped onto one local account in the same request, so neither can
+    be taken as replacing the other."""
+
+
+def _live_account_id(conn, account_id: Optional[str]) -> Optional[str]:
+    if not account_id:
+        return None
+    row = conn.execute(
+        "SELECT id FROM account WHERE id = ? AND trashed_at IS NULL", (account_id,)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _own_account(conn, row) -> Optional[str]:
+    """The local account a provider account already resolves to: the one holding its handle, or else the
+    one its mapping row names. The second covers a handle another provider account has taken over —
+    re-applying the row's decision must find its account again, not create a second one."""
+    held = conn.execute(
+        "SELECT id FROM account WHERE external_account_id = ?", (row["external_account_id"],)
+    ).fetchone()
+    return held["id"] if held else _live_account_id(conn, row["account_id"])
+
+
+def _resolve_shared_claims(conn, *, existing: dict,
+                           decisions: dict) -> tuple[dict[str, str], dict[str, str], set[str]]:
+    """Settle provider accounts that end up pointing at one local account. Returns, keyed by external id,
+    ({loser: winner}, {winner: local account id}, {claimants that must not take the handle}).
+
+    A local account can be fed by one provider account only (`account.external_account_id` is a single
+    handle), so when several of a connection's provider accounts point at one local account, one feeds it
+    and the rest are **replaced**. The usual cause is a provider reissuing an account's ids after the user
+    re-links the bank on the provider's side: the old id stops arriving, and the user maps the new one onto
+    the same account.
+
+    The winner, in order of evidence:
+      - the one claimant this request newly points at the account — that is the user saying "this one now";
+        two newly pointed at once is ambiguous and refused (`SharedAccountClaim`)
+      - otherwise the claimant the provider listed most recently (`last_listed_at`), the holder of the
+        account's handle among several listed together.
+    With no listing to go on, nothing is retired: the holder keeps the handle and the others are left as
+    they are, so the result is not decided by the order this request named them in. A later pull that lists
+    one of them settles it (`resolve_shared_account_claims`).
+    """
+    claims: dict[str, list[str]] = {}
+    for external_account_id, row in existing.items():
+        if external_account_id in decisions:
+            mode, target = decisions[external_account_id]
+            if mode == "existing":
+                account_id = _live_account_id(conn, target)
+            elif mode in ("new", "group"):
+                account_id = _own_account(conn, row)
+            else:
+                account_id = None
+        elif row["mapping_mode"] in ("new", "existing", "group") and not row["replaced_by"]:
+            account_id = _live_account_id(conn, row["account_id"])
+        else:
+            account_id = None
+        if account_id:
+            claims.setdefault(account_id, []).append(external_account_id)
+
+    replaced: dict[str, str] = {}
+    winners: dict[str, str] = {}
+    held_back: set[str] = set()
+    for account_id, claimants in claims.items():
+        if len(claimants) < 2:
+            continue
+        newly = [e for e in claimants if e in decisions and existing[e]["account_id"] != account_id]
+        if len(newly) > 1:
+            names = ", ".join(sorted(provider_account_label(existing[e]) for e in newly))
+            raise SharedAccountClaim(f"{names} cannot all map to the same account")
+        held = conn.execute(
+            "SELECT external_account_id FROM account WHERE id = ?", (account_id,)
+        ).fetchone()["external_account_id"]
+        winner = newly[0] if newly else None
+        if winner is None:
+            listed = {e: existing[e]["last_listed_at"] for e in claimants if existing[e]["last_listed_at"]}
+            latest = max(listed.values(), default=None)
+            fresh = [e for e, d in listed.items() if d == latest]
+            if held in fresh:
+                winner = held
+            elif len(fresh) == 1:
+                winner = fresh[0]
+        if winner is None:
+            held_back.update(e for e in claimants if e != held)
+            continue
+        winners[winner] = account_id
+        for loser in claimants:
+            if loser != winner:
+                replaced[loser] = winner
+    return replaced, winners, held_back
+
+
 def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provider: str,
                           institution: Optional[str], mappings: dict, default_owner_id: Optional[str]) -> dict:
     """Materialize the user's mapping decisions. `mappings` is
@@ -259,6 +354,10 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
     it for the rest — and recorded nothing whatsoever in the case where the candidates tied, which is
     precisely when the user has the most to rule out.
 
+    Provider accounts left pointing at one local account are settled first (`_resolve_shared_claims`): each
+    loser becomes a `skip` that records what replaced it, and the winner is made to hold the account's
+    handle. Without that the outcome was whichever row this loop happened to reach last.
+
     Returns {"created": [...], "linked": [...], "skipped": [...], "distinct_pairs": int, "changed": bool}
     — `changed` drives whether the caller re-runs duplicate detection, since a mapping change can newly
     qualify rows for the cross-account rules.
@@ -267,24 +366,40 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
         "SELECT * FROM connection_account WHERE connection_id = ?", (connection_id,)
     ).fetchall()}
 
+    decisions: dict[str, tuple[str, Optional[str]]] = {}
+    for external_account_id, choice in (mappings or {}).items():
+        mode = str((choice or {}).get("mode") or "").strip().lower()
+        if external_account_id in existing and mode in MAPPING_MODES:
+            target = str((choice or {}).get("target_account_id") or "").strip() or None
+            decisions[external_account_id] = (mode, target)
+
+    replaced, winners, held_back = _resolve_shared_claims(conn, existing=existing, decisions=decisions)
+    held_before = {
+        winner for winner, account_id in winners.items()
+        if conn.execute(
+            "SELECT 1 FROM account WHERE id = ? AND external_account_id = ?", (account_id, winner),
+        ).fetchone()
+    }
+    # Losers first, so releasing a loser's handle can never undo the winner's stamp.
+    order = [*replaced, *(e for e in decisions if e not in replaced)]
+
     created, linked, skipped = [], [], []
     # Collected rather than written inline: the assertion needs the local account's id, and for a `new`
     # mapping that id does not exist until this loop creates it.
     distinct_from: list[tuple[str, str]] = []
     changed = False
+    moved: list[str] = []
 
-    for external_account_id, choice in (mappings or {}).items():
-        row = existing.get(external_account_id)
-        if row is None:
-            continue  # not an account this connection offers; ignore rather than invent one
-        mode = str((choice or {}).get("mode") or "").strip().lower()
-        if mode not in MAPPING_MODES:
-            continue
+    for external_account_id in order:
+        row = existing[external_account_id]
+        if external_account_id in replaced:
+            choice, mode, target_account_id = {}, "skip", None
+        else:
+            choice = (mappings or {}).get(external_account_id) or {}
+            mode, target_account_id = decisions[external_account_id]
 
         prior_mode = row["mapping_mode"]
         prior_account = row["account_id"]
-        # One target for every mode that points at an existing account: adopted / parent / alias.
-        target_account_id = str((choice or {}).get("target_account_id") or "").strip() or None
         account_id: Optional[str] = None
 
         if mode == "skip":
@@ -297,11 +412,12 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
             target_id = target_account_id
             if not target_id:
                 continue
-            _clear_stale_external_id(conn, external_account_id=external_account_id, keep_account_id=target_id)
-            _link_account_to_connection(
-                conn, account_id=target_id, connection_id=connection_id,
-                provider=provider, external_account_id=external_account_id,
-            )
+            if external_account_id not in held_back:
+                _clear_stale_external_id(conn, external_account_id=external_account_id, keep_account_id=target_id)
+                _link_account_to_connection(
+                    conn, account_id=target_id, connection_id=connection_id,
+                    provider=provider, external_account_id=external_account_id,
+                )
             account_id = target_id
             linked.append(target_id)
 
@@ -313,17 +429,23 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
             # (`_attach_import_created_account_to_group` resolves the effective row first).
             if mode == "group" and target_account_id:
                 target_account_id = effective_account_id(conn, target_account_id) or target_account_id
-            # Whenever a local account already holds this provider handle, it IS this provider
-            # account locally — so reuse it rather than creating a second one. That covers the
-            # obvious case (re-applying an unchanged mapping must not duplicate the account) and the
-            # less obvious one: switching an already-linked account from 'existing' to 'group' is a
-            # change to how it is *grouped*, not a decision to abandon it. Creating a
-            # fresh account there would strand every transaction already synced under the old one.
-            already = conn.execute(
+            # Whenever this provider account already has a local account, it IS this provider account
+            # locally — so reuse it rather than creating a second one. That covers the obvious case
+            # (re-applying an unchanged mapping must not duplicate the account) and the less obvious one:
+            # switching an already-linked account from 'existing' to 'group' is a change to how it is
+            # *grouped*, not a decision to abandon it. Creating a fresh account there would strand every
+            # transaction already synced under the old one.
+            held = conn.execute(
                 "SELECT id FROM account WHERE external_account_id = ?", (external_account_id,)
             ).fetchone()
+            already = held["id"] if held else _own_account(conn, row)
             if already:
-                account_id = already["id"]
+                account_id = already
+                if not held and external_account_id not in held_back:
+                    _link_account_to_connection(
+                        conn, account_id=already, connection_id=connection_id,
+                        provider=provider, external_account_id=external_account_id,
+                    )
                 # 'group' still has to place it, since the parent may be newly chosen (or cleared).
                 if mode == "group":
                     set_account_parent(conn, [account_id], target_account_id)
@@ -345,14 +467,17 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
                 )
                 created.append(account_id)
 
+        # A replaced row stays replaced while it is re-applied as a skip (a refresh re-applies every
+        # decision); any other decision about it is the user taking it back.
+        replaced_by = replaced.get(external_account_id) or (row["replaced_by"] if mode == "skip" else None)
         conn.execute(
             """
             UPDATE connection_account
-            SET    account_id = ?, mapping_mode = ?, target_account_id = ?, updated_at = ?
+            SET    account_id = ?, mapping_mode = ?, target_account_id = ?, replaced_by = ?, updated_at = ?
             WHERE  connection_id = ? AND external_account_id = ?
             """,
             (account_id, mode, target_account_id if mode in ("existing", "group") else None,
-             utcnow_iso(), connection_id, external_account_id),
+             replaced_by, utcnow_iso(), connection_id, external_account_id),
         )
         # Only meaningful for a mapping that ends up as its own local account: 'existing' and 'group' are
         # already statements about the relationship, and 'skip' has no account to assert anything about.
@@ -364,6 +489,41 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
 
         if prior_mode != mode or prior_account != account_id:
             changed = True
+            moved.append(external_account_id)
+
+    # The winner holds the account's handle whatever order the loop ran in, including a winner this request
+    # did not mention.
+    for winner, account_id in winners.items():
+        holder = conn.execute("SELECT external_account_id FROM account WHERE id = ?", (account_id,)).fetchone()
+        if holder and holder["external_account_id"] != winner:
+            _clear_stale_external_id(conn, external_account_id=winner, keep_account_id=account_id)
+            _link_account_to_connection(
+                conn, account_id=account_id, connection_id=connection_id,
+                provider=provider, external_account_id=winner,
+            )
+        # A winner that did not hold the handle had its rows dropped while its history was walked, so its
+        # coverage claims history it never delivered. Cleared, so the next pull fetches that history again
+        # rather than treating it as held.
+        if winner not in held_before:
+            conn.execute(
+                """
+                UPDATE connection_account
+                SET    coverage_start_date = NULL, coverage_through_date = NULL,
+                       history_complete = 0, history_empty_streak = 0
+                WHERE  connection_id = ? AND external_account_id = ?
+                """,
+                (connection_id, winner),
+            )
+        changed = True
+
+    # A provider account that stops feeding the account it won hands back the ones it replaced: they show
+    # again as skipped, for the user to decide about.
+    for external_account_id in moved:
+        if external_account_id not in winners:
+            conn.execute(
+                "UPDATE connection_account SET replaced_by = NULL WHERE connection_id = ? AND replaced_by = ?",
+                (connection_id, external_account_id),
+            )
 
     # After the loop, so every account named here exists. Imported lazily: `duplicate_detection` imports
     # broadly and this module is pulled in by the sync path on every pull.
@@ -376,6 +536,49 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
 
     return {"created": created, "linked": linked, "skipped": skipped,
             "distinct_pairs": pairs, "changed": changed}
+
+
+def record_listed_accounts(conn: sqlite3.Connection, connection_id: str, listings: list[dict] | None) -> None:
+    """Stamp today on each provider account a pull's `complete_listings` returned whole. It is the durable
+    record of which provider accounts are still reported, which decides between two claimants of one local
+    account (`_resolve_shared_claims`). Kept on the mapping row because the sync log is prunable and a
+    restore leaves it empty."""
+    today = date.today().isoformat()
+    for external_account_id in {(entry or {}).get("external_account_id") for entry in listings or []} - {None}:
+        conn.execute(
+            "UPDATE connection_account SET last_listed_at = ? WHERE connection_id = ? AND external_account_id = ?",
+            (today, connection_id, external_account_id),
+        )
+
+
+def resolve_shared_account_claims(conn: sqlite3.Connection, connection_id: str) -> int:
+    """Settle the connection's provider accounts that share a local account, as a mapping save would
+    (`_resolve_shared_claims`), re-applying only the rows involved. Run after each pull, once the provider's
+    listings have said which of them are still reported. Returns how many it marked replaced."""
+    rows = conn.execute(
+        """
+        SELECT external_account_id, mapping_mode, target_account_id FROM connection_account
+        WHERE  connection_id = ? AND replaced_by IS NULL AND mapping_mode IN ('new', 'existing', 'group')
+          AND  account_id IN (
+                   SELECT account_id FROM connection_account
+                   WHERE  connection_id = ? AND replaced_by IS NULL AND account_id IS NOT NULL
+                     AND  mapping_mode IN ('new', 'existing', 'group')
+                   GROUP  BY account_id HAVING COUNT(*) > 1)
+        """,
+        (connection_id, connection_id),
+    ).fetchall()
+    if not rows:
+        return 0
+    connection = conn.execute("SELECT provider, institution FROM connection WHERE id = ?", (connection_id,)).fetchone()
+    count = "SELECT COUNT(*) AS n FROM connection_account WHERE connection_id = ? AND replaced_by IS NOT NULL"
+    before = conn.execute(count, (connection_id,)).fetchone()["n"]
+    apply_account_mapping(
+        conn, connection_id=connection_id, provider=connection["provider"], institution=connection["institution"],
+        mappings={r["external_account_id"]: {"mode": r["mapping_mode"], "target_account_id": r["target_account_id"]}
+                  for r in rows},
+        default_owner_id=None,
+    )
+    return conn.execute(count, (connection_id,)).fetchone()["n"] - before
 
 
 def build_sync_evidence(txn: dict, *, source_label: str, captured_fields: set[str]) -> Optional[str]:

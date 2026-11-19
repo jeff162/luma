@@ -22,11 +22,14 @@ from backend.routers import connections as connections_router
 from backend.routers.accounts import upsert_connection_accounts
 from backend.services.connection_mapping import (
     MAPPING_MODES,
+    SharedAccountClaim,
     apply_account_mapping,
     dedupe_inputs_for_connection,
     list_connection_accounts,
     provider_account_label,
+    record_listed_accounts,
     record_provider_accounts,
+    resolve_shared_account_claims,
     unmapped_count,
 )
 
@@ -351,6 +354,172 @@ class ConnectionAccountMappingTests(_MappingFixture):
             result = self._apply(conn, {"ext-nope": {"mode": "new", "name": "Ghost"}})
             self.assertEqual(result["created"], [])
             self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
+
+
+class ReplacedProviderAccountTests(_MappingFixture):
+    """A provider that reissues an account's id after the bank is re-linked on its side reports the same
+    account twice over a connection's life: the old row stays, and the user maps the new one onto the
+    account the old one fed. A local account takes one provider account, so one of the two must be retired
+    and the other must hold the handle sync resolves rows by."""
+
+    def _reissued(self, conn, old_mode="existing"):
+        # The old id was mapped long ago and holds the account's handle; the new id has just appeared.
+        self._existing_account(conn, "acct-chk", "Household Checking", type="depository")
+        record_provider_accounts(conn, connection_id="conn-1", accounts=[
+            {"external_account_id": "old-chk", "name": "EVERYDAY CHECKING (5150)"},
+        ])
+        if old_mode == "existing":
+            self._apply(conn, {"old-chk": {"mode": "existing", "target_account_id": "acct-chk"}})
+        else:
+            conn.execute("DELETE FROM account WHERE id = 'acct-chk'")
+            self._apply(conn, {"old-chk": {"mode": "new", "name": "Household Checking"}})
+        conn.execute(
+            "UPDATE connection_account SET coverage_start_date = '2024-01-01', coverage_through_date = '2026-10-01'"
+        )
+        record_provider_accounts(conn, connection_id="conn-1", accounts=[
+            {"external_account_id": "new-chk", "name": "EVERYDAY CHECKING (5150)"},
+        ])
+        return conn.execute("SELECT account_id FROM connection_account WHERE external_account_id = 'old-chk'"
+                            ).fetchone()["account_id"]
+
+    def _row(self, conn, external_id):
+        return conn.execute(
+            "SELECT * FROM connection_account WHERE connection_id = 'conn-1' AND external_account_id = ?",
+            (external_id,),
+        ).fetchone()
+
+    def _holder(self, conn, account_id):
+        return conn.execute("SELECT external_account_id FROM account WHERE id = ?", (account_id,)
+                            ).fetchone()["external_account_id"]
+
+    def _listed(self, conn, external_id, day):
+        conn.execute(
+            "UPDATE connection_account SET last_listed_at = ? WHERE external_account_id = ?", (day, external_id),
+        )
+
+    def _both_claim(self, conn, account_id):
+        # The stored shape a save made before claims were settled: both rows point at the account.
+        conn.execute(
+            "UPDATE connection_account SET mapping_mode = 'existing', account_id = ?, target_account_id = ?, "
+            "history_complete = 1 WHERE external_account_id = 'new-chk'",
+            (account_id, account_id),
+        )
+
+    def test_mapping_the_new_id_retires_the_old_one_whatever_order_the_dialog_sends(self):
+        # The dialog sends every row it lists, the old one included, in an order nothing chose.
+        for order in (("old-chk", "new-chk"), ("new-chk", "old-chk")):
+            with self.subTest(order=order), database.get_db() as conn:
+                conn.execute("SAVEPOINT reissue")
+                account_id = self._reissued(conn)
+                choice = {"mode": "existing", "target_account_id": account_id}
+                self._apply(conn, {e: choice for e in order})
+
+                self.assertEqual(self._holder(conn, account_id), "new-chk")
+                old = self._row(conn, "old-chk")
+                self.assertEqual((old["mapping_mode"], old["account_id"], old["replaced_by"]),
+                                 ("skip", None, "new-chk"))
+                self.assertEqual([r["external_account_id"] for r in list_connection_accounts(conn, "conn-1")],
+                                 ["new-chk"])
+                conn.execute("ROLLBACK TO reissue")
+                conn.execute("RELEASE reissue")
+
+    def test_an_old_row_that_created_its_account_does_not_create_a_second_one(self):
+        for order in (("old-chk", "new-chk"), ("new-chk", "old-chk")):
+            with self.subTest(order=order), database.get_db() as conn:
+                conn.execute("SAVEPOINT reissue")
+                account_id = self._reissued(conn, old_mode="new")
+                choices = {"old-chk": {"mode": "new", "name": "Household Checking"},
+                           "new-chk": {"mode": "existing", "target_account_id": account_id}}
+                self._apply(conn, {e: choices[e] for e in order})
+
+                self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 1)
+                self.assertEqual(self._holder(conn, account_id), "new-chk")
+                self.assertEqual(self._row(conn, "old-chk")["replaced_by"], "new-chk")
+                conn.execute("ROLLBACK TO reissue")
+                conn.execute("RELEASE reissue")
+
+    def test_two_new_ids_onto_one_account_at_once_are_refused_and_nothing_changes(self):
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-chk", "Household Checking", type="depository")
+            self._record(conn)
+            choice = {"mode": "existing", "target_account_id": "acct-chk"}
+            with self.assertRaises(SharedAccountClaim):
+                self._apply(conn, {"ext-checking": choice, "ext-card": choice})
+            self.assertIsNone(self._holder(conn, "acct-chk"))
+            self.assertEqual(unmapped_count(conn, "conn-1"), 2)
+
+    def test_a_pull_hands_a_stored_pair_to_the_id_the_provider_still_lists(self):
+        # The dead id holds the handle, so the new id's rows have been dropped on every pull while its
+        # history walk recorded coverage over them.
+        with database.get_db() as conn:
+            account_id = self._reissued(conn)
+            self._both_claim(conn, account_id)
+            self._listed(conn, "old-chk", "2026-11-01")
+            record_listed_accounts(conn, "conn-1", [{"external_account_id": "new-chk", "start": "x", "end": "y"}])
+
+            self.assertEqual(resolve_shared_account_claims(conn, "conn-1"), 1)
+            self.assertEqual(self._holder(conn, account_id), "new-chk")
+            self.assertEqual(self._row(conn, "old-chk")["replaced_by"], "new-chk")
+            new = self._row(conn, "new-chk")
+            self.assertEqual((new["coverage_start_date"], new["coverage_through_date"], new["history_complete"]),
+                             (None, None, 0))
+
+    def test_a_holder_listed_alongside_the_other_keeps_the_account(self):
+        # Both ids still listed — an institution reported under its old and new name at once. The one
+        # already feeding the account keeps it, rather than the account switching to the other's rows.
+        with database.get_db() as conn:
+            account_id = self._reissued(conn)
+            self._both_claim(conn, account_id)
+            self._listed(conn, "old-chk", "2026-11-18")
+            self._listed(conn, "new-chk", "2026-11-18")
+
+            resolve_shared_account_claims(conn, "conn-1")
+            self.assertEqual(self._holder(conn, account_id), "old-chk")
+            self.assertEqual(self._row(conn, "new-chk")["replaced_by"], "old-chk")
+            self.assertEqual(self._row(conn, "old-chk")["coverage_start_date"], "2024-01-01")
+
+    def test_with_no_listing_nothing_is_retired_and_the_holder_keeps_the_handle_in_any_order(self):
+        # Nothing stored says which id is live — a provider that lists nothing, or no pull since the column
+        # existed — so neither is retired on a guess, and a save naming them in either order leaves the
+        # handle where it was.
+        for order in (("old-chk", "new-chk"), ("new-chk", "old-chk")):
+            with self.subTest(order=order), database.get_db() as conn:
+                conn.execute("SAVEPOINT reissue")
+                account_id = self._reissued(conn)
+                self._both_claim(conn, account_id)
+                choice = {"mode": "existing", "target_account_id": account_id}
+                self._apply(conn, {e: choice for e in order})
+                self.assertEqual(resolve_shared_account_claims(conn, "conn-1"), 0)
+
+                self.assertEqual(self._holder(conn, account_id), "old-chk")
+                self.assertIsNone(self._row(conn, "old-chk")["replaced_by"])
+                self.assertIsNone(self._row(conn, "new-chk")["replaced_by"])
+                conn.execute("ROLLBACK TO reissue")
+                conn.execute("RELEASE reissue")
+
+    def test_a_refresh_keeps_a_replaced_account_retired(self):
+        with database.get_db() as conn:
+            account_id = self._reissued(conn)
+            self._apply(conn, {"new-chk": {"mode": "existing", "target_account_id": account_id}})
+            upsert_connection_accounts(
+                conn, connection_id="conn-1", provider="plaid", institution="Northgate",
+                accounts=[{"external_account_id": "old-chk", "name": "EVERYDAY CHECKING (5150)"},
+                          {"external_account_id": "new-chk", "name": "EVERYDAY CHECKING (5150)"}],
+                default_owner_id=self.owner_id,
+            )
+            self.assertEqual(self._row(conn, "old-chk")["replaced_by"], "new-chk")
+            self.assertEqual(self._holder(conn, account_id), "new-chk")
+
+    def test_moving_the_winner_elsewhere_hands_back_the_account_it_replaced(self):
+        # Retirement is a consequence of the winner feeding the account; once it stops, the old row shows
+        # again, as skipped, for the user to decide about.
+        with database.get_db() as conn:
+            account_id = self._reissued(conn)
+            self._apply(conn, {"new-chk": {"mode": "existing", "target_account_id": account_id}})
+            self._apply(conn, {"new-chk": {"mode": "skip"}})
+            old = self._row(conn, "old-chk")
+            self.assertEqual((old["mapping_mode"], old["replaced_by"]), ("skip", None))
+            self.assertEqual(len(list_connection_accounts(conn, "conn-1")), 2)
 
 
 class AccountsAwaitingHistoryTests(unittest.TestCase):

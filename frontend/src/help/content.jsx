@@ -2467,7 +2467,18 @@ export const HELP_TOPICS = [
             <strong>To map</strong> means an account was added at the provider after the initial
             mapping. Its transactions are skipped until it is mapped
             from <strong>Account mapping&hellip;</strong> (or <strong>Connection settings&hellip;</strong>)
-            in the card's menu.
+            in the card's menu, or by clicking the count.
+          </li>
+          <li>
+            *needs review* A bank re-linked at the provider can return its accounts as new ones. Mapping a
+            new one onto the Luma account the old one fed replaces the old one: a Luma account is fed by one
+            provider account, so the old one is set to skip and leaves the mapping screen. Where both were
+            mapped before this was enforced, the next sync settles them on whichever one the provider still
+            reports. Mapping two new accounts onto one Luma account in the same save is refused.
+          </li>
+          <li>
+            Transactions with nowhere to go are counted as <strong>No destination</strong> in
+            the <strong>Sync log</strong>, with the provider accounts they came from named below the count.
           </li>
           <li>
             A sync that did not complete is reported with what the provider said in

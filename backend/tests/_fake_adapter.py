@@ -72,6 +72,8 @@ class FakeCursorAdapter(ProviderAdapter):
             # absent is this fake's *correct* answer and a page scripts the key only to model an adapter
             # that does pull ranges.
             **({"requested_windows": page["requested_windows"]} if "requested_windows" in page else {}),
+            # A range provider's listing of the accounts it returned whole, scripted only to model one.
+            **({"complete_listings": page["complete_listings"]} if "complete_listings" in page else {}),
         }
 
     def connect(self, app_config, payload):

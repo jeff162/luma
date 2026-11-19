@@ -95,6 +95,9 @@ export default function ConnectionAccountMapDialog({
               : 'Adjust what each account from this connection maps to. Changing a mapping re-checks the transactions already pulled for duplicates.'
         }
         width="min(760px, 100%)"
+        // No top padding: the grid's sticky header pins at the body's padding edge, so a padded top leaves a
+        // band above it that rows scroll through. The states without the grid supply their own top space.
+        bodyPadding="0 20px 20px"
         onClose={saving ? undefined : onClose}
         actions={
           <DialogActions align="between">
@@ -114,7 +117,7 @@ export default function ConnectionAccountMapDialog({
       >
         {error ? (
           <div style={{
-            marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+            marginTop: 16, padding: '8px 12px', borderRadius: 8, fontSize: 13,
             background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
             border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
             color: 'var(--danger)',
@@ -124,7 +127,7 @@ export default function ConnectionAccountMapDialog({
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><Spinner /></div>
         ) : rows.length === 0 ? (
-          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: '16px 0 0' }}>
             This connection reported no accounts.
           </p>
         ) : (

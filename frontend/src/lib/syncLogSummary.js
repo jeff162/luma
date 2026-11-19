@@ -228,6 +228,22 @@ export function skippedBreakdown(entry) {
     .filter(b => b.count > 0)
 }
 
+// Which provider accounts a pull's no-destination rows came from, largest first, as `[{ account, label,
+// count }]`. The bucket's total alone cannot be acted on: the fix is to map one particular account, and
+// `account_counts` is where the split is kept. `label` is the account's current name where the server
+// knows it (`account_labels`), otherwise the provider id as recorded.
+export function unplacedAccounts(entry) {
+  const labels = entry?.account_labels || {}
+  return Object.entries(entry?.account_counts || {})
+    .map(([account, c]) => ({
+      account,
+      label: labels[account] || account,
+      count: Number(c?.skipped_unknown_account || 0) + Number(c?.skipped_no_account || 0),
+    }))
+    .filter(a => a.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+}
+
 // Where the call ended up, in words — the provider's own readiness signal for the last page it drained.
 //
 // This replaces a rendered `status_sequence`. That sequence held one entry per drained page, which for a

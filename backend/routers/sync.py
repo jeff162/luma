@@ -69,7 +69,8 @@ from backend.services.source_capabilities import (
     rejects_zero_amount,
 )
 from backend.services.connection_mapping import (
-    build_sync_evidence, provider_account_index, record_provider_accounts,
+    build_sync_evidence, provider_account_index, record_listed_accounts, record_provider_accounts,
+    resolve_shared_account_claims,
 )
 from backend.services.duplicate_detection import (
     evaluate_duplicate,
@@ -1626,6 +1627,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                         conn, connection["id"], page["added"], page.get("complete_listings"),
                         account_for=_account_for,
                     ))
+                    record_listed_accounts(conn, connection["id"], page.get("complete_listings"))
                     cursor = page["next_cursor"]
                     final_status = page["update_status"]
                     # Defaulted rather than required so an adapter written before this field still reads as
@@ -1712,6 +1714,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 discovered += _discover_new_provider_accounts(
                     connection, adapter, app_config, credential, seen_unknown, connection_advisories,
                 )
+                # With this pull's listings recorded, two provider accounts sharing a local account can be
+                # told apart; the next pull then routes the winner's rows and fetches its history.
+                resolve_shared_account_claims(conn, connection["id"])
+                conn.commit()
             except ProviderCredentialRejected as e:
                 # The one failure a user can act on, and the one retrying cannot fix. Flagged separately so
                 # the card can say "reconnect this" instead of counting it alongside network blips as
@@ -2075,6 +2081,13 @@ def sync_diagnostics(limit: int = 200,
         ).fetchall()
         retention = connection_log.retention_days(conn)
         nicknamed = nicknamed_connections(conn)
+        # What each provider account is called now, so a row's per-account figures name the account rather
+        # than its opaque provider id. Only a connection that still exists can say; a removed one's ids stay
+        # as recorded.
+        provider_accounts = {
+            connection_id: provider_account_index(conn, connection_id)
+            for connection_id in {r["connection_id"] for r in rows if r["connection_id"]}
+        }
 
     def _json_list(value):
         try:
@@ -2112,6 +2125,11 @@ def sync_diagnostics(limit: int = 200,
         # reads as `None`, which is a different fact from `{}`: "nothing was recorded" against "measured,
         # and the answer is none".
         d["account_counts"] = _json_obj(d.get("account_counts"))
+        known = provider_accounts.get(r["connection_id"]) or {}
+        d["account_labels"] = {
+            external_id: known[external_id]["label"]
+            for external_id in (d["account_counts"] or {}) if external_id in known
+        }
         d["became_complete"] = bool(r["became_complete"])
         d["skipped_breakdown"] = _skipped_breakdown(d["account_counts"], d)
         # The same number the connection card warns on, from the same function, so a reader following the

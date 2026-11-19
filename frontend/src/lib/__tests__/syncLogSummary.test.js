@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
-  historyDepthSummary, parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, windowSummary,
+  historyDepthSummary, parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, unplacedAccounts,
+  windowSummary,
 } from '../syncLogSummary.js'
 
 // The fingerprint format these read is produced by `_cursor_fingerprint` in backend/routers/sync.py and
@@ -229,6 +230,26 @@ describe('skippedBreakdown', () => {
     expect(skippedBreakdown({ skipped: 31 })).toBeNull()
     expect(skippedBreakdown({ skipped: 31, skipped_breakdown: null })).toBeNull()
     expect(skippedBreakdown(undefined)).toBeNull()
+  })
+})
+
+describe('unplacedAccounts', () => {
+  it('names each account behind the no-destination count, largest first, under either bucket key', () => {
+    expect(unplacedAccounts({
+      account_counts: {
+        'p:a': { skipped_unknown_account: 4 },
+        'p:b': { skipped_no_account: 90, skipped_unknown_account: 4 },
+        'p:c': { skipped_by_choice: 7, added: 2 },
+      },
+      account_labels: { 'p:b': 'EVERYDAY CHECKING' },
+    })).toEqual([
+      { account: 'p:b', label: 'EVERYDAY CHECKING', count: 94 },
+      { account: 'p:a', label: 'p:a', count: 4 },
+    ])
+  })
+
+  it('is empty for a row that recorded no per-account counts', () => {
+    expect(unplacedAccounts({ account_counts: null })).toEqual([])
   })
 })
 

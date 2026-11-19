@@ -28,6 +28,7 @@ from backend.services.recurring_detection import settle_owed_rescans
 from backend.services.connection_names import connection_display_name, normalize_nickname
 from backend.services.connection_mapping import (
     MAPPING_MODES,
+    SharedAccountClaim,
     apply_account_mapping,
     captured_field_keys,
     list_connection_accounts,
@@ -158,14 +159,19 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
 
     with get_db() as conn:
         connection = _get_connection(conn, connection_id)
-        result = apply_account_mapping(
-            conn,
-            connection_id=connection_id,
-            provider=connection["provider"],
-            institution=connection["institution"],
-            mappings={k: v.model_dump() for k, v in (body.mappings or {}).items()},
-            default_owner_id=resolve_default_owner_id(conn, None),
-        )
+        try:
+            result = apply_account_mapping(
+                conn,
+                connection_id=connection_id,
+                provider=connection["provider"],
+                institution=connection["institution"],
+                mappings={k: v.model_dump() for k, v in (body.mappings or {}).items()},
+                default_owner_id=resolve_default_owner_id(conn, None),
+            )
+        except SharedAccountClaim as exc:
+            # One local account takes one provider account; with two newly pointed at it there is no telling
+            # which replaces the other, so the user is asked to choose rather than one being picked.
+            raise HTTPException(status_code=409, detail=f"{exc}. Map one, save, then the other.") from exc
         rescan = rescan_connection_duplicates(conn, connection) if result["changed"] else None
         awaiting_history = _accounts_awaiting_history(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)

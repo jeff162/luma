@@ -1318,7 +1318,14 @@ export default function ConnectionsTab({ onShowHistory }) {
                     </StatusPill>
                   ) : null}
                   {s.unmapped ? (
+                    // Opens the mapping when one connection is asking, as that connection's own pill does;
+                    // with several, it opens the card so each connection's pill can be chosen.
                     <StatusPill tone="accent2"
+                      onClick={() => {
+                        const asking = connections.filter(c => unmappedByConnection[c.id] > 0)
+                        if (asking.length === 1) openAccountMap(asking[0])
+                        else setExpandedProviders({ ...expandedProviders, [p.provider]: true })
+                      }}
                       title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this provider ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
                       {s.unmapped} to map
                     </StatusPill>

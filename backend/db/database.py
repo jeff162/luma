@@ -362,13 +362,15 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # v93 adds `connection_account.nickname`, a display name for a provider account. v94 drops it again and
 # adds `connection.nickname`, the name a connection is shown by. v95 adds
 # `csv_import_profile.watch_restore_pending`, a watched folder a restore from another system switched off
-# and nobody has yet said to use here or clear.
+# and nobody has yet said to use here or clear. v96 adds `connection_account.replaced_by` and
+# `.last_listed_at`, the provider account that took over a local account and the last day a pull's listing
+# returned it.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 95
+CURRENT_VERSION = 96
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2878,6 +2880,17 @@ def _add_watch_restore_pending(conn):
     _mark_restored_watch_folders(conn)
 
 
+@migration(96)
+def _add_connection_account_replacement(conn):
+    # See the baseline CREATE. NULL on every row: nothing is replaced yet, and no pull has recorded a
+    # listing. Provider accounts already sharing a local account are settled by the first pull that lists
+    # them, since nothing stored says which of them the provider still reports.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+    for name in ("replaced_by", "last_listed_at"):
+        if columns and name not in columns:
+            conn.execute(f"ALTER TABLE connection_account ADD COLUMN {name} TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3259,6 +3272,15 @@ def init_db(db_path: str | None = None):
                 --                         pauses resumes counting rather than starting the streak over.
                 history_complete       INTEGER NOT NULL DEFAULT 0,
                 history_empty_streak   INTEGER NOT NULL DEFAULT 0,
+                -- The external id of this connection's provider account that took over the local account this
+                -- one fed. Set only on a 'skip' row; NULL otherwise. A local account takes one provider
+                -- account, so the other is retired rather than left contending for it, and hidden from the
+                -- mapping screen (services/connection_mapping.py, `_resolve_shared_claims`).
+                replaced_by            TEXT,
+                -- The last day a pull's provider listing returned this account whole (`complete_listings`).
+                -- NULL for a provider that lists nothing, and until a pull has. It is what tells a provider
+                -- account that is still reported from one whose id the provider has since replaced.
+                last_listed_at         TEXT,
                 created_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at          TEXT,
                 PRIMARY KEY (connection_id, external_account_id)

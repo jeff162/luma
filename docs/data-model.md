@@ -124,6 +124,11 @@ the counterpart of a CSV import's account step. It records
 - what the user decided: `mapping_mode`, `account_id`, `target_account_id`
 - that account's coverage: `coverage_start_date`, `coverage_through_date`, `terminal_window_days`,
   `history_complete`, `history_empty_streak` (see [Coverage has two shapes](#coverage-has-two-shapes))
+- `replaced_by`: the provider account of the same connection that took over the local account this one
+  fed. Set only on a `skip` row
+- `last_listed_at`: the last day a pull's provider listing (`complete_listings`) returned this account
+  whole. NULL for a provider that lists nothing. Kept here rather than read from the sync log, which is
+  prunable and which a restore leaves empty
 
 Connecting a bank writes these rows with `mapping_mode = NULL` and creates no local account. Nothing
 lands until the user says what each provider account is.
@@ -140,7 +145,24 @@ lands until the user says what each provider account is.
 - **A provider handle already held by a local account is adopted as `existing`.** The handle outlives
   the mapping row, which a disconnect cascades away, so a reconnect would otherwise start a second copy
   of every account.
-- **Switching an already-linked account to `group` or `new` reuses that account.**
+- **Switching an already-linked account to `group` or `new` reuses that account**, found by its handle or,
+  when another provider account has taken the handle, by the row's own `account_id`.
+- **A local account is fed by one provider account.** `account.external_account_id` is a single handle,
+  and sync resolves rows through it, so two provider accounts left pointing at one local account mean one
+  of them has its rows dropped. A provider that reissues ids after a re-link on its side produces exactly
+  that pair. Every mapping write settles it (`_resolve_shared_claims`), and so does every pull, once its
+  listings are recorded:
+  - the provider account a request newly points at the account wins; two newly pointed at it in one
+    request are refused, as there is no telling which replaces the other
+  - otherwise the one listed most recently wins, the handle's holder among several listed the same day
+  - with no listing to go on, nothing is retired and the holder keeps the handle, whatever order a save
+    names them in.
+
+  The others become `skip` with `replaced_by` set and leave the mapping screen. A winner that did not hold
+  the handle has its coverage cleared, since its walk recorded history whose rows were dropped; a mapping
+  save then pulls that history, while one settled by a pull is left to *Fetch more history* (the routine
+  window catches its new rows, and after a reissue the old id had delivered the rest). A winner that later
+  stops feeding the account hands back the rows it replaced, as visible skips.
 - **Only `existing` and `group` feed the alias machinery** (`account_duplicate_compare_targets`,
   `explicit_alias_csv_values`), and only an alias unlocks the coverage rules. Two accounts kept apart
   get the soft-flag sweep and auto-confirmation of exact in-group matches.
@@ -1691,7 +1713,8 @@ provider's answer, not the app's own pre-flight refusals.
 (the top-up's overlap) and `skipped_zero_amount`. `attention` is raised only for
 `skipped_held_by_other_connection`: rows whose card belongs to a different, still-existing connection,
 which is what a transaction-id collision looks like. An unmapped account is already reported by the
-"N to map" badge.
+"N to map" badge. The log names the provider accounts behind a no-destination count, by their current
+label where the connection still exists (`account_labels`).
 
 ### Sync import cards
 

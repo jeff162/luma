@@ -25,7 +25,8 @@ import FloatingDialog from '../FloatingDialog.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
   cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
-  historyDepthSummary, requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
+  historyDepthSummary, requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, unplacedAccounts,
+  windowSummary,
 } from '../../lib/syncLogSummary.js'
 import { connectionProviderLabel } from '../../lib/connectionSummary.js'
 import { formatTimestamp } from '../../lib/utils.js'
@@ -143,6 +144,7 @@ function SyncRow({ entry, when }) {
   const requests = entry.requested_windows?.length || null
   const cards = cardSummary(entry.card_counts, entry.institution)
   const skipped = skippedBreakdown(entry)
+  const unplaced = unplacedAccounts(entry)
   // What the call covered: the span it actually fetched, reconciled against the depth it set out for. Two
   // separate facts, joined on one line because either alone invites the wrong conclusion — a span with no
   // target reads as complete, and a target with no span reads as achieved.
@@ -154,12 +156,13 @@ function SyncRow({ entry, when }) {
   // pauses per account, "which ones actually moved" is the question the row exists to answer.
   // The provider prefix is dropped the same way the card summary drops the institution: it namespaces the
   // id and is already the row's own title, so it is the one part that identifies nothing here.
+  // An account the server can name is shown by that name instead.
   const accountPrefix = entry.provider ? `${entry.provider}:` : null
   const reachRows = Object.entries(entry.account_counts || {})
     .filter(([, c]) => c?.reached)
     .map(([account, c]) => {
-      const name = accountPrefix && account.startsWith(accountPrefix)
-        ? account.slice(accountPrefix.length) : account
+      const name = entry.account_labels?.[account]
+        || (accountPrefix && account.startsWith(accountPrefix) ? account.slice(accountPrefix.length) : account)
       return `${name} → ${syncLogDate(c.reached)}${c.history_complete ? ' (end of history)' : ''}`
     })
   // The raw fingerprints stay as the fallback: a provider whose checkpoint this cannot interpret must still
@@ -204,6 +207,17 @@ function SyncRow({ entry, when }) {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {skipped.map(b => (
             <OutcomeChip key={b.key} label={b.label} count={b.count} tone={b.tone} title={b.title} />
+          ))}
+        </div>
+      ) : null}
+      {/* Which accounts the no-destination rows came from, since mapping one of them is the fix. */}
+      {unplaced.length ? (
+        <div data-testid="sync-log-unplaced" style={{ color: 'var(--muted)' }}>
+          no destination from{' '}
+          {unplaced.map((a, i) => (
+            <span key={a.account}>
+              {i ? ' · ' : ''}<span style={{ color: 'var(--text)' }}>{a.label}</span> {a.count}
+            </span>
           ))}
         </div>
       ) : null}
@@ -328,6 +342,9 @@ function syncLogAsText(entries, scopeLabel) {
     if (checkpoint) lines.push(`  ${checkpoint}`)
     const pools = requestPoolSummary(e.requested_windows)
     if (pools) lines.push(`  requests charged: ${pools}`)
+    for (const a of unplacedAccounts(e)) {
+      lines.push(`  no destination ${a.account}${a.label !== a.account ? ` (${a.label})` : ''}: ${a.count}`)
+    }
     for (const [account, c] of Object.entries(e.account_counts || {})) {
       if (!c?.reached) continue
       lines.push(`  reached ${account} → ${c.reached}${c.history_complete ? ' (complete)' : ''}`)

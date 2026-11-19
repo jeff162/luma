@@ -417,6 +417,11 @@ only live record, so that copy is restored from the trash first and takes over i
 - **Only a window that ends today is listed.** SimpleFIN lists its recent window, and reaches it back to
   the oldest held pending row (`pending_since`, within `RECOMMENDED_RANGE_DAYS`) so a hold pending longer than the
   routine overlap is still judged.
+- **A listing also says which provider accounts are still reported.** Sync stamps each listed account's
+  `connection_account.last_listed_at`, and that is what settles two provider accounts mapped onto one
+  local account, the shape a provider leaves when it reissues account ids after a re-link on its side
+  (`data-model.md` → *Connection account mapping*). An adapter that lists nothing leaves such a pair to
+  the user's next mapping save.
 
 ## Currency
 

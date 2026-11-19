@@ -27,8 +27,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, compact_if_worthwhile, get_db, single_runner
-from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
+from backend.services.connection_mapping import (
+    SharedAccountClaim, apply_account_mapping, record_provider_accounts,
+)
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
     clear_account_pair_distinct_for_merge,
@@ -315,10 +318,16 @@ def upsert_connection_accounts(conn, *, connection_id: str, provider: str,
         ).fetchall()
     }
     if decided:
-        apply_account_mapping(
-            conn, connection_id=connection_id, provider=provider, institution=institution,
-            mappings=decided, default_owner_id=default_owner_id,
-        )
+        try:
+            apply_account_mapping(
+                conn, connection_id=connection_id, provider=provider, institution=institution,
+                mappings=decided, default_owner_id=default_owner_id,
+            )
+        except SharedAccountClaim as exc:
+            # Re-applying stored decisions names nothing new, so this needs two stored rows whose accounts
+            # have since moved onto one. The connect or refresh still records the provider's list; the
+            # mapping dialog is where the user settles the pair.
+            log_warning(f"[connections] {connection_id}: mapping not re-applied: {exc}")
     return len(accounts)
 
 
