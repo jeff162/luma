@@ -7,10 +7,11 @@ Two consumers share this builder: a prospective user exploring the app before co
 data, and the Playwright E2E suite, which needs a populated, past-onboarding baseline. The data is
 entirely invented (generic well-known vendors only, fictional owners/accounts — no PII), and shaped to
 exercise the features worth showing: multiple owners and account types, per-account import batches
-(provenance), custom categories and rules, category-level tags that *inherit* onto transactions, a year
-of recurring + one-off activity, a standing two-legged inter-account transfer, card payments, a
-refund, an Amazon order history reconciled against the card, and a cross-account duplicate that the real
-post-import sweep flags for review.
+(provenance), custom categories and rules, category- and account-level tags that *inherit* onto
+transactions, a year of recurring + one-off activity, a standing two-legged inter-account transfer, card
+payments, a refund, an Amazon order history reconciled against the card, a payment-app wallet whose rows
+pair with their checking-side mirrors, a merchant-less rule that raises an alert, and a cross-account
+duplicate that the real post-import sweep flags for review.
 
 Amount sign follows the stored convention (categorizer `_amount_side_matches`): debits/spending are
 **positive**, credits/income are **negative**. `content_hash` mirrors the importer's `make_hash` so a
@@ -32,6 +33,7 @@ from datetime import date, timedelta
 
 ESSENTIAL_TAG = "Essential Expenses"
 DISCRETIONARY_TAG = "Discretionary"
+TAX_TAG = "Tax Reporting"
 
 # Marker (in the data DB's import_workflow_state) recording that this tenant's data is the demo set.
 # It is the contract that keeps demo and real data from ever mixing: while it is present, new imports
@@ -209,6 +211,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     from backend.db.database import _seed_default_categories, SHARED_OWNER_ID
     from backend.db.demo_examples import seed_all
     from backend.routers.import_export.core import run_import_core
+    from backend.services.wallet_accounts import fill_wallet_match_text
 
     # An organized starter tree to map imported labels into: a file category that matches a starter leaf
     # reuses it; one that doesn't (e.g. "Pet Care") is created under Unassigned by the import itself.
@@ -258,6 +261,9 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "card": (str(uuid.uuid4()), "Rewards Card", "credit", owners["Jordan"][0]),
         "brokerage": (str(uuid.uuid4()), "Brokerage", "investment", owners["Jordan"][0]),
         "amazon": (str(uuid.uuid4()), "Amazon", "amazon", owners["Jordan"][0]),
+        # A payment app. Being a wallet is what the type says; its name is the text its other side carries
+        # on checking, which `fill_wallet_match_text` takes up as every account-creating write does.
+        "wallet": (str(uuid.uuid4()), "PocketPay", "p2p", owners["Alex"][0]),
     }
     for aid, name, acct_type, owner_id in accounts.values():
         conn.execute(
@@ -265,6 +271,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
                VALUES (?, NULL, NULL, 'manual', ?, ?, ?, ?)""",
             (aid, name, name, acct_type, owner_id),
         )
+    fill_wallet_match_text(conn, [accounts["wallet"][0]])
     name_of = {key: accounts[key][1] for key in accounts}
 
     # ===== Source 1: "Everyday Bank" — a curated export WITH a Category column (checking + savings).
@@ -297,6 +304,11 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         bank(monthly(4, m), "Fiberlink", "Internet", 69.99, "checking")
         bank(monthly(5, m), "CellOne Mobile", "Phone", 55.00, "checking")
         bank(monthly(10, m), "Keystone Auto Insurance", "Auto Insurance", 132.00, "checking")
+    # A housemate pays their share of the rent back a few days after it goes out. The newest rent has
+    # nothing back yet; demo_examples files the shares and these repayments as a receivable.
+    for m in range(1, 13):
+        paid_back = (date.fromisoformat(monthly(1, m)) + timedelta(days=3)).isoformat()
+        bank(paid_back, "Jamie Ortiz — rent share", "Reimbursed Expenses", -700.00, "checking")
     # Month 0's water bill is the one that outgrew its rule, further down.
     for m in range(1, 13):
         bank(monthly(6, m), "Metro Water", "Water", 34.10 + (m * 7) % 12, "checking")
@@ -363,6 +375,30 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # the imported-categories workspace would have done.
     bank(d(70), "Oakline Furniture", "Furniture", 450.00, "checking")
     bank(d(16), "Oakline Furniture", "Furniture", 1149.00, "checking")
+
+    # ===== Source 3: "PocketPay" — a payment app's export (no categories), and the rows it leaves on
+    # checking. The wallet holds the real transaction; checking sees only money crossing to or from it,
+    # under the app's name, and the bank files none of those rows. Counted on both accounts, each payment
+    # would count twice, so the pairing that runs after the import (services/wallet_pairs.py) pairs each
+    # checking row with its wallet row. Two kinds are shown: a payment the app charged straight to checking
+    # (only the checking row stops counting) and a cash-out (both rows are money movement). A payment from
+    # the balance has no checking row at all, and the money received into the balance is income once. =====
+    wallet_rows = []  # (date, note, amount, account_name)
+
+    def wallet(when, note, amount):
+        wallet_rows.append((when, note, f"{-amount:.2f}", name_of["wallet"]))
+
+    def next_day(when):
+        return (date.fromisoformat(when) + timedelta(days=1)).isoformat()
+
+    for m in range(13):
+        when = monthly(12, m)
+        wallet(when, "Hillside Veg Box", 85.00)                              # rule → Groceries
+        bank(next_day(when), "POCKETPAY *HILLSIDE VEG", "", 85.00, "checking")
+    wallet(d(44), "Casey Morgan — used bike", -150.00)                       # rule → Other Income
+    wallet(d(40), "Riley Park — dog walking", 40.00)                         # from the balance; rule → Pet Care
+    wallet(d(38), "Cash out to bank", 110.00)                                # the rest of the balance, cashed out
+    bank(d(36), "POCKETPAY TRANSFER", "", -110.00, "checking")
 
     # The irregular spending of a year: a summer trip, the dentist twice, prescriptions, and the holidays
     # (placed by calendar month, like the bills above, so December lands in December).
@@ -530,6 +566,9 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         ("amazon", "Online Shopping"),
         ("petco", "Pet Care"),
         ("chewy", "Pet Care"),
+        ("veg box", "Groceries"),
+        ("dog walking", "Pet Care"),
+        ("used bike", "Other Income"),
         # The card side of the autopay; the bank side arrives already categorized.
         ("payment received", "Credit Card Payment"),
         # Item names from the Amazon order history. "Amazon" says nothing about what was bought; the
@@ -556,6 +595,16 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         (gym_rule_id, leaves["Gym Membership"]),
     )
 
+    # A rule with no merchant text, watching an account that should stay quiet: money comes into savings
+    # and nothing is ever paid from it, so any debit there raises a Task. With no text it matches every
+    # row in its scope, which is why it is scoped to the one account. Alerts record arrivals rather than
+    # matches, so it is in place before the card file brings the savings charge it catches.
+    conn.execute(
+        """INSERT INTO category_rule (id, category_id, keyword, debit_credit, account_id, alert, alert_message)
+           VALUES (?, NULL, '', 'debit', ?, 1, 'Money paid out of savings')""",
+        (str(uuid.uuid4()), accounts["savings"][0]),
+    )
+
     # Import the raw source (no categories). The core's post-import sweep flags the cross-account
     # "Annual Membership" duplicate against the checking row from the first import.
     _import(
@@ -567,12 +616,23 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     from backend.routers.rules import ensure_rule_series
     ensure_rule_series(conn, gym_rule_id, "monthly")
 
+    # The wallet last, so the checking rows it pairs with are already in; the pairing runs after the
+    # import as it would for a user's file.
+    wallet_cols = {"date": "Date", "description": "Note", "amount": "Amount", "account": "Account"}
+    wallet_profile_id = _insert_demo_profile(conn, "PocketPay", wallet_cols, use_imported_categories=0)
+    _import(
+        _render_csv(["Date", "Note", "Amount", "Account"], wallet_rows),
+        profile_id=wallet_profile_id, column_map=wallet_cols, account_keys=("wallet",),
+        use_imported_categories=False, filename="pocketpay.csv",
+    )
+
     _import_amazon_orders(conn, accounts["amazon"][0], accounts["card"][0], amazon_charges, d)
 
-    # --- Category-level tags (transactions inherit them through their category/group) ---
+    # --- Category- and account-level tags (transactions inherit them through their category, group or
+    # account) ---
     groups, leaves = _category_lookup(conn)
 
-    def add_tag(name, color, sort_order, leaf_names=(), group_names=()):
+    def add_tag(name, color, sort_order, leaf_names=(), group_names=(), account_keys=()):
         tid = str(uuid.uuid4())
         conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, ?, ?)", (tid, name, color, sort_order))
         for n in leaf_names:
@@ -581,11 +641,16 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         for n in group_names:
             if n in groups:
                 conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (groups[n], tid))
+        for key in account_keys:
+            conn.execute("INSERT INTO account_tag (account_id, tag_id) VALUES (?, ?)", (accounts[key][0], tid))
         return tid
 
     tag_ids = {}
     tag_ids[ESSENTIAL_TAG] = add_tag(ESSENTIAL_TAG, "#16a34a", 0, leaf_names=("Groceries", "Rent & Mortgage", "Gas"), group_names=("Utilities",))
     tag_ids[DISCRETIONARY_TAG] = add_tag(DISCRETIONARY_TAG, "#f59e0b", 1, leaf_names=("Dining Out", "Coffee & Drinks"), group_names=("Entertainment", "Shopping"))
+    # Everything on the brokerage matters at tax time whatever it is filed under, which is a fact about
+    # the account rather than any category, so the tag goes on the account.
+    tag_ids[TAX_TAG] = add_tag(TAX_TAG, "#7c3aed", 2, account_keys=("brokerage",))
 
     # --- The features that are done *to* a transaction rather than imported with it ---
     _groups, leaves = _category_lookup(conn)
@@ -637,6 +702,6 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "batches": conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0],
         "transactions": txn_count,
         "suspects_flagged": suspects_flagged,
-        "tags": [ESSENTIAL_TAG, DISCRETIONARY_TAG],
+        "tags": [ESSENTIAL_TAG, DISCRETIONARY_TAG, TAX_TAG],
         **examples,
     }

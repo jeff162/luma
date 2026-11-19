@@ -6,7 +6,7 @@
 `demo_data` builds a ledger the way a user would — two CSV imports and an Amazon order import through
 the real pipelines. What it
 cannot express that way is anything that is *done to* a transaction afterwards: a split, a receivable
-and its repayment, an attached receipt, a rule carrying an amount range, payments grouped into one
+and its repayment (once, or every month), an attached receipt, a rule carrying an amount range, payments grouped into one
 purchase, rule suggestions already reviewed. Those arrive here, against rows the imports already created.
 
 **These are examples rather than fixtures.** Someone exploring the demo is reading them to find out what
@@ -211,6 +211,46 @@ def seed_open_reimbursements(conn, leaves: dict) -> None:
         work_leaf = _receivable_leaf(conn, "Work expenses")
         _categorize(conn, printing["id"], work_leaf)
         _categorize(conn, payback["id"], work_leaf)
+
+
+def seed_shared_rent(conn, leaves: dict) -> None:
+    """A housemate's share of a monthly bill: the receivable that recurs.
+
+    Each month's rent is split, the household's share as rent and the housemate's as a receivable, and
+    the housemate pays it back a few days later. Most months are paired and finished, as a year of use
+    leaves them. The month before last has been paid but not yet paired, and the newest is still owed,
+    so the outstanding report and the pairing both have a month to work on. The rent itself stays one
+    recurring series: the repayments are a receivable coming back, not a transfer to fold into it.
+    """
+    if "Rent & Mortgage" not in leaves:
+        return
+    rents = conn.execute(
+        "SELECT id, amount FROM txn WHERE raw_name = 'Parkside Apartments' ORDER BY date DESC"
+    ).fetchall()
+    repayments = conn.execute(
+        "SELECT id, amount FROM txn WHERE raw_name LIKE 'Jamie Ortiz%' ORDER BY date DESC"
+    ).fetchall()
+    share = 700.00
+    rent_leaf = _receivable_leaf(conn, "Housemate rent")
+    for month, rent in enumerate(rents):
+        save_split(conn, rent["id"], [
+            {"category_id": leaves["Rent & Mortgage"], "amount": round(float(rent["amount"]) - share, 2),
+             "label": "Our share"},
+            {"category_id": rent_leaf, "amount": share, "label": "Jamie's share"},
+        ])
+        # The newest rent has no repayment yet, so repayment n answers rent n + 1.
+        repayment = repayments[month - 1] if 0 < month <= len(repayments) else None
+        if repayment:
+            _categorize(conn, repayment["id"], rent_leaf)
+        if month == 1:
+            continue
+        record = create_reimbursement(
+            conn, [{"txn_id": rent["id"], "amount": share, "label": "Jamie's share"}],
+            counterparty="Jamie Ortiz",
+        )
+        if repayment:
+            add_claims(conn, record["id"], [{"txn_id": repayment["id"], "amount": repayment["amount"]}])
+            complete(conn, record["id"])
 
 
 # --- Marketplace orders ----------------------------------------------------------------------------
@@ -451,6 +491,7 @@ def seed_all(conn, leaves: dict, tag_ids: dict) -> dict:
     seed_order_split(conn, leaves)
     seed_reimbursements(conn, leaves)
     seed_open_reimbursements(conn, leaves)
+    seed_shared_rent(conn, leaves)
     seed_documents(conn)
     seed_rules(conn, leaves)
     seed_purchase(conn)

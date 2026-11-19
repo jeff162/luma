@@ -73,19 +73,19 @@ test('discarding either keeps the rows’ categories or clears them, as chosen',
   await openReview(page)
   await card(page, 'City Power & Light').getByRole('button', { name: 'keep categorization' }).click()
   await expect(card(page, 'City Power & Light')).toHaveCount(0)
-  await card(page, 'Parkside Apartments').getByRole('button', { name: 'remove categorization' }).click()
-  await expect(card(page, 'Parkside Apartments')).toHaveCount(0)
+  await card(page, 'CellOne Mobile').getByRole('button', { name: 'remove categorization' }).click()
+  await expect(card(page, 'CellOne Mobile')).toHaveCount(0)
 
   const kept = await rowsFor(request, 'City Power')
   expect(kept).toHaveLength(13)
   expect(kept.every(row => row.category_name === 'Electricity' && row.category_source === 'import')).toBe(true)
-  const cleared = await rowsFor(request, 'Parkside Apartments')
+  const cleared = await rowsFor(request, 'CellOne Mobile')
   expect(cleared).toHaveLength(13)
   expect(cleared.every(row => !row.category_id && row.category_source === 'cleared')).toBe(true)
 
   await pill(page, 'discarded').click()
   await expect(card(page, 'City Power & Light')).toBeVisible()
-  await expect(card(page, 'Parkside Apartments')).toBeVisible()
+  await expect(card(page, 'CellOne Mobile')).toBeVisible()
 })
 
 test('resolving a conflict set builds the rule from the chosen category and leaves the other rows as filed', async ({ page, request }) => {

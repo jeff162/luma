@@ -28,6 +28,7 @@ from backend.db.database import (
 from backend.db.demo_data import (
     DISCRETIONARY_TAG,
     ESSENTIAL_TAG,
+    TAX_TAG,
     is_demo_loadable,
     load_demo_data,
 )
@@ -73,10 +74,10 @@ class DemoDataTests(unittest.TestCase):
             ).fetchone()[0]
             self.assertEqual(owners, 2)
 
-            # Five accounts, each of a distinct type.
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM account").fetchone()[0], 5)
+            # Six accounts, each of a distinct type.
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM account").fetchone()[0], 6)
             types = {r[0] for r in conn.execute("SELECT type FROM account")}
-            self.assertEqual(types, {"depository", "savings", "credit", "investment", "amazon"})
+            self.assertEqual(types, {"depository", "savings", "credit", "investment", "amazon", "p2p"})
 
             n_txn = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
             self.assertGreater(n_txn, 60)
@@ -121,19 +122,19 @@ class DemoDataTests(unittest.TestCase):
             self.assertTrue(per_date)
             self.assertEqual(set(per_date.values()), {2})
 
-            # Two CSV files (one per data source) and an Amazon order history, produced through the real
-            # import pipelines — so every row has provenance, both CSV files land under a saved data
+            # Three CSV files (one per data source) and an Amazon order history, produced through the real
+            # import pipelines — so every row has provenance, every CSV file lands under a saved data
             # source, and the CSV cards get coverage.
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 3)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 4)
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM txn WHERE import_batch_id IS NULL").fetchone()[0], 0
             )
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM csv_import_profile").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM csv_import_profile").fetchone()[0], 3)
             self.assertEqual(
                 conn.execute(
                     "SELECT COUNT(DISTINCT account_id) FROM import_batch_account WHERE account_id IS NOT NULL"
                 ).fetchone()[0],
-                4,
+                5,
             )
             # Several novel (non-starter) expense categories land in Unassigned so the "Group imported
             # categories" workspace has real items to organize, not just one.
@@ -421,3 +422,86 @@ class DemoWorkedExampleTests(unittest.TestCase):
         self.assertGreater(last[:4] + last[5:7], first[:4] + first[5:7])
         self.assertGreaterEqual((int(last[:4]) - int(first[:4])) * 12
                                 + int(last[5:7]) - int(first[5:7]), 12)
+
+    def test_wallet_rows_pair_both_ways_with_checking(self):
+        """Each wallet row is the record of what happened, and its mirror on checking stops counting. A
+        payment the app charged to checking leaves the wallet row counted; a cash-out is money movement on
+        both sides. Without both kinds the wallet review shows only half of what pairing decides."""
+        from backend.services.excluded_categories import money_movement_sql
+
+        with self._conn() as conn:
+            movement = money_movement_sql(conn, "c", "g")
+            pairs = conn.execute(
+                f"""SELECT l.id, m.role, t.amount, {movement} AS movement
+                    FROM   txn_link l
+                    JOIN   txn_link_member m ON m.link_id = l.id
+                    JOIN   txn t ON t.id = m.txn_id
+                    LEFT   JOIN category c ON c.id = t.category_id
+                    LEFT   JOIN category g ON g.id = c.parent_id
+                    WHERE  l.kind = 'wallet_pair'"""
+            ).fetchall()
+        by_link: dict[str, dict] = {}
+        for row in pairs:
+            by_link.setdefault(row["id"], {})[row["role"]] = row
+        kinds = set()
+        for members in by_link.values():
+            wallet, counterpart = members["wallet"], members["counterpart"]
+            self.assertTrue(counterpart["movement"], "a paired checking row still counts")
+            same_sign = (wallet["amount"] > 0) == (counterpart["amount"] > 0)
+            kinds.add("payment" if same_sign else "transfer")
+            self.assertEqual(bool(wallet["movement"]), not same_sign)
+        self.assertEqual(kinds, {"payment", "transfer"})
+
+    def test_a_merchant_less_rule_raises_an_alert(self):
+        """A rule with no merchant text, scoped to one account, whose alert has caught an arrival — so
+        Tasks carries the alert and the rule editor's no-merchant form has an example."""
+        from backend.routers.tasks import _rule_alert_tasks
+
+        with self._conn() as conn:
+            rule = conn.execute(
+                "SELECT id, account_id FROM category_rule "
+                "WHERE keyword = '' AND match_expr IS NULL AND alert = 1 AND deleted_at IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(rule, "no merchant-less alert rule")
+            self.assertIsNotNone(rule["account_id"])
+            tasks = _rule_alert_tasks(conn)
+        self.assertTrue(any(t["count"] >= 1 for t in tasks), "the alert caught nothing")
+
+    def test_an_account_tag_reaches_the_accounts_transactions(self):
+        from backend.services.transaction_tags import get_visible_transaction_tag_map
+
+        with self._conn() as conn:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT t.id FROM txn t JOIN account_tag at ON at.account_id = t.account_id "
+                "JOIN tag g ON g.id = at.tag_id WHERE g.name = ?", (TAX_TAG,)
+            )]
+            tag_map = get_visible_transaction_tag_map(conn, ids)
+        self.assertTrue(ids, "the tagged account has no transactions")
+        for txn_id in ids:
+            self.assertIn(TAX_TAG, {t["name"] for t in tag_map.get(txn_id, [])})
+
+    def test_a_shared_bill_is_a_receivable_every_month(self):
+        """The housemate's rent share: settled months, a repayment not yet paired, a month still owed —
+        and the rent still one series, its repayments not folded into it as a transfer."""
+        from backend.services.reimbursements import outstanding
+
+        with self._conn() as conn:
+            records = conn.execute(
+                """SELECT json_extract(l.metadata_json, '$.completion') IS NOT NULL AS done,
+                          COUNT(m.txn_id) AS members
+                   FROM   txn_link l JOIN txn_link_member m ON m.link_id = l.id
+                   WHERE  l.kind = 'reimbursement' AND l.external_ref = 'Jamie Ortiz'
+                   GROUP  BY l.id"""
+            ).fetchall()
+            loose_ids = {row["txn_id"] for row in outstanding(conn)["loose"]}
+            loose_repayment = conn.execute(
+                "SELECT id FROM txn WHERE raw_name LIKE 'Jamie Ortiz%' AND id IN ({})".format(
+                    ",".join("?" * len(loose_ids))), list(loose_ids),
+            ).fetchone()
+            rent_series = conn.execute(
+                "SELECT counterpart_account_id FROM recurring_series WHERE payee_key = 'parkside apartments'"
+            ).fetchall()
+        self.assertGreaterEqual(sum(r["done"] for r in records), 2)
+        self.assertIn((0, 1), [(r["done"], r["members"]) for r in records], "no month still owed")
+        self.assertIsNotNone(loose_repayment, "no repayment waiting to be paired")
+        self.assertEqual([r["counterpart_account_id"] for r in rent_series], [None])
