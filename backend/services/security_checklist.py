@@ -101,7 +101,7 @@ def _https_item() -> dict | None:
             f"A device has connected without HTTPS since {app_name()} started. {_without_https_costs()}",
             "/help/running-a-server", "Set up HTTPS",
         )
-    return _item("https", title, MET, "Other devices connect through the HTTPS proxy on this computer.")
+    return _item("https", title, MET, "Connections are through the HTTPS proxy.")
 
 
 def _named_host_item(request: Request) -> dict | None:
@@ -112,10 +112,10 @@ def _named_host_item(request: Request) -> dict | None:
         return None
     if not by_address:
         return _item("named_host", "Opened by name", MET,
-                     "This browser uses the server's name, which passkeys need.")
+                     "The server is identified by name, required to use passkeys.")
     return _item(
         "named_host", "Opened by name", NOT_MET,
-        "This browser uses the server's IP address, so passkeys cannot be used. Open it by name instead.",
+        "The server is identified by its IP address, not name. Passkeys will not work. Reference it by name instead.",
         "/help/running-a-server", "Running as a server",
     )
 
@@ -141,7 +141,7 @@ def _backup_item(tasks: dict[str, dict]) -> dict | None:
     due = tasks.get("backup_due")
     if not due:
         return _item("backups", title, MET,
-                     "The vault and data provider credentials have not changed since the last backup.")
+                     "The vault and data provider credentials are included in the most recent backup.")
     return _item("backups", title, NOT_MET, due["description"], "/settings?section=backup", "Open Backup / Restore")
 
 
@@ -151,7 +151,7 @@ def _certificate_item(tasks: dict[str, dict]) -> dict | None:
     title = "Server certificate unchanged"
     task = tasks.get("proxy_certificate_changed")
     if not task:
-        return _item("certificate", title, MET, "The proxy is using the certificate your devices installed.")
+        return _item("certificate", title, MET, "The proxy's certificate matches what is installed.")
     return _item("certificate", title, NOT_MET, task["description"], task["link"], task["link_label"])
 
 
@@ -162,7 +162,7 @@ def _update_item(tasks: dict[str, dict]) -> dict:
                      "/settings?section=about", "Turn it on in About")
     task = tasks.get("update_available")
     if not task:
-        return _item("update", title, MET, "No newer version was found at the last check.")
+        return _item("update", title, MET, "No newer version have been found.")
     return _item("update", title, NOT_MET, task["description"], task["link"], task["link_label"])
 
 

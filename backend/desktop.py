@@ -614,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tray",
         action="store_true",
-        help=_help_on("win32", "Run with no console window and a notification-area icon to open and stop it."),
+        help=_help_on("win32", "Start a system tray (notification area) icon."),
     )
     parser.add_argument(
         "--start-at-sign-in",
@@ -622,8 +622,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=_help_on(
             "win32",
-            "Start this installation as a server, with the notification-area icon, whenever the current "
-            "user signs in; --no-start-at-sign-in undoes it. Exits without starting the server.",
+            "Start this installation as a server on login. Toggle with --no-start-at-sign-in undoes it. Does not start {APP_NAME}",
         ),
     )
     parser.add_argument(
@@ -631,15 +630,14 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const="",
         metavar="USERNAME",
-        help="Set a new password for an account locked out of sign-in, then exit without starting the "
-             "server. Asks which account when USERNAME is left out.",
+        help="Set a new password for an account which is locked out. Does not start {APP_NAME}.",
     )
     parser.add_argument(
         "--adopt-ledger",
         action="store_true",
-        help="Pair the financial database the settings name with this installation's control database, "
-             "after showing both and asking, then exit without starting the server. For a server that "
-             "refuses to open its data because the two do not belong together.",
+        help="Used as an override when a server refuses to start because the control and the financial databases appear" \
+        "to be mismatched to resolve the pairing so the server can be started. Verify that the"
+        "correct pair of databases cannot be located before taking this step.",
     )
     args = parser.parse_args(argv)
 
