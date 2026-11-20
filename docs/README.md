@@ -210,7 +210,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Building](releasing.md#building)
 - [Cutting a release](releasing.md#cutting-a-release)
 - [Release checklist](releasing.md#release-checklist)
-- [Configuring the public repository](releasing.md#configuring-the-public-repository)
+- [Repository settings](releasing.md#repository-settings)
 - [Obstacles](releasing.md#obstacles)
 
 ## Work in progress

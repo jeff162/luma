@@ -18,12 +18,7 @@ Producing the downloadable artifacts and cutting a release.
   - [Smoke tests](#smoke-tests)
   - [Reviewing the vault's cryptography](#reviewing-the-vaults-cryptography)
 - [Release checklist](#release-checklist)
-- [Configuring the public repository](#configuring-the-public-repository)
-  - [Security features](#security-features)
-  - [Main branch rule](#main-branch-rule)
-  - [Actions supply chain](#actions-supply-chain)
-  - [Container image visibility](#container-image-visibility)
-  - [Repository presentation and collaboration](#repository-presentation-and-collaboration)
+- [Repository settings](#repository-settings)
 - [Obstacles](#obstacles)
 
 ## The two distribution forms
@@ -419,84 +414,22 @@ guessability estimate.
 7. Publishing the release starts the *Container image* workflow. Check that it finished, since the
    compose file just attached pulls what it pushes.
 
-## Configuring the public repository
+## Repository settings
 
-Public visibility is part of a release, not a replacement for one: publish the tagged GitHub Release
-and attach its artifacts before or alongside changing visibility, so the README's download link works
-when visitors first see it. The repository's community files — `README.md`, `LICENSE`,
-`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, the issue forms, and the pull-request template
-— are the public contract and should remain enabled.
+A few GitHub settings constrain what the repository's own files may do, so a change to either side has
+to keep the other in step.
 
-Some GitHub controls are unavailable on a private repository under the free plan. Configure the
-following immediately after making the repository public, in this order.
-
-### Security features
-
-Open **Settings → Code security and analysis** and enable:
-
-- **Dependency graph**, **Dependabot alerts**, and **Dependabot security updates**, so known vulnerable
-  dependencies create actionable, repository-visible alerts.
-- **Secret scanning** and **push protection**, so new credentials are blocked before reaching public
-  history. These prevent future disclosure; they do not remove anything already pushed.
-- **Code scanning default setup**, selecting both Python and JavaScript when GitHub asks which
-  languages to analyze. Review the first scan's findings before treating its configuration as settled.
-
-Keep private vulnerability reporting enabled under the repository's **Security** tab. The existing
-`SECURITY.md` and issue-form contact link direct reporters to that channel instead of exposing
-financial-data security reports in public issues.
-
-### Main branch rule
-
-Create a branch ruleset in **Settings → Rules → Rulesets** that targets `main`. Require a pull request
-before merging and require these CI status checks:
-
-- `Backend, unit and lint`
-- `Browser suite`
-
-Also block force pushes and branch deletion, and require the branch to be up to date before merging.
-Do not require an approving review merely because the control exists: for a sole maintainer, it adds
-friction without an independent review. If collaborators gain merge access, revisit that choice and
-the bypass list at the same time. Keep the ruleset in an active/enforced state, and verify a test pull
-request cannot merge while either required check is failing.
-
-### Actions supply chain
-
-Every external `uses:` reference in `.github/workflows/` names the full commit SHA of a release, with
-the version in a trailing comment so it remains auditable. A SHA never moves on its own, so
-`.github/dependabot.yml` keeps the pins current: it opens one pull request for all of them when an
-action releases, rewriting the SHA and the comment together. A new `uses:` line takes the same form.
-Open **Settings → Actions → General** and:
-
-- set **Actions permissions** to *Allow \<owner\>, and select non-\<owner\>, actions and reusable
-  workflows*, with only **Allow actions created by GitHub** checked;
-- enable **Require actions to be pinned to a full-length commit SHA**;
-- retain the read-only default `GITHUB_TOKEN` permissions and leave workflow pull-request approval
-  disabled.
-
-Pinning makes an Actions compromise unable to silently move a tag to different code. With the
-requirement on, a `uses:` line naming a tag stops its workflow from running.
-
-### Container image visibility
-
-A package's visibility is its own setting, separate from the repository's, and GitHub documents private
-as the default for a newly published one. After the first release publishes the image, open the package
-from the repository's **Packages** list and, under **Package settings**, make it public if it is not.
-Until it is, nobody else can pull it. Confirm with a `docker pull` from a machine that is not signed in
-to the registry.
-
-### Repository presentation and collaboration
-
-Open **Settings → General** and check the repository description, topics, homepage, and social preview.
-The description already states Luma's purpose; add concise discovery topics that accurately describe
-the project, such as `personal-finance`, `local-first`, `self-hosted`, `python`, and `react`. Leave the
-homepage blank unless there is a maintained project site distinct from this repository. Upload
-`docs/images/social-preview.png` (1280×640, captured from the demo ledger) as the social preview.
-
-Keep **Issues** and **Discussions** enabled, and leave the wiki disabled unless it gains a clearly
-different purpose from `docs/`. Preserve the existing signed-commit acknowledgement requirement and
-delete-head-branch-on-merge setting. Review the fork setting deliberately: public forks are normal for
-an AGPL project, but disabling them is reasonable if the maintainer does not want to support that
-workflow.
+- **The `main` ruleset names CI jobs by their display name.** It requires `Backend, unit and lint` and
+  `Browser suite` to pass before a pull request merges, so renaming either job in the workflow leaves
+  every pull request waiting on a check that never reports. Rename the required check in the same change.
+- **Actions must be pinned to a full commit SHA.** The repository requires it, so a `uses:` line naming
+  a tag stops its workflow from running. Every external `uses:` names the full SHA of a release with the
+  version in a trailing comment, and `.github/dependabot.yml` keeps the pins current. Pinning means a
+  compromised action cannot silently move a tag to different code.
+- **Private vulnerability reporting stays enabled**, because `SECURITY.md` and the issue form's contact
+  link send reporters there rather than to a public issue.
+- **No approving review is required.** For a sole maintainer it adds friction without an independent
+  review. If collaborators gain merge access, revisit this and the ruleset's bypass list together.
 
 ---
 
