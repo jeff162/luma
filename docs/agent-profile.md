@@ -27,6 +27,10 @@ instruction and fix the drift.
 - Check a fact before writing it down, because a confident sentence in a doc or comment stops the next
   reader from checking: grep for an invariant or a rendered behaviour, and measure a quantity.
 
+- Write a gap nobody has worked through as the intent plus what is left to do, not as a settled cost
+  ("places opt in as they are identified", not "a right-click there does nothing, an accepted cost"),
+  because a doc that reads as decided stops the next person from doing the work.
+
 - When something will not work after a couple of attempts, stop and tell the user what was tried and
   what happened, so they can decide whether to fix something themselves, take the task over, or have the
   agent keep trying. Repeated failed attempts cost time and credits, and the user can often clear the
