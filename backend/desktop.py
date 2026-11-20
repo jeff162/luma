@@ -574,70 +574,74 @@ def _help_on(platform: str, text: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    app_name = runtime_config.app_name()
     parser = argparse.ArgumentParser(
         prog="luma",
-        description="Run Luma as a single local process: serve the app and open it in a browser.",
+        description=f"Run {app_name} as a single local process: serve the app and open it in a browser.",
     )
-    parser.add_argument(
+    starting = parser.add_argument_group(f"Starting {app_name}")
+    starting.add_argument(
         "--no-browser",
         action="store_true",
         help="Start the server and print its URL without opening a browser.",
     )
-    parser.add_argument(
+    starting.add_argument(
         "--server",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Run as a server behind a reverse proxy on this machine: no browser is opened and the port "
              "is fixed. Overrides SERVER_MODE in either direction.",
     )
-    parser.add_argument(
-        "--certificate-fingerprint",
-        action="store_true",
-        help="Print the fingerprint of the reverse proxy's root certificate, to compare against the one "
-             "shown where another computer downloads it, then exit without starting the server.",
-    )
-    parser.add_argument(
-        "--caddyfile",
-        action="store_true",
-        help="Print a Caddyfile for this installation's network name and port, then exit without "
-             "starting the server.",
-    )
-    parser.add_argument(
-        "--systemd-unit",
-        action="store_true",
-        help=_help_on(
-            "linux",
-            "Print a systemd unit that runs this installation as a server, as the current user, then "
-            "exit without starting the server.",
-        ),
-    )
-    parser.add_argument(
+    starting.add_argument(
         "--tray",
         action="store_true",
         help=_help_on("win32", "Start a system tray (notification area) icon."),
     )
-    parser.add_argument(
+    tools = parser.add_argument_group(
+        "Setup and recovery",
+        f"These options exit; they do not run {app_name} or start a server.",
+    )
+    tools.add_argument(
+        "--certificate-fingerprint",
+        action="store_true",
+        help="Print the fingerprint of the reverse proxy's root certificate, to compare against the one "
+             "shown where another computer downloads it.",
+    )
+    tools.add_argument(
+        "--caddyfile",
+        action="store_true",
+        help="Display a Caddyfile for this installation.",
+    )
+    tools.add_argument(
+        "--systemd-unit",
+        action="store_true",
+        help=_help_on(
+            "linux",
+            "Display a systemd unit to run this installation as a server, as the current user.",
+        ),
+    )
+    tools.add_argument(
         "--start-at-sign-in",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=_help_on(
             "win32",
-            "Start this installation as a server on login. Toggle with --no-start-at-sign-in undoes it. Does not start {APP_NAME}",
+            "Register this installation to start as a server at sign-in; --no-start-at-sign-in removes it.",
         ),
     )
-    parser.add_argument(
+    tools.add_argument(
         "--reset-password",
         nargs="?",
         const="",
         metavar="USERNAME",
-        help="Set a new password for an account which is locked out. Does not start {APP_NAME}.",
+        help="Set a new password for an account which is locked out.",
     )
-    parser.add_argument(
+    tools.add_argument(
         "--adopt-ledger",
         action="store_true",
-        help="Used as an override when a server refuses to start because the control and the financial databases appear" \
-        "to be mismatched to resolve the pairing so the server can be started. Verify that the"
-        "correct pair of databases cannot be located before taking this step.",
+        help="Used as an override when a server refuses to start because the control and the financial databases appear "
+             "to be mismatched to resolve the pairing so the server can be started. Verify that the "
+             "correct pair of databases cannot be located before taking this step.",
     )
     args = parser.parse_args(argv)
 
