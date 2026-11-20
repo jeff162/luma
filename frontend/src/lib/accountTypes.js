@@ -47,3 +47,23 @@ export function isWalletAccountType(value) {
   return ACCOUNT_TYPES.some(t => t.value === value && t.kind === 'wallet')
 }
 export const GENERIC_IMPORT_ACCOUNT_TYPES = ACCOUNT_TYPES.filter(t => t.kind !== 'marketplace')
+
+// Which side of zero an account's balance normally sits on: held (positive) for a bank or investment
+// account, owed (negative) for a card or loan, and about zero for a wallet or marketplace, which money
+// passes through. `other` says nothing, as with net worth, so it has none.
+const NORMAL_BALANCE_SIDE = {
+  depository: 'held', savings: 'held', investment: 'held',
+  credit: 'owed', loan: 'owed',
+  paypal: 'zero', p2p: 'zero', amazon: 'zero',
+}
+
+// The color for a balance on the unusual side for its type, or null for one where it belongs: red below
+// zero where money is normally held (an overdraft), green above it where money is normally owed (a credit
+// balance) or should be near none (a wallet holding money).
+export function unusualBalanceColor(accountType, amount) {
+  const side = NORMAL_BALANCE_SIDE[accountType]
+  const value = Math.round((Number(amount) || 0) * 100)
+  if (!side || value === 0) return null
+  if (value < 0) return side === 'owed' ? null : 'var(--danger)'
+  return side === 'held' ? null : 'var(--success)'
+}

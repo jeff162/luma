@@ -23,6 +23,10 @@ export const MONEY_DISPLAY_CONFIG = {
   },
 }
 
+// A balance that needs a look (stale, or disagreeing with its transactions): the warning color toned toward
+// the muted text these figures sit in, so it is easy to spot without the warning color's full weight.
+export const BALANCE_WARNING_COLOR = 'color-mix(in srgb, var(--warning) 80%, var(--muted))'
+
 export function currencySymbolFor(code) {
   // Asked of Intl rather than kept as a table: the browser already ships CLDR, and a hand-maintained map
   // would be one more thing to update per currency — the exact kind of omission that blocks a user for no

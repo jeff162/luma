@@ -19,8 +19,8 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
 import AccountBalanceDialog from '../components/accounts/AccountBalanceDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
-import { ACCOUNT_TYPES, isWalletAccountType } from '../lib/accountTypes.js'
-import { formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
+import { ACCOUNT_TYPES, isWalletAccountType, unusualBalanceColor } from '../lib/accountTypes.js'
+import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { formatDate } from '../lib/utils.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
@@ -963,9 +963,6 @@ function AccountTagsCell({
   )
 }
 
-// The stale date and the two-feeds mark: toned toward the muted date text so a stale row is easy to spot
-// without the warning color's full weight.
-const BALANCE_WARNING_COLOR = 'color-mix(in srgb, var(--warning) 80%, var(--muted))'
 const BALANCE_SOURCE_PHRASES = {
   provider: 'Based on the balance the connection reported on',
   manual: 'Based on a manually entered value on',
@@ -975,7 +972,7 @@ const BALANCE_SOURCE_PHRASES = {
 // way; an empty top row shows a dash to click. A member row has nothing, as the group's balance is its top row's.
 // The second line dates the balance the figure was carried forward from, with (m) when it was entered by
 // hand, the one kind that stays right only while someone keeps it up.
-function AccountBalanceCell({ balance, isChild, rootId, accountLabel, onEdit, disabled }) {
+function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabel, onEdit, disabled }) {
   if (isChild) return <div />
   const buttonStyle = {
     display: 'block', width: '100%', background: 'none', border: 'none', padding: 0, color: 'var(--text)',
@@ -1002,7 +999,9 @@ function AccountBalanceCell({ balance, isChild, rootId, accountLabel, onEdit, di
       <button type="button" onClick={disabled ? undefined : onEdit} style={buttonStyle}>
         <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
           {others.length ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
-          {formatSignedMoneyAmount(balance.amount)}
+          <span style={{ color: unusualBalanceColor(accountType, balance.amount) || undefined }}>
+            {formatSignedMoneyAmount(balance.amount)}
+          </span>
         </div>
         <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
           {formatDate(balance.as_of_date)}
@@ -1522,6 +1521,7 @@ function AccountRow({
 
         <AccountBalanceCell
           balance={account.balance}
+          accountType={account.type}
           isChild={isChild}
           rootId={account.id}
           accountLabel={accountLabel}

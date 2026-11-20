@@ -4,7 +4,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
-import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { formatDate, formatDateRange } from '../lib/utils.js'
+import { unusualBalanceColor } from '../lib/accountTypes.js'
 import { Spinner, FilterChip, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -28,6 +30,16 @@ import {
 } from './detailShared.jsx'
 
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
+
+function signedChange(amount) {
+  return formatSignedMoneyAmount(amount, { positiveSign: 'plus' })
+}
+
+// One span where the stated balances and the transactions disagree (`balance_checks`), as the change each
+// gives: the transactions in it are missing something, or hold something extra, worth the difference.
+function describeBalanceCheck(check) {
+  return `${formatDateRange(check.from_date, check.to_date)}: the balance changed by ${signedChange(check.stated_change)}, the transactions by ${signedChange(check.ledger_change)}.`
+}
 
 // Toggle chip for the merged-account source filter. Multi-select: "All" clears the set, each source
 // chip toggles its own account in/out.
@@ -57,6 +69,22 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // panel's geometry has gone quiet (see usePanelReveal), then fades in fully formed.
   const [accountsSettled, setAccountsSettled] = useState(false)
   const isMerged = mergeSources.length > 0
+  // The group's balance today and where its stated balances disagree with its transactions. The list's
+  // Balance column runs back from today's balance, so it appears only once there is one.
+  const [balanceInfo, setBalanceInfo] = useState(null)
+  const [balanceNonce, setBalanceNonce] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    api.getBalanceChecks(account.id)
+      .then(result => { if (!cancelled) setBalanceInfo(result) })
+      .catch(() => { if (!cancelled) setBalanceInfo(null) })
+    return () => { cancelled = true }
+  }, [account.id, balanceNonce])
+  const balance = balanceInfo?.balance || null
+  const balanceChecks = useMemo(() => balanceInfo?.checks || [], [balanceInfo])
+  const balanceFlags = useMemo(() => new Map(
+    balanceChecks.filter(check => check.flag_txn_id).map(check => [check.flag_txn_id, describeBalanceCheck(check)]),
+  ), [balanceChecks])
   const sourceCsv = sourceFilter.size ? Array.from(sourceFilter).join(',') : undefined
 
   useEffect(() => {
@@ -101,9 +129,14 @@ export default function AccountDetail({ account, categories = [], onClose, force
     account_ids: String(account.id),
     ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
   }), [account.id, sourceCsv, range])
+  // The running balance rides the page fetch only: it is not a filter, so it stays out of what a download
+  // or "select all matching" reads.
   const loadPage = useCallback((offset, limit, sort) => (
-    api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
-  ), [listParams])
+    api.getTransactions({
+      ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir,
+      running_balance_account_id: String(account.id),
+    })
+  ), [listParams, account.id])
   const {
     rows: monthTxns,
     setRows: setMonthTxns,
@@ -124,6 +157,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
     showSourceAccount: isMerged,
+    showRunningBalance: !!balance,
   })
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
 
@@ -198,9 +232,26 @@ export default function AccountDetail({ account, categories = [], onClose, force
     categories,
   })
 
+  // A change to the rows moves every balance after it, so the balances are re-read with the list.
+  function refresh() {
+    reload()
+    setBalanceNonce(n => n + 1)
+  }
+
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
+      {balance ? (
+        <div style={{ fontSize: 13, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+          Balance{' '}
+          <span style={{ color: unusualBalanceColor(balanceInfo.account_type, balance.amount) || undefined }}>
+            {formatSignedMoneyAmount(balance.amount)}
+          </span>
+          <span style={{ color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
+            {' · '}{formatDate(balance.as_of_date)}{balance.source === 'manual' ? ' (m)' : ''}
+          </span>
+        </div>
+      ) : null}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         Account activity history
         {/* Label the actual window the chart shows (its month span), not the global filter. */}
@@ -267,6 +318,29 @@ export default function AccountDetail({ account, categories = [], onClose, force
             </div>
           )}
 
+          {balanceChecks.length > 0 && (
+            <div style={{
+              marginBottom: 12, padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 12, lineHeight: 1.5,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span>
+                Stated balances that the transactions don&apos;t account for
+              </div>
+              <div style={{ display: 'grid', gap: 2, maxHeight: 96, overflowY: 'auto' }}>
+                {balanceChecks.map(check => (
+                  <LinkButton
+                    key={`${check.from_date}|${check.to_date}|${check.from_account_id}|${check.to_account_id}`}
+                    onClick={() => { setRangeMode('month'); setSelectedMonth(check.to_date.slice(0, 7)) }}
+                    style={{ fontSize: 12, textAlign: 'left', justifySelf: 'start' }}
+                  >
+                    {describeBalanceCheck(check)}
+                  </LinkButton>
+                ))}
+              </div>
+            </div>
+          )}
+
           {trendLoading && trend.length === 0 ? <Spinner /> : trend.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)', padding: '16px 0' }}>
               No history found for this account.
@@ -293,7 +367,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={refresh} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}
@@ -302,10 +376,16 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     onCategorySave={saveCategory}
                     onCategoryOpenDetail={setCategoryDetail}
                     onTransactionOpenDetail={setPayeeDetail}
-                    onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
+                    onTrashed={txnId => {
+                      setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))
+                      if (balance) refresh()
+                    }}
                     onRowsChange={setMonthTxns}
                     showAccount={false}
                     showSourceAccount={isMerged}
+                    showRunningBalance={!!balance}
+                    balanceFlags={balanceFlags}
+                    balanceAccountType={balanceInfo?.account_type}
                     markExcludedFromTotals
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
@@ -346,7 +426,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
         txn={payeeDetail}
         categories={categories}
         onClose={() => setPayeeDetail(null)}
-        onReconcile={makeRowReconciler(setMonthTxns)}
+        onReconcile={(txnId, patch) => {
+          makeRowReconciler(setMonthTxns)(txnId, patch)
+          // A row removed, or its amount, date or pending state changed, moves the balances after it.
+          if (balance && (patch === null || ['amount', 'date', 'is_pending'].some(key => key in patch))) refresh()
+        }}
         forceFloating
         stackIndex={stackIndex + 1}
         dateStart={dateStart}

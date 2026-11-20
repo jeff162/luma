@@ -580,6 +580,9 @@ export const api = {
   // Explains an account with little/no activity: how many of its imported rows were skipped/removed
   // as duplicates, and which accounts/source files the matched existing transactions live on.
   getAccountDuplicateSummary: (id) => request(`/accounts/${id}/duplicate-summary`),
+  // The group's balance today and the spans where its stated balances and transactions disagree.
+  getBalanceChecks: (id) => request(`/accounts/${id}/balance-checks`),
+  getManualBalances: (id) => request(`/accounts/${id}/balances/manual`),
   setAccountTags: (id, tag_ids) =>
     request(`/accounts/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
   getInactiveCategories: () => request('/categories/inactive'),

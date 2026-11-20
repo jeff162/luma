@@ -347,6 +347,19 @@ group's top row.
   (`also_reporting`):
   two live feeds into one group, of which only the latest can count.
 
+**A running balance runs back from today's** (`running_balances`): the balance just after each row is
+today's balance with the later rows' movement undone, in the order the ledger lists rows by date (date,
+then id; the order within a day is arbitrary but fixed). Earlier stated balances do not restart it,
+because a figure that changes where a stated balance sits would hide the discrepancy instead of showing
+it. The transaction list adds it on request (`running_balance_account_id`), outside the filter, so a
+download or a bulk selection never carries it.
+
+**Earlier stated balances are checks** (`balance_checks`). Each pair of consecutive ones should differ by
+what the rows dated after the first, through the second's date, moved. A pair that differs by a cent or
+more is reported with both changes and the last row of its span. Neighbours are compared rather than each
+figure against the latest, so one missing or extra row shows in the span it belongs to and not in every
+span before it.
+
 **`account.exclude_from_net_worth`** keeps an account's balance out of net worth. It is read from the
 group root, as type is, so a member's own value lies dormant until it is detached, and the API refuses to
 set it on a member. An `other` account is out whatever the column says, because the type says nothing

@@ -29,7 +29,8 @@ from backend.services.recurring_detection import owe_recurring_rescan, payee_key
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
 from backend.services.txn_trash import restore_txns, trash_txns
-from backend.services.account_groups import effective_account_id_sql
+from backend.services.account_balances import running_balances
+from backend.services.account_groups import effective_account_id, effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
     AMOUNT_PARAM_NAMES,
@@ -1194,6 +1195,7 @@ def list_transactions(
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, ge=0, le=1000, description="rows per page (max 1000); 0 = no limit — returns all matching rows, for known-bounded scopes only"),
     offset:       int           = Query(0),
+    running_balance_account_id: Optional[str] = Query(None, description="Add `running_balance`, the balance of this account's group just after each row (services/account_balances.py)."),
     input_format: InputFormat   = Depends(caller_input_format),
 ):
     # Direct (non-HTTP) callers may omit the dependencies; over HTTP FastAPI always supplies them.
@@ -1365,7 +1367,14 @@ def list_transactions(
         # that import this one.
         from backend.routers.import_export.amazon import LINK_KIND as AMAZON_ORDER_LINK_KIND
         amazon_by_txn = partners_map(conn, AMAZON_ORDER_LINK_KIND, txn_ids) if rows else {}
+        running = (
+            running_balances(conn, effective_account_id(conn, running_balance_account_id), txn_ids)
+            if running_balance_account_id and rows else None
+        )
         for txn in transactions:
+            if running is not None:
+                # An expanded split part is a share of a row, not a movement of its own.
+                txn["running_balance"] = None if txn.get("split_part_id") else running.get(txn["id"])
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
             txn["blocked_tags"] = blocked_map.get(txn["id"], [])

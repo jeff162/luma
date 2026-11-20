@@ -1847,12 +1847,17 @@ export const HELP_TOPICS = [
           sync, opens the cards it added to.
         </p>
         <p>
-          <strong>Balance</strong> is what an account holds, or owes as a negative amount. It starts from
+          <strong>Balance</strong> is what an account holds, or owes as a negative amount. One on the unusual
+          side for its type is colored: red below zero on a bank or investment account, green above zero on a
+          card or loan, and either on a wallet, which normally holds nothing. It starts from
           the latest balance its connection reported or that was entered by hand, dated beneath it, and adds
           the posted transactions dated after that. The date is highlighted when no newer balance has come
           for a week from a connection, or 35 days for one entered by hand, which is marked (m). Clicking a balance, or the dash where there is none, or <strong>Edit balance…</strong> in the
           row&apos;s &#8943; menu, enters one by hand, for an account with no connection or to set one right. A merged group has one balance, from
-          whichever member reported most recently. <strong>Exclude</strong> keeps an account out
+          whichever member reported most recently. The account&apos;s &#8599; report shows the balance after
+          each transaction, and lists any stretch between two stated balances whose change the transactions in
+          it don&apos;t add up to; the last transaction in that stretch is marked &#9888;, since one is missing,
+          extra or wrong there. <strong>Exclude</strong> keeps an account out
           of net worth; an account of type <em>Other</em> is always out.
         </p>
         <p>

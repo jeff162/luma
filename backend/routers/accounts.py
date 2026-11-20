@@ -55,8 +55,10 @@ from backend.services.account_references import (
     replace_account_reference_in_batch_snapshots,
     replace_account_reference_in_profile_column_maps,
 )
-from backend.services.account_balances import current_balances, delete_manual_balance, record_manual_balance
-from backend.services.account_groups import set_account_parent
+from backend.services.account_balances import (
+    balance_checks, current_balances, delete_manual_balance, manual_balances, record_manual_balance,
+)
+from backend.services.account_groups import effective_account_id, set_account_parent
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_settings_followups import settle_account_change
 from backend.services.wallet_accounts import (
@@ -453,6 +455,31 @@ def _balance_date(as_of_date: str) -> str:
     if parsed > date.today():
         raise HTTPException(status_code=400, detail="A balance can't be dated in the future")
     return parsed.isoformat()
+
+
+@router.get("/{account_id}/balance-checks")
+def get_balance_checks(account_id: str):
+    """The group's balance today and where its stated balances and transactions disagree. A member's id
+    means its group, whose balance it is part of."""
+    with get_db() as conn:
+        if not _get_account_row(conn, account_id):
+            raise HTTPException(status_code=404, detail="Account not found")
+        root_id = effective_account_id(conn, account_id)
+        root = conn.execute("SELECT type FROM account WHERE id = ?", (root_id,)).fetchone()
+        return {
+            # The group's type, which says which side of zero its balance normally sits on.
+            "account_type": root["type"] if root else None,
+            "balance": current_balances(conn, root_id=root_id).get(root_id),
+            "checks": balance_checks(conn, root_id),
+        }
+
+
+@router.get("/{account_id}/balances/manual")
+def list_manual_balances(account_id: str):
+    with get_db() as conn:
+        if not _get_account_row(conn, account_id):
+            raise HTTPException(status_code=404, detail="Account not found")
+        return manual_balances(conn, account_id)
 
 
 @router.put("/{account_id}/balances/manual/{as_of_date}")

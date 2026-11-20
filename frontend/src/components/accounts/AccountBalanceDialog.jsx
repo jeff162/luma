@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../lib/api.js'
 import { formatAmountInput } from '../../lib/displayFormat.js'
@@ -9,7 +9,7 @@ import { onEnter } from '../../lib/formKeys.js'
 import { BALANCE_SIDES, buildBalancePayload, defaultBalanceSide } from '../../lib/manualBalance.js'
 import { formatSignedMoneyAmount } from '../../lib/moneyDisplay.js'
 import { formatDate, localIsoDate } from '../../lib/utils.js'
-import { AppDialog, Button, Input, SegmentedToggle } from '../ui.jsx'
+import { AppDialog, Button, IconButton, Input, SegmentedToggle } from '../ui.jsx'
 
 /*
  * Entering an account's balance by hand: for an account nothing reports one for, or to set one right.
@@ -17,7 +17,8 @@ import { AppDialog, Button, Input, SegmentedToggle } from '../ui.jsx'
  * The entry is a stated balance like a provider's, so the account's balance today is carried forward
  * from it through the transactions after its date (`docs/data-model.md` → *Account balances*). Opened on
  * an entry made by hand, it edits that entry and can remove it; otherwise it starts a new one for today.
- * A connection's figure is not editable here, since its next sync would restate it.
+ * A connection's figure is not editable here, since its next sync would restate it. Earlier entries are
+ * listed beneath, each removable, as they go on serving as checks on the transactions after them.
  */
 export default function AccountBalanceDialog({ account, onClose, onSaved }) {
   const balance = account.balance
@@ -32,6 +33,27 @@ export default function AccountBalanceDialog({ account, onClose, onSaved }) {
   const [error, setError] = useState('')
   const built = buildBalancePayload(form, today)
   const update = patch => { setForm(prev => ({ ...prev, ...patch })); setError('') }
+  const [entries, setEntries] = useState([])
+  const [entriesNonce, setEntriesNonce] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    api.getManualBalances(account.id)
+      .then(rows => { if (!cancelled) setEntries(rows || []) })
+      .catch(() => { if (!cancelled) setEntries([]) })
+    return () => { cancelled = true }
+  }, [account.id, entriesNonce])
+  const earlier = entries.filter(entry => entry.as_of_date !== editing?.as_of_date)
+
+  async function removeEarlier(asOfDate) {
+    setError('')
+    try {
+      await api.removeManualBalance(account.id, asOfDate)
+      setEntriesNonce(n => n + 1)
+      onSaved?.()
+    } catch (err) {
+      setError(err?.message || 'The entry could not be removed.')
+    }
+  }
 
   async function run(request) {
     setBusy(true)
@@ -114,6 +136,29 @@ export default function AccountBalanceDialog({ account, onClose, onSaved }) {
           {built.ok ? `${formatSignedMoneyAmount(built.balance)} at the end of ${formatDate(built.date)}` : null}
         </span>
       </div>
+      {earlier.length ? (
+        <div style={{ display: 'grid', gap: 4 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>Earlier entries</div>
+          <div style={{ display: 'grid', gap: 2, maxHeight: 160, overflowY: 'auto' }}>
+            {earlier.map(entry => (
+              <div key={entry.as_of_date} style={{
+                display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 10, alignItems: 'center',
+                fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
+              }}>
+                <span>{formatDate(entry.as_of_date)}</span>
+                <span>{formatSignedMoneyAmount(entry.balance)}</span>
+                <IconButton
+                  size="compact"
+                  aria-label={`Remove the entry for ${formatDate(entry.as_of_date)}`}
+                  title="Remove"
+                  disabled={busy}
+                  onClick={() => removeEarlier(entry.as_of_date)}
+                >×</IconButton>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
     </AppDialog>,
     document.body,

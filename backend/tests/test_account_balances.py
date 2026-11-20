@@ -20,7 +20,9 @@ from unittest import mock
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
 from backend.services import plaid_service
-from backend.services.account_balances import current_balances, delete_manual_balance, record_manual_balance
+from backend.services.account_balances import (
+    balance_checks, current_balances, delete_manual_balance, record_manual_balance, running_balances,
+)
 from backend.services.providers.plaid import PlaidAdapter
 
 from backend.tests._fake_adapter import FakeCursorAdapter
@@ -210,6 +212,22 @@ class CurrentBalanceTests(unittest.TestCase):
         record_manual_balance(self.conn, "cash", "2026-07-27", 250.0)  # 20 days old
         self.assertFalse(current_balances(self.conn, today=self.TODAY)["cash"]["stale"])
         self.assertTrue(current_balances(self.conn, today=date(2026, 9, 1))["cash"]["stale"])  # 36 days
+
+    def test_running_balances_anchor_on_today_and_a_disagreeing_span_is_flagged_once(self):
+        self._state("card", "2026-07-20", -900.0)
+        self._state("card", "2026-08-01", -900.0)
+        self._state("card", "2026-08-10", -100.0)
+        self._txn("card", "2026-08-05", -850.0)   # a payment, which the August 10 balance shows as 800
+        self._txn("card", "2026-08-12", 25.0)
+        self._txn("card", "2026-08-13", 4.0, pending=1)
+        ids = ["card-2026-08-05--850.0", "card-2026-08-12-25.0", "card-2026-08-13-4.0"]
+        self.assertEqual(running_balances(self.conn, "card", ids), {ids[0]: -100.0, ids[1]: -125.0})
+        checks = balance_checks(self.conn, "card")
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(
+            {k: checks[0][k] for k in ("from_date", "to_date", "stated_change", "ledger_change", "gap", "flag_txn_id")},
+            {"from_date": "2026-08-01", "to_date": "2026-08-10", "stated_change": 800.0, "ledger_change": 850.0,
+             "gap": -50.0, "flag_txn_id": ids[0]})
 
 
 if __name__ == "__main__":

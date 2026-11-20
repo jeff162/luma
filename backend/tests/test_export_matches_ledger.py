@@ -107,8 +107,9 @@ class ExportMatchesLedgerTests(unittest.TestCase):
     def test_export_accepts_every_filter_the_list_feed_does(self):
         # A filter the dependency does not name is not an error over HTTP — it is ignored, and the download
         # silently holds more rows than the list it was taken from.
+        # `running_balance_account_id` adds a figure to each row and narrows nothing.
         list_filters = set(inspect.signature(list_transactions).parameters) - {
-            "facets", "sort_by", "sort_dir", "limit", "offset",
+            "facets", "sort_by", "sort_dir", "limit", "offset", "running_balance_account_id",
         }
         self.assertEqual(set(inspect.signature(transaction_list_filters).parameters), list_filters)
 

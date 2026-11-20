@@ -18,6 +18,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatDate } from '../lib/utils.js'
+import { unusualBalanceColor } from '../lib/accountTypes.js'
+import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { CategoryCell, MerchantCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { transactionRowKey } from '../lib/splitRows.js'
 import PillGridTable from './PillGridTable.jsx'
@@ -42,9 +44,12 @@ const COLUMN_DEFS = {
   // text columns; overflow past its width is clipped by the cell wrapper.
   tags: { key: 'tags', label: 'Tags', defaultWidth: 96, minWidth: 44, sortable: false },
   amount: { key: 'amount', label: 'Amount', defaultWidth: 96, minWidth: 72, align: 'end' },
+  // The account's balance just after the row (`running_balance`, from the server). Not sortable: it
+  // follows the date order, so sorting by date is sorting by it.
+  runningBalance: { key: 'runningBalance', label: 'Balance', defaultWidth: 112, minWidth: 84, align: 'end', sortable: false },
 }
 
-function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
+function getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance }) {
   return [
     COLUMN_DEFS.date,
     COLUMN_DEFS.merchant,
@@ -53,6 +58,7 @@ function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
     ...(showSourceAccount ? [COLUMN_DEFS.sourceAccount] : []),
     COLUMN_DEFS.tags,
     COLUMN_DEFS.amount,
+    ...(showRunningBalance ? [COLUMN_DEFS.runningBalance] : []),
   ]
 }
 
@@ -150,6 +156,12 @@ export default function TransactionListTable({
   showAccount = true,
   showSourceAccount = false,
   showCategory = true,
+  // A Balance column after Amount, from each row's `running_balance`. `balanceFlags` maps a row id to the
+  // note its balance carries, a span where the stated balances and the transactions disagree.
+  showRunningBalance = false,
+  balanceFlags = null,
+  // The account's type, which colors a balance on the unusual side of zero (`unusualBalanceColor`).
+  balanceAccountType = null,
   // The merchant ↗ (opens the merchant activity report) is self-referential on a list already scoped
   // to one merchant — e.g. TransactionDetail's own payee activity — so that surface turns it off while
   // keeping inline rename, the pencil, and the row menu.
@@ -239,7 +251,7 @@ export default function TransactionListTable({
     return [...rows].sort((a, b) => compareRows(a, b, sortState.key, sign))
   }, [rows, externallyControlled, sortState])
 
-  const availableColumns = getAvailableColumns({ showCategory, showAccount, showSourceAccount })
+  const availableColumns = getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance })
   const interactiveColumns = normalizeInteractiveColumns(columnConfig, availableColumns)
 
   function patchRows(txnId, patch) {
@@ -348,6 +360,24 @@ export default function TransactionListTable({
             onOpenDetail={onTransactionOpenDetail}
           />
         )
+      case 'runningBalance': {
+        if (txn.running_balance == null) return null
+        const flag = balanceFlags?.get(txn.id)
+        const figure = (
+          <span style={{
+            fontSize: 12, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+            color: unusualBalanceColor(balanceAccountType, txn.running_balance) || 'var(--muted)',
+          }}>
+            {flag ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
+            {formatSignedMoneyAmount(txn.running_balance)}
+          </span>
+        )
+        return (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            {flag ? <Tooltip content={flag} align="right">{figure}</Tooltip> : figure}
+          </div>
+        )
+      }
       default:
         return null
     }
