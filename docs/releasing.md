@@ -382,10 +382,40 @@ guessability estimate.
    fresh empty `[Unreleased]` above it. The release date enters here and nowhere else, which is why
    this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
    Update the link definitions at the foot of the file to match.
-5. Tag `vX.Y.Z` and push. CI builds all five artifacts.
+5. Tag `vX.Y.Z` on the release commit and push the tag. Pushing the branch does not push its tags, and
+   the tag push is what starts the Release workflow, which builds all five artifacts:
+
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   gh run list -w release.yml -L 1        # the run the push started; its id is <run-id> in step 6
+   ```
+
+   To move a tag to a later commit — a fix landed after tagging — delete it locally and on GitHub,
+   then tag and push again; the new push starts a fresh run. Only before the release is published:
+   once it is, its downloads and container image belong to the commit the tag named.
+
+   ```bash
+   git tag -d vX.Y.Z
+   git push origin :refs/tags/vX.Y.Z
+   ```
+
 6. Write the GitHub Release and **attach four of the five artifacts and their `.sha256` files** — every
    one but `luma-macos-x64`, which is built and not published — along with `docker-compose.yml` from
-   the tagged tree. Nothing is downloadable until this happens.
+   the tagged tree. Nothing is downloadable until this happens, and it has to happen before the run's
+   artifacts expire (the date is on the run page). With `gh`, where `<run-id>` is the tag's Release run:
+
+   ```bash
+   gh run download <run-id> -D dl          # unpacks each artifact into dl/luma-<slug>/
+   git show vX.Y.Z:docker-compose.yml > docker-compose.yml
+   gh release create vX.Y.Z --verify-tag --draft --title "Luma X.Y.Z" --notes "…" \
+     dl/luma-linux-x64/* dl/luma-linux-arm64/* dl/luma-windows-x64/* dl/luma-macos-arm64/* \
+     docker-compose.yml
+   ```
+
+   `--draft` leaves it unpublished for a look on the Releases page; **Publish release** there finishes
+   it. From the browser instead, the run page's **Artifacts** list downloads each as a wrapper zip:
+   attach the archive and `.sha256` from inside it, not the wrapper.
 7. Publishing the release starts the *Container image* workflow. Check that it finished, since the
    compose file just attached pulls what it pushes.
 
