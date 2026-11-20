@@ -88,3 +88,5 @@ one file, not scan a monolith for the paragraph that applies.
   flash for an instant.
 - [Screens that refresh themselves when the data they show changes](query-cache-invalidation.md) —
   replaces a hand-written refresh list. Maybe never needed.
+- [Lint on ESLint 10](eslint-10.md) — parked until eslint-plugin-react and eslint-plugin-jsx-a11y release
+  support; one command checks.
