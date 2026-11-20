@@ -601,7 +601,8 @@ export const HELP_TOPICS = [
         <p>
           The individual transaction rows support a right-click menu (press and hold on a touch screen) and &#128393; at the
           end of the row opens the transaction editor. The transaction editor also supports adding external documentation in the
-          form of attachments.
+          form of attachments. On a touch screen, where there is no hover, the menu&apos;s <strong>Source
+          detail</strong> shows what hovering the merchant name shows.
         </p>
         <p>
           The <strong>Reimbursements</strong> button at the top of the page brings up a list of the

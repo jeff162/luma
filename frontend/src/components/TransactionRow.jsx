@@ -137,13 +137,18 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onOpenSplit, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onShowSourceDetail, onEditNote, onEditTags, onOpenRule, onOpenSplit, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
   const { txn } = menu
   // Recurring: a member edits/views its series; a row the user previously removed offers a targeted
   // restore back into that same series; otherwise "Mark as recurring…" (which starts a new one).
   const restorable = onRestoreRecurring && !txn.recurring_series_id && txn.recurring_excluded_series_id
   const items = [
     { label: '✎ Edit transaction…', onClick: () => onOpenDetail(txn) },
+    // The merchant name's hover card, for a screen with no hover. Second so Edit keeps the top slot on
+    // every row, since this item appears only on rows that have source detail to show.
+    onShowSourceDetail && hasFileOriginDetail(txn)
+      ? { label: 'ⓘ Source detail', onClick: () => onShowSourceDetail(txn) }
+      : null,
     { label: ruleActionLabel, onClick: () => onOpenRule(txn) },
     // Named for what the row ends up as, not for the mechanism: an ordinary row is being divided, a
     // split one is being adjusted. Sits with the rule item because both are categorization.

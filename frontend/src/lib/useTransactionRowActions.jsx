@@ -41,8 +41,11 @@ import RuleActionModal from '../components/RuleActionModal.jsx'
 import SplitEditorDialog from '../components/SplitEditorDialog.jsx'
 import { wholeTransactionRow } from './splitRows.js'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
-import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, FloatingPanel } from '../components/ui.jsx'
+import { MerchantOriginHoverCard } from '../components/OriginFields.jsx'
 import { useVisibleViewport, visibleLayerBox } from './visibleViewport.js'
+import { useCoarsePointer } from './deviceLayout.js'
+import { useEscapeAction } from './uiInteractions.js'
 import { formatDate } from './utils.js'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, onMembershipChange, categories, onAddCategory } = {}) {
@@ -50,6 +53,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const navigate = useNavigate()
   const [noteTarget, setNoteTarget] = useState(null)
   const [tagTarget, setTagTarget] = useState(null)
+  const [sourceDetailTarget, setSourceDetailTarget] = useState(null)
   const [pendingTrash, setPendingTrash] = useState(null)
   // Shared tag list for the row's Tags modal (loaded once app-wide; see useTags).
   const { tags: tagModalAllTags, loading: tagsLoading, addTag: addTagToCache } = useTags()
@@ -331,6 +335,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     setNoteTarget,
     tagTarget,
     setTagTarget,
+    sourceDetailTarget,
+    setSourceDetailTarget,
     pendingTrash,
     setPendingTrash,
     tagModalAllTags,
@@ -382,11 +388,25 @@ function MenuEditorOverlay({ onClose, children }) {
   )
 }
 
+// The merchant name's hover card opened from the row menu, for a touch screen, where there is no hover to
+// open it. Escape is handled here because the overlay only closes on a tap outside the card.
+function SourceDetailOverlay({ txn, onClose }) {
+  useEscapeAction(onClose)
+  return (
+    <MenuEditorOverlay onClose={onClose}>
+      <FloatingPanel radius={10} style={{ padding: 12 }}>
+        <MerchantOriginHoverCard txn={txn} copyable />
+      </FloatingPanel>
+    </MenuEditorOverlay>
+  )
+}
+
 export function TransactionRowActionsChrome({ controller }) {
   const {
     menu, menuReady, closeMenu, onOpenDetail,
     setNoteTarget, setTagTarget, setPendingTrash,
     noteTarget, tagTarget, pendingTrash,
+    sourceDetailTarget, setSourceDetailTarget,
     tagModalAllTags, tagsLoading, addTagToCache,
     ruleModalState, setRuleModalState,
     ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring, restoreToRecurring,
@@ -397,6 +417,8 @@ export function TransactionRowActionsChrome({ controller }) {
     onRuleSaved,
     splitTarget, setSplitTarget, openSplitFromMenu, handleSplitSaved, categories, onAddCategory,
   } = controller
+  // With a mouse the merchant name's hover already shows this card, so the menu offers it only on touch.
+  const coarsePointer = useCoarsePointer()
 
   return (
     <>
@@ -405,6 +427,7 @@ export function TransactionRowActionsChrome({ controller }) {
           menu={menu}
           onClose={closeMenu}
           onOpenDetail={txn => { onOpenDetail?.(txn); closeMenu() }}
+          onShowSourceDetail={coarsePointer ? txn => { setSourceDetailTarget(txn); closeMenu() } : undefined}
           onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
           onEditTags={txn => { setTagTarget(txn); closeMenu() }}
           onMarkReviewed={txn => { markReviewed(txn); closeMenu() }}
@@ -449,6 +472,9 @@ export function TransactionRowActionsChrome({ controller }) {
             onClose={() => setTagTarget(null)}
           />
         </MenuEditorOverlay>
+      ) : null}
+      {sourceDetailTarget ? (
+        <SourceDetailOverlay txn={sourceDetailTarget} onClose={() => setSourceDetailTarget(null)} />
       ) : null}
       {pendingTrash ? (
         <AppConfirmDialog
