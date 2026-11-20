@@ -1,0 +1,12 @@
+# Keeps the workflows' pinned actions current. Each `uses:` names a full commit SHA, which never moves on
+# its own, so without this the pins would stay at whatever release they were set to. Dependabot rewrites
+# the SHA and its trailing version comment together, in one pull request for all of them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -461,19 +461,20 @@ request cannot merge while either required check is failing.
 
 ### Actions supply chain
 
-The repository currently uses version tags for GitHub Actions. Before enabling mandatory SHA pinning,
-replace every external `uses:` reference in `.github/workflows/` with the full commit SHA for a
-reviewed release of that action; retain the version in a trailing comment so it remains auditable.
-After that change is merged, open **Settings → Actions → General** and:
+Every external `uses:` reference in `.github/workflows/` names the full commit SHA of a release, with
+the version in a trailing comment so it remains auditable. A SHA never moves on its own, so
+`.github/dependabot.yml` keeps the pins current: it opens one pull request for all of them when an
+action releases, rewriting the SHA and the comment together. A new `uses:` line takes the same form.
+Open **Settings → Actions → General** and:
 
-- set **Actions permissions** to allow only GitHub-owned actions and explicitly approved actions or
-  reusable workflows;
+- set **Actions permissions** to *Allow \<owner\>, and select non-\<owner\>, actions and reusable
+  workflows*, with only **Allow actions created by GitHub** checked;
 - enable **Require actions to be pinned to a full-length commit SHA**;
 - retain the read-only default `GITHUB_TOKEN` permissions and leave workflow pull-request approval
   disabled.
 
-Pinning first makes an Actions compromise unable to silently move a tag to different code. Requiring
-SHAs before the workflow change would instead stop the release and CI workflows from running.
+Pinning makes an Actions compromise unable to silently move a tag to different code. With the
+requirement on, a `uses:` line naming a tag stops its workflow from running.
 
 ### Container image visibility
 
