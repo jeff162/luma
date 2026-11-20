@@ -3,9 +3,6 @@
 // The ledger is sized to the whole result from its first response and fetches the page the viewport is
 // on, so a reader who drags the scrollbar deep into the list is served that page directly — not every
 // page between the top and there, which is what made the thumb lag the mouse while rows were loading.
-//
-// jsdom does no layout, so the scroll viewport and the rows are given fixed heights (as in
-// WindowedRows.test.jsx), keyed off the row's data-index.
 
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
@@ -13,6 +10,7 @@ import { MemoryRouter } from 'react-router-dom'
 import Transactions from '../Transactions.jsx'
 import { TransactionShareProvider } from '../../contexts/TransactionShareContext.jsx'
 import { api } from '../../lib/api.js'
+import { installFakeLayout } from '../../test-support/fakeLayout.js'
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -52,22 +50,7 @@ const VIEWPORT_HEIGHT = 600
 const ROW_HEIGHT = 40
 const TOTAL = 5000
 
-beforeAll(() => {
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  const heightOf = element => (element.hasAttribute('data-index') ? ROW_HEIGHT : VIEWPORT_HEIGHT)
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 800 } })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return heightOf(this) } })
-  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800 } })
-  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return heightOf(this) } })
-  Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
-    const height = heightOf(this)
-    return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: height, width: 800, height, toJSON() {} }
-  }
-})
+beforeAll(() => installFakeLayout({ viewportHeight: VIEWPORT_HEIGHT, rowHeight: ROW_HEIGHT }))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 

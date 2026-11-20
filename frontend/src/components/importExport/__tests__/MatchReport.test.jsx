@@ -14,33 +14,14 @@ import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { UserPreferencesProvider } from '../../../lib/UserPreferencesContext.jsx'
 import { MatchReport } from '../MatchReport.jsx'
+import { installFakeLayout } from '../../../test-support/fakeLayout.js'
 
-// jsdom does no layout: every box measures 0x0, so a virtualizer faithfully renders nothing. These two
-// stubs give it just enough geometry to behave as it would in a browser — a 600px viewport and rows of a
-// known height — which is what makes "how many rows mounted" a meaningful assertion here.
+// A 600px viewport and rows of a known height (see `fakeLayout.js`) are what make "how many rows mounted"
+// a meaningful assertion here.
 const VIEWPORT_HEIGHT = 600
 const MEASURED_ROW_HEIGHT = 40
 
-beforeAll(() => {
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  // A mounted row reports its own height; anything else is treated as the scroll viewport. Every path
-  // has to agree, because virtual-core reads the viewport through clientHeight but measures rows
-  // through whichever of the others the build happens to use — a viewport-sized row makes the virtualizer
-  // believe one row fills the screen, which quietly defeats the thing these tests exist to check.
-  const heightOf = element => (element.hasAttribute('data-index') ? MEASURED_ROW_HEIGHT : VIEWPORT_HEIGHT)
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 800 } })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return heightOf(this) } })
-  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800 } })
-  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return heightOf(this) } })
-  Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
-    const height = heightOf(this)
-    return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: height, width: 800, height, toJSON() {} }
-  }
-})
+beforeAll(() => installFakeLayout({ viewportHeight: VIEWPORT_HEIGHT, rowHeight: MEASURED_ROW_HEIGHT }))
 
 // This project doesn't run vitest with `globals: true`, so testing-library's automatic per-test cleanup
 // never registers — without this, each render stacks another copy in document.body and `screen` queries
