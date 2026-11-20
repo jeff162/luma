@@ -988,6 +988,10 @@ export const api = {
   updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTag:   (id) => request(`/tags/${id}`, { method: 'DELETE' }),
   updateAccount: (id, data) => request(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // `balance` is the household's position: positive held, negative owed.
+  setManualBalance: (id, asOfDate, balance) =>
+    request(`/accounts/${id}/balances/manual/${asOfDate}`, { method: 'PUT', body: JSON.stringify({ balance }) }),
+  removeManualBalance: (id, asOfDate) => request(`/accounts/${id}/balances/manual/${asOfDate}`, { method: 'DELETE' }),
 
   // The mapping table's amounts. Parsed server-side by the same code the import runs, so the preview
   // cannot disagree with what will be stored; `suppressMutationSignal` because this POST writes nothing.

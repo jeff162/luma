@@ -20,7 +20,7 @@ from unittest import mock
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
 from backend.services import plaid_service
-from backend.services.account_balances import current_balances
+from backend.services.account_balances import current_balances, delete_manual_balance, record_manual_balance
 from backend.services.providers.plaid import PlaidAdapter
 
 from backend.tests._fake_adapter import FakeCursorAdapter
@@ -196,6 +196,20 @@ class CurrentBalanceTests(unittest.TestCase):
         self.assertEqual((result["account_id"], result["amount"]), ("old-card", -60.0))
         self.assertEqual(result["also_reporting"], ["card"])
         self.assertTrue(result["stale"])
+
+    def test_a_balance_entered_by_hand_anchors_until_removed(self):
+        self._state("cash", "2026-08-01", 300.0)
+        self._txn("cash", "2026-08-12", 20.0)
+        record_manual_balance(self.conn, "cash", "2026-08-10", 250.0)
+        result = current_balances(self.conn, today=self.TODAY)["cash"]
+        self.assertEqual((result["source"], result["stated"], result["amount"]), ("manual", 250.0, 230.0))
+        self.assertTrue(delete_manual_balance(self.conn, "cash", "2026-08-10"))
+        self.assertEqual(current_balances(self.conn, today=self.TODAY)["cash"]["amount"], 280.0)
+
+    def test_a_balance_entered_by_hand_stays_fresh_for_a_statement_cycle(self):
+        record_manual_balance(self.conn, "cash", "2026-07-27", 250.0)  # 20 days old
+        self.assertFalse(current_balances(self.conn, today=self.TODAY)["cash"]["stale"])
+        self.assertTrue(current_balances(self.conn, today=date(2026, 9, 1))["cash"]["stale"])  # 36 days
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
+import AccountBalanceDialog from '../components/accounts/AccountBalanceDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES, isWalletAccountType } from '../lib/accountTypes.js'
 import { formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
@@ -80,8 +81,8 @@ const OWNERS_PANEL_WIDTH = 720
 const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners'], ['connections', 'Connections']]
 const ACCOUNTS_TAB_STORAGE_KEY = 'luma.accounts.tab'
 const ACCOUNT_TYPE_ORDER = Object.fromEntries(ACCOUNT_TYPES.map((type, index) => [type.value, index]))
-const ACCOUNT_SORT_KEYS = ['name', 'type', 'owner']
-const DEFAULT_ACCOUNT_SORT_DIRECTIONS = { name: 'asc', type: 'asc', owner: 'asc' }
+const ACCOUNT_SORT_KEYS = ['name', 'type', 'owner', 'balance']
+const DEFAULT_ACCOUNT_SORT_DIRECTIONS = { name: 'asc', type: 'asc', owner: 'asc', balance: 'desc' }
 
 
 // "Shared" only becomes an assignable owner when there are multiple personal owners; otherwise it would just duplicate the sole-owner default.
@@ -174,6 +175,13 @@ function buildAccountSortComparator(sortKey, sortDir) {
     const typeCmp = (ACCOUNT_TYPE_ORDER[a.type] ?? 99) - (ACCOUNT_TYPE_ORDER[b.type] ?? 99)
     const ownerCmp = (a.owner_name || '').localeCompare(b.owner_name || '')
     const dir = sortDir === 'asc' ? 1 : -1
+    if (sortKey === 'balance') {
+      // An account with no balance has nothing to rank by, so it follows the rest in either direction.
+      const aBalance = a.balance?.amount
+      const bBalance = b.balance?.amount
+      if (aBalance == null || bBalance == null) return (aBalance == null) - (bBalance == null) || nameCmp
+      return dir * (aBalance - bBalance) || nameCmp
+    }
     if (sortKey === 'type') return dir * (typeCmp || ownerCmp || nameCmp)
     if (sortKey === 'owner') return dir * (ownerCmp || typeCmp || nameCmp)
     return dir * (nameCmp || typeCmp || ownerCmp)
@@ -955,32 +963,52 @@ function AccountTagsCell({
   )
 }
 
-// A group's balance sits on its top row; a member row has none of its own. The second line dates the
-// balance the figure was carried forward from, in the warning color once it is old enough that the
-// source has stopped restating it.
-const BALANCE_SOURCE_PHRASES = { provider: 'Reported by the connection' }
+// The stale date and the two-feeds mark: toned toward the muted date text so a stale row is easy to spot
+// without the warning color's full weight.
+const BALANCE_WARNING_COLOR = 'color-mix(in srgb, var(--warning) 80%, var(--muted))'
+const BALANCE_SOURCE_PHRASES = {
+  provider: 'Based on the balance the connection reported on',
+  manual: 'Based on a manually entered value on',
+}
 
-function AccountBalanceCell({ balance, rootId, accountLabel }) {
-  if (!balance) return <div />
+// The cell is one button whether or not there is a balance, so a balance is entered and changed the same
+// way; an empty top row shows a dash to click. A member row has nothing, as the group's balance is its top row's.
+// The second line dates the balance the figure was carried forward from, with (m) when it was entered by
+// hand, the one kind that stays right only while someone keeps it up.
+function AccountBalanceCell({ balance, isChild, rootId, accountLabel, onEdit, disabled }) {
+  if (isChild) return <div />
+  const buttonStyle = {
+    display: 'block', width: '100%', background: 'none', border: 'none', padding: 0, color: 'var(--text)',
+    textAlign: 'right', minWidth: 0, fontVariantNumeric: 'tabular-nums', cursor: disabled ? 'default' : 'pointer',
+  }
+  if (!balance) {
+    return (
+      <button type="button" aria-label="Enter a balance" onClick={disabled ? undefined : onEdit}
+        style={{ ...buttonStyle, color: 'var(--muted)', fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px` }}>
+        —
+      </button>
+    )
+  }
   const others = balance.also_reporting.map(accountLabel)
   const tip = [
-    `${BALANCE_SOURCE_PHRASES[balance.source] || 'Stated'} on ${formatDate(balance.as_of_date)}, and carried forward through any later posted transactions.`,
+    `${BALANCE_SOURCE_PHRASES[balance.source] || 'Based on a balance stated on'} ${formatDate(balance.as_of_date)}.`,
     balance.account_id !== rootId ? `From ${accountLabel(balance.account_id)}.` : null,
     balance.available != null ? `${formatMoneyMagnitude(balance.available)} available, as reported.` : null,
-    balance.stale ? 'No newer balance has been reported for over a week.' : null,
+    balance.stale ? `Has not been updated in over ${balance.stale_after_days === 7 ? 'a week' : `${balance.stale_after_days} days`}.` : null,
     others.length ? `${others.join(', ')} also reported a balance within a week of it. Only the latest counts.` : null,
   ].filter(Boolean)
   return (
     <Tooltip content={<div style={{ display: 'grid', gap: 4 }}>{tip.map(line => <div key={line}>{line}</div>)}</div>} align="right">
-      <div style={{ textAlign: 'right', minWidth: 0, fontVariantNumeric: 'tabular-nums' }}>
+      <button type="button" onClick={disabled ? undefined : onEdit} style={buttonStyle}>
         <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
-          {others.length ? <span style={{ color: 'var(--warning)', marginRight: 4 }}>⚠</span> : null}
+          {others.length ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
           {formatSignedMoneyAmount(balance.amount)}
         </div>
-        <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? 'var(--warning)' : 'var(--muted)' }}>
+        <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
           {formatDate(balance.as_of_date)}
+          {balance.source === 'manual' ? ' (m)' : null}
         </div>
-      </div>
+      </button>
     </Tooltip>
   )
 }
@@ -1011,6 +1039,7 @@ function NetWorthCell({ account, isChild, disabled, onChange }) {
 function AccountRow({
   account,
   accountLabel = () => '',
+  onEditBalance,
   parentAccount = null,
   hasChildren = false,
   isLastChild = false,
@@ -1491,7 +1520,14 @@ function AccountRow({
           onTagCreated={onAccountTagCreated}
         />
 
-        <AccountBalanceCell balance={isChild ? null : account.balance} rootId={account.id} accountLabel={accountLabel} />
+        <AccountBalanceCell
+          balance={account.balance}
+          isChild={isChild}
+          rootId={account.id}
+          accountLabel={accountLabel}
+          onEdit={() => onEditBalance?.(account)}
+          disabled={interactionDisabled}
+        />
 
         <NetWorthCell
           account={account}
@@ -1526,6 +1562,7 @@ export default function Accounts() {
    * - trash is only the reversible holding state before permanent cleanup happens from Settings
    */
   const [accounts, setAccounts] = useState([])
+  const [balanceDialogAccount, setBalanceDialogAccount] = useState(null)
   const [owners, setOwners] = useState([])
   const [availableTags, setAvailableTags] = useState([])
   const [tagsEditMode, setTagsEditMode] = useState(false)
@@ -2407,6 +2444,12 @@ export default function Accounts() {
               title: 'Choose the tags attached to this account.',
               onClick: () => setTagPickerAccountId(rowMenu.account.id),
             },
+            // A group has one balance, shown and entered on its top row.
+            ...(!rowMenu.account.parent_account_id ? [{
+              label: 'Edit balance…',
+              title: 'Enter this account’s balance by hand, or change one entered before.',
+              onClick: () => setBalanceDialogAccount(rowMenu.account),
+            }] : []),
             ...(isWalletAccountType(rowMenu.account.type) && !rowMenu.account.parent_account_id ? [{
               label: 'Wallet match text…',
               title: 'The text a bank or card transaction contains when it is the other side of this wallet’s transaction.',
@@ -2426,6 +2469,18 @@ export default function Accounts() {
               onClick: () => setPendingRemoval(rowMenu.account),
             },
           ]}
+        />
+      ) : null}
+
+      {balanceDialogAccount ? (
+        <AccountBalanceDialog
+          account={balanceDialogAccount}
+          onClose={() => setBalanceDialogAccount(null)}
+          onSaved={async () => {
+            setSortIndicatorActive(false)
+            await reloadAccounts()
+            notifyAccountsChanged()
+          }}
         />
       ) : null}
 
@@ -2663,8 +2718,8 @@ export default function Accounts() {
                                 {
                                   key: 'balance',
                                   label: 'Balance',
-                                  align: 'right',
-                                  sortable: false,
+                                  align: 'end',
+                                  title: 'Click to sort accounts by balance',
                                   cellPadding: 0,
                                   contentPadding: '0 9px',
                                   leadingInset: 0,
@@ -2773,6 +2828,7 @@ export default function Accounts() {
                                   <AccountRow
                                     account={root}
                                     accountLabel={accountLabel}
+                                    onEditBalance={setBalanceDialogAccount}
                                     gridTemplateColumns={accountGridTemplate}
                                     hasChildren={children.length}
                                     isCollapsed={isCollapsed}

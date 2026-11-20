@@ -21,7 +21,9 @@ Attach / detach also coordinates with dedupe state — see
   (`restore_auto_merged_after_detach`). User-Reject decisions (`'user'`) are preserved.
 """
 
+import math
 import uuid
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -53,7 +55,7 @@ from backend.services.account_references import (
     replace_account_reference_in_batch_snapshots,
     replace_account_reference_in_profile_column_maps,
 )
-from backend.services.account_balances import current_balances
+from backend.services.account_balances import current_balances, delete_manual_balance, record_manual_balance
 from backend.services.account_groups import set_account_parent
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_settings_followups import settle_account_change
@@ -81,6 +83,11 @@ class AccountUpdate(BaseModel):
     # A wallet's text to find its other side by (services/wallet_accounts.py); "" is none.
     wallet_match_text: Optional[str] = None
     exclude_from_net_worth: Optional[bool] = None
+
+
+class ManualBalanceRequest(BaseModel):
+    # The household's position: positive held, negative owed (`services/account_balances.py`).
+    balance: float
 
 
 class AccountAttachRequest(BaseModel):
@@ -433,6 +440,39 @@ def update_account(account_id: str, body: AccountUpdate):
             )
     if settings_changed:
         settle_account_change([account_id])
+    return {"ok": True}
+
+
+def _balance_date(as_of_date: str) -> str:
+    try:
+        parsed = date.fromisoformat(as_of_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Enter the date as YYYY-MM-DD")
+    # Nothing can have stated a balance for a day that has not ended, and carrying one forward from the
+    # future would subtract nothing while reading as current.
+    if parsed > date.today():
+        raise HTTPException(status_code=400, detail="A balance can't be dated in the future")
+    return parsed.isoformat()
+
+
+@router.put("/{account_id}/balances/manual/{as_of_date}")
+def set_manual_balance(account_id: str, as_of_date: str, body: ManualBalanceRequest):
+    day = _balance_date(as_of_date)
+    if not math.isfinite(body.balance):
+        raise HTTPException(status_code=400, detail="Enter an amount")
+    with get_db() as conn:
+        if not _get_account_row(conn, account_id):
+            raise HTTPException(status_code=404, detail="Account not found")
+        record_manual_balance(conn, account_id, day, body.balance)
+    return {"ok": True}
+
+
+@router.delete("/{account_id}/balances/manual/{as_of_date}")
+def remove_manual_balance(account_id: str, as_of_date: str):
+    day = _balance_date(as_of_date)
+    with get_db() as conn:
+        if not delete_manual_balance(conn, account_id, day):
+            raise HTTPException(status_code=404, detail="No balance was entered for that day")
     return {"ok": True}
 
 

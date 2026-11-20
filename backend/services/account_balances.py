@@ -21,6 +21,9 @@ from datetime import date
 from typing import Callable, Optional
 
 PROVIDER_SOURCE = "provider"
+# Entered by hand, for an account nothing reports a balance for, or to correct one. A connection's next
+# report is a later date and so becomes the anchor; the entry stays as a figure to reconcile against.
+MANUAL_SOURCE = "manual"
 
 
 def record_provider_balances(conn, balances: Optional[dict],
@@ -48,10 +51,36 @@ def record_provider_balances(conn, balances: Optional[dict],
     return recorded
 
 
-# How old an account's latest stated balance may be before it is shown as stale, and how close together two
-# members of a group must report for both to be live feeds. A connected account restates its balance on every
-# sync, so a week without one means its feed has stopped.
-STALE_AFTER_DAYS = 7
+def record_manual_balance(conn, account_id: str, as_of_date: str, balance: float) -> None:
+    """Store a balance entered by hand, as the household's position on `as_of_date`, replacing an earlier
+    entry for the same day."""
+    conn.execute(
+        """
+        INSERT INTO account_balance (account_id, as_of_date, source, balance, available, recorded_at)
+        VALUES (?, ?, ?, ?, NULL, datetime('now'))
+        ON CONFLICT (account_id, as_of_date, source) DO UPDATE SET
+            balance = excluded.balance, recorded_at = excluded.recorded_at
+        """,
+        (account_id, as_of_date, MANUAL_SOURCE, round(float(balance), 2)),
+    )
+
+
+def delete_manual_balance(conn, account_id: str, as_of_date: str) -> bool:
+    """Remove a balance entered by hand. A provider's figure is not removable: its next sync restates it."""
+    return conn.execute(
+        "DELETE FROM account_balance WHERE account_id = ? AND as_of_date = ? AND source = ?",
+        (account_id, as_of_date, MANUAL_SOURCE),
+    ).rowcount > 0
+
+
+# How old an account's latest stated balance may be before it is shown as stale, by where it came from. A
+# connected account restates its balance on every sync, so a week without one means its feed has stopped; a
+# balance entered by hand is typically copied from a monthly statement, so it is stale once a statement is
+# missed.
+STALE_AFTER_DAYS = {PROVIDER_SOURCE: 7, MANUAL_SOURCE: 35}
+
+# How close together two members of a group must report for both to be live feeds.
+LIVE_FEED_WINDOW_DAYS = 7
 
 
 def current_balances(conn, today: Optional[date] = None) -> dict:
@@ -63,7 +92,7 @@ def current_balances(conn, today: Optional[date] = None) -> dict:
     pending row is left out, as no source's stated balance counts one. A group with no stated balance is
     absent.
 
-    `also_reporting` names the other members whose own latest balance falls within `STALE_AFTER_DAYS` of
+    `also_reporting` names the other members whose own latest balance falls within `LIVE_FEED_WINDOW_DAYS` of
     the anchor's: two live feeds into one group, where only one can be the group's balance."""
     today = today or date.today()
     anchors = {
@@ -97,14 +126,16 @@ def current_balances(conn, today: Optional[date] = None) -> dict:
         result[root_id] = {
             # A transaction's amount is positive for money out, so it lowers the position.
             "amount": round(anchor["balance"] - later, 2),
+            "stated": anchor["balance"],
             "available": anchor["available"],
             "as_of_date": anchor["as_of_date"],
             "source": anchor["source"],
             "account_id": anchor["account_id"],
-            "stale": (today - as_of).days > STALE_AFTER_DAYS,
+            "stale_after_days": STALE_AFTER_DAYS[anchor["source"]],
+            "stale": (today - as_of).days > STALE_AFTER_DAYS[anchor["source"]],
             "also_reporting": sorted(
                 m["account_id"] for m in member_latest
                 if m["root_id"] == root_id and m["account_id"] != anchor["account_id"]
-                and (as_of - date.fromisoformat(m["as_of_date"])).days <= STALE_AFTER_DAYS),
+                and (as_of - date.fromisoformat(m["as_of_date"])).days <= LIVE_FEED_WINDOW_DAYS),
         }
     return result

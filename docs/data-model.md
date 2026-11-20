@@ -322,7 +322,11 @@ ledger in between, so no stored figure has to follow later edits to the ledger.
   account. A merge leaves it in place, and removing the account deletes it, since the account taking the
   history has a balance of its own.
 - **A source restating a date replaces its figure for that date**, since a provider re-reports the same day
-  on every sync. `source` is `provider`.
+  on every sync. `source` is `provider` or `manual`.
+- **`manual` is a balance entered by hand** (`PUT /accounts/{id}/balances/manual/{date}`), for an account
+  nothing reports one for, or to set one right. It is a position like any other, never dated in the
+  future, and the only kind the user can remove: a provider's next sync would restate its own. On a
+  connected account the next report is a later date and takes over as the anchor.
 - **Nothing is recorded for a provider account with no local account** (unmapped, or Skip), or for an
   account in another currency, for the reason its rows are discarded.
 - Backed up (`account_balances`): a provider reports only its current balance, so nothing re-derives an
@@ -336,9 +340,11 @@ group's top row.
 - **It is carried forward through the group's live, posted rows dated after the anchor.** A stated
   balance is taken as that day's closing balance, so a row on the anchor's own date is already in it. A
   pending row is left out, as no source's balance counts one.
-- **It is stale after `STALE_AFTER_DAYS` (7) with no newer balance**, since a connected account restates
-  its balance on every sync.
-- **A second member stating a balance within that window of the anchor is reported** (`also_reporting`):
+- **It is stale after `STALE_AFTER_DAYS` with no newer balance**, by the anchor's source: 7 days for
+  `provider`, since a connected account restates its balance on every sync, and 35 for `manual`, since a
+  balance entered by hand is usually copied from a monthly statement.
+- **A second member stating a balance within `LIVE_FEED_WINDOW_DAYS` (7) of the anchor is reported**
+  (`also_reporting`):
   two live feeds into one group, of which only the latest can count.
 
 **`account.exclude_from_net_worth`** keeps an account's balance out of net worth. It is read from the

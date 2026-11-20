@@ -1848,9 +1848,11 @@ export const HELP_TOPICS = [
         </p>
         <p>
           <strong>Balance</strong> is what an account holds, or owes as a negative amount. It starts from
-          the balance its connection last reported, dated beneath it, and adds the posted transactions dated
-          after that. The date is highlighted once a week passes with no newer balance. A merged group has one
-          balance, from whichever member reported most recently. <strong>Exclude</strong> keeps an account out
+          the latest balance its connection reported or that was entered by hand, dated beneath it, and adds
+          the posted transactions dated after that. The date is highlighted when no newer balance has come
+          for a week from a connection, or 35 days for one entered by hand, which is marked (m). Clicking a balance, or the dash where there is none, or <strong>Edit balance…</strong> in the
+          row&apos;s &#8943; menu, enters one by hand, for an account with no connection or to set one right. A merged group has one balance, from
+          whichever member reported most recently. <strong>Exclude</strong> keeps an account out
           of net worth; an account of type <em>Other</em> is always out.
         </p>
         <p>
