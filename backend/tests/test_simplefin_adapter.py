@@ -225,6 +225,24 @@ class SimpleFinNormalizationTests(unittest.TestCase):
         self.assertEqual(rows[_ext_id("t1")]["amount"], 33.87)
         self.assertEqual(rows[_ext_id("t2")]["amount"], -1200.00)
 
+    def test_each_account_reports_its_stated_balance(self):
+        # SimpleFIN states a balance from the holder's side, as it signs amounts, so an amount owed arrives
+        # negative and is passed through; flipping it would count a card's debt as money held. An account
+        # in another currency reports none, for the reason its rows are discarded.
+        def account(account_id, balance, currency="USD", **extra):
+            return {"id": account_id, "name": account_id, "conn_id": "CONN-1", "currency": currency,
+                    "balance": balance, "balance-date": _epoch("2026-08-06"), "transactions": [], **extra}
+
+        server = _Server(payload=_payload(accounts=[
+            account("SAV-1", "100.23", **{"available-balance": "75.23"}),
+            account("CARD-1", "-412.50"),
+            account("EUR-1", "50.00", currency="EUR"),
+        ]))
+        self.assertEqual(self._sync(server)["balances"], {
+            "simplefin:SAV-1": {"balance": 100.23, "available": 75.23, "as_of": "2026-08-06"},
+            "simplefin:CARD-1": {"balance": -412.5, "available": None, "as_of": "2026-08-06"},
+        })
+
     def test_the_ledger_date_is_when_the_charge_was_made(self):
         # The day a charge is looked for on a statement and the month it counts in. The posted date is
         # kept beside it for duplicate detection.

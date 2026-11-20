@@ -967,13 +967,14 @@ export default function ConnectionsTab({ onShowHistory }) {
   async function openAccountMap(connection, { pendingBackfill = false, days = null } = {}) {
     setMapError(null)
     setMapLoading(true)
-    setMapTarget({ connection, accounts: [], captureFields: [], pendingBackfill, days })
+    setMapTarget({ connection, accounts: [], captureFields: [], realtimeBalances: null, pendingBackfill, days })
     try {
       const res = await api.getConnectionAccounts(connection.id)
       setMapTarget({
         connection: res.connection || connection,
         accounts: res.accounts || [],
         captureFields: res.capture_fields || [],
+        realtimeBalances: res.realtime_balances ?? null,
         pendingBackfill, days,
       })
       setUnmappedByConnection(prev => ({ ...prev, [connection.id]: res.unmapped || 0 }))
@@ -999,6 +1000,20 @@ export default function ConnectionsTab({ onShowHistory }) {
       )
       setMapTarget(prev => (prev ? { ...prev, captureFields: res.capture_fields || next } : prev))
     } catch (e) {
+      setMapError(e.message)
+    }
+  }
+
+  // Saved as toggled, for the reason capture fields are.
+  async function toggleRealtimeBalances(enabled) {
+    const target = mapTarget
+    if (!target) return
+    setMapTarget(prev => (prev ? { ...prev, realtimeBalances: enabled } : prev))
+    try {
+      const res = await api.setConnectionRealtimeBalances(target.connection.id, enabled)
+      setMapTarget(prev => (prev ? { ...prev, realtimeBalances: res.realtime_balances } : prev))
+    } catch (e) {
+      setMapTarget(prev => (prev ? { ...prev, realtimeBalances: !enabled } : prev))
       setMapError(e.message)
     }
   }
@@ -1800,12 +1815,13 @@ export default function ConnectionsTab({ onShowHistory }) {
             onClose={() => setCardMenu(null)}
             minWidth={220}
             items={[
-              // Named for what the dialog can change: only a provider with optional capture fields has
-              // settings beyond the mapping.
+              // Named for what the dialog can change: only a provider with optional capture fields or a
+              // balance choice has settings beyond the mapping.
               providerById[cardMenu.provider]?.has_optional_capture_fields
+                || providerById[cardMenu.provider]?.offers_realtime_balances
                 ? {
                     label: 'Connection settings…',
-                    title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
+                    title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and what future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
                     onClick: () => openAccountMap(cardMenu.connection),
                   }
                 : {
@@ -1859,6 +1875,8 @@ export default function ConnectionsTab({ onShowHistory }) {
             captureFields={mapTarget.captureFields}
             accounts={accounts}
             onToggleCaptureField={toggleCaptureField}
+            realtimeBalances={mapTarget.realtimeBalances}
+            onToggleRealtimeBalances={toggleRealtimeBalances}
             loading={mapLoading}
             saving={mapSaving}
             error={mapError}

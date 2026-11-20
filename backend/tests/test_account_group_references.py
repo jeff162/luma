@@ -73,6 +73,7 @@ ACCOUNT_REFERENCE_KINDS = {
     # A tag attached to one account row. A merged child's tags are deliberately dormant until it is
     # detached (`services/transaction_tags.py`), so this must NOT be resolved.
     ("account_tag", "account_id"): "specific",
+    ("account_balance", "account_id"): "specific",
     # "These two accounts are distinct" assertions, about the account rows themselves. A merge
     # contradicts the assertion and `clear_account_pair_distinct_for_merge` deletes the row outright,
     # so there is nothing left to resolve.

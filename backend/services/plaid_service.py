@@ -27,6 +27,7 @@ from plaid.model.transactions_get_request_options import TransactionsGetRequestO
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.transactions_sync_request_options import TransactionsSyncRequestOptions
 from plaid.model.accounts_get_request import AccountsGetRequest
+from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 
@@ -213,6 +214,31 @@ def fetch_accounts(app_config: dict, access_token: str) -> list[dict]:
             "currency":         _currency_code(a.get("balances") or {}),
         })
     return accounts
+
+
+def fetch_balances(app_config: dict, access_token: str, *, realtime: bool = False) -> list[dict]:
+    """Each account's balance as Plaid states it. `/accounts/get` returns the copy Plaid cached at the Item's
+    last update (about daily for a Transactions Item) and is free; `/accounts/balance/get` asks the bank now
+    and is billed per successful call, which is why it is the caller's choice."""
+    client = _get_client(app_config)
+    with _plaid_errors():
+        if realtime:
+            response = client.accounts_balance_get(AccountsBalanceGetRequest(access_token=access_token)).to_dict()
+        else:
+            response = client.accounts_get(AccountsGetRequest(access_token=access_token)).to_dict()
+    out = []
+    for a in response["accounts"]:
+        balances = a.get("balances") or {}
+        updated = balances.get("last_updated_datetime")
+        out.append({
+            "plaid_account_id": a["account_id"],
+            "type":             str(a["type"]),
+            "current":          balances.get("current"),
+            "available":        balances.get("available"),
+            "currency":         _currency_code(balances),
+            "last_updated":     updated.date().isoformat() if hasattr(updated, "date") else None,
+        })
+    return out
 
 
 def fetch_transactions(

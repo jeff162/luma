@@ -43,6 +43,7 @@ two shapes hit several of them unchanged:
 - [Dates a source does not have](#dates-a-source-does-not-have)
 - [Pending rows a source stops sending](#pending-rows-a-source-stops-sending)
 - [Currency](#currency)
+- [Balances](#balances)
 - [The published guide is not the contract](#the-published-guide-is-not-the-contract)
 - [Request budgets and pausing](#request-budgets-and-pausing)
 - [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
@@ -83,6 +84,7 @@ otherwise learn by branching on `provider`:
 | `routine_lookback_days` | How far a routine (non-backfill) sync reaches on a cursorless provider. |
 | `zero_amount_rows` | Whether $0 rows are kept or refused — see below. **No default.** |
 | `currency_scope` | Whether the provider states a currency per `"account"` or per `"transaction"` — see [Currency](#currency). **No default.** |
+| `offers_realtime_balances` | Whether `fetch_balances` can ask for a live balance rather than the provider's cached one. `True` puts a per-connection switch in the connection's settings — see [Balances](#balances). |
 
 Most have a default. `zero_amount_rows` and `currency_scope` deliberately do not, because their answers do
 not generalize between providers and a wrong inherited guess is silent.
@@ -445,6 +447,27 @@ warning would be false there; its notice names the rows instead, and only on a p
 takes an optional currency column; a row it names in another currency is refused and listed with the
 import's rejected rows, and an unmapped column means the whole file is in the ledger's currency. A new
 file importer whose format can mix currencies should do the same rather than import at face value.
+
+## Balances
+
+An adapter reports each account's balance as the **household's position**: positive for money held,
+negative for money owed (`data-model.md` → *Account balances*). Providers disagree on the sign of a card
+or loan balance, and a wrong one raises nothing; it counts debt as money held. Plaid states an amount owed
+as positive and the adapter negates it for credit and loan accounts; SimpleFIN states every balance from
+the holder's side, as it signs transactions, and passes it through. Decide it from the provider's
+documentation, and pin it with a test on an owed balance.
+
+**How the balance arrives depends on what it costs.** A provider whose responses already carry balances
+(SimpleFIN, on every accounts request) reports them on each page as `balances`, so a metered allowance is
+not spent on them. One that needs a request of its own (Plaid) implements `fetch_balances`, which the sync
+calls once after a successful drain. A provider with both a cached and a live figure, the live one billed,
+declares `offers_realtime_balances` and leaves the choice to each connection.
+
+- **`as_of` is the date the provider says the balance is from**, and the day it was read where it says
+  nothing (Plaid's cached figure carries a date for only a few institutions).
+- **An account in another currency reports no balance**, for the reason its rows are dropped.
+- **A failed balance request does not fail the pull.** The sync records it as a warning on the connection,
+  since the transactions it brought are sound.
 
 ## The published guide is not the contract
 

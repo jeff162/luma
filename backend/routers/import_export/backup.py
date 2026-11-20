@@ -584,7 +584,8 @@ BACKUP_SECTIONS = (
     # coverage test: `credential`/`credential_enc` (secrets) and `sync_started_at`/`sync_progress` (a sync
     # running in the process that wrote them).
     ("connections", "connection",
-     "SELECT id, provider, external_id, institution, nickname, created_at, captured_fields, transactions_cursor, "
+     "SELECT id, provider, external_id, institution, nickname, created_at, captured_fields, realtime_balances, "
+     "transactions_cursor, "
      "initial_sync_complete, last_synced_at, last_sync_error, last_sync_error_at, consecutive_sync_failures, "
      "last_sync_warnings, reauth_required, last_sync_outcome, last_sync_summary, provider_request_budget, "
      "provider_request_budget_at FROM connection ORDER BY rowid"),
@@ -668,6 +669,9 @@ BACKUP_SECTIONS = (
     ("txn_tags", "txn_tag", "SELECT * FROM txn_tag ORDER BY rowid"),
     ("category_tags", "category_tag", "SELECT * FROM category_tag ORDER BY rowid"),
     ("account_tags", "account_tag", "SELECT * FROM account_tag ORDER BY rowid"),
+    # Balances a source stated. A provider re-reports only today's, so a restore without these would lose
+    # every earlier one.
+    ("account_balances", "account_balance", "SELECT * FROM account_balance ORDER BY rowid"),
     ("rule_tags", "rule_tag", "SELECT * FROM rule_tag ORDER BY rowid"),
     # User's explicit "these two accounts are distinct" assertions (dedupe review state).
     ("account_pair_distinct", "account_pair_distinct", "SELECT * FROM account_pair_distinct ORDER BY rowid"),
@@ -702,12 +706,12 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
 # `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, 15 the
-# `connections` section, 16 the `import_batch_rejected_rows` section, 17 the `backup_history` section, and 18
-# the `rule_alert_hits` section — all purely additive, which is why an older archive still restores through
+# `connections` section, 16 the `import_batch_rejected_rows` section, 17 the `backup_history` section, 18
+# the `rule_alert_hits` section, and 19 the `account_balances` section — all purely additive, which is why an older archive still restores through
 # exactly the same path with the new section simply absent. A section can also be retired: restore reads only the sections listed
 # above, so an older archive's retired section is ignored (`merchant_renames`, whose table was dropped).
-BACKUP_PAYLOAD_VERSION = 18
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
+BACKUP_PAYLOAD_VERSION = 19
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
 
 # How old a backup's resume points may be and still be handed back to a provider. Plaid documents a
 # `/transactions/sync` cursor as valid for at least a year after it was issued; past that nothing vouches
@@ -1344,6 +1348,7 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM txn_tag")
     conn.execute("DELETE FROM category_tag")
     conn.execute("DELETE FROM account_tag")
+    conn.execute("DELETE FROM account_balance")
     conn.execute("DELETE FROM rule_tag")
     conn.execute("DELETE FROM account_pair_distinct")
     conn.execute("DELETE FROM amazon_charge_distinct")
@@ -1401,7 +1406,7 @@ def _wipe_user_data_tables(conn):
 # What a data restore writes onto a connection row: everything the backup knows about it except its
 # identity, and its resume point and request budget, which are each decided separately.
 _RESTORED_CONNECTION_STATE = (
-    "nickname", "captured_fields", "last_synced_at", "last_sync_error", "last_sync_error_at",
+    "nickname", "captured_fields", "realtime_balances", "last_synced_at", "last_sync_error", "last_sync_error_at",
     "consecutive_sync_failures", "last_sync_warnings", "reauth_required", "last_sync_outcome",
     "last_sync_summary",
 )
@@ -1514,7 +1519,7 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
             local_budget, (row.get("provider_request_budget"), row.get("provider_request_budget_at")))
         keep_cursor = cursor_trusted and (local is None or local["external_id"] == external_id)
         values = {column: row.get(column) for column in state_columns}
-        for column in ("consecutive_sync_failures", "reauth_required"):
+        for column in ("consecutive_sync_failures", "reauth_required", "realtime_balances"):
             if column in values:
                 values[column] = int(values[column] or 0)
         values["transactions_cursor"] = row.get("transactions_cursor") if keep_cursor else None
@@ -1788,6 +1793,7 @@ _RESTORE_REQUIRE = (
     ("category_tag", "tag_id", "tag"),
     ("account_tag", "account_id", "account"),
     ("account_tag", "tag_id", "tag"),
+    ("account_balance", "account_id", "account"),
     ("rule_tag", "rule_id", "category_rule"),
     ("rule_tag", "tag_id", "tag"),
     ("rule_alert_hit", "rule_id", "category_rule"),

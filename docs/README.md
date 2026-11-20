@@ -146,6 +146,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Dates a source does not have](building-a-connector.md#dates-a-source-does-not-have)
 - [Pending rows a source stops sending](building-a-connector.md#pending-rows-a-source-stops-sending)
 - [Currency](building-a-connector.md#currency)
+- [Balances](building-a-connector.md#balances)
 - [The published guide is not the contract](building-a-connector.md#the-published-guide-is-not-the-contract)
 - [Request budgets and pausing](building-a-connector.md#request-budgets-and-pausing)
 - [Pages, commits, and what a failure may cost](building-a-connector.md#pages-commits-and-what-a-failure-may-cost)

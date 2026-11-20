@@ -1134,6 +1134,15 @@ import card. The full rule is in `data-model.md`.
   mirrors it at boot, and Settings reloads after saving. Per-provider handling:
   `building-a-connector.md` → *Currency*.
 
+- **Balances arrive in one of two ways, chosen by what they cost** (`data-model.md` → *Account balances*). A
+  provider whose responses already carry them (SimpleFIN) reports them on each page as `balances`; one
+  that needs a request of its own (Plaid) implements `fetch_balances`, which `run_sync` calls once after a
+  successful drain, committing first because nothing may be held open across a provider call. Plaid's
+  default is the free cached copy (`/accounts/get`); `connection.realtime_balances`, offered where the
+  adapter declares `offers_realtime_balances` and set from the connection's settings (`PUT
+  /api/connections/{id}/realtime-balances`), asks for a live one, which the provider bills per request. A
+  failed balance request is a warning on a pull that otherwise succeeded.
+
 - **Provider-supplied error text is clipped in the adapter** (`_clip`, `_MAX_MESSAGE_CHARS`). SimpleFIN's
   bank-level codes are shown to the user and its request advisories go to the log.
 

@@ -73,6 +73,10 @@ class CapturedFieldsRequest(BaseModel):
     fields: list[str]
 
 
+class RealtimeBalancesRequest(BaseModel):
+    enabled: bool
+
+
 def _capture_field_state(conn, connection):
     """The provider's declared capture fields, each marked with whether it is currently on. Locked
     fields always report on — they are what duplicate detection reads, so they are not the user's to
@@ -86,6 +90,19 @@ def _capture_field_state(conn, connection):
         {**f, "enabled": bool(f.get("locked") or f["key"] in active)}
         for f in adapter.capture_fields()
     ]
+
+
+def _realtime_balances_state(conn, connection) -> Optional[bool]:
+    """Whether this connection asks for live balances, or None when its provider offers no choice — the
+    dialog then shows no switch."""
+    try:
+        adapter = get_adapter(connection["provider"])
+    except UnknownProviderError:
+        return None
+    if not adapter.offers_realtime_balances:
+        return None
+    row = conn.execute("SELECT realtime_balances FROM connection WHERE id = ?", (connection["id"],)).fetchone()
+    return bool(row["realtime_balances"])
 
 
 def _get_connection(conn, connection_id: str):
@@ -126,11 +143,13 @@ def get_connection_accounts(connection_id: str):
         connection = _get_connection(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)
         capture_fields = _capture_field_state(conn, connection)
+        realtime_balances = _realtime_balances_state(conn, connection)
     return {
         "connection": dict(connection),
         "accounts": accounts,
         "unmapped": sum(1 for a in accounts if not a["mapped"]),
         "capture_fields": capture_fields,
+        "realtime_balances": realtime_balances,
     }
 
 
@@ -338,3 +357,16 @@ def set_captured_fields(connection_id: str, body: CapturedFieldsRequest):
         )
         capture_fields = _capture_field_state(conn, connection)
     return {"capture_fields": capture_fields}
+
+
+@router.put("/{connection_id}/realtime-balances")
+def set_realtime_balances(connection_id: str, body: RealtimeBalancesRequest):
+    """Choose whether this connection's syncs ask for live balances (`ProviderAdapter.fetch_balances`).
+    Refused for a provider that offers no choice, rather than stored where nothing would read it."""
+    with get_db() as conn:
+        connection = _get_connection(conn, connection_id)
+        if _realtime_balances_state(conn, connection) is None:
+            raise HTTPException(status_code=409, detail="This connection's provider offers no live balances")
+        conn.execute("UPDATE connection SET realtime_balances = ? WHERE id = ?",
+                     (1 if body.enabled else 0, connection_id))
+    return {"realtime_balances": body.enabled}

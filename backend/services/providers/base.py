@@ -186,6 +186,10 @@ class ProviderAdapter(ABC):
     # like `zero_amount_rows`: it follows from the provider's protocol. See `services/source_capabilities.py`.
     currency_scope: CurrencyScope
 
+    # Whether `fetch_balances` can ask for a live balance instead of the provider's cached one. True puts a
+    # per-connection switch in the connection's settings; the live request is the provider's to bill.
+    offers_realtime_balances: bool = False
+
     # How far back a *routine* (non-backfill) sync reaches on a provider with no cursor. Deliberately not
     # applied to a cursor provider: for Plaid `days_requested` sets the window the item *maintains*, so
     # sending a small number on a routine sync would discard history rather than merely fetch less of it.
@@ -223,7 +227,7 @@ class ProviderAdapter(ABC):
 
             {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
              update_status, backfill_complete, resume_later, account_coverage, covered_through, warnings, advisories,
-             unsupported_currency, requested_windows, complete_listings}
+             unsupported_currency, requested_windows, complete_listings, balances}
 
         Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
         `pending_external_transaction_id`: when a posted transaction supersedes a pending one, this holds the
@@ -357,6 +361,14 @@ class ProviderAdapter(ABC):
         response omitted, discarded, or reported a problem for is never listed. Optional; a cursor provider,
         which reports removals itself, omits it.
 
+        `balances` is `{external_account_id: {"balance": float, "available": float | None, "as_of": iso_date}}`
+        for a provider whose responses already carry each account's balance, so reporting it costs no
+        request of its own. `balance` is the household's position, positive for money held and negative for
+        money owed, converted from the provider's sign; `available` is what can be spent now, as the provider
+        states it; `as_of` is the date the provider says the balance is from. An account in another currency
+        is left out, for the reason its rows are. Optional: a provider that needs a separate request for
+        balances leaves it out and implements `fetch_balances` instead.
+
         `pending_since` is the date of the oldest pending row the caller holds for this connection, or None.
         An adapter that reports `complete_listings` may reach back to it so a charge left pending longer
         than its routine overlap is still listed. Others ignore it.
@@ -399,6 +411,16 @@ class ProviderAdapter(ABC):
             "unsupported_currency": {},
             "requested_windows": [{"start": start.isoformat(), "end": end.isoformat()}],
         }
+
+    def fetch_balances(self, app_config: dict, credential: str, *, realtime: bool = False,
+                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY) -> dict:
+        """Each account's balance, in the shape of a page's `balances`, for a provider whose pulls do not
+        carry them. The caller asks once per successful pull, after the drain, so a provider that bills or
+        meters the request pays for it once per sync. `realtime` asks for a live figure rather than the
+        provider's cached one, and is passed only where the adapter declares `offers_realtime_balances` and
+        the user turned it on. The default reports nothing: a provider whose pages carry balances has
+        already reported them."""
+        return {}
 
     def capture_fields(self) -> list[dict]:
         """What this provider can capture per transaction, for the connection's field picker:

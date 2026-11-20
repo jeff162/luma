@@ -47,6 +47,7 @@ from backend.services.providers.config import (
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.wallet_pairs import pair_after_ingest
 from backend.services.pending_supersession import oldest_held_pending_date, settle_vanished_pending
+from backend.services.account_balances import record_provider_balances
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
     NOTHING_PROTECTED,
@@ -971,7 +972,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 
     _SELECT_CONNECTIONS = (
         "SELECT id, provider, external_id, credential, credential_enc, institution, nickname, "
-        "transactions_cursor, initial_sync_complete, provider_request_budget FROM connection"
+        "transactions_cursor, initial_sync_complete, provider_request_budget, realtime_balances FROM connection"
     )
 
     with get_db() as conn:
@@ -1628,6 +1629,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                         account_for=_account_for,
                     ))
                     record_listed_accounts(conn, connection["id"], page.get("complete_listings"))
+                    record_provider_balances(conn, page.get("balances"), _account_for)
                     cursor = page["next_cursor"]
                     final_status = page["update_status"]
                     # Defaulted rather than required so an adapter written before this field still reads as
@@ -1714,6 +1716,22 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 discovered += _discover_new_provider_accounts(
                     connection, adapter, app_config, credential, seen_unknown, connection_advisories,
                 )
+                # Once per pull and after the drain, for a provider whose pages carry no balances. A
+                # failure here leaves the pull's rows standing: balances are reported, not lost, so the
+                # problem is a warning on a sync that otherwise succeeded. Committed first, since nothing may
+                # be held open across a provider call.
+                conn.commit()
+                try:
+                    balances = adapter.fetch_balances(
+                        app_config, credential, ledger_currency=ledger_currency,
+                        realtime=adapter.offers_realtime_balances and bool(connection["realtime_balances"]),
+                    )
+                    record_provider_balances(conn, balances, _account_for)
+                except Exception as e:
+                    log_warning(f"[sync] balances not fetched for connection {connection['id']}: {e}")
+                    message = f"Balances were not updated: {e}"
+                    if message not in connection_warnings:
+                        connection_warnings.append(message)
                 # With this pull's listings recorded, two provider accounts sharing a local account can be
                 # told apart; the next pull then routes the winner's rows and fetches its history.
                 resolve_shared_account_claims(conn, connection["id"])

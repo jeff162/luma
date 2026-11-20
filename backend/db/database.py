@@ -376,13 +376,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `csv_import_profile.watch_restore_pending`, a watched folder a restore from another system switched off
 # and nobody has yet said to use here or clear. v96 adds `connection_account.replaced_by` and
 # `.last_listed_at`, the provider account that took over a local account and the last day a pull's listing
-# returned it.
+# returned it. v97 adds `account_balance`, the balances a source stated for an account, and
+# `connection.realtime_balances`, whether a connection's syncs ask for a live balance.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 96
+CURRENT_VERSION = 97
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2903,6 +2904,28 @@ def _add_connection_account_replacement(conn):
             conn.execute(f"ALTER TABLE connection_account ADD COLUMN {name} TEXT")
 
 
+@migration(97)
+def _add_account_balance(conn):
+    # See the baseline CREATEs. Empty: no balance was recorded before the table. Every connection starts on
+    # the provider's cached balance.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if columns and "realtime_balances" not in columns:
+        conn.execute("ALTER TABLE connection ADD COLUMN realtime_balances INTEGER NOT NULL DEFAULT 0")
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account'").fetchone():
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_balance (
+            account_id  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+            as_of_date  TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            balance     REAL NOT NULL,
+            available   REAL,
+            recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (account_id, as_of_date, source)
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3137,6 +3160,10 @@ def init_db(db_path: str | None = None):
                 -- connection (see ProviderAdapter.capture_fields). NULL = the adapter's defaults. Locked
                 -- fields are always captured and never appear here.
                 captured_fields TEXT,
+                -- 1 = each sync asks the provider for a live balance rather than the copy it last cached,
+                -- for an adapter that offers the choice (`ProviderAdapter.offers_realtime_balances`). Off by
+                -- default because the provider bills each live request.
+                realtime_balances INTEGER NOT NULL DEFAULT 0,
                 -- Sync health, so the Connections card can report it without being expanded. These four
                 -- describe DIFFERENT things and are deliberately not collapsed into one:
                 --   last_synced_at            the last *successful* pull — the freshness of the data, not
@@ -3690,6 +3717,23 @@ def init_db(db_path: str | None = None):
                 account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
                 tag_id     TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
                 PRIMARY KEY (account_id, tag_id)
+            );
+
+            -- Balances a source stated for an account (services/account_balances.py). Only stated balances
+            -- are stored; a balance on any other date is derived from the nearest one and the ledger.
+            -- `balance` is the household's position (held positive, owed negative), whatever the source's
+            -- own sign. `source` is 'provider'. Keyed to the raw account row, since a balance describes one
+            -- physical account; a group's balance is read from its members.
+            CREATE TABLE IF NOT EXISTS account_balance (
+                account_id  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+                as_of_date  TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                balance     REAL NOT NULL,
+                -- What the source says can be spent now (funds, or remaining credit), as it states it.
+                -- Not a position, so it takes no sign. NULL where the source gives none.
+                available   REAL,
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (account_id, as_of_date, source)
             );
 
             -- Records account pairs the user has explicitly declared distinct via Keep on a

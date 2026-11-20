@@ -32,6 +32,9 @@ export default function ConnectionAccountMapDialog({
   error = null,
   onSave,
   onToggleCaptureField,
+  // null when the provider offers no choice of balance; otherwise whether syncs ask for a live one.
+  realtimeBalances = null,
+  onToggleRealtimeBalances,
   onClose,
   // A fresh connect must resolve every account before history is pulled; reopening later to adjust
   // one mapping should not force decisions on the rest.
@@ -191,6 +194,23 @@ export default function ConnectionAccountMapDialog({
                 </label>
               ))}
             </div>
+          </div>
+        ) : null}
+        {realtimeBalances !== null ? (
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Balances</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.5 }}>
+              Without a live balance, each sync records the balance the provider last cached, usually about
+              a day old. The provider bills each live request.
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!realtimeBalances}
+                onChange={e => onToggleRealtimeBalances?.(e.target.checked)}
+              />
+              Ask for a live balance on each sync
+            </label>
           </div>
         ) : null}
       </AppDialog>

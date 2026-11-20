@@ -109,6 +109,8 @@ ACCOUNT_REFERENCES: tuple[AccountReference, ...] = (
 
     # Statements about the account row itself, with nothing left to say once it is gone.
     AccountReference("account_tag", "account_id", CASCADE, CASCADE),
+    # A balance describes one physical account, so the account taking the history has its own.
+    AccountReference("account_balance", "account_id", CASCADE, CASCADE),
     AccountReference("account_pair_distinct", "account_id_low", CASCADE, CASCADE),
     AccountReference("account_pair_distinct", "account_id_high", CASCADE, CASCADE),
 )

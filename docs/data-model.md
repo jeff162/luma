@@ -85,7 +85,8 @@ off, and it never changes what a write does. A rule created under the lens gets 
 ## Accounts
 
 An account is a bank, card, wallet or marketplace account, created by mapping a connection, by a CSV
-import, or by hand. It is a reporting and ownership dimension only: it carries no balance.
+import, or by hand. It is a reporting and ownership dimension. The balances a source states for it are
+kept beside it (see [Account balances](#account-balances)).
 
 ### Data-source linkage
 
@@ -305,6 +306,27 @@ canonically (`*_low < *_high`), cascades with either side, and rides the data ba
   Amazon reconciliation report. The unaccounted grouping will not chain an asserted pair, and an
   order-anchored duplicate bucket is skipped only when every pair in the group is asserted. A re-import
   that adds a new copy forms new, unasserted pairs.
+
+### Account balances
+
+`account_balance` holds the balances a source **stated** for an account, one row per account, date and
+source (`services/account_balances.py`). A balance on any other date is derived from a stated one and the
+ledger in between, so no stored figure has to follow later edits to the ledger.
+
+- **`balance` is the household's position**: positive for money held, negative for money owed. Each source
+  converts its own sign on the way in (`building-a-connector.md` → *Balances*), so derivation and totals
+  never ask an account's type. A transaction's `amount` lowers the position on every type alike.
+- **`available` is what the source says can be spent now**, funds in a bank account or remaining credit on
+  a card, as stated. It is not a position and takes no sign.
+- **Keyed to the raw account row**, not the effective account, because a balance describes one physical
+  account. A merge leaves it in place, and removing the account deletes it, since the account taking the
+  history has a balance of its own.
+- **A source restating a date replaces its figure for that date**, since a provider re-reports the same day
+  on every sync. `source` is `provider`.
+- **Nothing is recorded for a provider account with no local account** (unmapped, or Skip), or for an
+  account in another currency, for the reason its rows are discarded.
+- Backed up (`account_balances`): a provider reports only its current balance, so nothing re-derives an
+  earlier one.
 
 ## Transactions
 

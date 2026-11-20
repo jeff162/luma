@@ -137,6 +137,7 @@ TABLE_TO_SECTION = {
     "txn_tag": "txn_tags",
     "category_tag": "category_tags",
     "account_tag": "account_tags",
+    "account_balance": "account_balances",
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
     "amazon_charge_distinct": "amazon_charge_distinct",
@@ -220,12 +221,12 @@ class BackupFixtureTestCase(unittest.TestCase):
                     """
                     INSERT INTO connection
                         (id, provider, external_id, credential, credential_enc, institution, captured_fields,
-                         transactions_cursor, initial_sync_complete, last_synced_at, last_sync_error,
+                         realtime_balances, transactions_cursor, initial_sync_complete, last_synced_at, last_sync_error,
                          last_sync_error_at, consecutive_sync_failures, last_sync_warnings, reauth_required,
                          last_sync_outcome, last_sync_summary, provider_request_budget,
                          provider_request_budget_at)
                     VALUES ('fixture-conn', 'plaid', 'item-fixture', '', 'sealed-token', 'Fixture Bank',
-                            '["counterparty"]', 'cursor-at-backup', 1, '2026-04-15T08:00:00Z', 'timed out',
+                            '["counterparty"]', 1, 'cursor-at-backup', 1, '2026-04-15T08:00:00Z', 'timed out',
                             '2026-04-14T08:00:00Z', 1, '["one bank needs attention"]', 0, 'ok',
                             '{"added": 2}', '{"spent": 10}', '2026-04-15T08:00:00.000000Z')
                     """
@@ -255,6 +256,9 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute("INSERT INTO txn_tag (txn_id, tag_id, rule_present, manual_state) VALUES (?, ?, 0, 1)", (txn, tag))
                 conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (leaf, tag))
                 conn.execute("INSERT INTO account_tag (account_id, tag_id) VALUES (?, ?)", (a2, tag))
+                conn.execute(
+                    "INSERT INTO account_balance (account_id, as_of_date, source, balance, available, recorded_at) "
+                    "VALUES (?, '2026-04-15', 'provider', -412.5, 1587.5, '2026-04-15 08:00:00')", (a1,))
                 conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule, tag))
                 # An alerting rule (every alert column away from its default) and the row it caught.
                 conn.execute("UPDATE category_rule SET alert = 1, alert_message = 'Closed card used' WHERE id = ?",

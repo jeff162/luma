@@ -346,6 +346,8 @@ def list_providers(request: Request):
             # Names the card's menu entry: with nothing optional to capture, the dialog it opens is only
             # the account mapping, and "settings" would promise choices it does not have.
             "has_optional_capture_fields": any(not f.get("locked") for f in adapter.capture_fields()),
+            # A choice the same dialog offers, so it also earns the "settings" name.
+            "offers_realtime_balances": adapter.offers_realtime_balances,
         })
     return {"providers": out}
 

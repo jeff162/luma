@@ -2396,7 +2396,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           The mapping can be changed from <strong>Account mapping&hellip;</strong> in the card's menu;
-          for a provider with optional details to capture (Plaid), the entry
+          for a provider with optional details to capture or a choice of live balances (Plaid), the entry
           is <strong>Connection settings&hellip;</strong> and covers those as well. An account added at the
           provider later has to be mapped as well (see <em>When a connection needs attention</em> below).
         </p>

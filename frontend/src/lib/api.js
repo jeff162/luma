@@ -643,6 +643,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fields }),
     }),
+  setConnectionRealtimeBalances: (connectionId, enabled) =>
+    request(`/connections/${connectionId}/realtime-balances`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
   setConnectionAccountMap: (connectionId, mappings) =>
     request(`/connections/${connectionId}/account-map`, {
       method: 'POST',

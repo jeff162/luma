@@ -82,6 +82,12 @@ class PlaidAdapter(ProviderAdapter):
     reissues_credential = True
     # Every Plaid call carries the client secret beside the access token, so a token is dead without it.
     credential_needs_app_secret = True
+    # `/accounts/balance/get` asks the bank now, billed per call; the default is the free cached copy.
+    offers_realtime_balances = True
+
+    # Plaid states a credit or loan balance as the amount owed, positive; every other type as what the
+    # account holds. Negating the first pair gives the household's position the page contract asks for.
+    _OWED_TYPES = frozenset({"credit", "loan"})
 
     def create_link_token(self, app_config: dict, user_id: str = "local-user",
                           access_token: str | None = None) -> str:
@@ -114,6 +120,27 @@ class PlaidAdapter(ProviderAdapter):
             }
             for a in accounts
         ]
+
+    def fetch_balances(self, app_config: dict, credential: str, *, realtime: bool = False,
+                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY) -> dict:
+        # `/transactions/sync` returns accounts too, but only those with transactions in that response and
+        # never investment accounts, so it cannot stand in for a listing.
+        with _reconnect_signal():
+            accounts = plaid_service.fetch_balances(app_config, credential, realtime=realtime)
+        # A cached balance is from the Item's last update, which Plaid dates for only a few institutions;
+        # elsewhere it is recorded as of the day it was read.
+        today = date.today().isoformat()
+        out = {}
+        for a in accounts:
+            if a["current"] is None or not currency_matches(ledger_currency, a.get("currency")):
+                continue
+            current = float(a["current"])
+            out[a["plaid_account_id"]] = {
+                "balance":   -current if a["type"] in self._OWED_TYPES else current,
+                "available": a["available"],
+                "as_of":     a["last_updated"] or today,
+            }
+        return out
 
     # What Plaid can capture per transaction. `posted_date`, the descriptor, the counterparties and
     # the check number are locked on: duplicate detection reads all four, so letting them be turned off
