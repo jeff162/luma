@@ -179,8 +179,8 @@ writing a test apply once one has earned its place (`collaboration-notes.md` →
   cheap enough to run whole. A docs or comment-only edit gets lint and a link check, since no suite can
   observe it.
 
-- Run `npm run lint` (from `frontend/`) after editing any `backend/*.py`, because it carries ruff and
-  the backend guards (timestamps, comments), which pytest does not run.
+- Run `npm run lint` (from `frontend/`) after editing any `backend/*.py` or `scripts/*.py`, because it
+  carries ruff and the backend guards (timestamps, comments), which pytest does not run.
 
 - The pre-commit hook reads `git diff --cached` and the personal-data guard scans `git ls-files`, so
   neither sees an untracked file; name new files to the checker directly

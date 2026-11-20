@@ -1,7 +1,7 @@
 # Lint-only deps. Mirrors [project.optional-dependencies].dev in pyproject.toml, just as
 # requirements-test.txt mirrors .test. Install: pip install -r requirements-dev.txt
 #
-# ruff is configured in pyproject.toml ([tool.ruff]) and gates `npm run lint`, which CI runs — so a
+# ruff is configured in ruff.toml at the repository root and gates `npm run lint`, which CI runs — so a
 # checkout without this file installed will fail that step. It is deliberately not in the pre-commit
 # hook; see CONTRIBUTING.md -> "Hooks and lint" for why.
-ruff==0.16.6
+ruff==0.17.6

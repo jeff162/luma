@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-// Backend lint entry point, invoked from `npm run lint` alongside the comment and timestamp checks.
+// Python lint entry point, invoked from `npm run lint` alongside the comment and timestamp checks. It
+// covers `backend/` and the build and release scripts in `scripts/`; the rules are in /ruff.toml.
 //
 // ruff ships as a standalone executable rather than a Python script, so this cannot go through
 // python-runner.js (which runs a .py file). Two things make the discovery its own problem:
@@ -22,7 +23,7 @@ const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
 const repoRoot = path.resolve(__dirname, '..')
-const target = path.join(repoRoot, 'backend')
+const targets = [path.join(repoRoot, 'backend'), path.join(repoRoot, 'scripts')]
 const isWindows = process.platform === 'win32'
 
 const venvRuff = isWindows
@@ -44,7 +45,7 @@ for (const [command, prefixArgs] of candidates) {
   if (probe.error || probe.status !== 0) {
     continue
   }
-  const result = spawnSync(command, [...prefixArgs, 'check', target], { stdio: 'inherit' })
+  const result = spawnSync(command, [...prefixArgs, 'check', ...targets], { stdio: 'inherit' })
   if (result.error) {
     throw result.error
   }

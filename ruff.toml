@@ -1,0 +1,32 @@
+# ruff's settings for every Python file in the repository: `backend/` and the build and release
+# scripts in `scripts/`. Kept at the root so that any ruff (the `npm run lint` gate, an editor plugin,
+# a bare `ruff check`) finds the same rules from either folder.
+line-length = 100
+target-version = "py312"
+
+[lint]
+# Deliberately narrow, chosen from a measured first run rather than a preset.
+#
+# `F` is the half that behaves like a compiler for a language that does not have one: an undefined
+# name, a redefinition that silently discards the first definition, a comparison that cannot be true.
+# Those are runtime errors here, and only in whichever branch a test happens not to cover. It is
+# already clean of all of them, which is what makes it a gate rather than a cleanup project.
+#
+# `DTZ003`/`DTZ005` are the general form of scripts/check-backend-timestamps.js: a stored timestamp
+# must flow through time_utils.utcnow_iso() rather than a naive datetime. The rest of the DTZ family
+# is deliberately excluded — 56 of its remaining hits are `date.today()`, and a local calendar date
+# is usually the right thing in a ledger.
+#
+# The timestamp guard is kept alongside these on purpose. It runs in the pre-commit hook with nothing to
+# install, and its `# local-time: <reason>` exemption requires a reason; here each such line would need a
+# `# noqa`, which does not.
+#
+# Not selected, both measured and rejected: `E`/`W`, because 140 of their 144 hits are the deliberate
+# column-aligned one-liners in backend/routers/categories.py and enforcing them would mean reformatting
+# correct code; and `I`, which is autofixable but rewrites imports across ~119 files to catch nothing.
+# Run `ruff check --select I --fix` by hand if import ordering is ever worth its own pass.
+select = ["F", "DTZ003", "DTZ005"]
+
+# Only consulted by an explicit `--select I` run, since `I` is not in the selection above.
+[lint.isort]
+known-first-party = ["backend"]
