@@ -199,12 +199,21 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   scoped to one group, can live only in the right-click menu.
 - **On a touch screen, press-and-hold opens the right-click menu** (`lib/touchContextMenu.js`, installed
   once for the whole app), because iPad Safari fires no `contextmenu` for a long press. A surface needs no
-  code of its own. So that the hold does not also start a text selection, text is unselectable on a touch
-  screen except in fields.
+  code of its own.
+- **The browser's own right-click menu and text selection are withheld unless a place opts in.** With a
+  mouse, the app has many right-click menus of its own, and the browser's menu is withheld app-wide so
+  that each place opts in rather than each menu having to opt out. Where the app offers no menu of its
+  own, letting the browser's through is generally wanted, for Copy and the rest. Page bodies opt in with
+  `data-browser-context-passthrough`, and other places opt in as they are identified.
+  On a touch screen, press-and-hold opens the app's menu, and a hold that also selected text would
+  select a word and raise Safari's copy bubble at the same time, so text is unselectable there.
+  Text fields keep both, wherever they render.
 - **Text that is there to be read and copied is marked `ui-selectable`**: a help topic, an error, the
-  source detail card. The mark restores selection on a touch screen and the browser's own right-click
-  menu with a mouse, which the app otherwise withholds outside page bodies that opt in with
-  `data-browser-context-passthrough`. Text fields get the browser's menu wherever they render.
+  source detail card. The mark restores selection and Safari's copy bubble on a touch screen, and the
+  browser's right-click menu with a mouse, so the same text can be copied on either kind of device.
+  Mark text a user plausibly wants to copy where nothing on screen already copies it. Never mark text on
+  or inside an element that has its own right-click menu, because on a touch screen the hold would
+  both select and open the menu. Such text gets a copy button instead.
 
 ## Transaction lists
 
