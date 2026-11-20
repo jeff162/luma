@@ -53,6 +53,7 @@ from backend.services.account_references import (
     replace_account_reference_in_batch_snapshots,
     replace_account_reference_in_profile_column_maps,
 )
+from backend.services.account_balances import current_balances
 from backend.services.account_groups import set_account_parent
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_settings_followups import settle_account_change
@@ -79,6 +80,7 @@ class AccountUpdate(BaseModel):
     type: Optional[str] = None
     # A wallet's text to find its other side by (services/wallet_accounts.py); "" is none.
     wallet_match_text: Optional[str] = None
+    exclude_from_net_worth: Optional[bool] = None
 
 
 class AccountAttachRequest(BaseModel):
@@ -131,6 +133,7 @@ def _get_account_row(conn, account_id: str):
             a.type,
             a.subtype,
             a.wallet_match_text,
+            a.exclude_from_net_worth,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -170,6 +173,7 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.type,
             a.subtype,
             a.wallet_match_text,
+            a.exclude_from_net_worth,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -336,6 +340,10 @@ def list_accounts(include_children: bool = False, include_trashed: bool = False)
     with get_db() as conn:
         rows = _list_account_rows(conn, include_children=include_children, include_trashed=include_trashed)
         accounts = _attach_account_tags(conn, [_serialize_account(r) for r in rows])
+        # A group has one balance, carried on its root; a member's row has none of its own to show.
+        balances = current_balances(conn)
+        for account in accounts:
+            account["balance"] = None if account["parent_account_id"] else balances.get(account["id"])
     return accounts
 
 
@@ -402,6 +410,13 @@ def update_account(account_id: str, body: AccountUpdate):
                 raise HTTPException(status_code=400, detail=str(e))
             settings_changed = settings_changed or next_text != (acc["wallet_match_text"] or "")
             conn.execute("UPDATE account SET wallet_match_text = ? WHERE id = ?", (next_text, account_id))
+
+        if body.exclude_from_net_worth is not None:
+            # Read from the group root, as type is, so a member's own setting would do nothing until detached.
+            if acc["parent_account_id"]:
+                raise HTTPException(status_code=400, detail="Set this on the group's top account")
+            conn.execute("UPDATE account SET exclude_from_net_worth = ? WHERE id = ?",
+                         (int(body.exclude_from_net_worth), account_id))
 
         if body.owner_id is not None:
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)

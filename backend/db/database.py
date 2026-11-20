@@ -377,13 +377,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # and nobody has yet said to use here or clear. v96 adds `connection_account.replaced_by` and
 # `.last_listed_at`, the provider account that took over a local account and the last day a pull's listing
 # returned it. v97 adds `account_balance`, the balances a source stated for an account, and
-# `connection.realtime_balances`, whether a connection's syncs ask for a live balance.
+# `connection.realtime_balances`, whether a connection's syncs ask for a live balance. v98 adds
+# `account.exclude_from_net_worth`.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 97
+CURRENT_VERSION = 98
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2926,6 +2927,14 @@ def _add_account_balance(conn):
     """)
 
 
+@migration(98)
+def _add_exclude_from_net_worth(conn):
+    # See the baseline CREATE. Every account starts in net worth; `other` accounts are kept out by type.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if columns and "exclude_from_net_worth" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN exclude_from_net_worth INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3515,7 +3524,10 @@ def init_db(db_path: str | None = None):
                 trashed_at          TEXT,
                 -- A wallet account's text to find its other side by on a bank or card row
                 -- (services/wallet_accounts.py). NULL = never set; '' = the user says none.
-                wallet_match_text   TEXT
+                wallet_match_text   TEXT,
+                -- 1 = the user keeps this account's balance out of net worth. Read from the group root, and
+                -- an `other` account is out whatever this says (`docs/data-model.md` -> *Account balances*).
+                exclude_from_net_worth INTEGER NOT NULL DEFAULT 0
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).

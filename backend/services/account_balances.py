@@ -17,6 +17,7 @@ account type alike.
 date, since a provider re-reports the same day's balance on every sync.
 """
 
+from datetime import date
 from typing import Callable, Optional
 
 PROVIDER_SOURCE = "provider"
@@ -45,3 +46,65 @@ def record_provider_balances(conn, balances: Optional[dict],
         )
         recorded += 1
     return recorded
+
+
+# How old an account's latest stated balance may be before it is shown as stale, and how close together two
+# members of a group must report for both to be live feeds. A connected account restates its balance on every
+# sync, so a week without one means its feed has stopped.
+STALE_AFTER_DAYS = 7
+
+
+def current_balances(conn, today: Optional[date] = None) -> dict:
+    """Each account group's balance today, keyed by group root.
+
+    A group has one balance, anchored on the latest balance any member stated (the latest-recorded among
+    those on the same day) and carried forward through the group's posted, live rows dated after it. The
+    anchor is taken as that day's closing balance, so a row on the anchor's own date is already in it. A
+    pending row is left out, as no source's stated balance counts one. A group with no stated balance is
+    absent.
+
+    `also_reporting` names the other members whose own latest balance falls within `STALE_AFTER_DAYS` of
+    the anchor's: two live feeds into one group, where only one can be the group's balance."""
+    today = today or date.today()
+    anchors = {
+        row["root_id"]: row for row in conn.execute(
+            """
+            SELECT COALESCE(a.parent_account_id, a.id) AS root_id, b.account_id, b.as_of_date, b.source,
+                   b.balance, b.available, MAX(b.as_of_date || ' ' || b.recorded_at) AS latest
+            FROM account_balance b
+            JOIN account a ON a.id = b.account_id
+            GROUP BY root_id
+            """)
+    }
+    member_latest = conn.execute(
+        """
+        SELECT COALESCE(a.parent_account_id, a.id) AS root_id, b.account_id, MAX(b.as_of_date) AS as_of_date
+        FROM account_balance b
+        JOIN account a ON a.id = b.account_id
+        GROUP BY b.account_id
+        """).fetchall()
+    result = {}
+    for root_id, anchor in anchors.items():
+        as_of = date.fromisoformat(anchor["as_of_date"])
+        later = conn.execute(
+            """
+            SELECT COALESCE(SUM(t.amount), 0)
+            FROM txn t
+            JOIN account a ON a.id = t.account_id
+            WHERE COALESCE(a.parent_account_id, a.id) = ? AND t.date > ?
+              AND t.trashed_at IS NULL AND t.is_pending = 0
+            """, (root_id, anchor["as_of_date"])).fetchone()[0]
+        result[root_id] = {
+            # A transaction's amount is positive for money out, so it lowers the position.
+            "amount": round(anchor["balance"] - later, 2),
+            "available": anchor["available"],
+            "as_of_date": anchor["as_of_date"],
+            "source": anchor["source"],
+            "account_id": anchor["account_id"],
+            "stale": (today - as_of).days > STALE_AFTER_DAYS,
+            "also_reporting": sorted(
+                m["account_id"] for m in member_latest
+                if m["root_id"] == root_id and m["account_id"] != anchor["account_id"]
+                and (as_of - date.fromisoformat(m["as_of_date"])).days <= STALE_AFTER_DAYS),
+        }
+    return result

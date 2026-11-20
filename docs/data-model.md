@@ -328,6 +328,24 @@ ledger in between, so no stored figure has to follow later edits to the ledger.
 - Backed up (`account_balances`): a provider reports only its current balance, so nothing re-derives an
   earlier one.
 
+**The balance today is derived per group** (`current_balances`), and is what the Accounts page shows on a
+group's top row.
+
+- **It anchors on the latest balance any member stated**, the latest recorded among those on one day,
+  because a group is one account to the rest of the app.
+- **It is carried forward through the group's live, posted rows dated after the anchor.** A stated
+  balance is taken as that day's closing balance, so a row on the anchor's own date is already in it. A
+  pending row is left out, as no source's balance counts one.
+- **It is stale after `STALE_AFTER_DAYS` (7) with no newer balance**, since a connected account restates
+  its balance on every sync.
+- **A second member stating a balance within that window of the anchor is reported** (`also_reporting`):
+  two live feeds into one group, of which only the latest can count.
+
+**`account.exclude_from_net_worth`** keeps an account's balance out of net worth. It is read from the
+group root, as type is, so a member's own value lies dormant until it is detached, and the API refuses to
+set it on a member. An `other` account is out whatever the column says, because the type says nothing
+about what the account is; the column keeps its value so a retype restores the user's choice.
+
 ## Transactions
 
 `txn` is the central fact table.

@@ -19,6 +19,8 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES, isWalletAccountType } from '../lib/accountTypes.js'
+import { formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
+import { formatDate } from '../lib/utils.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
@@ -41,7 +43,7 @@ const ACCOUNTS_COLUMNS_PREF_KEY = 'ui.accounts.columns'
 // Account-list column geometry. Name is the fluid filler (`minmax(0, 1fr)`) so the table always fits
 // its container with no horizontal scrollbar: the divider between Name and Type trades width between
 // those two, and the dividers after it follow the shared rule in `lib/columnDividers.js`. The
-// drag-handle and delete gutters stay fixed, so Tags is resized from its left divider. Widths/order
+// drag-handle, net-worth and delete gutters stay fixed, so Balance is resized from its left divider. Widths/order
 // persist via the shared useColumnPreference model. Order MUST match the header config and the cell
 // order rendered by AccountRow/DraftAccountRow.
 const ACCOUNT_COLUMN_DEFAULTS = [
@@ -50,6 +52,8 @@ const ACCOUNT_COLUMN_DEFAULTS = [
   { key: 'type', width: 110, minWidth: 90 },
   { key: 'owner', width: 116, minWidth: 96 },
   { key: 'tags', width: 112, minWidth: 84 },
+  { key: 'balance', width: 112, minWidth: 90 },
+  { key: 'netWorth', width: 72, resizable: false },
   { key: 'actions', width: 28, resizable: false },
 ]
 
@@ -486,12 +490,13 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
             />
           </div>
 
-          {/* The tags cell is free while drafting (tags are added once the account exists), and the
-              action track only fits the ⋯ menu, so the submit sits here beside the cancel. */}
+          {/* Tags, balance and net worth have nothing to set until the account exists, and the action
+              track only fits the ⋯ menu, so the submit spans the last two beside the cancel. */}
+          <div />
           <Button
             type="submit"
             disabled={creating}
-            style={{ justifySelf: 'end', height: ACCOUNT_CONTROL_HEIGHT, padding: '0 12px' }}
+            style={{ gridColumn: 'span 2', justifySelf: 'end', height: ACCOUNT_CONTROL_HEIGHT, padding: '0 12px' }}
           >
             {creating ? 'Adding…' : 'Add'}
           </Button>
@@ -950,8 +955,62 @@ function AccountTagsCell({
   )
 }
 
+// A group's balance sits on its top row; a member row has none of its own. The second line dates the
+// balance the figure was carried forward from, in the warning color once it is old enough that the
+// source has stopped restating it.
+const BALANCE_SOURCE_PHRASES = { provider: 'Reported by the connection' }
+
+function AccountBalanceCell({ balance, rootId, accountLabel }) {
+  if (!balance) return <div />
+  const others = balance.also_reporting.map(accountLabel)
+  const tip = [
+    `${BALANCE_SOURCE_PHRASES[balance.source] || 'Stated'} on ${formatDate(balance.as_of_date)}, and carried forward through any later posted transactions.`,
+    balance.account_id !== rootId ? `From ${accountLabel(balance.account_id)}.` : null,
+    balance.available != null ? `${formatMoneyMagnitude(balance.available)} available, as reported.` : null,
+    balance.stale ? 'No newer balance has been reported for over a week.' : null,
+    others.length ? `${others.join(', ')} also reported a balance within a week of it. Only the latest counts.` : null,
+  ].filter(Boolean)
+  return (
+    <Tooltip content={<div style={{ display: 'grid', gap: 4 }}>{tip.map(line => <div key={line}>{line}</div>)}</div>} align="right">
+      <div style={{ textAlign: 'right', minWidth: 0, fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
+          {others.length ? <span style={{ color: 'var(--warning)', marginRight: 4 }}>⚠</span> : null}
+          {formatSignedMoneyAmount(balance.amount)}
+        </div>
+        <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? 'var(--warning)' : 'var(--muted)' }}>
+          {formatDate(balance.as_of_date)}
+        </div>
+      </div>
+    </Tooltip>
+  )
+}
+
+// Set on the group's top row, as type is. An `other` account says nothing about what it holds, so it
+// stays out whatever its own setting.
+function NetWorthCell({ account, isChild, disabled, onChange }) {
+  if (isChild) return <div />
+  const forced = (account.type || 'other') === 'other'
+  const title = forced ? 'Accounts of type Other cannot be included in net worth' : 'Exclude from net worth'
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center' }}>
+      <Tooltip content={title}>
+        <input
+          type="checkbox"
+          checked={forced || !!account.exclude_from_net_worth}
+          disabled={forced || disabled}
+          onChange={e => onChange(e.target.checked)}
+          aria-label={title}
+          // A disabled control takes no pointer events in some browsers, so the hover reaches the tooltip.
+          style={{ margin: 0, cursor: forced || disabled ? 'default' : 'pointer', pointerEvents: forced ? 'none' : undefined }}
+        />
+      </Tooltip>
+    </div>
+  )
+}
+
 function AccountRow({
   account,
+  accountLabel = () => '',
   parentAccount = null,
   hasChildren = false,
   isLastChild = false,
@@ -1432,6 +1491,15 @@ function AccountRow({
           onTagCreated={onAccountTagCreated}
         />
 
+        <AccountBalanceCell balance={isChild ? null : account.balance} rootId={account.id} accountLabel={accountLabel} />
+
+        <NetWorthCell
+          account={account}
+          isChild={isChild}
+          disabled={interactionDisabled}
+          onChange={exclude => savePatch({ exclude_from_net_worth: exclude })}
+        />
+
         {/* An overflow menu where a one-press × used to be, and the extra press is the point rather
             than tidiness: removing an account is permanent (`AccountRemovalDialog` says why no undo is
             possible), so the protection has to be the path to it. A single-item menu is the right
@@ -1563,6 +1631,13 @@ export default function Accounts() {
     () => buildAccountGridTemplate(effectiveAccountColumns),
     [effectiveAccountColumns],
   )
+
+  // A member named by its own name and mask, as the row shows it, since a group's members share a display name.
+  const accountLabel = useCallback(id => {
+    const account = accounts.find(a => a.id === id)
+    if (!account) return ''
+    return account.mask ? `${account.name} ···${account.mask}` : account.name
+  }, [accounts])
 
   const accountDividerDraggable = key => dividerIsDraggable(accountColumns, accountColumns.findIndex(c => c.key === key))
 
@@ -2585,6 +2660,30 @@ export default function Accounts() {
                                     </IconButton>
                                   ),
                                 },
+                                {
+                                  key: 'balance',
+                                  label: 'Balance',
+                                  align: 'right',
+                                  sortable: false,
+                                  cellPadding: 0,
+                                  contentPadding: '0 9px',
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: accountDividerDraggable('balance'),
+                                  draggable: false,
+                                },
+                                {
+                                  key: 'netWorth',
+                                  label: 'Exclude',
+                                  align: 'center',
+                                  sortable: false,
+                                  cellPadding: 0,
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: false,
+                                  draggable: false,
+                                  title: 'Exclude from net worth',
+                                },
                                 { key: 'actions', kind: 'spacer', cellPadding: 0 },
                               ]}
                               gridTemplateColumns={accountGridTemplate}
@@ -2673,6 +2772,7 @@ export default function Accounts() {
                                 <div key={root.id}>
                                   <AccountRow
                                     account={root}
+                                    accountLabel={accountLabel}
                                     gridTemplateColumns={accountGridTemplate}
                                     hasChildren={children.length}
                                     isCollapsed={isCollapsed}
@@ -2708,6 +2808,7 @@ export default function Accounts() {
                                     <AccountRow
                                       key={child.id}
                                       account={child}
+                                      accountLabel={accountLabel}
                                       gridTemplateColumns={accountGridTemplate}
                                       parentAccount={root}
                                       isLastChild={childIdx === children.length - 1}

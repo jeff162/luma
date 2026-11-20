@@ -8,9 +8,11 @@ card's debt as money held in every total built on it.
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -18,6 +20,7 @@ from unittest import mock
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
 from backend.services import plaid_service
+from backend.services.account_balances import current_balances
 from backend.services.providers.plaid import PlaidAdapter
 
 from backend.tests._fake_adapter import FakeCursorAdapter
@@ -143,6 +146,56 @@ class SyncRecordsBalancesTests(unittest.TestCase):
             conn.execute("UPDATE connection SET realtime_balances = 1 WHERE id = ?", (self.CONNECTION_ID,))
         self._sync(adapter)
         self.assertEqual(adapter.balance_calls, [False, True])
+
+
+class CurrentBalanceTests(unittest.TestCase):
+    """The derived balance today: one per group, carried forward from its latest stated balance."""
+    TODAY = date(2026, 8, 16)
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        init_db(str(Path(self.tempdir.name) / "current.db"))
+        self.conn = sqlite3.connect(str(Path(self.tempdir.name) / "current.db"))
+        self.conn.row_factory = sqlite3.Row
+        self.addCleanup(self.conn.close)
+        for account_id, parent in (("card", None), ("old-card", "card"), ("cash", None)):
+            self.conn.execute(
+                "INSERT INTO account (id, name, display_name, type, parent_account_id) "
+                "VALUES (?, ?, ?, 'credit', ?)", (account_id, account_id, account_id, parent))
+
+    def _state(self, account_id, as_of, balance, recorded_at="2026-08-01 00:00:00"):
+        self.conn.execute(
+            "INSERT INTO account_balance (account_id, as_of_date, source, balance, recorded_at) "
+            "VALUES (?, ?, 'provider', ?, ?)", (account_id, as_of, balance, recorded_at))
+
+    def _txn(self, account_id, day, amount, pending=0, trashed_at=None):
+        self.conn.execute(
+            "INSERT INTO txn (id, account_id, amount, merchant_name, display_name, raw_name, date, is_pending, "
+            "trashed_at) VALUES (?, ?, ?, 'M', 'M', 'M', ?, ?, ?)",
+            (f"{account_id}-{day}-{amount}", account_id, amount, day, pending, trashed_at))
+
+    def test_the_latest_stated_balance_is_carried_forward_through_later_posted_rows(self):
+        self._state("card", "2026-08-10", -100.0)
+        self._state("card", "2026-08-01", -900.0)
+        self._txn("card", "2026-08-10", 7.0)        # on the anchor's day: already in its closing balance
+        self._txn("card", "2026-08-12", 25.0)       # a purchase: more owed
+        self._txn("old-card", "2026-08-13", -40.0)  # a payment on another member lands on the group
+        self._txn("card", "2026-08-14", 9.0, pending=1)
+        self._txn("card", "2026-08-15", 11.0, trashed_at="2026-08-16")
+        result = current_balances(self.conn, today=self.TODAY)
+        self.assertEqual(set(result), {"card"})
+        self.assertEqual(result["card"]["amount"], -85.0)
+        self.assertEqual(result["card"]["as_of_date"], "2026-08-10")
+        self.assertFalse(result["card"]["stale"])
+
+    def test_a_group_takes_its_newest_member_balance_and_names_a_second_live_feed(self):
+        self._state("card", "2026-08-01", -50.0)
+        self._state("old-card", "2026-08-05", -60.0)
+        result = current_balances(self.conn, today=self.TODAY)["card"]
+        self.assertEqual((result["account_id"], result["amount"]), ("old-card", -60.0))
+        self.assertEqual(result["also_reporting"], ["card"])
+        self.assertTrue(result["stale"])
 
 
 if __name__ == "__main__":

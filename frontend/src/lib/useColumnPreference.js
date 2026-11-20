@@ -4,7 +4,7 @@
 // Shared column-geometry preference for PillGridTable-hosted tables. Persists the user's column order
 // and widths per kind of screen (`useDeviceLayoutPreference`), and merges a saved config over
 // freshly-computed defaults: keep only known keys (in the saved order), clamp persisted widths to each
-// column's min and a sane max, and append any default column the saved config didn't carry (e.g. one
+// column's min and a sane max, and insert any default column the saved config didn't carry (e.g. one
 // added since the user last customized). Lives in one place so every resizable/reorderable pill table behaves the same
 // — the matching-imported-transactions report and the duplicate-rows dialog both consume it.
 
@@ -39,10 +39,14 @@ export function normalizeColumnConfig(savedColumns, defaultColumns) {
     }
   }
 
-  for (const defaultColumn of defaultColumns) {
-    if (seen.has(defaultColumn.key)) continue
-    merged.push({ ...defaultColumn })
-  }
+  // A column added since the config was saved goes in after the column it follows by default, so it
+  // lands where it was designed to sit rather than past a trailing gutter.
+  defaultColumns.forEach((defaultColumn, index) => {
+    if (seen.has(defaultColumn.key)) return
+    const previousKey = defaultColumns[index - 1]?.key
+    merged.splice(merged.findIndex(column => column.key === previousKey) + 1, 0, { ...defaultColumn })
+    seen.add(defaultColumn.key)
+  })
 
   return merged
 }

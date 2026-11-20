@@ -1847,6 +1847,13 @@ export const HELP_TOPICS = [
           sync, opens the cards it added to.
         </p>
         <p>
+          <strong>Balance</strong> is what an account holds, or owes as a negative amount. It starts from
+          the balance its connection last reported, dated beneath it, and adds the posted transactions dated
+          after that. The date is highlighted once a week passes with no newer balance. A merged group has one
+          balance, from whichever member reported most recently. <strong>Exclude</strong> keeps an account out
+          of net worth; an account of type <em>Other</em> is always out.
+        </p>
+        <p>
           Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
           usually worth it, since they carry the richest transaction detail; a bank account on its own
           represents a month of card purchases a single payment. When both the payment account and the
