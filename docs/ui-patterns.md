@@ -199,8 +199,12 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   scoped to one group, can live only in the right-click menu.
 - **On a touch screen, press-and-hold opens the right-click menu** (`lib/touchContextMenu.js`, installed
   once for the whole app), because iPad Safari fires no `contextmenu` for a long press. A surface needs no
-  code of its own; one whose menu sits on text adds the `ui-context-menu-target` class so the hold does
-  not also start a text selection.
+  code of its own. So that the hold does not also start a text selection, text is unselectable on a touch
+  screen except in fields.
+- **Text that is there to be read and copied is marked `ui-selectable`**: a help topic, an error, the
+  source detail card. The mark restores selection on a touch screen and the browser's own right-click
+  menu with a mouse, which the app otherwise withholds outside page bodies that opt in with
+  `data-browser-context-passthrough`. Text fields get the browser's menu wherever they render.
 
 ## Transaction lists
 

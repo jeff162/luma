@@ -127,7 +127,7 @@ export default function HelpTopicDialog({ topicId, onClose }) {
           <IconButton size="large" aria-label="Close" onClick={onClose}>&times;</IconButton>
         </div>
         <HelpNavContext.Provider value={{ navigate: followLink }}>
-          <div className="help-body" ref={bodyRef}><Body /></div>
+          <div className="help-body ui-selectable" ref={bodyRef}><Body /></div>
         </HelpNavContext.Provider>
         {/* At the foot rather than the top: a linked topic is read through before stepping back, so this is
             where the reader is when they want it, and the two ways out share one line. */}

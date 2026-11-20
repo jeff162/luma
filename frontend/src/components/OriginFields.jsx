@@ -58,7 +58,7 @@ export function MerchantOriginHoverCard({ txn, onPin = null, copyable = false })
   const merchant = txn.display_name || txn.merchant_name || txn.raw_name || '—'
   const rows = getTxnFileOriginRows(txn)
   return (
-    <div style={{ display: 'grid', gap: 6, maxWidth: 360 }}>
+    <div className="ui-selectable" style={{ display: 'grid', gap: 6, maxWidth: 360 }}>
       <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ fontWeight: 600, fontSize: 12.5, wordBreak: 'break-word', minWidth: 0 }}>{merchant}</div>
         {copyable ? (

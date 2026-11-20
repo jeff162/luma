@@ -214,7 +214,7 @@ class AppErrorBoundary extends Component {
     return (
       <div data-browser-context-passthrough="true" style={{ padding: 40, fontFamily: 'sans-serif' }}>
         <h2 style={{ color: 'var(--danger)', marginBottom: 12 }}>Something went wrong</h2>
-        <pre data-browser-context-passthrough="true" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
+        <pre className="ui-selectable" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
           {this.state.error?.message}
         </pre>
         <button
@@ -1610,10 +1610,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // The browser's own menu is withheld except where it has something to offer: a page body that opts
+    // in, a text field (for Copy and Paste wherever it renders), and text marked `ui-selectable`, which
+    // is there to be read and copied (index.html makes the same mark selectable on a touch screen).
+    // A surface with its own right-click menu still opens it, since its handler cancels the event.
     function handleContextMenu(e) {
       const target = e.target
       if (!(target instanceof HTMLElement)) return
-      const passThrough = target.closest('[data-browser-context-passthrough="true"]')
+      const passThrough = target.closest(
+        '[data-browser-context-passthrough="true"], .ui-selectable, '
+        + 'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+      )
       if (passThrough) return
       e.preventDefault()
     }

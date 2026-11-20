@@ -18,8 +18,8 @@
  * - An item drag (`pointerDrag.js`) picks up sooner, and blocks `contextmenu` while it is held, so a drag
  *   in progress never opens a menu.
  *
- * A surface whose menu sits on text (a ledger row) also carries `ui-context-menu-target`, whose styles in
- * `index.html` stop Safari starting a text selection under the same hold.
+ * On a touch screen text is unselectable app-wide (`index.html`), so the same hold does not also start a
+ * Safari text selection; fields and text marked `ui-selectable` keep it.
  */
 
 const HOLD_MS = 500

@@ -282,6 +282,9 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', sid
         <div
           ref={tipRef}
           role="tooltip"
+          // A portal still bubbles React events to the trigger's ancestors, so without this a right-click
+          // in the card would open the menu of the row the trigger sits in.
+          onContextMenu={event => event.stopPropagation()}
           onMouseEnter={interactive ? () => clearTimeout(closeTimer.current) : undefined}
           onMouseLeave={interactive ? hide : undefined}
           style={boxStyle}
@@ -634,7 +637,7 @@ export function AppDialog({
                 </div>
               ) : null}
               {description ? (
-                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                <div className="ui-selectable" style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
                   {description}
                 </div>
               ) : null}

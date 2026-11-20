@@ -140,7 +140,7 @@ export default function Help() {
             </div>
           ) : null}
           <Card style={{ padding: '20px 24px', lineHeight: 1.6, fontSize: 14 }}>
-            <div className="help-body"><Body /></div>
+            <div className="help-body ui-selectable"><Body /></div>
           </Card>
         </div>
       </div>
