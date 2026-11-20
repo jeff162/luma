@@ -34,9 +34,11 @@ CONFIGURATION_LINK = ("/settings?section=configuration", "Open Startup configura
 
 
 def _item(item_id: str, title: str, status: str, detail: str, link: str | None = None,
-          link_label: str | None = None, severity: str | None = None) -> dict:
+          link_label: str | None = None, severity: str | None = None, checked_at: str | None = None) -> dict:
+    # `checked_at` is a timestamp rather than text in `detail`, so the browser can show it in its own time
+    # zone and keep its age current.
     return {"id": item_id, "title": title, "status": status, "detail": detail, "link": link,
-            "link_label": link_label, "severity": severity}
+            "link_label": link_label, "severity": severity, "checked_at": checked_at}
 
 
 def _sign_in_item() -> dict | None:
@@ -161,9 +163,14 @@ def _update_item(tasks: dict[str, dict]) -> dict:
         return _item("update", title, UNKNOWN, "Checking for new versions is turned off.",
                      "/settings?section=about", "Turn it on in About")
     task = tasks.get("update_available")
-    if not task:
-        return _item("update", title, MET, "No newer version have been found.")
-    return _item("update", title, NOT_MET, task["description"], task["link"], task["link_label"])
+    if task:
+        return _item("update", title, NOT_MET, task["description"], task["link"], task["link_label"])
+    checked_at = update_check.last_checked_at()
+    if not checked_at:
+        return _item("update", title, UNKNOWN, "No check has succeeded yet.",
+                     "/settings?section=about", "Check now in About")
+    # No full stop: the page ends the sentence after the "last checked" age it appends.
+    return _item("update", title, MET, "No newer version has been found", checked_at=checked_at)
 
 
 def build(request: Request, security_tasks: list[dict]) -> list[dict]:

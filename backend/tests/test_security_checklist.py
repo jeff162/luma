@@ -116,6 +116,18 @@ class SecurityChecklistTests(unittest.TestCase):
         self.assertEqual(item["status"], security_checklist.NOT_MET)
         self.assertEqual(item["link"], "/settings?section=about")
 
+    def test_the_version_item_is_met_only_once_a_check_has_succeeded(self):
+        transport.declare_listener(reachable=False, direct=False)
+        update_check.set_enabled(True)
+        with mock.patch.object(update_check, "available_version", return_value=None):
+            with mock.patch.object(update_check, "last_checked_at", return_value=None):
+                never = self._items(_req())["update"]
+            with mock.patch.object(update_check, "last_checked_at", return_value="2026-11-01T09:00:00Z"):
+                checked = self._items(_req())["update"]
+        self.assertEqual(never["status"], security_checklist.UNKNOWN)
+        self.assertEqual(checked["status"], security_checklist.MET)
+        self.assertEqual(checked["checked_at"], "2026-11-01T09:00:00Z")
+
     def test_the_backup_item_follows_the_backup_task(self):
         transport.declare_listener(reachable=False, direct=False)
         due = {"id": "backup_due", "description": "A change since the last backup."}

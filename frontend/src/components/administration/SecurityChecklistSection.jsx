@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../../lib/api.js'
+import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
 import { Card } from '../ui.jsx'
 import { StatusPill } from '../connections/ConnectionStatus.jsx'
 
@@ -15,6 +16,13 @@ const STATUS = {
   not_met: { tone: 'warning', label: 'Not met' },
   unknown: { tone: 'muted', label: 'Unknown' },
   info: { tone: 'muted', label: 'Info' },
+}
+
+// Its own component because the hook keeps the age current, and a hook cannot be called inside the map.
+function CheckedAt({ value }) {
+  const checked = useRelativeTimestamp(value)
+  if (!checked.label) return null
+  return <span title={checked.absolute || undefined}> (last checked {checked.label}).</span>
 }
 
 export default function SecurityChecklistSection() {
@@ -54,6 +62,7 @@ export default function SecurityChecklistSection() {
             </div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55 }}>
               {item.detail}
+              {item.checked_at ? <CheckedAt value={item.checked_at} /> : null}
               {item.link && item.status !== 'met' ? (
                 <>
                   {' '}

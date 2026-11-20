@@ -73,14 +73,19 @@ def available_version() -> str | None:
     return ".".join(str(part) for part in latest)
 
 
-def status() -> dict:
+def last_checked_at() -> str | None:
+    """When a check last reached the release list, or None if none ever has."""
     checked = get_app_setting(SUCCEEDED_AT_KEY)
+    # Stored as naive UTC; the marker is what stops a browser reading it as its own local time.
+    return f"{checked}Z" if checked else None
+
+
+def status() -> dict:
     return {
         "enabled": is_enabled(),
         "current_version": runtime_config.APP_VERSION,
         "available_version": available_version(),
-        # Stored as naive UTC; the marker is what stops a browser reading it as its own local time.
-        "last_checked_at": f"{checked}Z" if checked else None,
+        "last_checked_at": last_checked_at(),
     }
 
 
