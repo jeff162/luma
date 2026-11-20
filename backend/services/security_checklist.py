@@ -30,7 +30,7 @@ INFO = "info"
 # A not-met item that bypasses protection the operator set up, not just one they haven't set up yet.
 ELEVATED = "elevated"
 
-CONFIGURATION_LINK = ("/settings?section=configuration", "Open Startup configuration")
+CONFIGURATION_LINK = ("/settings?section=configuration", "Review Startup configuration")
 
 
 def _item(item_id: str, title: str, status: str, detail: str, link: str | None = None,
@@ -50,7 +50,7 @@ def _sign_in_item() -> dict | None:
     return _item(
         "sign_in", "Sign-in required", INFO,
         "Other devices on the network can open this installation without signing in.",
-        "/settings?section=signInProtection", "Turn on sign-in",
+        "/settings?section=signInProtection", "Open sign-in settings",
     )
 
 
@@ -85,7 +85,7 @@ def _https_item() -> dict | None:
     if wide and (transport.seen_https_from_network() or proxy_certificate.is_running()):
         return _item(
             "https", title, NOT_MET,
-            f"HTTPS can be bypassed. {app_name()} also listens on the network directly ({wide['setting']} is "
+            f"HTTPS can be bypassed. {app_name()} listens on the network directly ({wide['setting']} is "
             f"{wide['value']}), so devices can skip the proxy and connect unencrypted. Set {wide['setting']} "
             "back to localhost.",
             *CONFIGURATION_LINK, severity=ELEVATED,
@@ -161,7 +161,7 @@ def _update_item(tasks: dict[str, dict]) -> dict:
     title = "Latest version"
     if not update_check.is_enabled():
         return _item("update", title, UNKNOWN, "Checking for new versions is turned off.",
-                     "/settings?section=about", "Turn it on in About")
+                     "/settings?section=about", "Visit About to revise")
     task = tasks.get("update_available")
     if task:
         return _item("update", title, NOT_MET, task["description"], task["link"], task["link_label"])
