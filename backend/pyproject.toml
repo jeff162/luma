@@ -7,9 +7,9 @@ dependencies = [
     "fastapi==0.143.0",
     "uvicorn[standard]==0.54.0",
     "plaid-python==45.0.0",
-    "pydantic==2.14.1",
+    "pydantic==2.14.4",
     "python-dotenv==1.2.4",
-    "python-multipart==0.0.32",
+    "python-multipart==0.0.34",
     "itsdangerous==2.2.0",
     # Its wheels vendor OpenSSL, so this pin decides which OpenSSL every packaged kit ships with.
     "cryptography==50.0.2",
@@ -25,7 +25,7 @@ dependencies = [
     "Pillow==13.0.0",
     "pypdf==6.21.4",
     # The mDNS responder behind a server-mode installation's network name.
-    "zeroconf==0.151.5",
+    "zeroconf==0.154.0",
     # The notification-area icon of a Windows server started without a console.
     'pystray==0.19.5; sys_platform == "win32"',
 ]
@@ -36,9 +36,9 @@ dependencies = [
 # (see backend/tests/_api_client.py).
 [project.optional-dependencies]
 test = [
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-xdist==3.8.0",
-    "httpx2==2.13.1",
+    "httpx2==2.16.2",
 ]
 # Linting only, kept out of `test` on purpose: a CI job that installs the test extra to run pytest
 # should not drag a linter in as a side effect, and the two are gated separately.

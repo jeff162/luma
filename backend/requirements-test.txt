@@ -1,8 +1,8 @@
 # Test-only deps. Mirrors [project.optional-dependencies].test in pyproject.toml, just as
 # requirements.txt mirrors [project.dependencies]. Install: pip install -r requirements-test.txt
-pytest==9.1.1
+pytest==9.2.0
 # Parallel test execution (`-n auto`). Each worker is its own process, which is what makes it
 # safe here: the suite's shared state is module-level (`CONTROL_DB_PATH`, the schema template
 # cache) and every test already builds its own temp database.
 pytest-xdist==3.8.0
-httpx2==2.13.1
+httpx2==2.16.2

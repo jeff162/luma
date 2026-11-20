@@ -26,6 +26,10 @@ class AuthRejectionDiagnosticsTests(unittest.TestCase):
     def _reject(self, prepare):
         """Make one request that the sign-in session middleware will refuse, and return its log line."""
         with api_client() as (client, _data_path):
+            # The client arrives signed in, and its cookie is scoped to a domain where a `set` here is not,
+            # so both would be sent under one name and which one the server reads depends on the order
+            # the client happens to send them in.
+            client.cookies.clear()
             prepare(client)
             with self.assertLogs(level=logging.WARNING) as captured:
                 response = client.get("/api/accounts")

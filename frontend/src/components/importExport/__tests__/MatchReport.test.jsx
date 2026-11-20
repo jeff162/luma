@@ -27,13 +27,15 @@ beforeAll(() => {
     unobserve() {}
     disconnect() {}
   }
-  // A mounted row reports its own height; anything else is treated as the scroll viewport. Both paths
-  // have to agree, because virtual-core reads the viewport through offsetHeight but measures rows
-  // through whichever of the two the build happens to use — a viewport-sized row makes the virtualizer
+  // A mounted row reports its own height; anything else is treated as the scroll viewport. Every path
+  // has to agree, because virtual-core reads the viewport through clientHeight but measures rows
+  // through whichever of the others the build happens to use — a viewport-sized row makes the virtualizer
   // believe one row fills the screen, which quietly defeats the thing these tests exist to check.
   const heightOf = element => (element.hasAttribute('data-index') ? MEASURED_ROW_HEIGHT : VIEWPORT_HEIGHT)
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return 800 } })
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return heightOf(this) } })
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800 } })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return heightOf(this) } })
   Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
     const height = heightOf(this)
     return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: height, width: 800, height, toJSON() {} }
