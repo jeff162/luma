@@ -113,7 +113,8 @@ describe('ActionMenu', () => {
     trigger.focus()
     const onClose = vi.fn()
     render(<ActionMenu anchorElement={trigger} onClose={onClose} items={[{ label: 'Rename', onClick: () => {} }]} />)
-    expect(document.activeElement).toBe(screen.getByRole('menu'))
+    // A trigger focused by script is focus-visible, so this opens as from the keyboard, on the first item.
+    expect(screen.getByRole('menu').contains(document.activeElement)).toBe(true)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(document.activeElement).toBe(trigger)

@@ -11,7 +11,7 @@
 
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DocumentsPanel from '../DocumentsPanel.jsx'
 import { api } from '../../lib/api.js'
@@ -232,6 +232,9 @@ describe('DocumentsPanel', () => {
     render(<DocumentsPanel txnId="t1" />)
     pasteInto(await findBox(), RICH_RECEIPT)
     const preview = await screen.findByLabelText('Preview of the pasted receipt')
+    // jsdom renders no `srcdoc`, and the load it fires on insertion never reaches React's `onLoad`, so the
+    // load a browser fires once the content is in is delivered here — that is what makes the frame editable.
+    fireEvent.load(preview)
     const doc = preview.contentDocument
     doc.body.innerHTML = '<table><tr><td>Professional Tune Up</td><td>$350.00</td></tr></table>'
     doc.dispatchEvent(new Event('input'))

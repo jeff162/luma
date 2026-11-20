@@ -33,9 +33,12 @@ export const PREVIEW_CONTENT_SECURITY_POLICY = "default-src 'none'"
 export function buildPastedHtmlPreview(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html')
   doc.querySelectorAll('meta, link, script').forEach(element => element.remove())
-  doc.querySelectorAll('[href], [xlink\\:href]').forEach(element => {
-    element.removeAttribute('href')
-    element.removeAttribute('xlink:href')
+  // `*|` because an SVG link's `xlink:href` is `href` in the XLink namespace, which a plain attribute
+  // selector does not match — `[xlink\:href]` names an attribute that does not exist, and matched nothing.
+  doc.querySelectorAll('[*|href]').forEach(element => {
+    for (const attribute of [...element.attributes]) {
+      if (attribute.localName === 'href') element.removeAttributeNode(attribute)
+    }
   })
   const policy = doc.createElement('meta')
   policy.setAttribute('http-equiv', 'Content-Security-Policy')

@@ -76,7 +76,8 @@ describe('the ledger pages by position', () => {
     const firstRow = container.querySelector('[data-index]')
     const spacer = firstRow.parentElement.parentElement
     expect(parseFloat(spacer.style.height)).toBeGreaterThan(TOTAL * 30)
-    const viewport = firstRow.closest('div[style*="overflow-y: auto"]')
+    let viewport = firstRow.parentElement
+    while (viewport.style.overflowY !== 'auto') viewport = viewport.parentElement
 
     api.getTransactions.mockClear()
     viewport.scrollTop = 3200 * ROW_HEIGHT
