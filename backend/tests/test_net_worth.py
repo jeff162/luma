@@ -183,7 +183,7 @@ class HistoryFlagTests(_Ledger):
         self._state("chk", "2026-06-30", 0.0)
         self.assertEqual(self._flag("chk", "depository"),
                          {"before": "2026-06-30", "date": "2026-03-01", "amount": -400.0,
-                          "suggested_from": "2026-04-01", "seam": None})
+                          "suggested_from": "2026-04-01", "seam": None, "balance_date": "2026-03-31"})
         # Shown wherever the account's figures are.
         self.assertEqual(self._on()["accounts"][0]["history_flag"]["before"], "2026-06-30")
 
@@ -231,6 +231,7 @@ class HistoryFlagTests(_Ledger):
                           "import_batch_id) VALUES ('synced', 'chk', 20.0, 'M', 'M', 'M', '2026-05-10', 'sync')")
         self._state("chk", "2026-06-30", 0.0, source="provider")
         self.assertEqual(self._flag("chk")["seam"], "2026-05-09")
+        self.assertEqual(self._flag("chk")["balance_date"], "2026-05-09")
 
 
 if __name__ == "__main__":

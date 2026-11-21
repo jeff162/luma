@@ -76,6 +76,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `DetailTrendChart` | The monthly trend bar chart at the top of a detail panel. | `components/detailShared.jsx` |
 | `PanningChartFrame` | A bar chart that may be wider than its card. | `components/PanningChartFrame.jsx` |
 | `PanningChartTooltip` | The tooltip of a chart inside a scrolling element, because Recharts places its own against the whole canvas. | `components/PanningChartTooltip.jsx` |
+| `TrendPlot` | The history chart under a Dashboard Single-period report: one bar per bucket, a value axis that stays put while the plot pans, the selected period highlighted, a click picking a bucket. | `components/TrendPlot.jsx` |
 | `SummaryTotalCard` | A headline figure above a Dashboard report. | `components/SummaryTotalCard.jsx` |
 | `Breadcrumb` | The trail of a Dashboard drill, each step but the last going back to it. | `components/Breadcrumb.jsx` |
 | `--series-1` … `--series-8` | Colouring a chart's series by what each one is, in a fixed order that stays legible to colour-blind readers in every theme. | `index.html` |

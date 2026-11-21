@@ -29,7 +29,6 @@ import {
 import { TREND_SPAN_ALL, TREND_SPAN_PREF_KEY, trendSpanFloorMonth } from '../lib/trendSpan.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatDate, monthLabel } from '../lib/utils.js'
-import { trendPlotLayout } from '../lib/trendPlotLayout.js'
 import { accountColor, bridgeRows, buildBridge, describeHistoryFlag, groupByType } from '../lib/netWorth.js'
 import { useAccountDetailPanels } from './accounts/useAccountDetailPanels.jsx'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
@@ -37,6 +36,7 @@ import Breadcrumb from './Breadcrumb.jsx'
 import PanningChartFrame from './PanningChartFrame.jsx'
 import PanningChartTooltip from './PanningChartTooltip.jsx'
 import SummaryTotalCard from './SummaryTotalCard.jsx'
+import TrendPlot from './TrendPlot.jsx'
 import TrendSpanSelect from './TrendSpanSelect.jsx'
 import TrendsWindowSelect from './TrendsWindowSelect.jsx'
 import { Button, Card, EmptyState, LinkButton, Select, Spinner, StaleWhileRefreshing, Tooltip, getFormControlStyle } from './ui.jsx'
@@ -63,7 +63,6 @@ const OWNER_PARAM_KEYS = ['owner_ids', 'exclude_owner_ids', 'owner_lens']
 const MONTHS_FIT = 36
 const MONTH_BAR_WIDTH = 24
 const CHART_HEIGHT = 260
-const STRIP_HEIGHT = 200
 
 function currentMonth() {
   const now = new Date()
@@ -296,24 +295,15 @@ function BridgeChart({ steps, series, onDrill }) {
   )
 }
 
-// The history under the period's figures, as the trend sits under the Expenses breakdown, with the same
-// two controls: how far back it reaches (the Dashboard's one span setting, counted back from the period's
-// end) and the bucket size. Net worth is a figure on a date rather than a sum, so a quarter or a year is
-// its balance at its last month's end, or today for the current one. The buckets the period covers are
-// highlighted, and a click makes that bucket the period.
+// The history under the period's figures, drawn by the plot the Expenses trend uses (`TrendPlot`), with
+// the same two controls: how far back it reaches (the Dashboard's one span setting, counted back from the
+// period's end) and the bucket size. Net worth is a figure on a date rather than a sum, so a quarter or a
+// year is its balance at its last month's end, or today for the current one. The buckets the period covers
+// are highlighted, and a click makes that bucket the period.
 function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
   const { pinDateFromChart, canGoBackDate, goBackDate, previousDate } = useFilters()
   const [spanPref, setSpanPref] = useUserPreference(TREND_SPAN_PREF_KEY, TREND_SPAN_ALL)
   const [grainChoice, setGrainChoice] = useState(null)
-  const [viewportWidth, setViewportWidth] = useState(0)
-  // A callback ref, so the observer follows the box across the chart's re-renders.
-  const measureViewport = useCallback(node => {
-    if (!node || typeof ResizeObserver === 'undefined') return undefined
-    setViewportWidth(node.clientWidth)
-    const observer = new ResizeObserver(() => setViewportWidth(node.clientWidth))
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
   const points = history.points
   if (!points.length) return null
   const period = dateStart && dateEnd ? { start: dateStart, end: dateEnd } : null
@@ -328,54 +318,18 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
       // The bucket's last figure: its last month's end, or the latest it has.
       const inside = points.filter(p => p.month >= bucket.start && p.month <= bucket.end)
       const point = inside[inside.length - 1]
+      const label = bucketLabel(bucket, grain)
       return {
         ...bucket,
-        label: bucketLabel(bucket, grain),
-        date: point?.date,
-        value: point ? valueOf(point) : null,
-        highlighted: period ? bucket.isSelected : true,
+        bucketStart: bucket.start,
+        bucketEnd: bucket.end,
+        label,
+        fullLabel: point ? formatDate(point.date) : label,
+        plotted: point ? valueOf(point) : null,
+        periodLabel: label,
       }
     })
-  function handleClick(state) {
-    const bucket = data[clickedDataIndex(state)]
-    if (!bucket) return
-    pinDateFromChart({ start: bucket.rangeStart, end: bucket.rangeEnd, preset: bucket.label })
-  }
-  // Sized as the Expenses trend is (`trendPlotLayout`): each bucket gets its share of the card, so a few
-  // buckets draw wide bars and many draw narrow ones, down to the width at which the plot pans instead.
-  const plot = trendPlotLayout(data.length, viewportWidth)
-  const pans = viewportWidth > 0 && plot.width > viewportWidth
-  const chart = (
-    <ResponsiveContainer width="100%" height={pans ? '100%' : STRIP_HEIGHT}>
-      <BarChart data={data} margin={{ top: 8, right: 12, bottom: 6, left: pans ? 24 : 0 }}
-        {...CLICKABLE_CHART_EVENTS} onClick={handleClick} style={{ cursor: 'pointer' }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="label" tick={{ fill: 'var(--muted)', fontSize: 10 }}
-          interval={pans ? 2 : data.length <= 12 ? 0 : Math.floor(data.length / 12)} />
-        <YAxis orientation={pans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-        <ReferenceLine y={0} stroke="var(--muted)" />
-        <ChartTooltip
-          content={<PanningChartTooltip />}
-          isAnimationActive={false}
-          cursor={{ fill: 'var(--surface2)' }}
-          labelFormatter={(label, payload) => {
-            const day = payload?.[0]?.payload?.date
-            return day ? formatDate(day) : label
-          }}
-          formatter={value => [formatSignedMoneyAmount(value), openGroup ? openGroup.label : 'Net worth']}
-          contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-          labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-          itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-        />
-        <Bar dataKey="value" isAnimationActive={false} radius={2}>
-          {data.map(bucket => (
-            <Cell key={bucket.start} fill={openGroup ? openGroup.color : 'var(--accent)'}
-              fillOpacity={bucket.highlighted ? 0.85 : 0.3} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
-  )
+  const color = openGroup ? openGroup.color : 'var(--accent)'
   const grainWord = { month: 'month', quarter: 'quarter', year: 'year' }[grain]
   return (
     <Card>
@@ -400,13 +354,13 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
           </select>
         </div>
       </div>
-      <div ref={measureViewport}>
-        {pans ? (
-          <PanningChartFrame minWidth={plot.width} height={STRIP_HEIGHT} pinKey={`${data.length}:${data[0].start}`}>
-            {chart}
-          </PanningChartFrame>
-        ) : chart}
-      </div>
+      <TrendPlot
+        data={data}
+        name={openGroup ? openGroup.label : 'Net worth'}
+        formatter={value => formatSignedMoneyAmount(value)}
+        fillOf={bucket => (bucket.isSelected ? color : `color-mix(in srgb, ${color} 45%, var(--surface2))`)}
+        onBucketClick={bucket => pinDateFromChart({ start: bucket.rangeStart, end: bucket.rangeEnd, preset: bucket.periodLabel })}
+      />
     </Card>
   )
 }

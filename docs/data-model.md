@@ -412,11 +412,13 @@ Dashboard's Net worth frame.
   `signal_dismissals` store, keyed to the account and the stated balance the history was worked back
   from, so entering an earlier balance judges the new history afresh. Later history is not judged: each
   stated balance checks the span before it (`balance_checks`).
-- **The flag offers two remedies besides dismissal.** Where the group's rows switch from imported files to
-  a connection (`connection_seam`: the day before its first synced row, with earlier rows from elsewhere),
-  it offers a balance on that day, which gives the earlier history its own starting point and keeps it. It
-  also offers a start date, `suggested_from`: the earliest day from which the worked-back history stays on
-  the right side.
+- **The flag offers two remedies besides dismissal.** One is a balance from a statement on
+  `balance_date`, which gives the earlier history its own starting point and keeps it: the day before the
+  group's rows switch from imported files to a connection where they do (`connection_seam`: the day before
+  its first synced row, with earlier rows from elsewhere), and otherwise the day before `suggested_from`.
+  The other is a start date, `suggested_from`: the earliest day from which the worked-back history stays
+  on the right side. Nothing is entered for the user: the missing amount is not in the ledger, and a
+  figure made up to fit would hide the warning without making the history right.
 - **`account.net_worth_from` is the first date net worth counts a group from**, read from the group root
   and set only by the user. Before it the group is left out, as before its coverage begins, and the flag
   judges only the history from it. It changes nothing else: the account's own balance, running balance and

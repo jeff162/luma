@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
@@ -58,21 +58,17 @@ import { useUserPreference, useDeferredDeviceLayoutPreference } from '../lib/Use
 import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
+import TrendPlot from '../components/TrendPlot.jsx'
 import SummaryTotalCard from '../components/SummaryTotalCard.jsx'
 import Breadcrumb from '../components/Breadcrumb.jsx'
 import NetWorthView from '../components/NetWorthView.jsx'
 import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
 import { buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
-import ClippedBar from '../components/ClippedBar.jsx'
 import PanningChartTooltip from '../components/PanningChartTooltip.jsx'
-import {
-  trendPlotLayout, centeredScrollLeft, bucketAnchorMonth, bucketIndexAtScroll, trendScrollTargetIndex,
-} from '../lib/trendPlotLayout.js'
 import { periodAverage, seriesDateRange } from '../lib/periodAverage.js'
 import AvgPill from '../components/AvgPill.jsx'
 import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
-import AxisAvgPill from '../components/AxisAvgPill.jsx'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { formatDecimal } from '../lib/displayFormat.js'
 import { vh } from '../lib/displaySize.js'
@@ -86,21 +82,6 @@ const DASHBOARD_TAG_REPORTS_PREF_KEY = 'ui.dashboard.tagReports'
 // divider to rebalance and it persists. Defaults to giving the monthly chart a little more room than
 // the annual one (its month labels are tighter than 4-digit years). Clamped to [MIN, MAX].
 const DASHBOARD_TRENDS_SPLIT_PREF_KEY = 'ui.dashboard.trendsSplit'
-// The trend chart is drawn as *two* charts side by side so the value axis can stay put while the plot
-// pans: a fixed column carrying only the axis, and the scrolling plot with its own axis hidden. The two
-// share one vertical geometry — height, top and bottom margins, and the space the category axis
-// reserves — because that is what makes their scales identical and their gridlines line up. Change any
-// of these and both charts must change together, or the axis quietly starts describing a scale the bars
-// are not drawn to.
-const TREND_CHART_HEIGHT = 224
-const TREND_CHART_MARGIN_Y = 6
-const TREND_XAXIS_HEIGHT = 48
-// The sticky column, and the axis inside it. The column is the wider of the two by enough to hold the
-// average pill, which is drawn over the tick labels rather than in the plot so that it stays visible at
-// any pan position; the remaining few pixels are the gap the plot would otherwise butt straight up
-// against.
-const TREND_AXIS_COLUMN_WIDTH = 76
-const TREND_AXIS_LABEL_WIDTH = 60
 const TRENDS_SPLIT_DEFAULT = 0.56
 const TRENDS_SPLIT_MIN = 0.3
 const TRENDS_SPLIT_MAX = 0.75
@@ -360,26 +341,6 @@ function trimEmptyTrendBuckets(buckets) {
   return buckets.slice(firstKeep, lastKeep + 1)
 }
 
-// Multi-line tick used by the trend chart so labels like "Jun 2013 – Jun 2014" don't bleed
-// into the bars on either side. Single-segment labels render normally; range labels split on
-// the en dash and stack onto two lines so each line fits within the bar's column width.
-function TrendBucketTick({ x, y, payload }) {
-  const value = String(payload?.value ?? '')
-  const parts = value.split(/\s*–\s*/)
-  if (parts.length < 2) {
-    return (
-      <text x={x} y={y + 14} fill="var(--muted)" fontSize={11} textAnchor="middle">
-        {value}
-      </text>
-    )
-  }
-  return (
-    <text fill="var(--muted)" fontSize={11} textAnchor="middle">
-      <tspan x={x} y={y + 12}>{parts[0]}</tspan>
-      <tspan x={x} y={y + 26}>– {parts[1]}</tspan>
-    </text>
-  )
-}
 
 const now = new Date()
 const thisM = format(now, 'yyyy-MM')
@@ -1889,30 +1850,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [showAllSpendingRows, setShowAllSpendingRows] = useState(false)
   const [otherDrillDepth, setOtherDrillDepth] = useState(0)
-  // The trend plot is handed an explicit width rather than discovering one after it has drawn, so the
-  // only measurement left is the viewport it may have to stretch to fill. Observing it here — once, on
-  // the scroll container itself — is what keeps a re-bucket free of any measure-then-redraw: this width
-  // does not change when the grain does. A callback ref rather than an effect, because the container
-  // mounts and unmounts with the drill level and a ref assignment does not re-run effects.
-  const trendScrollRef = useRef(null)
-  const trendViewportObserver = useRef(null)
-  // The month under the middle of the viewport, kept up to date as the plot is panned. Read only when
-  // the bucket set is rebuilt, so it is deliberately the value from *before* that happened.
-  const trendAnchorMonth = useRef(null)
-  const [trendViewportWidth, setTrendViewportWidth] = useState(0)
-  const attachTrendScroll = useCallback(node => {
-    trendViewportObserver.current?.disconnect()
-    trendViewportObserver.current = null
-    trendScrollRef.current = node
-    if (!node) return
-    setTrendViewportWidth(node.clientWidth)
-    if (typeof ResizeObserver === 'undefined') return
-    // clientWidth, not the observed content rect: a horizontal scrollbar costs height, not width, so
-    // this cannot feed back into the width that decides whether the scrollbar is there.
-    const observer = new ResizeObserver(() => setTrendViewportWidth(node.clientWidth))
-    observer.observe(node)
-    trendViewportObserver.current = observer
-  }, [])
   // The cash-flow diagram has two independent tails — a ledger usually has a handful of income buckets
   // and a great many expense ones — so each side pages into its own tail rather than sharing the pie's
   // single depth.
@@ -2503,56 +2440,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
   const [heldTrend, setHeldTrend] = useState([])
   useEffect(() => { if (computedTrend) setHeldTrend(computedTrend) }, [computedTrend])
   const trend = computedTrend ?? heldTrend
-
-  // The trend chart pans by native horizontal scroll, and the bucket set is replaced under it in two
-  // quite different ways — which is what decides where the plot should then be scrolled to.
-  //
-  // **A bar click picks a period**, and the picked period is what to show. The same goes for any bucket
-  // set with a selection in it — after a grain change too, since the highlighted run is what the reader
-  // is following. A selection spanning several buckets is centred on the middle one.
-  //
-  // **With nothing selected, changing the grain re-cuts the same data.** The reader is still looking at
-  // whatever they were looking at — and scrolling to the newest bucket, which is the only sensible
-  // index-based answer, throws them to the far end of the chart every time. The month under the middle
-  // of the viewport is carried across instead, so month, quarter and year views of the same period stay
-  // on that period.
-  //
-  // `useLayoutEffect` so it lands before paint instead of as a visible jump, and keyed on the bucket set
-  // rather than on every render so it never fights the user's own scrolling. The offset is computed from
-  // the same layout the plot is drawn at, not from the bar width: those are the same number only while
-  // the buckets are what sets the width, and a stretched plot spreads its bars over the extra room.
-  //
-  // "The bucket set" is which periods are drawn and which are selected, not the array holding them: the
-  // totals reload on every ledger change, and a reload that brings back the same buckets must leave the
-  // pan alone. So the effect is keyed on `trendBucketsKey` and reads the buckets through a ref.
-  const trendSelectedIndex = useMemo(() => {
-    const selected = trend.flatMap((b, i) => (b.isSelected ? [i] : []))
-    return selected.length ? selected[Math.floor((selected.length - 1) / 2)] : -1
-  }, [trend])
-  const trendPlot = useMemo(
-    () => trendPlotLayout(trend.length, trendViewportWidth),
-    [trend.length, trendViewportWidth],
-  )
-  const rememberTrendAnchor = useCallback(() => {
-    const el = trendScrollRef.current
-    if (!el || trend.length === 0) return
-    const index = bucketIndexAtScroll({
-      scrollLeft: el.scrollLeft, viewportWidth: el.clientWidth, layout: trendPlot, bucketCount: trend.length,
-    })
-    if (index >= 0) trendAnchorMonth.current = bucketAnchorMonth(trend[index])
-  }, [trend, trendPlot])
-  const trendBucketsKey = trend.map(b => `${b.rangeStart}:${b.rangeEnd}:${b.isSelected ? 1 : 0}`).join(',')
-  const latestTrend = useRef(trend)
-  useLayoutEffect(() => { latestTrend.current = trend }, [trend])
-  useLayoutEffect(() => {
-    const el = trendScrollRef.current
-    const buckets = latestTrend.current
-    if (!el || buckets.length === 0) return
-    const index = trendScrollTargetIndex({
-      buckets, selectedIndex: trendSelectedIndex, anchorMonth: trendAnchorMonth.current,
-    })
-    el.scrollLeft = centeredScrollLeft({ index, layout: trendPlot, viewportWidth: el.clientWidth })
-  }, [trendBucketsKey, trendSelectedIndex, trendPlot])
 
   // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
   // transaction-change refresh so an edit updates them without resetting the user's drill.
@@ -3475,121 +3362,20 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
                           })}`}
                         {' · click a bar to select that period'}
                       </div>
-                      <StaleWhileRefreshing refreshing={computedTrend == null} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        {/* The value axis, held out of the scroll so it stays readable at any pan
-                            position. It is a chart rather than hand-drawn labels so that recharts works
-                            out the ticks — the same ticks, from the same data and domain, that the plot
-                            beside it is scaled to. */}
-                        <div style={{ width: TREND_AXIS_COLUMN_WIDTH, height: TREND_CHART_HEIGHT, flexShrink: 0 }}>
-                          {/* Sized, not measured — see the plot below. This box was never responsive at
-                              all: it is a constant beside a constant. */}
-                          <BarChart
-                            width={TREND_AXIS_COLUMN_WIDTH}
-                            height={TREND_CHART_HEIGHT}
-                            data={trendData}
-                            margin={{ top: TREND_CHART_MARGIN_Y, right: 0, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
-                          >
-                            <YAxis
-                              width={TREND_AXIS_LABEL_WIDTH}
-                              tickFormatter={formatSignedAxisTick}
-                              tick={{ fill: 'var(--muted)', fontSize: 11 }}
-                              domain={trendClamp.domain}
-                              allowDataOverflow={trendClamp.clamped}
-                            />
-                            {/* Draws nothing; it reserves exactly the height the plot's category axis
-                                reserves, which is what keeps the two vertical scales in step. */}
-                            <XAxis dataKey="label" height={TREND_XAXIS_HEIGHT} tick={false} axisLine={false} />
-                            {/* Invisible rather than hidden: `hide` drops the series from the domain
-                                altogether and the axis comes out blank. */}
-                            <Bar dataKey="plotted" fillOpacity={0} isAnimationActive={false} />
-                            {/* The average's pill lives here rather than on its line in the plot,
-                                where it would pan out of view and stay out on a long timeline. It
-                                reads the same scale the ticks were drawn from, and steps aside from
-                                any tick label it would otherwise sit on. */}
-                            {trend.length > 1 && trendAvg != null && (
-                              <AxisAvgPill value={trendAvg} columnWidth={TREND_AXIS_COLUMN_WIDTH} />
-                            )}
-                          </BarChart>
-                        </div>
-                        <div
-                          ref={attachTrendScroll}
-                          onScroll={rememberTrendAnchor}
-                          style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}
-                        >
-                          {/* Given its width rather than left to discover one. `<ResponsiveContainer>`
-                            measures its own box with a ResizeObserver and holds the result in state, so
-                            a re-bucket draws once at the *previous* bucket set's width and is corrected
-                            only after paint — a stale-width frame whose look depends on which way the
-                            grain went and where the plot was scrolled. The width is not responsive
-                            anyway: it is the bucket count, and the viewport only when the buckets do
-                            not fill it. */}
-                          <div style={{ width: trendPlot.width, height: TREND_CHART_HEIGHT }}>
-                            <BarChart
-                              width={trendPlot.width}
-                              height={TREND_CHART_HEIGHT}
-                              data={trendData}
-                              margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
-                              // On the chart, not the bar: the target is the whole hovered column, so a
-                              // short bar is as easy to pick as a tall one.
-                              {...CLICKABLE_CHART_EVENTS}
-                              onClick={state => handleTrendBarClick(trendData[clickedDataIndex(state)])}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                              <XAxis
-                                dataKey="label"
-                                interval={0}
-                                tick={<TrendBucketTick />}
-                                height={TREND_XAXIS_HEIGHT}
-                              />
-                              {/* Hidden, not absent: the scale still has to be computed here, and it is
-                                identical to the column's because the domain and data are. */}
-                              <YAxis
-                                hide
-                                domain={trendClamp.domain}
-                                allowDataOverflow={trendClamp.clamped}
-                              />
-                              <Tooltip
-                                // The plot pans, so the card is placed against what is visible rather than
-                                // against the whole canvas — see PanningChartTooltip.
-                                content={<PanningChartTooltip />}
-                                isAnimationActive={false}
-                                // The drawn value is clamped; the tooltip reports the real one.
-                                formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
-                                // The axis label is cut to fit a bar; the card names the exact range.
-                                labelFormatter={(label, payload) => payload?.[0]?.payload?.fullLabel ?? label}
-                                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                              />
-                              {/* Static, like the axis column beside it. Re-bucketing replaces the whole
-                                series, so the default grow-in plays in full on every grain change — and
-                                with the axis in its own chart it would be an animation running against
-                                a scale that had already snapped. */}
-                              <Bar
-                                dataKey="plotted"
-                                radius={[4, 4, 0, 0]}
-                                shape={<ClippedBar />}
-                                name={trendScopeName || (viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending')}
-                                isAnimationActive={false}
-                              >
-                                {trendData.map((entry, idx) => (
-                                  <Cell
-                                    key={idx}
-                                    fill={entry.isSelected
-                                      ? 'var(--accent)'
-                                      : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))'}
-                                  />
-                                ))}
-                              </Bar>
-                              {/* Unlabelled: the pill naming this line is in the sticky axis column,
-                                which is the only part of the chart that does not pan away. */}
-                              {trendData.length > 1 && trendAvg != null && (
-                                <ReferenceLine y={trendAvg} stroke="var(--accent2)" strokeDasharray="4 4" />
-                              )}
-                            </BarChart>
-                          </div>
-                        </div>
+                      <StaleWhileRefreshing refreshing={computedTrend == null}>
+                        <TrendPlot
+                          data={trendData}
+                          domain={trendClamp.domain}
+                          clamped={trendClamp.clamped}
+                          average={trendAvg}
+                          name={trendScopeName || (viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending')}
+                          // The drawn value is clamped; the tooltip reports the real one.
+                          formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                          fillOf={entry => (entry.isSelected
+                            ? 'var(--accent)'
+                            : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))')}
+                          onBucketClick={handleTrendBarClick}
+                        />
                       </StaleWhileRefreshing>
                     </Card>
                   )

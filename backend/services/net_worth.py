@@ -190,11 +190,16 @@ def load_group_balances(conn, root_ids: list) -> dict:
 
 
 def _shown_flag(conn, root_id: str, balances: GroupBalances, account_type, dismissed: set) -> Optional[dict]:
-    """The group's history flag with its seam, or None when it has none or it was dismissed."""
+    """The group's history flag with its seam, or None when it has none or it was dismissed.
+
+    `balance_date` is the day a balance from a statement would fix the most: the seam where there is one,
+    and otherwise the day before `suggested_from`, the last day the worked-back history goes wrong on."""
     flag = history_flag(balances, account_type)
     if not flag or history_flag_key(root_id, flag["before"]) in dismissed:
         return None
-    return {**flag, "seam": connection_seam(conn, root_id, flag["before"])}
+    seam = connection_seam(conn, root_id, flag["before"])
+    balance_date = seam or (date.fromisoformat(flag["suggested_from"]) - timedelta(days=1)).isoformat()
+    return {**flag, "seam": seam, "balance_date": balance_date}
 
 
 def account_history_flag(conn, root_id: str) -> Optional[dict]:

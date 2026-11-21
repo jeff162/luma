@@ -497,9 +497,9 @@ export const HELP_TOPICS = [
           A ⚠ marks a balance not updated recently, or a history the transactions cannot explain: working
           back lands an account well on the wrong side of zero, which usually means transactions are missing,
           often where an account moved from imported files to a connection. Entering a balance from a
-          statement on that day fixes it, and the warning offers the date when it can find it. Otherwise net
-          worth can count the account only from a later date, offered as the furthest back its transactions
-          hold up, or the warning can be dismissed. The date is shown, and can be changed, on the
+          statement fixes it; the warning offers the date it would fix the most, the day of that move when it
+          can find it. Otherwise net worth can count the account only from a later date, offered as the
+          furthest back its transactions hold up, or the warning can be dismissed, which changes nothing. The date is shown, and can be changed, on the
           account&apos;s page.
         </p>
       </>
