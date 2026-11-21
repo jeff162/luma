@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'react'
 import CopyTransactionsButton from './CopyTransactionsButton.jsx'
-import ColumnsMenu, { COLUMNS_GLYPH } from './ColumnsMenu.jsx'
-import { Button, IconButton, RefreshButton } from './ui.jsx'
+import { Button, RefreshButton } from './ui.jsx'
 
 /*
  * The "Copy the shown rows + toggle Bulk Edit" row that sits above a TransactionListTable on every
@@ -22,36 +20,10 @@ import { Button, IconButton, RefreshButton } from './ui.jsx'
  * lists*), and that model owes the user an explicit way to re-query — without it a row edited out of the
  * scope has no way back off the screen, and the figures the panel header reads from the server stay behind
  * the ledger. A host that genuinely has nothing to re-query passes neither and the button is absent.
- *
- * `columns` (`{ items: [{ key, label, hidden }], onSetHidden }`) adds the gear that chooses which columns
- * the table shows, the Transactions page's column choice, for a host whose table offers a hidden column.
  */
-export default function TransactionListToolbar({ rows, copy = null, title, bulk, onRefresh = null, refreshing = false, columns = null, style }) {
-  const [columnsAnchor, setColumnsAnchor] = useState(null)
+export default function TransactionListToolbar({ rows, copy = null, title, bulk, onRefresh = null, refreshing = false, style }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8, ...style }}>
-      {columns ? (
-        <IconButton
-          aria-label="Choose columns"
-          title="Choose columns"
-          aria-haspopup="menu"
-          aria-expanded={Boolean(columnsAnchor)}
-          onClick={event => {
-            const trigger = event.currentTarget
-            setColumnsAnchor(current => (current ? null : trigger))
-          }}
-        >
-          <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>{COLUMNS_GLYPH}</span>
-        </IconButton>
-      ) : null}
-      {columns && columnsAnchor ? (
-        <ColumnsMenu
-          anchorElement={columnsAnchor}
-          columns={columns.items}
-          onSetHidden={columns.onSetHidden}
-          onClose={() => setColumnsAnchor(null)}
-        />
-      ) : null}
       {onRefresh ? (
         <RefreshButton
           onRefresh={onRefresh}

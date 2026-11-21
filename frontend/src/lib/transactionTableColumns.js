@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The columns `TransactionListTable` can show, and what a host needs to know about them: a column's label
-// for the column choice, and the width the shown columns need.
+// The columns `TransactionListTable` can show, and the width a host needs for the shown ones.
 
 export const TRANSACTION_TABLE_COLUMN_DEFS = {
   date: { key: 'date', label: 'Date', defaultWidth: 96, minWidth: 82 },
@@ -25,13 +24,8 @@ export const TRANSACTION_TABLE_COLUMN_DEFS = {
   runningBalance: { key: 'runningBalance', label: 'Balance', defaultWidth: 112, minWidth: 84, align: 'end', sortable: false },
 }
 
-// A column's header label, for a host listing the columns (the column choice).
-export function transactionColumnLabel(key) {
-  return TRANSACTION_TABLE_COLUMN_DEFS[key]?.label || key
-}
-
 // The width a table needs to show `columns` (the shown entries of its layout) without scrolling sideways:
-// the columns, the bulk-select column while it shows, the rows' side padding and the scroller's border.
+// the columns, the bulk-select column while it shows, the rows' side padding and the frame's border.
 export function transactionTableWidth(columns, { bulkActive = false } = {}) {
   const columnsWidth = columns.reduce((sum, column) => sum + (Number(column.width) || 0), 0)
   return columnsWidth + (bulkActive ? 40 : 0) + 14 * 2 + 2

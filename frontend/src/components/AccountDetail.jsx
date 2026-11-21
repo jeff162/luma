@@ -12,8 +12,8 @@ import NetWorthStartDialog from './accounts/NetWorthStartDialog.jsx'
 import { unusualBalanceColor } from '../lib/accountTypes.js'
 import { Spinner, FilterChip, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
-import { transactionColumnLabel, transactionTableWidth } from '../lib/transactionTableColumns.js'
-import { setColumnHidden, visibleColumns } from '../lib/columnVisibility.js'
+import { transactionTableWidth } from '../lib/transactionTableColumns.js'
+import { visibleColumns } from '../lib/columnVisibility.js'
 import TransactionDetail from './TransactionDetail.jsx'
 import TransactionListToolbar from './TransactionListToolbar.jsx'
 import CategoryDetail from './CategoryDetail.jsx'
@@ -158,6 +158,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // registry and closes with this account panel; edits made inside it reconcile back into the month list.
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
+  // The table offers the column choice for the Posted column: a connected card's bank lists rows by
+  // posting date, and sorting by it makes the running balance count in that order too.
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
@@ -165,12 +167,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
     showRunningBalance: !!balance,
     showPostedDate: true,
   })
-  // The column choice, for the Posted column: a connected card's bank lists rows by posting date, and
-  // sorting by it makes the running balance count in that order too.
-  const columnChoice = useMemo(() => ({
-    items: columnConfig.map(col => ({ key: col.key, label: transactionColumnLabel(col.key), hidden: !!col.hidden })),
-    onSetHidden: (key, hidden) => setColumnConfig(setColumnHidden(columnConfig, key, hidden)),
-  }), [columnConfig, setColumnConfig])
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
 
   // Explains an account with little/no visible activity: how many of its imported rows were skipped or
@@ -407,7 +403,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={refresh} refreshing={reloading} columns={columnChoice} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={refresh} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}
@@ -430,6 +426,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     markExcludedFromTotals
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
+                    offerColumnChoice
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
                     paging={paging}
                     sortState={sortState}

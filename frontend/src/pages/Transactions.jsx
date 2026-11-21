@@ -28,8 +28,7 @@ import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import CornerTab from '../components/CornerTab.jsx'
-import ColumnsMenu, { COLUMNS_GLYPH } from '../components/ColumnsMenu.jsx'
+import { ColumnsStrip } from '../components/ColumnsMenu.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
@@ -52,8 +51,6 @@ const TRANSACTIONS_PAGE_SIZE = 500
 // Rows past the viewport, either way, that are fetched before they scroll into view.
 const TRANSACTIONS_PREFETCH_ROWS = 200
 const TRANSACTIONS_ROW_ESTIMATE = 38
-// The width of the column chooser's corner tab, kept clear at the end of the header.
-const CORNER_TAB_ROOM = 48
 
 // The ledger's attribute quick filter always carries a *choice*; what varies is whether it is applied.
 // Uncategorized is the seed because it is the most-reached-for of the set and the one the Tasks nudge
@@ -115,7 +112,6 @@ export default function Transactions() {
   const [detailPanels, setDetailPanels] = useState([])
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
   const [editId, setEditId] = useState(null)
-  const [columnsMenuAnchor, setColumnsMenuAnchor] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [addingTransaction, setAddingTransaction] = useState(false)
   const [storedDocumentsOpen, setStoredDocumentsOpen] = useState(false)
@@ -845,11 +841,12 @@ export default function Transactions() {
             so the sticky PillTableHeader inside pins to it, and the windowed rows measure
             the viewport from the same element. */}
         <Card style={{ position: 'relative', padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* Its own stacking context, so the sticky header stays under the column chooser's tab. */}
-          <div
-            ref={listScrollRef}
-            style={{ position: 'relative', zIndex: 0, overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
-          >
+          <ColumnsStrip
+            radius={12}
+            columns={cols.map(col => ({ key: col.key, label: getLedgerColumnDef(col.key).label, hidden: !!col.hidden }))}
+            onSetHidden={(key, hidden) => setStoredCols(setLedgerColumnHidden(cols, key, hidden))}
+          />
+          <div ref={listScrollRef} style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}>
             <PillGridTable
               columns={renderColumns}
               onColumnsChange={handleColUpdate}
@@ -861,9 +858,8 @@ export default function Transactions() {
                 background: 'var(--surface)',
                 zIndex: 2,
               }}
-              // Room past the last column for the column chooser's corner tab, so a list scrolled sideways
-              // to its end does not put the Amount header under it. The 28 is the rows' side padding.
-              contentStyle={{ minWidth: renderColumns.reduce((sum, col) => sum + col.width, 0) + 28 + CORNER_TAB_ROOM }}
+              // The 28 is the rows' side padding.
+              contentStyle={{ minWidth: renderColumns.reduce((sum, col) => sum + col.width, 0) + 28 }}
               renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
                 <div>
                   {initialLoading ? <Spinner /> : total === 0 ? (
@@ -928,33 +924,9 @@ export default function Transactions() {
               )}
             />
           </div>
-          {/* Rarely changed, so it is kept out of the toolbar: a corner of the table it adjusts. */}
-          <CornerTab
-            corner="top-right"
-            radius={12}
-            title="Choose columns"
-            aria-label="Choose columns"
-            aria-haspopup="menu"
-            aria-expanded={Boolean(columnsMenuAnchor)}
-            onClick={event => {
-              const trigger = event.currentTarget
-              setColumnsMenuAnchor(current => (current ? null : trigger))
-            }}
-          >
-            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>{COLUMNS_GLYPH}</span>
-          </CornerTab>
         </Card>
 
         <TransactionRowActionsChrome controller={rowActions} />
-
-        {columnsMenuAnchor ? (
-          <ColumnsMenu
-            anchorElement={columnsMenuAnchor}
-            columns={cols.map(col => ({ key: col.key, label: getLedgerColumnDef(col.key).label, hidden: !!col.hidden }))}
-            onSetHidden={(key, hidden) => setStoredCols(setLedgerColumnHidden(cols, key, hidden))}
-            onClose={() => setColumnsMenuAnchor(null)}
-          />
-        ) : null}
 
         {detailPanels.map((panel, index) => {
           if (panel.type === 'txn') {

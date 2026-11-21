@@ -206,7 +206,7 @@ function NetWorthPeriod({ result, history, periodLabel, dateStart, dateEnd, open
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 20, marginBottom: 24 }}>
           <Card>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
-              {hasOpening ? 'Change' : (openGroup ? scope : 'Net worth')} by {openGroup ? 'account' : 'account type'}
+              {hasOpening ? 'Change' : (openGroup ? scope : 'Net worth')} by {openGroup ? 'account' : 'category'}
             </div>
             <BridgeChart steps={steps} series={bridgeGroups} onDrill={openGroup ? null : onDrill} />
           </Card>
@@ -548,7 +548,7 @@ function NetWorthTrends({ history, openType, onDrill, trendWindow, onTrendWindow
       </ComposedChart>
     </ResponsiveContainer>
   )
-  const typeOptions = [{ value: '', label: 'All types' }, ...groups.map(g => ({ value: g.type, label: g.label }))]
+  const typeOptions = [{ value: '', label: 'All sources' }, ...groups.map(g => ({ value: g.type, label: g.label }))]
   return (
     <>
       {openGroup ? <Breadcrumb items={['Overview', openGroup.label]} onNavigate={() => onDrill(null)} /> : null}

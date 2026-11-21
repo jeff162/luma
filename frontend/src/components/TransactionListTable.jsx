@@ -29,7 +29,8 @@ import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
-import { mergeVisibleColumns, visibleColumns } from '../lib/columnVisibility.js'
+import { mergeVisibleColumns, setColumnHidden, visibleColumns } from '../lib/columnVisibility.js'
+import { ColumnsStrip } from './ColumnsMenu.jsx'
 import { TRANSACTION_TABLE_COLUMN_DEFS as COLUMN_DEFS } from '../lib/transactionTableColumns.js'
 
 
@@ -144,8 +145,7 @@ export default function TransactionListTable({
   // note its balance carries, a span where the stated balances and the transactions disagree.
   showRunningBalance = false,
   balanceFlags = null,
-  // Offer a Posted column. It starts hidden, so a host offering it also offers the column choice
-  // (`TransactionListToolbar`'s `columns`), editing the same `columnConfig`.
+  // Offer a Posted column. It starts hidden, so a host offering it also offers the column choice.
   showPostedDate = false,
   // The account's type, which colors a balance on the unusual side of zero (`unusualBalanceColor`).
   balanceAccountType = null,
@@ -170,6 +170,9 @@ export default function TransactionListTable({
   fillHeight = false,
   columnConfig = null,
   onColumnConfigChange = null,
+  // The gear above the table that chooses which columns show (`ColumnsStrip`), editing `columnConfig`
+  // through `onColumnConfigChange`.
+  offerColumnChoice = false,
   // Callers that own row fetching (and thus do sort server-side) can pass a controlled pair;
   // when omitted the table manages its own client-side sort.
   sortState: externalSortState = null,
@@ -458,49 +461,64 @@ export default function TransactionListTable({
 
   return (
     <>
-      {/* This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
-        horizontal scroll feeds the wide grid. scrollRef lands here so a caller can reach the same
-        element the rows scroll inside. It is intentionally
-        NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
-        and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
-        which subtly changes the wrapper's measured size and throws off the floating detail
-        panel's initial centered position. */}
+      {/* The frame draws the border and clips the corners; a `fillHeight` table passes the flex chain on
+        through it to the scroll viewport. */}
       <div
-        ref={attachScrollRef}
         style={{
           border: '1px solid var(--border)',
           borderRadius: 10,
-          overflow: 'auto',
-          ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : { maxHeight }),
+          overflow: 'hidden',
+          ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' } : {}),
         }}>
-        <PillGridTable
-          columns={pillColumns}
-          onColumnsChange={onColumnConfigChange
-            ? cols => onColumnConfigChange(mergeVisibleColumns(
-              layoutColumns, cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY),
-            ))
-            : undefined}
-          sortState={sortState}
-          onSort={onSort}
-          headerStyle={{
-            position: 'sticky',
-            top: 0,
-            background: 'var(--surface)',
-            zIndex: 2,
-          }}
-          renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-            <WindowedRows
-              scrollRef={internalScrollRef}
-              items={paging ? paging.slots : visibleRows}
-              getItemKey={transactionRowKey}
-              estimateSize={41}
-              measureKey={activeColumns.map(col => col.width).join(',')}
-              onRangeChange={paging?.onRangeChange}
-              apiRef={paging?.apiRef}
-              renderRow={txn => renderRow(activeColumns, gridTemplateColumns, txn)}
-            />
-          )}
-        />
+        {offerColumnChoice && onColumnConfigChange ? (
+          <ColumnsStrip
+            radius={10}
+            columns={layoutColumns.map(col => ({ key: col.key, label: COLUMN_DEFS[col.key].label, hidden: !!col.hidden }))}
+            onSetHidden={(key, hidden) => onColumnConfigChange(setColumnHidden(layoutColumns, key, hidden))}
+          />
+        ) : null}
+        {/* This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
+          horizontal scroll feeds the wide grid. scrollRef lands here so a caller can reach the same
+          element the rows scroll inside. It is intentionally
+          NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
+          and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
+          which subtly changes the wrapper's measured size and throws off the floating detail
+          panel's initial centered position. */}
+        <div
+          ref={attachScrollRef}
+          style={{
+            overflow: 'auto',
+            ...(fillHeight ? { flex: 1, minHeight: 0 } : { maxHeight }),
+          }}>
+          <PillGridTable
+            columns={pillColumns}
+            onColumnsChange={onColumnConfigChange
+              ? cols => onColumnConfigChange(mergeVisibleColumns(
+                layoutColumns, cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY),
+              ))
+              : undefined}
+            sortState={sortState}
+            onSort={onSort}
+            headerStyle={{
+              position: 'sticky',
+              top: 0,
+              background: 'var(--surface)',
+              zIndex: 2,
+            }}
+            renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+              <WindowedRows
+                scrollRef={internalScrollRef}
+                items={paging ? paging.slots : visibleRows}
+                getItemKey={transactionRowKey}
+                estimateSize={41}
+                measureKey={activeColumns.map(col => col.width).join(',')}
+                onRangeChange={paging?.onRangeChange}
+                apiRef={paging?.apiRef}
+                renderRow={txn => renderRow(activeColumns, gridTemplateColumns, txn)}
+              />
+            )}
+          />
+        </div>
       </div>
       <TransactionRowActionsChrome controller={rowActions} />
       {/* Portaled because this table often sits inside a floating panel or a draggable dialog, and a

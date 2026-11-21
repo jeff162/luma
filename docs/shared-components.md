@@ -102,7 +102,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `SplitButton` | A common action with its alternatives behind a caret. | `components/SplitButton.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
-| `ColumnsMenu` (+ `columnVisibility`) | Choosing which of a table's columns are shown, from a gear: on the Transactions page and in `TransactionListToolbar`'s `columns`. The layout keeps hidden columns beside the neighbour they followed. | `components/ColumnsMenu.jsx`, `lib/columnVisibility.js` |
+| `ColumnsMenu` + `ColumnsStrip` (+ `columnVisibility`) | Choosing which of a table's columns are shown, from a gear in a strip across the top of the table, above its scroll viewport so it covers neither the scrollbar nor a header: on the Transactions page and in `TransactionListTable` with `offerColumnChoice`. The layout keeps hidden columns beside the neighbour they followed. | `components/ColumnsMenu.jsx`, `lib/columnVisibility.js` |
 | `ActionMenu` + `ActionMenuButton` | Every pop-up menu: the `⋯` menu of rarely used actions, a right-click menu (`anchorPoint`), a split button's caret, a short list to open one of. Plain, checked (one of many), on/off (several, menu stays open), disabled-with-reason and danger items, and arrow-key navigation. | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 | `startPointerDrag` + `useDropZone` | Dragging an item onto a target, by mouse or by finger. | `lib/pointerDrag.js` |
