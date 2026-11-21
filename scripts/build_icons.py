@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regenerate the platform icon files from the one vector source.
+"""Regenerate the platform icon files, and the macOS disk image background, from their vector sources.
 
-`assets/luma-icon.svg` is the source of truth; everything this writes is derived and committed, so a
-normal build needs no rasterizer and no extra dependency. Run it only when the artwork changes:
+`assets/luma-icon.svg` and `assets/dmg-background.svg` are the sources of truth; everything this writes
+is derived and committed, so a normal build needs no rasterizer and no extra dependency. Run it only when
+the artwork changes:
 
     pip install cairosvg           # not a project dependency — this script is the only user
     python scripts/build_icons.py
@@ -23,6 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "luma-icon.svg"
+DMG_BACKGROUND_SOURCE = ROOT / "assets" / "dmg-background.svg"
 
 # The canvas macOS draws on, and the portion of it Apple's icon grid gives the artwork.
 MACOS_CANVAS = 1024
@@ -55,6 +57,23 @@ def _inset_for_macos():
     return canvas
 
 
+def _render_dmg_backgrounds() -> list[Path]:
+    """The disk image background at its size in points and at twice that. `dmgbuild` finds the `@2x`
+    file beside the first by name and combines the two with `tiffutil -cathidpicheck`, which is what
+    keeps the window sharp on a Retina display. That check compares the images' sizes in points, so each
+    carries the resolution that makes them equal: 72 dpi for the first and 144 for the second."""
+    import cairosvg
+    from PIL import Image
+
+    written = []
+    for scale, suffix in ((1, ""), (2, "@2x")):
+        target = ROOT / "assets" / f"dmg-background{suffix}.png"
+        png = cairosvg.svg2png(url=str(DMG_BACKGROUND_SOURCE), scale=scale)
+        Image.open(BytesIO(png)).save(target, dpi=(72 * scale, 72 * scale))
+        written.append(target)
+    return written
+
+
 def main() -> int:
     try:
         import cairosvg  # noqa: F401
@@ -65,8 +84,9 @@ def main() -> int:
             f"    {sys.executable} -m pip install cairosvg"
         )
 
-    if not SOURCE.is_file():
-        raise SystemExit(f"No icon source at {SOURCE}.")
+    for source in (SOURCE, DMG_BACKGROUND_SOURCE):
+        if not source.is_file():
+            raise SystemExit(f"No artwork source at {source}.")
 
     written = []
 
@@ -96,6 +116,8 @@ def main() -> int:
     apple_touch = public / "apple-touch-icon.png"
     _render(APPLE_TOUCH_SIZE).save(apple_touch)
     written.append(apple_touch)
+
+    written.extend(_render_dmg_backgrounds())
 
     print("Wrote:")
     for path in written:

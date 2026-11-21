@@ -1,2 +1,4 @@
 # Build-time only: packaging the standalone desktop artifact (scripts/build_desktop.py).
 pyinstaller==6.22.3
+# Lays out the macOS disk image's Finder window. It drives hdiutil, so it is installed only on macOS.
+dmgbuild==1.6.7; sys_platform == "darwin"

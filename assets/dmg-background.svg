@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 460" width="640" height="460" role="img" aria-labelledby="title desc">
+  <title id="title">Luma disk image background</title>
+  <desc id="desc">An arrow from where the application sits to where the Applications shortcut sits, above a tray for the accompanying documents.</desc>
+  <!-- Coordinates are Finder points and must agree with the DMG_ constants in scripts/build_desktop.py: the
+       arrow spans the gap between the two icons of the top row, and the tray starts below their labels. -->
+  <rect width="640" height="460" fill="#eeede8"/>
+  <rect y="236" width="640" height="224" fill="#e3e0d7"/>
+  <line x1="0" y1="236" x2="640" y2="236" stroke="#cfcabd" stroke-width="1.5"/>
+  <g fill="none" stroke="#1f6f8b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M250 130 H384"/>
+    <path d="M362 110 L388 130 L362 150"/>
+  </g>
+</svg>

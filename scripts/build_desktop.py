@@ -63,6 +63,19 @@ BUNDLE_IDENTIFIER = "io.github.jeff162.luma"
 # would otherwise quietly raise the floor whenever the runner image moves.
 MINIMUM_MACOS = "11.0"
 
+# The Finder window a mounted `.dmg` opens in, in points. The top row is the install gesture, with the
+# background's arrow running from the application to the Applications shortcut; the documents sit in a
+# tray below it, inside the window rather than off its edge, so README.txt and its first-launch steps are
+# seen. Finder draws every icon at one size, which is what bounds the tray to a single row of four.
+# `assets/dmg-background.svg` is drawn on this grid, so a change to one is a change to the other.
+DMG_BACKGROUND = ROOT / "assets" / "dmg-background.png"
+DMG_WINDOW_SIZE = (640, 460)
+DMG_ICON_SIZE = 96
+DMG_TOP_ROW_Y = 130
+# Centres of the application and the Applications shortcut; the background's arrow spans the gap.
+DMG_APP_X, DMG_APPLICATIONS_X = 170, 470
+DMG_TRAY_ROW_Y = 330
+
 # The line about where data lives is the reason there are two of these rather than one with a
 # substitution: it is the whole difference between the forms, and it is the thing someone reads this
 # file to find out.
@@ -431,7 +444,11 @@ def _package_zip(executable: Path, form: str) -> Path:
 
 def _package_disk_image(app: Path, form: str) -> Path:
     """A `.dmg` holding the bundle, a symlink to Applications, and the notes about opening an unsigned
-    application. `hdiutil` is macOS-only, which is fine: this branch is only ever reached there."""
+    application, laid out as the `DMG_` constants describe. `dmgbuild` writes the window's layout into the
+    image's `.DS_Store` directly rather than by scripting Finder, which a headless CI runner cannot do
+    dependably; it drives `hdiutil`, so this branch, like the dependency, is macOS-only."""
+    import dmgbuild
+
     image = _artifact_name(form, ".dmg")
     image.parent.mkdir(parents=True, exist_ok=True)
     image.unlink(missing_ok=True)
@@ -440,27 +457,42 @@ def _package_disk_image(app: Path, form: str) -> Path:
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     try:
-        # `symlinks=True` is load-bearing: a PyInstaller bundle links `Contents/Resources` and
-        # `Contents/Frameworks` at each other, and resolving those into copies would both double the
-        # size and break the paths the bootloader resolves at startup.
-        shutil.copytree(app, staging / app.name, symlinks=True)
-        (staging / "Applications").symlink_to("/Applications")
-        (staging / "README.txt").write_text(READ_ME_MACOS)
-        shutil.copyfile(LICENSE_FILE, staging / "LICENSE")
-        shutil.copyfile(THIRD_PARTY_NOTICES_FILE, staging / THIRD_PARTY_NOTICES_FILE.name)
-        shutil.copyfile(ENV_EXAMPLE_FILE, staging / ENV_EXAMPLE_FILE.name)
+        readme = staging / "README.txt"
+        readme.write_text(READ_ME_MACOS)
+        # In the order they sit in the tray, README first since it is the one needed before first launch.
+        documents = [
+            (readme, readme.name),
+            (LICENSE_FILE, "LICENSE"),
+            (THIRD_PARTY_NOTICES_FILE, THIRD_PARTY_NOTICES_FILE.name),
+            (ENV_EXAMPLE_FILE, ENV_EXAMPLE_FILE.name),
+        ]
 
-        _run(
-            [
-                "hdiutil", "create",
-                "-volname", DEFAULT_APP_NAME,
-                "-srcfolder", str(staging),
-                "-ov",
+        tray_slot = DMG_WINDOW_SIZE[0] // len(documents)
+        icon_locations = {
+            app.name: (DMG_APP_X, DMG_TOP_ROW_Y),
+            "Applications": (DMG_APPLICATIONS_X, DMG_TOP_ROW_Y),
+        }
+        for index, (_, name) in enumerate(documents):
+            icon_locations[name] = (tray_slot * index + tray_slot // 2, DMG_TRAY_ROW_Y)
+
+        dmgbuild.build_dmg(
+            str(image),
+            DEFAULT_APP_NAME,
+            settings={
+                # Copied with `ditto`, which keeps the bundle's internal symlinks: a PyInstaller bundle
+                # links `Contents/Resources` and `Contents/Frameworks` at each other, and resolving those
+                # into copies would both double the size and break the paths the bootloader resolves.
+                "files": [str(app), *((str(source), name) for source, name in documents)],
+                "symlinks": {"Applications": "/Applications"},
                 # Compressed and read-only, which is what a distributed image should be.
-                "-format", "UDZO",
-                str(image),
-            ],
-            cwd=ROOT,
+                "format": "UDZO",
+                # `dmgbuild` picks up the `@2x` file beside this one by name, for Retina displays.
+                "background": str(DMG_BACKGROUND),
+                "window_rect": ((200, 120), DMG_WINDOW_SIZE),
+                "icon_size": DMG_ICON_SIZE,
+                "text_size": 13,
+                "icon_locations": icon_locations,
+            },
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)

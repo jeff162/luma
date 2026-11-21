@@ -184,7 +184,12 @@ in the build notices it.
 ### macOS specifics
 
 macOS produces `luma-<version>-macos-<arch>.dmg`: a `Luma.app` bundle beside a shortcut to
-Applications, installed by dragging one onto the other.
+Applications, installed by dragging one onto the other. The image opens in a fixed Finder window whose
+background draws an arrow from the bundle to the shortcut, with the README, licences and
+`env_example.txt` in a tray below, inside the window so the README's first-launch steps are seen.
+`dmgbuild` writes that layout into the image without scripting Finder, which a CI runner cannot do
+dependably; the icon positions in `build_desktop.py` and the drawing in `assets/dmg-background.svg` share
+one grid, so moving either means moving both.
 
 **Two macOS architectures are built and one is published** — `arm64` for Apple Silicon, and `x64` for
 Intel. One universal2 binary needs universal2 wheels for `cryptography` and `pydantic-core` which are not
@@ -215,7 +220,8 @@ rather than leaving a dead icon in the Dock.
 ### Icons
 
 `assets/luma-icon.svg` is the source; `scripts/build_icons.py` derives the macOS `.icns`, the Windows
-`.ico` and the browser favicons. The derived files are committed, so an ordinary build needs no
+`.ico` and the browser favicons, and from `assets/dmg-background.svg` the disk image background at one
+and two times its size, the second for Retina displays. The derived files are committed, so an ordinary build needs no
 rasterizer — run the script only when the artwork changes (it needs `pip install cairosvg`,
 deliberately not a project dependency). It emits two shapes of the same drawing: full-bleed for Windows
 and the browser, and inset for macOS, which since Big Sur draws every icon on a canvas larger than the
