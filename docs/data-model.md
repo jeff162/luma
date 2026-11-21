@@ -465,7 +465,9 @@ and the month it belongs in.
 `posted_date` is when the charge settled. It is nullable and set only where the source supplies a
 posting distinct from an undifferentiated date; a CSV with one date column leaves it NULL. It exists for
 duplicate detection: two sources routinely date one charge on different bases, so every date test in
-the ladder asks whether either date applies.
+the ladder asks whether either date applies. A balance also counts a row by when it posted, and the
+account report offers a Posted column only for a group where some live row posted on a day other than
+its date, since elsewhere the column would repeat the date.
 
 - A posted timestamp of `0` from a provider is read as absent. SimpleFIN's protocol makes the field
   mandatory, so a pending row carries `0` there.

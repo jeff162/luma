@@ -1952,8 +1952,9 @@ export const HELP_TOPICS = [
           row&apos;s &#8943; menu, enters one by hand, for an account with no connection or to set one right. A merged group has one balance, from
           whichever member reported most recently. The account&apos;s &#8599; report shows the balance after
           each transaction, counted in the order of the date the list is sorted by, with a day&apos;s credits
-          before its debits as banks post them. Its &#9881; adds a <strong>Posted</strong> column; sorted by
-          that, the list and its balances match a bank&apos;s own listing. The report also lists any stretch
+          before its debits as banks post them. Where some of an account&apos;s transactions posted on a later day
+          than they were made, its &#9881; adds a <strong>Posted</strong> column; sorted by that, the list and
+          its balances match a bank&apos;s own listing. The report also lists any stretch
           between two stated balances whose change the transactions in it don&apos;t add up to; the last
           transaction in that stretch is marked &#9888;, since one is missing, extra or wrong there. <strong>Exclude</strong> keeps an account out
           of net worth; an account of type <em>Other</em> is always out.

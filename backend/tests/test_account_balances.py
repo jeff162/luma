@@ -19,6 +19,7 @@ from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
+from backend.routers.accounts import _posted_dates_differ
 from backend.services import plaid_service
 from backend.services.account_balances import (
     balance_checks, current_balances, delete_manual_balance, record_manual_balance, running_balances,
@@ -256,6 +257,15 @@ class CurrentBalanceTests(unittest.TestCase):
         self._state("cash", "2026-08-05", 200.0)
         self._txn("cash", "2026-07-30", 300.0, posted="2026-08-02")
         self.assertEqual(balance_checks(self.conn, "cash"), [])
+
+    def test_the_posted_column_is_offered_when_a_live_row_in_the_group_posted_on_another_day(self):
+        # The account report offers Posted only where it would show something other than the date.
+        self._txn("card", "2026-08-01", 5.0, posted="2026-08-01")
+        self._txn("cash", "2026-08-01", 6.0, posted="2026-08-03", trashed_at="2026-08-04")
+        self.assertFalse(_posted_dates_differ(self.conn, "card"))
+        self.assertFalse(_posted_dates_differ(self.conn, "cash"))
+        self._txn("old-card", "2026-08-02", 7.0, posted="2026-08-04")  # a member's row decides for its group
+        self.assertTrue(_posted_dates_differ(self.conn, "card"))
 
 
 if __name__ == "__main__":

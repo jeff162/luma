@@ -65,11 +65,13 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // A merged account's report covers its whole group as one account. The list offers a Source account
   // column there, so a row can still be traced to the member it was imported on.
   const [isMerged, setIsMerged] = useState(false)
-  // The panel's body reflows as its two opening fetches land (the monthly trend fills the chart and
-  // reveals the month section; the accounts fetch may add the Source account column). Rather than let the
-  // user watch it grow and reposition, it's held invisible until both first fetches are in and the
-  // panel's geometry has gone quiet (see usePanelReveal), then fades in fully formed.
+  // The panel's body reflows as its opening fetches land (the monthly trend fills the chart and reveals the
+  // month section; the accounts fetch may add the Source account column; the balance fetch may add the
+  // Balance and Posted columns). Rather than let the user watch it grow and reposition, it's held invisible
+  // until all three first fetches are in and the panel's geometry has gone quiet (see usePanelReveal), then
+  // fades in fully formed.
   const [accountsSettled, setAccountsSettled] = useState(false)
+  const [balanceSettled, setBalanceSettled] = useState(false)
   // The group's balance today and where its stated balances disagree with its transactions. The list's
   // Balance column runs back from today's balance, so it appears only once there is one.
   const [balanceInfo, setBalanceInfo] = useState(null)
@@ -79,6 +81,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     api.getBalanceChecks(account.id)
       .then(result => { if (!cancelled) setBalanceInfo(result) })
       .catch(() => { if (!cancelled) setBalanceInfo(null) })
+      .finally(() => { if (!cancelled) setBalanceSettled(true) })
     return () => { cancelled = true }
   }, [account.id, balanceNonce])
   const balance = balanceInfo?.balance || null
@@ -150,13 +153,14 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
   // The table offers the column choice for the Posted column: a connected card's bank lists rows by
-  // posting date, and sorting by it makes the running balance count in that order too.
+  // posting date, and sorting by it makes the running balance count in that order too. It is offered only
+  // where some row posted on another day than its date, since elsewhere it would repeat the Date column.
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
     showSourceAccount: isMerged,
     showRunningBalance: !!balance,
-    showPostedDate: true,
+    showPostedDate: !!balanceInfo?.posted_dates_differ,
   })
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
 
@@ -248,7 +252,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
       transactionTableWidth(visibleColumns(columnConfig), { bulkActive: bulk.bulkMode }),
     ),
   })
-  const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
+  const revealed = usePanelReveal(panelRef, accountsSettled && balanceSettled && !trendLoading)
 
   // A change to the rows moves every balance after it, so the balances are re-read with the list.
   function refresh() {

@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildTransactionTableDefaultColumnConfig,
   normalizeTransactionTableColumnConfig,
+  retainUnofferedColumns,
 } from '../transactionTablePreferences.js'
 
 const keysOf = columns => (columns || []).map(column => column.key)
@@ -74,5 +75,37 @@ describe('normalizeTransactionTableColumnConfig', () => {
     const normalized = normalizeTransactionTableColumnConfig([{ key: 'merchant', width: 'wide' }])
     expect(normalized.find(column => column.key === 'merchant').width)
       .toBe(buildTransactionTableDefaultColumnConfig().find(column => column.key === 'merchant').width)
+  })
+})
+
+describe('retainUnofferedColumns', () => {
+  // One layout serves every account's report, and each offers Posted, Balance and Source account only
+  // where they apply. A save on an account without them must not reset them for the accounts with them.
+  const saved = [
+    { key: 'date', width: 96 }, { key: 'posted', width: 120 }, { key: 'merchant', width: 260 },
+    { key: 'tags', width: 96 }, { key: 'amount', width: 108 }, { key: 'runningBalance', width: 140, hidden: true },
+  ]
+  const offeredWithout = new Set(['date', 'merchant', 'tags', 'amount'])
+
+  it('keeps a column the surface does not offer, as it was saved, through a save made without it', () => {
+    const next = [
+      { key: 'merchant', width: 300 }, { key: 'date', width: 96 }, { key: 'tags', width: 96 }, { key: 'amount', width: 108 },
+    ]
+    const stored = retainUnofferedColumns(next, saved, offeredWithout)
+    const restored = normalizeTransactionTableColumnConfig(
+      stored, { showCategory: false, showAccount: false, showPostedDate: true, showRunningBalance: true },
+    )
+    expect(restored).toEqual([
+      { key: 'merchant', width: 300 }, { key: 'date', width: 96 }, { key: 'posted', width: 120 },
+      { key: 'tags', width: 96 }, { key: 'amount', width: 108 }, { key: 'runningBalance', width: 140, hidden: true },
+    ])
+  })
+
+  it('does not carry an unknown or repeated column', () => {
+    const next = [{ key: 'date', width: 96 }]
+    const stored = retainUnofferedColumns(
+      next, [{ key: 'nonsense', width: 10 }, { key: 'posted', width: 120 }, { key: 'posted', width: 90 }], new Set(['date']),
+    )
+    expect(stored).toEqual([{ key: 'posted', width: 120 }, { key: 'date', width: 96 }])
   })
 })

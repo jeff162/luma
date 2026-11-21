@@ -512,8 +512,8 @@ def _balance_date(as_of_date: str) -> str:
 
 @router.get("/{account_id}/balance-checks")
 def get_balance_checks(account_id: str):
-    """The group's balance today and where its stated balances and transactions disagree. A member's id
-    means its group, whose balance it is part of."""
+    """The group's balance today and where its stated balances and transactions disagree, with the other
+    group-wide facts the account report reads. A member's id means its group, whose balance it is part of."""
     with get_db() as conn:
         if not _get_account_row(conn, account_id):
             raise HTTPException(status_code=404, detail="Account not found")
@@ -526,9 +526,27 @@ def get_balance_checks(account_id: str):
             "checks": balance_checks(conn, root_id),
             "history_flag": account_history_flag(conn, root_id),
             "net_worth_from": root["net_worth_from"] if root else None,
+            # Whether the account report offers a Posted column: only where it would ever show something
+            # other than the date beside it.
+            "posted_dates_differ": _posted_dates_differ(conn, root_id),
             # The group's top account, which the net worth settings are set on.
             "root_id": root_id,
         }
+
+
+def _posted_dates_differ(conn, root_id: str) -> bool:
+    """Whether any live row in the group posted on a day other than its date. The whole group's rows decide,
+    not a window of them, so the column does not come and go as the report moves between months. The group's
+    accounts are listed first so the rows are reached through their account index; joined the other way, the
+    planner reads every transaction in the ledger."""
+    return conn.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM txn t
+            WHERE t.account_id IN (SELECT id FROM account WHERE COALESCE(parent_account_id, id) = ?)
+              AND t.trashed_at IS NULL AND t.posted_date IS NOT NULL AND t.posted_date <> t.date
+        )
+        """, (root_id,)).fetchone()[0] == 1
 
 
 @router.post("/{account_id}/history-flag/dismiss")
