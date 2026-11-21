@@ -278,10 +278,18 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **Filtering by an account group on a joined account reads the whole table.** `COALESCE(a.parent_account_id,
   a.id) = ?` can only be tested after the join, so SQLite walks every transaction to test it, and the cost
   grows with the ledger rather than with the group. Selecting the rows by their own account id,
-  `t.account_id IN` `group_accounts_sql(...)` (`services/account_groups.py`), reads only the group's rows. A
-  query with a selective index of its own to start from (an amount, a narrow date window) can lose that
-  start with this form, which is why the transaction list's account filter (`account_membership`) keeps the
-  resolved-root form.
+  `t.account_id IN` `group_accounts_sql(...)` (`services/account_groups.py`), reads only the group's rows.
+  Without planner statistics, a query that also has a narrow date window can lose its start from the date
+  index with this form; with them, the planner weighs the two and this form is the faster with or without a
+  date range.
+- **The query planner needs statistics, and SQLite never gathers them itself.** Without `sqlite_stat1` it
+  reads a whole-ledger query through the partial amount index, a lookup per row and several times slower
+  than reading the table straight through, and it passes over the account and import-batch indexes where a
+  join could start from them. `refresh_planner_statistics` (`db/database.py`) re-estimates them, bounded by
+  `PLANNER_STATISTICS_ANALYSIS_LIMIT`, at startup, after an import, a sync, a demo load and a restore. A
+  backup leaves the statistics out with SQLite's other `sqlite_%` tables, so a restored ledger relies on
+  that refresh. `PRAGMA optimize` is not enough before SQLite 3.46, where it analyzes only the tables the
+  same connection has already queried.
 - **A bound is safe only once what falls outside it is reachable.** Paging a list before its archive
   exists hides rows with no way back to them.
 - **Paging `GET /import-export/batches` breaks the callers that read it as an aggregate over all

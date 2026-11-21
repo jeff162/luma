@@ -39,13 +39,12 @@ from fastapi import Query
 from fastapi import params as fastapi_params
 from pydantic.fields import FieldInfo
 
-from backend.services.account_groups import effective_account_id_sql
+from backend.services.account_groups import group_accounts_sql
 from backend.services.transaction_attributes import attribute_membership
 from backend.services.transaction_tags import tag_filter_membership_sql
 
 # Every membership expression below correlates on the alias set the callers all JOIN identically:
 # t(xn) / a(ccount) / p(arent account) / c(ategory) / pc (parent category).
-EFFECTIVE_ACCOUNT_ID_SQL = effective_account_id_sql("t.account_id")
 
 # Synthetic selections the category facet accepts alongside real ids. They are not rows in `category`;
 # they name the uncategorized buckets the UI shows as if they were entries, which is why every consumer
@@ -90,8 +89,9 @@ def split_ids(raw: Optional[str], separator: str) -> list[str]:
 
 # --- Membership per facet -------------------------------------------------------------------------
 
-# Both sides of an account comparison have to resolve the same way. The row side already does
-# (`EFFECTIVE_ACCOUNT_ID_SQL`), and the *given* ids are resolved here too rather than compared raw,
+# Both sides of an account comparison have to resolve the same way. The row side is every account in the
+# selected groups (`group_accounts_sql`, matched on the row's own account id so the account index can
+# narrow the rows), and the *given* ids are resolved to their groups too rather than compared raw,
 # because a caller can hold an id that has since become a merged child — nothing resolves to a child
 # any more, so a raw child id matches no row at all and reports no error. Resolving both sides makes
 # a child id mean "the group it belongs to", which is the only reading anyone ever wants. Done in SQL,
@@ -103,8 +103,8 @@ def account_membership(ids: list[str]) -> Optional[tuple[str, list]]:
         return None
     placeholders = ','.join('?' * len(ids))
     return (
-        f"{EFFECTIVE_ACCOUNT_ID_SQL} IN "
-        f"(SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))",
+        f"t.account_id IN "
+        f"{group_accounts_sql(f'IN (SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))')}",
         list(ids),
     )
 
@@ -118,7 +118,7 @@ def account_type_membership(types: list[str]) -> Optional[tuple[str, list]]:
         return None
     placeholders = ','.join('?' * len(types))
     return (
-        f"(SELECT type FROM account WHERE id = {EFFECTIVE_ACCOUNT_ID_SQL}) IN ({placeholders})",
+        f"t.account_id IN {group_accounts_sql(f'IN (SELECT id FROM account WHERE type IN ({placeholders}))')}",
         list(types),
     )
 

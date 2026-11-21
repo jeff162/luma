@@ -51,7 +51,8 @@ from backend import app_config
 from backend.authorization import require_admin_or_local
 from backend.app_logging import log_warning
 from backend.db.database import (SHARED_OWNER_ID, compact_database, compact_if_worthwhile, get_db,
-                                 get_tenant_workflow_state, set_tenant_workflow_state)
+                                 get_tenant_workflow_state, refresh_planner_statistics,
+                                 set_tenant_workflow_state)
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
 from backend.json_utils import safe_json_dict
@@ -3086,6 +3087,7 @@ def _run_uploaded_import(text: str, cfg: dict, filename: str, progress_id: Optio
     # touched, not the whole ledger. Settled here, not in run_import_core, because the core also runs
     # inside the demo loader's own transaction, which scans once at its end.
     settle_owed_rescans()
+    refresh_planner_statistics(reason="imported a file")
 
     return result
 

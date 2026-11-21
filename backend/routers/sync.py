@@ -35,7 +35,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.app_logging import log_error, log_warning
-from backend.db.database import get_db
+from backend.db.database import get_db, refresh_planner_statistics
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
 from backend.services import connection_log, crypto_service, rule_alerts, rule_conflicts
@@ -1946,6 +1946,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     # rather than waiting for a manual scan: scoped to the payees this sync touched, not the whole ledger.
     if touched_ids or removed:
         settle_owed_rescans()
+        refresh_planner_statistics(reason="synced")
 
     # `historical_complete` is the client's stop-polling signal: true once no connection has more to deliver
     # *right now*. A paused connection counts as nothing-more-right-now even though its history is

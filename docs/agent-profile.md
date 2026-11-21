@@ -54,8 +54,9 @@ instruction and fix the drift.
   WAL mode.
 
 - Measure before blaming, and measure on a copy of real data, because the test fixtures (largest ~1,200
-  rows) cannot show a cost that appears only at ledger scale. To sweep for one, trace the suite's SQL
-  with `sqlite3.set_trace_callback` and run `EXPLAIN QUERY PLAN` on each statement against the copy.
+  rows) cannot show a cost that appears only at ledger scale. To sweep for one, run
+  `scripts/query_plan_survey.py --db <ledger>`, which traces the suite's SQL and explains and times each
+  statement on a copy, with and without planner statistics.
 
 - The user works in the app while a session is open, so figures from the live ledger are comparable
   only within a single run.

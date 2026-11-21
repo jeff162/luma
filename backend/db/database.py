@@ -295,6 +295,34 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
     return compact_database(resolved_path, reason=reason)
 
 
+# The rows of each index ANALYZE reads to estimate it. Bounded so a refresh costs a few milliseconds on a
+# ledger of any size, rather than growing with it as a full count does.
+PLANNER_STATISTICS_ANALYSIS_LIMIT = 1000
+
+
+def refresh_planner_statistics(db_path: str | None = None, *, reason: str) -> None:
+    """Re-estimate the table and index sizes SQLite's query planner chooses plans by (`sqlite_stat1`).
+
+    Without them the planner guesses, and on this schema it guesses badly: it reads a whole-ledger query
+    through the partial amount index, a lookup per row, and passes over the account and import-batch
+    indexes for joins it would otherwise start from them. Run where the ledger changes size in bulk — at
+    startup, after an import or a sync, and after a restore — since the estimates only drift with the data.
+    `PRAGMA optimize` would be the usual call, but before SQLite 3.46 it re-analyzes only the tables the
+    same connection has already queried, which on a fresh connection is none.
+
+    The statistics are a table of SQLite's own, which a backup leaves out (`sqlite_%`), so a restored
+    ledger has none until this runs. Like compaction, a failure here is never the caller's failure: the
+    work it follows has committed, and stale estimates cost speed, not correctness.
+    """
+    resolved_path = _normalize_db_path(db_path)
+    try:
+        with get_db(resolved_path) as conn:
+            conn.execute(f"PRAGMA analysis_limit = {PLANNER_STATISTICS_ANALYSIS_LIMIT}")
+            conn.execute("ANALYZE")
+    except sqlite3.Error as exc:
+        log_warning(f"[db] planner statistics for {resolved_path} were not refreshed ({reason}): {exc}")
+
+
 # Fresh installs are created directly at `CURRENT_VERSION` from the full schema in `init_db` and
 # stamped there without replaying migrations. Existing databases are advanced in place by
 # `run_migrations`, which applies every registered migration newer than the DB's recorded version.
@@ -4416,6 +4444,7 @@ def init_db(db_path: str | None = None):
         # Whatever a deletion path that does not compact left behind, given back while nothing else
         # holds the database.
         compact_if_worthwhile(resolved_path, reason="startup")
+    refresh_planner_statistics(resolved_path, reason="startup")
 
 
 # The reconciliation reports' attention counts (Amazon's per import batch, the PayPal reconciliation over the

@@ -66,7 +66,7 @@ from backend.services.preferences import (
     set_preference,
 )
 from backend.db.database import (_seed_default_categories, compact_if_worthwhile, ensure_shared_owner, get_db,
-                                 get_db_instance_id)
+                                 get_db_instance_id, refresh_planner_statistics)
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
@@ -544,7 +544,9 @@ def load_demo_data_endpoint(request: Request):
     _require_local_mode()
     scope_id = _require_current_user(request)["id"]
     with get_db() as conn:
-        return load_demo_data(conn, scope_id=scope_id)
+        result = load_demo_data(conn, scope_id=scope_id)
+    refresh_planner_statistics(reason="loaded the demo data")
+    return result
 
 
 @router.get("/demo-data")

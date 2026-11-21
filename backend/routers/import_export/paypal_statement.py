@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from backend.db.database import get_db
+from backend.db.database import get_db, refresh_planner_statistics
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
 from backend.services.account_groups import effective_account_id
@@ -352,4 +352,5 @@ async def import_paypal_statements(files: list[UploadFile] = File(...), assignme
     # Each statement's import owed its payees a recurring rescan; one scan settles them all.
     if batches:
         settle_owed_rescans()
+        refresh_planner_statistics(reason="imported PayPal statements")
     return {"batches": batches, "skipped": skipped, "unrecognized_files": unrecognized, "unreadable_files": unreadable}

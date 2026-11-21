@@ -70,7 +70,7 @@ from backend import app_config
 from backend.app_logging import log_error
 from backend.authorization import require_admin_or_local
 from backend.runtime_config import app_name, data_dir
-from backend.db.database import current_db_path, get_db, single_runner
+from backend.db.database import current_db_path, get_db, refresh_planner_statistics, single_runner
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
 from backend.services.ledger_currency import get_ledger_currency
@@ -923,6 +923,7 @@ def _scan_watched_sources(*, profile_id: Optional[str]) -> dict:
     # Each import owed its payees a recurring rescan; one scan settles them all.
     if imported_batch_ids:
         settle_owed_rescans()
+        refresh_planner_statistics(reason="imported from a watched folder")
     with get_db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO db_meta (key, value) VALUES (?, ?)",

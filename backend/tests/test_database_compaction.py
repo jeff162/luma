@@ -1,4 +1,5 @@
-"""Giving freed pages back to the filesystem after a bulk deletion nobody asked to reclaim space from."""
+"""Database upkeep after bulk changes: giving freed pages back to the filesystem after a deletion nobody asked
+to reclaim space from, and refreshing the query planner's estimates."""
 
 from __future__ import annotations
 
@@ -64,3 +65,19 @@ class CompactIfWorthwhileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefreshPlannerStatisticsTests(unittest.TestCase):
+    """The planner's estimates are a table SQLite keeps only once asked; without them it guesses."""
+
+    def test_the_estimates_are_written_for_the_ledger_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "ledger.db"
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute("CREATE TABLE row (key TEXT)")
+                conn.execute("CREATE INDEX idx_row_key ON row(key)")
+                conn.executemany("INSERT INTO row VALUES (?)", [(str(i % 50),) for i in range(500)])
+            database.refresh_planner_statistics(str(db_path), reason="test")
+            with closing(sqlite3.connect(db_path)) as conn:
+                stats = dict(conn.execute("SELECT idx, stat FROM sqlite_stat1 WHERE tbl = 'row'").fetchall())
+        self.assertEqual(stats["idx_row_key"].split()[0], "500")

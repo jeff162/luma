@@ -72,6 +72,7 @@ from backend.authorization import require_admin_or_local
 from backend.db.database import (
     CURRENT_VERSION,
     compact_if_worthwhile,
+    refresh_planner_statistics,
     current_db_path,
     get_db,
     get_db_instance_id,
@@ -2274,6 +2275,7 @@ def restore_payload(payload: dict, force: bool = False, source: Optional[dict] =
     documents = _restore_documents(None)
     forget_startup_routes()
     compact_if_worthwhile(reason="restored a backup")
+    refresh_planner_statistics(reason="restored a backup")
     return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents,
             "database_check_passed": database_health.check_passed()}
 
@@ -2403,6 +2405,7 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         result["restored_counts"] = counts
         result["removed_connections"] = removed_connections
         compact_if_worthwhile(reason="restored a backup")
+        refresh_planner_statistics(reason="restored a backup")
     if accounts_part is not None:
         result["accounts"] = accounts_backup.apply(accounts_part, passkey_hosts)
         if left_behind:
