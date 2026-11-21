@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /*
  * These hooks centralize the app's dismissal and inline-edit conventions so popovers, menus, and text edits
@@ -36,6 +36,21 @@ function blurActiveElementIfContained(refs) {
   active.blur()
 }
 
+/*
+ * One Escape press goes to one layer. Each surface that answers Escape (a menu, a popup, a detail panel, a
+ * page's selection) registers here while it is active, and a single window listener hands the press to the
+ * layer activated most recently. Separate window listeners all run, in the order they were added and not by
+ * which surface is on top, which is how one press used to close a menu and the panel it was opened from.
+ * The top layer decides alone: when it declines (focus in a field it leaves alone), nothing below acts.
+ * A press already default-prevented, by a field cancelling its own edit, goes to no layer.
+ */
+const escapeLayers = []
+
+function dispatchEscape(event) {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+  escapeLayers.at(-1)?.(event)
+}
+
 export function useEscapeAction(
   onEscape,
   {
@@ -44,18 +59,24 @@ export function useEscapeAction(
     escapeBehavior = ESCAPE_BEHAVIOR.CUSTOM,
   } = {}
 ) {
+  // The latest handler is read through a ref so a re-render does not re-register the layer, which would
+  // move it to the top of the stack.
+  const handlerRef = useRef(null)
+  handlerRef.current = event => {
+    if (ignoreEditableTarget && isEditableTarget(event.target)) return
+    onEscape?.(event)
+  }
+
   useEffect(() => {
     if (!enabled) return undefined
-
-    function handleKeyDown(event) {
-      if (event.key !== 'Escape') return
-      if (ignoreEditableTarget && isEditableTarget(event.target)) return
-      onEscape?.(event)
+    const layer = event => handlerRef.current(event)
+    if (!escapeLayers.length) window.addEventListener('keydown', dispatchEscape)
+    escapeLayers.push(layer)
+    return () => {
+      escapeLayers.splice(escapeLayers.indexOf(layer), 1)
+      if (!escapeLayers.length) window.removeEventListener('keydown', dispatchEscape)
     }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [enabled, ignoreEditableTarget, onEscape, escapeBehavior])
+  }, [enabled, escapeBehavior])
 }
 
 export function useDismissiblePopup({

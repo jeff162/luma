@@ -104,7 +104,8 @@ Shared interaction surfaces:
 - **`components/ui.jsx`:** visual primitives — cards, buttons, floating panels, overlays, form control
   styling, and the confirm/notice/text-entry dialogs
 - **`lib/uiInteractions.js`:** hooks for dismissible layers, popups, escape handling, and transient text
-  editing
+  editing. Escape goes through one shared stack: each active layer registers with `useEscapeAction`, and a
+  press reaches only the layer activated most recently
 - **`components/TransientTextInput.jsx`:** the single-field edit control where Enter/blur commits and
   Escape restores the pre-edit value
 

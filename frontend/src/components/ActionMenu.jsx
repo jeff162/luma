@@ -39,7 +39,8 @@ import { IconButton, Tooltip } from './ui.jsx'
  * the focused one, whether the pointer or the keyboard put it there. Choosing an item, Escape and Tab
  * return focus to the trigger, or to whatever held it before a right-click; an outside click leaves
  * focus where it lands. Keys are kept from reaching the surface behind, which may have arrow or Enter
- * handling of its own; Escape is not, since dismissal listens for it on the window.
+ * handling of its own; Escape is not, since dismissal takes it from the shared Escape layers
+ * (useEscapeAction), where an open menu is above the panel or page that opened it.
  *
  * It is anchored to the element that opened it (`anchorElement`), or to the pointer for a right-click
  * menu (`anchorPoint`, `{ x, y }`: the event's `clientX`/`clientY`, which are screen pixels), and the browser keeps it there (useAnchoredPopup): right-aligned to

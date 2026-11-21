@@ -184,8 +184,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **Creating something, or a multi-field form, uses an explicit submit** and does not commit on blur
   (`onBlurCommit={false}`), so clicking away never creates a half-specified thing.
 - **Escape cancels the local edit and nothing else.** It restores the pre-edit value and does not close
-  the surrounding popover, dialog or page. Each editor or layer owns its own Escape
-  (`TransientTextInput`, `useDismissibleLayer`, `SearchInput`); there is no global listener.
+  the surrounding popover, dialog or page. A field handles its own Escape and marks it handled
+  (`TransientTextInput`, `SearchInput`); every other layer registers with `useEscapeAction`, and one press
+  reaches only the layer opened most recently, so a menu closes without the panel it was opened from.
 - **Enter advances through a small form and submits from the last field** (`lib/formKeys.js`). Enter is
   gated on the same named condition as the button. A typed confirmation for an irreversible action takes
   no Enter handler.
@@ -383,8 +384,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A panel may open a child panel**, which closes with its parent.
 - **Edits reconcile to the host through one callback**, `onReconcile(txnId, patch | null)`, usually
   built with `makeRowReconciler`.
-- **Escape closes only the topmost panel**, and not while focus is in a text field or a dialog is open
-  above it. Panels do not close on a backdrop click.
+- **Escape closes only the topmost panel**, and not while focus is in a text field, or a menu, popup or
+  dialog is open above it. Panels do not close on a backdrop click.
 - **A report kept open while working elsewhere minimizes to the navigation pane** through
   `useDetachedReportViewer` and `MinimizedReportPill`.
 - **Geometry the user set is remembered** with `useRestorablePanelGeometry`.

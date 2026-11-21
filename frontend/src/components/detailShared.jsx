@@ -33,7 +33,7 @@ import { useDeviceLayoutPreference, useOptionalUserPreference } from '../lib/Use
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { DialogActions, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
-import { isEditableTarget } from '../lib/uiInteractions.js'
+import { isEditableTarget, useEscapeAction } from '../lib/uiInteractions.js'
 import { preventPressDefaults, trackPointer } from '../lib/pointerDrag.js'
 import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMatchingTransactions.js'
 import { leadingRows } from '../lib/rowSlots.js'
@@ -894,25 +894,20 @@ export function DetailPanelShell({
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
 
-  // Escape dismisses the topmost panel, matching the rest of the app's dismissable layers. Gated so
-  // it only fires when nothing more specific owns the Escape: only the topmost panel responds, we
-  // bail when focus is in a text field (the inline editor cancels its own edit instead — this is what
-  // keeps a half-finished note/name edit from nuking the whole panel), and we bail when a modal
-  // dialog is open above the panel (the dialog owns Escape). We deliberately do not require focus to
-  // be inside the panel: opening a panel by clicking leaves focus on the trigger in the page behind,
-  // so a focus-inside rule would make Escape-right-after-open silently do nothing.
-  useEffect(() => {
-    if (!effectiveIsTopmost) return undefined
-    function onKeyDown(event) {
-      if (event.key !== 'Escape') return
-      if (isEditableTarget(document.activeElement)) return
-      if (document.querySelector('[data-modal-overlay]')) return
-      event.preventDefault()
-      onClose?.()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [effectiveIsTopmost, onClose])
+  // Escape dismisses the topmost panel. It is an Escape layer (useEscapeAction) only while topmost, so
+  // bringing a panel to the front puts it above the layers already open, and a menu or popup opened from
+  // it afterwards sits above it and takes the press alone. The panel still declines when focus is in a
+  // text field (the inline editor cancels its own edit instead — this is what keeps a half-finished
+  // note/name edit from nuking the whole panel) and when a modal dialog is open above it (the dialog owns
+  // Escape). We deliberately do not require focus to be inside the panel: opening a panel by clicking
+  // leaves focus on the trigger in the page behind, so a focus-inside rule would make
+  // Escape-right-after-open silently do nothing.
+  useEscapeAction(event => {
+    if (isEditableTarget(document.activeElement)) return
+    if (document.querySelector('[data-modal-overlay]')) return
+    event.preventDefault()
+    onClose?.()
+  }, { enabled: effectiveIsTopmost })
 
   const panelSurfaceStyle = getFloatingPanelSurfaceStyle({
     active: !pos || effectiveIsTopmost,
