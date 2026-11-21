@@ -426,8 +426,8 @@ export const HELP_TOPICS = [
       <>
         <p>*needs review*</p>
         <p>
-          When several people share one {APP_NAME} &mdash; a household, say &mdash; but each mostly wants to see
-          their own money, the <strong>Owner view</strong> narrows the app to chosen owners. The switch in the
+          When several people, such as a household, share one {APP_NAME} but each mostly wants to see their
+          own money, the <strong>Owner view</strong> narrows the app to chosen owners. The switch in the
           top-right corner of the Dashboard, Transactions, Accounts, Rules, Recurring and Tasks pages limits them
           to the transactions, accounts, rules and recurring series that belong to those owners.
         </p>
@@ -3493,7 +3493,7 @@ export const HELP_TOPICS = [
       <>
         <p>*needs review*</p>
         <p>
-          Payment apps &mdash; PayPal, Venmo, Cash App and the like &mdash; are accounts of type{' '}
+          Payment apps, such as PayPal, Venmo and Cash App, are accounts of type{' '}
           <strong>PayPal</strong> or <strong>P2P</strong>. A payment app holds the record of what was bought or
           received &mdash; money can sit in its balance, and then its transaction is the only record there is.
           What the app took from a card or bank, or sent back to one, also appears on that account under the
