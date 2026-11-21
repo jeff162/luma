@@ -27,7 +27,7 @@ import { localIsoDate } from '../lib/utils.js'
 import { Spinner, Button, FilterChip, IconButton, LinkButton, SegmentedToggle, Select, getFormControlStyle } from './ui.jsx'
 import { ActionMenu } from './ActionMenu.jsx'
 import OwnerChip from './OwnerChip.jsx'
-import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference, useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import {
   IMPORT_RULE_LOOKBACK_CHOICES,
   IMPORT_RULE_LOOKBACK_PREF_KEY,
@@ -41,7 +41,7 @@ import {
   normalizeImportRuleSortOrder,
   suggestionSelectionChanged,
 } from '../lib/importRuleSuggestions.js'
-import { ProgressPill, SuggestionActionButton } from './importRuleSuggestions/suggestionPresentational.jsx'
+import { ProgressPill, SuggestionActionButton, SuggestionPill } from './importRuleSuggestions/suggestionPresentational.jsx'
 import { SettledConflictSetTable } from './importRuleSuggestions/SettledConflictSetTable.jsx'
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
@@ -56,6 +56,8 @@ import TransactionDetail from './TransactionDetail.jsx'
 import { localStore } from '../lib/browserStorage.js'
 import { toCssPx, vw } from '../lib/displaySize.js'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
+
+const FILTERS_COLLAPSED_PREF_KEY = 'ui.importRuleSuggestions.filtersCollapsed'
 
 const SORT_OPTIONS = [{ value: 'row_count', label: '# rows' }, { value: 'alpha', label: 'A–Z' }]
 
@@ -147,6 +149,8 @@ export default function ImportRuleSuggestionReview({
     || legacySortOrderRef.current
     || 'row_count'
   const normalizedMerchantFilter = merchantFilterText.trim().toLowerCase()
+  // The sticky filter panel can fold to one line, which gives a narrow window its list back.
+  const [filtersCollapsedPref, setFiltersCollapsedPref] = useDeviceLayoutPreference(FILTERS_COLLAPSED_PREF_KEY, false)
 
   // Look-back lens: split pending suggestions by recency. The pending/conflicts views show merchant
   // groups with any pending activity inside the chosen window (0 = all time); the `older` view shows the
@@ -389,6 +393,8 @@ export default function ImportRuleSuggestionReview({
     storageScope: suggestionBulkStorageScope(persistKey, selectedOwnerIds, reviewFilter),
   })
   const bulkMode = bulk.active
+  // Bulk mode keeps the filter panel open, since the bulk-actions bar lives in it.
+  const filtersCollapsed = Boolean(filtersCollapsedPref) && !bulkMode
   // Reset during render rather than in an effect, so leaving bulk mode never paints a filtered list.
   if (conflictsHidden && !bulkMode) setConflictsHidden(false)
   const conflictSetSuggestions = useMemo(
@@ -825,6 +831,19 @@ export default function ImportRuleSuggestionReview({
     },
   }
   const activeViewHeader = viewHeaders[reviewFilter] || viewHeaders.pending
+  // The folded panel's one line: the view's pill, then whichever merchant and owner filters are on, each in
+  // the pill it wears elsewhere on the page. All read-only, since they sit inside the unfold toggle.
+  const activeViewPill = reviewFilterPills.find(pill => pill.key === reviewFilter)
+  const selectedOwners = selectedOwnerIds.map(ownerId => availableOwners.find(owner => owner.id === ownerId)).filter(Boolean)
+  const collapsedFiltersSummary = (
+    <>
+      {activeViewPill
+        ? <ProgressPill label={activeViewPill.label} value={activeViewPill.value} tone={activeViewPill.tone} active />
+        : <span style={{ fontSize: 12, color: 'var(--muted)' }}>{activeViewHeader.title}</span>}
+      {normalizedMerchantFilter ? <SuggestionPill label={`merchant “${merchantFilterText.trim()}”`} tone="muted" /> : null}
+      {selectedOwners.map(owner => <OwnerChip key={owner.id} owner={owner} />)}
+    </>
+  )
 
   function getSuggestionMenuActions(suggestion, resolvedSuggestion) {
     if (suggestion.review_status === 'discarded') {
@@ -974,7 +993,7 @@ export default function ImportRuleSuggestionReview({
       )
     }
     return (
-      <div ref={listTopRef} style={{ display: 'grid', gap: 12 }}>
+      <div ref={listTopRef} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
         {trashSets.map(item => {
           const label = getReviewStatusLabel(item.status)
           const clearedAt = item.cleared_at
@@ -1367,7 +1386,7 @@ export default function ImportRuleSuggestionReview({
             {categoryCount} categor{categoryCount === 1 ? 'y' : 'ies'} · {totalRows} row{totalRows === 1 ? '' : 's'}
           </span>
         </div>
-        <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
           {items.map(item => <div key={item.key}>{item.node}</div>)}
         </div>
       </div>
@@ -1437,98 +1456,121 @@ export default function ImportRuleSuggestionReview({
         }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, width: '100%', minWidth: 0 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto', alignItems: 'center', gap: 10, minHeight: 42, width: '100%', minWidth: 0 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
-              Filters:
-            </span>
-            <div style={{
+          {/* Wraps rather than overlapping: when the filters and Clear do not fit on one line, Clear drops
+              to its own line, still at the right, and the filter capsule never grows past the row. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 42, width: '100%', minWidth: 0 }}>
+            <button
+              type="button"
+              onClick={() => setFiltersCollapsedPref(!filtersCollapsed).catch(() => {})}
+              disabled={bulkMode}
+              aria-expanded={!filtersCollapsed}
+              title={filtersCollapsed ? 'Show the filters' : 'Fold the filters to one line'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, flex: filtersCollapsed ? '1 1 0' : undefined,
+                background: 'none', border: 'none', padding: 0, color: 'var(--text)', font: 'inherit', textAlign: 'left',
+                cursor: bulkMode ? 'default' : 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 12, color: 'var(--muted)', width: 8 }}>{filtersCollapsed ? '+' : '−'}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>Filters:</span>
+              {filtersCollapsed ? (
+                // Padded so the clip that keeps the line to one row does not cut the active pill's ring.
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', padding: '3px 2px' }}>
+                  {collapsedFiltersSummary}
+                </span>
+              ) : null}
+            </button>
+            {filtersCollapsed ? null : <div style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 8,
-              flexWrap: 'nowrap',
-              overflowX: 'auto',
-              overflowY: 'hidden',
+              // Wraps its filters rather than scrolling them, so an open owner filter is never out of
+              // sight; a radius of half the one-line height keeps the single line a pill.
+              flexWrap: 'wrap',
               minWidth: 0,
               minHeight: 46,
               padding: '6px 6px',
-              borderRadius: 999,
+              borderRadius: 23,
               border: '1px solid color-mix(in srgb, var(--border) 72%, white 12%)',
               background: 'color-mix(in srgb, var(--surface) 76%, rgba(15, 23, 42, 0.08))',
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
-              justifySelf: 'start',
-              scrollbarWidth: 'thin',
+              maxWidth: '100%',
             }}>
               {renderMerchantFilterControl()}
               {renderOwnerFilterControl()}
-            </div>
-            <div style={{ justifySelf: 'end' }}>
+            </div>}
+            <div style={{ marginLeft: 'auto' }}>
               {renderClearReviewedControl()}
             </div>
           </div>
-          {/* Pills get their own full-width row so the set is stable — clicking a filter no longer
-              reflows them (the per-view controls below changed width before and shoved the pills around). */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-            {reviewFilterPills.map(pill => (
-              <ProgressPill
-                key={pill.key}
-                label={pill.label}
-                value={pill.value}
-                tone={pill.tone}
-                active={reviewFilter === pill.key}
-                title={viewHeaders[pill.key]?.description}
-                onClick={bulkMode ? undefined : () => onChangeReviewFilter(pill.key)}
-                disabled={bulkMode}
-              />
-            ))}
-          </div>
-          {/* Bottom line: the active view's header on the left, the controls (look back / sort / bulk)
-              pinned to the right so they sit on one consistent line instead of floating mid-panel. */}
-          <div
-            onContextMenu={event => {
-              if (!bulkMode) return
-              event.preventDefault()
-              setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: null })
-            }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}
-          >
-            <div style={{ minWidth: 0, flex: '1 1 220px' }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{activeViewHeader.title}</span>
-              {activeViewHeader.description ? (
-                <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{activeViewHeader.description}</span>
-              ) : null}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {renderLookbackControl()}
-              {renderSortControl()}
-              <span
-                title={showInlineRefreshing ? 'Updating' : ''}
-                style={{
-                  width: 16,
-                  height: 16,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  visibility: showInlineRefreshing ? 'visible' : 'hidden',
+          {filtersCollapsed ? null : (
+            <>
+              {/* Pills get their own full-width row so the set is stable — clicking a filter no longer
+                  reflows them (the per-view controls below changed width before and shoved the pills around). */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                {reviewFilterPills.map(pill => (
+                  <ProgressPill
+                    key={pill.key}
+                    label={pill.label}
+                    value={pill.value}
+                    tone={pill.tone}
+                    active={reviewFilter === pill.key}
+                    title={viewHeaders[pill.key]?.description}
+                    onClick={bulkMode ? undefined : () => onChangeReviewFilter(pill.key)}
+                    disabled={bulkMode}
+                  />
+                ))}
+              </div>
+              {/* Bottom line: the active view's header on the left, the controls (look back / sort / bulk)
+                  pinned to the right so they sit on one consistent line instead of floating mid-panel. */}
+              <div
+                onContextMenu={event => {
+                  if (!bulkMode) return
+                  event.preventDefault()
+                  setBulkMenu({ anchorPoint: pointerAnchor(event), scopeIds: null })
                 }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}
               >
-                <span style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: 999,
-                  background: 'color-mix(in srgb, var(--accent) 72%, white 12%)',
-                  boxShadow: '0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent)',
-                }} />
-              </span>
-              {bulkAvailable ? (
-                <SuggestionActionButton
-                  onClick={toggleBulkMode}
-                  active={bulkMode}
-                >
-                  {bulkMode ? 'Cancel' : 'Bulk Select'}
-                </SuggestionActionButton>
-              ) : null}
-            </div>
-          </div>
+                <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{activeViewHeader.title}</span>
+                  {activeViewHeader.description ? (
+                    <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{activeViewHeader.description}</span>
+                  ) : null}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {renderLookbackControl()}
+                  {renderSortControl()}
+                  <span
+                    title={showInlineRefreshing ? 'Updating' : ''}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      visibility: showInlineRefreshing ? 'visible' : 'hidden',
+                    }}
+                  >
+                    <span style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 999,
+                      background: 'color-mix(in srgb, var(--accent) 72%, white 12%)',
+                      boxShadow: '0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent)',
+                    }} />
+                  </span>
+                  {bulkAvailable ? (
+                    <SuggestionActionButton
+                      onClick={toggleBulkMode}
+                      active={bulkMode}
+                    >
+                      {bulkMode ? 'Cancel' : 'Bulk Select'}
+                    </SuggestionActionButton>
+                  ) : null}
+                </div>
+              </div>
+            </>
+          )}
           {/* Bulk-actions bar: appears only in bulk mode. All bulk dispositions live here as visible
               buttons (Save/Defer/Discard variants per view) rather than riding on the cards' own row
               buttons or hiding in a right-click menu. Labels omit "selected" — the bar's own header
@@ -1620,7 +1662,9 @@ export default function ImportRuleSuggestionReview({
           {emptyMessage}
         </div>
       ) : (
-        <div ref={listTopRef} style={{ display: 'grid', gap: 12 }}>
+        // A single shrinkable track, as on the containers above: the implicit `auto` track would hold every
+        // card at its widest card's min-content, wider than a narrow window and out past the sticky panel.
+        <div ref={listTopRef} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
           {(() => {
             // Bulk-select mode stays flat: every suggestion is its own selectable card, no grouping.
             if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))

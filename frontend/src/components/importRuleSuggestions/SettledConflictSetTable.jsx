@@ -20,6 +20,12 @@ import { formatSuggestionAmountLabel, getStatusPalette } from '../../lib/importR
  * settled disposition is rarely re-targeted in place.
  */
 
+// The narrowest this table can be without its rows spilling out of the card: the status column, Rows,
+// Category at its floor and a pending member's action cluster, plus the card's padding. Measured in the
+// total view, where all four are present, since the action labels fix it rather than the data. The page
+// holds its whole column at this width, so every card fits it and nothing shows beside the sticky filters.
+export const SETTLED_CONFLICT_TABLE_MIN_WIDTH = 550
+
 const STATUS_META = {
   accepted: { tone: 'accepted', symbol: '✓', label: 'Accepted' },
   skipped: { tone: 'skipped', symbol: '?', label: 'Deferred' },

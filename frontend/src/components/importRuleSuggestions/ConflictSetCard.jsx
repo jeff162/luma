@@ -148,7 +148,9 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
         ) : null}
       </div>
 
-      <div style={{ display: 'grid', gap: 6 }}>
+      {/* The columns are sized to their labels, so in a narrow window the table scrolls sideways inside
+          the card instead of widening it. The category picker portals its menu, so nothing is clipped. */}
+      <div style={{ display: 'grid', gap: 6, overflowX: 'auto' }}>
         <div style={{
           display: 'grid', gridTemplateColumns: cols, gap: 10, alignItems: 'end',
           fontSize: 10.5, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em',

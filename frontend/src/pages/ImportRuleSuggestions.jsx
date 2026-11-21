@@ -7,6 +7,7 @@ import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
 import ImportedFilesPopover from '../components/importRuleSuggestions/ImportedFilesPopover.jsx'
+import { SETTLED_CONFLICT_TABLE_MIN_WIDTH } from '../components/importRuleSuggestions/SettledConflictSetTable.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
@@ -647,10 +648,10 @@ export default function ImportRuleSuggestions() {
               whole panel jumps when switching filters. */}
           <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable', padding: '4px 32px 32px' }}>
             {/* minmax(0, 1fr) lets the single column shrink below its children's min-content so the cards
-                reflow as the window narrows, instead of the implicit `auto` track holding them wide and
-                getting clipped. overflow:auto above is the safety net: anything that still can't shrink
-                scrolls rather than truncating. */}
-            <div style={{ width: '100%', maxWidth: 1120, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 18 }}>
+                reflow as the window narrows, instead of the implicit `auto` track holding them wide. It
+                stops at the widest card's floor: below that the whole column, summary card, sticky filters
+                and cards alike, holds its width and the overflow:auto above scrolls it sideways. */}
+            <div style={{ width: '100%', maxWidth: 1120, minWidth: SETTLED_CONFLICT_TABLE_MIN_WIDTH, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 18 }}>
               {batchContextError ? (
                 <Card>
                   <div style={{ fontSize: 14, color: 'var(--danger)' }}>{batchContextError}</div>
