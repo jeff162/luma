@@ -127,6 +127,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
+| `useViewLoad` + `LoadFailed` | What a view fetches to show: its own loading state, the newest load winning, one quiet retry, and a failure noted in the server log and offered as Retry. On the Dashboard's modes and Net worth. | `lib/useViewLoad.js`, `components/ui.jsx` |
 | `useBusyIndicator` | Any label, spinner or skeleton driven by a `loading` flag. | `lib/useBusyIndicator.js` |
 | `StaleWhileRefreshing` | Content kept on screen through a reload that would otherwise look current. | `components/ui.jsx` |
 | `UndoToast` | The timed Undo offered after a reversible action. Raised from a dialog, pass `zIndex`, because the default sits below `AppDialog`. | `components/CategoryTreePrimitives.jsx` |

@@ -39,7 +39,8 @@ import SummaryTotalCard from './SummaryTotalCard.jsx'
 import TrendPlot from './TrendPlot.jsx'
 import TrendSpanSelect from './TrendSpanSelect.jsx'
 import TrendsWindowSelect from './TrendsWindowSelect.jsx'
-import { Button, Card, EmptyState, LinkButton, Select, Spinner, StaleWhileRefreshing, Tooltip, getFormControlStyle } from './ui.jsx'
+import { Button, Card, EmptyState, LinkButton, LoadFailed, Select, Spinner, StaleWhileRefreshing, Tooltip, getFormControlStyle } from './ui.jsx'
+import { useViewLoad } from '../lib/useViewLoad.js'
 
 /*
  * The Dashboard's Net worth frame: the household's position across its accounts, from the balances they
@@ -82,9 +83,6 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
   const { openAccountDetail, panelsNode } = useAccountDetailPanels({ accounts: null, categories })
   // The open type, shared by both modes as the Expenses frame's group drill is.
   const [drillType, setDrillType] = useState(null)
-  const [period, setPeriod] = useState(null)
-  const [history, setHistory] = useState(null)
-  const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => Promise.all([
     mode === 'single'
@@ -92,26 +90,10 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
       : Promise.resolve(null),
     api.getNetWorthByMonth(ownerParams),
   ]), [mode, ownerParams, dateStart, dateEnd])
-
-  const apply = useCallback(([periodResult, historyResult]) => {
-    setPeriod(periodResult)
-    setHistory(historyResult)
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    load()
-      .then(results => { if (!cancelled) apply(results) })
-      .catch(() => { })
-      .then(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [load, apply])
+  const { data, loading, busy, error, reload: refresh } = useViewLoad(load, { view: 'Net worth' })
+  const [period = null, history = null] = data || []
 
   // A sync, an edit or a dismissed flag moves what is shown, so the figures are re-read in place.
-  const refresh = useCallback(() => {
-    load().then(apply).catch(() => { })
-  }, [load, apply])
   useAfterLedgerChange(refresh)
   useEffect(() => {
     window.addEventListener('luma:transactions-changed', refresh)
@@ -136,8 +118,9 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
           Net worth counts accounts by owner only. The other filters do not apply.
         </div>
       ) : null}
-      {!ready ? <Spinner /> : (
+      {!ready ? (error ? <LoadFailed what="net worth" onRetry={refresh} /> : busy ? <Spinner /> : null) : (
         <StaleWhileRefreshing refreshing={loading}>
+          {error ? <LoadFailed what="net worth" onRetry={refresh} inline /> : null}
           {mode === 'trends' ? (
             <NetWorthTrends
               history={history}

@@ -269,6 +269,8 @@ scroll behavior and first-paint placement belong to the shared control, not to p
 - **A reload keeps what is on screen.** The spinner is for a first load:
   `{loading && rows.length === 0 ? <Spinner/> : rows}`. Where held content would claim to be current,
   wrap it in `StaleWhileRefreshing`.
+- **A failed load says so and offers Retry** (`useViewLoad`, `LoadFailed`), after one quiet retry.
+  Settling on an empty state hides the failure, and a spinner nothing clears never ends.
 - **A busy indicator is delayed, then held** (`useBusyIndicator`). Most requests are local and return in
   milliseconds, so an indicator bound straight to `loading` only flickers. `disabled` still follows the
   raw flag.

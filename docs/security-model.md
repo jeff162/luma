@@ -24,6 +24,7 @@ accident. Where a fact is about *how it works*, it links to `architecture.md` ra
 - [Reading and deleting outside the data directory](#reading-and-deleting-outside-the-data-directory)
 - [Rendering documents a user supplied](#rendering-documents-a-user-supplied)
 - [Text from others in a spreadsheet](#text-from-others-in-a-spreadsheet)
+- [A user's text in the server log](#a-users-text-in-the-server-log)
 - [Why provider credentials are the only things encrypted](#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](#revocation-in-both-directions)
   - [Responding to an exposure](#responding-to-an-exposure)
@@ -174,6 +175,21 @@ plain-text list copy write such a text cell with a leading `'`, which a spreadsh
 (`spreadsheet_safe` in `routers/import_export/backup.py`, mirrored in `frontend/src/lib/transactionShare.js`).
 Numbers are left alone, since a negative amount opens with `-` and has to stay a number. The rich-text
 copy is left alone too: it is pasted into an email or a document, where a stray `'` would only be noise.
+
+## A user's text in the server log
+
+One route writes what a signed-in user sends into `luma.log`: a browser reporting that a view's load failed
+(`POST /api/diagnostics/log/client`, from `frontend/src/lib/useViewLoad.js`). It is open to every signed-in
+user, since the failure is their own browser's, and to nobody before sign-in. What it writes is held to:
+
+- **One line of printable text, capped**, so a report cannot forge further log lines or a traceback in
+  Settings → Error log.
+- **Marked `[client-reported]`**, so it is never read as the server's own failure.
+- **A few reports per user per minute**, the rest refused. The log is capped (`app_log_file.py`), so a
+  flood would rotate the real errors out of it, and a report the view could not recover from counts toward
+  the Tasks reminder about errors.
+
+Filling the disk is not among the risks: the log's cap bounds it whatever is written.
 
 ## Why provider credentials are the only things encrypted
 

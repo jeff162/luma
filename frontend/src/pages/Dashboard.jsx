@@ -42,7 +42,7 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle, IconButton, LinkButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, LoadFailed, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle, IconButton, LinkButton, TOUCH_GRIP_WIDTH, TouchResizeMark } from '../components/ui.jsx'
 import { useCoarsePointer } from '../lib/deviceLayout.js'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
@@ -72,6 +72,7 @@ import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
 import { preventPressDefaults } from '../lib/pointerDrag.js'
 import { formatDecimal } from '../lib/displayFormat.js'
 import { vh } from '../lib/displaySize.js'
+import { useViewLoad } from '../lib/useViewLoad.js'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -1008,7 +1009,7 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
  * Sankey sides rather than a separate gross reading of the same ledger. The net line is
  * `inflow - outflow` by construction, so it cannot drift from the bars it is drawn over.
  */
-function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, span, onSpanChange, loading, onOpenMonth, onOpenSinglePeriod }) {
+function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, span, onSpanChange, loading, busy, onOpenMonth, onOpenSinglePeriod }) {
   // Window selection and row shaping are pure and live in lib/cashFlowTrend.js, where they can be
   // exercised without a chart — the diverging-bar sign contract below depends on them.
   const { windowOptions, effectiveWindow, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
@@ -1040,10 +1041,10 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
     }
   }
 
-  // First load gets the spinner; a reload keeps what is on screen rather than swapping it for one.
-  // Keyed on the incoming rows, not the derived series, so a year selection that happens to be empty
-  // does not read as still-loading.
-  if (loading && (rows || []).length === 0) return <Spinner />
+  // First load gets the spinner once it has run long enough to notice (`busy`); a reload keeps what is on
+  // screen rather than swapping it for one. Keyed on the incoming rows, not the derived series, so a year
+  // selection that happens to be empty does not read as still-loading.
+  if (loading && (rows || []).length === 0) return busy ? <Spinner /> : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -1168,7 +1169,7 @@ function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onS
   )
 }
 
-function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChange, drillGroup, pickedGroup = drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
+function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChange, drillGroup, pickedGroup = drillGroup, onDrillGroup, onClearDrill, loading, busy, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
   const lastBarClickRef = useRef({ key: null, time: 0 })
   const lastAreaClickRef = useRef({ idx: -1, time: 0 })
   // Sort state for the "Monthly averages by group" report at the bottom. Defaults to total
@@ -1222,11 +1223,12 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
       setSortDir(key === 'name' ? 'asc' : 'desc')
     }
   }
-  // Blank until the first series arrives: a spinner, or the empty states that charts with no rows would
-  // draw, would each flash for what is almost always a few milliseconds. A reload keeps the tab on screen
-  // instead (StaleWhileRefreshing below). Swapping it out for a loading state collapsed the page, which
-  // threw a drill started from the averages table at the bottom back up to the top.
-  if (rows == null || !trendWindow) return null
+  // Blank until the first series arrives, and a spinner only once that has run long enough to notice
+  // (`busy`): the empty states that charts with no rows would draw would flash for what is almost always a
+  // few milliseconds. A reload keeps the tab on screen instead (StaleWhileRefreshing below). Swapping it
+  // out for a loading state collapsed the page, which threw a drill started from the averages table at the
+  // bottom back up to the top.
+  if (rows == null || !trendWindow) return busy ? <Spinner /> : null
 
   const normalizedRows = rows.filter(r =>
     typeof r?.month === 'string' &&
@@ -2206,7 +2208,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
   const [cashFlowTrendRows, setCashFlowTrendRows] = useState([])
   const [cashFlowAnnualRows, setCashFlowAnnualRows] = useState([])
   const [trendGroups, setTrendGroups] = useState([])
-  const [trendLoading, setTrendLoading] = useState(false)
   // The window the Trends tab shows, resolved here rather than inside TrendsPanel because the group picker's
   // options are fetched for it. Null until the series first arrives, since the default depends on the data.
   const trendWindow = useMemo(
@@ -2218,7 +2219,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
   const trendWindowStart = trendWindow?.start
   const trendWindowEnd = trendWindow?.end
 
-  const [loading, setLoading] = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
   // Whether there are figures worth holding on screen through a reload. Empty on the very first load
   // and on a filter that genuinely matches nothing, which are the two cases where a spinner is the
@@ -2491,17 +2491,32 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
     setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
   }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame, trendWindowStart, trendWindowEnd, beginTrendGroups])
 
+  // Each mode's figures load with the mode (`useViewLoad`), so a mode's loading state is its own: one flag
+  // shared by the modes, which only Single period and Compare cleared, held Trends on "Loading…" for good
+  // whenever this dashboard mounted already in Trends. Single period holds its load until the default
+  // period resolves, so it does not load all-time and then reload the default.
+  const singleLoad = useViewLoad(loadSingleTotals, { active: mode === 'single' && !dateResolving, view: 'Dashboard (Single period)' })
+  const compareLoad = useViewLoad(loadCompareTotals, { active: mode === 'compare' && !!periodA && !!periodB, view: 'Dashboard (Compare)' })
+  const trendLoad = useViewLoad(viewIsCashFlow ? loadCashFlowTrend : loadTrendSeries, {
+    active: mode === 'trends',
+    view: viewIsCashFlow ? 'Dashboard (Cash flow trends)' : 'Dashboard (Trends)',
+  })
+  const { reload: reloadSingle } = singleLoad
+  const { reload: reloadCompare } = compareLoad
+  const { reload: reloadTrend } = trendLoad
+  // The mode whose figures the shared spinner and fade below stand for; Trends shows its own.
+  const flowLoad = mode === 'single' ? singleLoad : mode === 'compare' ? compareLoad : null
+
   useEffect(() => {
     if (mode !== 'single') return
-    // Hold the fetch until the default period resolves, so we don't load all-time and then reload the
-    // default. Re-runs when dateResolving flips (the dep) even if the resolved period is also all-time.
+    // Re-runs when dateResolving flips (the dep) even if the resolved period is also all-time.
     if (dateResolving) return
     // A bar of a drilled trend moves the period *for* the open group or category, so that pin keeps the
-    // drill and refreshes it in place; any other change returns to the top level.
+    // drill and refreshes it in place; any other change returns to the top level. The totals reload
+    // either way, with `singleLoad`.
     const keep = keepDrillForDateRef.current
     keepDrillForDateRef.current = undefined
     if (keep !== undefined && sameDateRange(keep, filters.date) && level !== 'groups') {
-      loadSingleTotals().catch(() => { })
       if (selectedGroup?.group_id) {
         const isLatest = beginGroupCategories()
         api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
@@ -2510,13 +2525,7 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
       }
       return
     }
-    setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null); setOtherDrillDepth(0)
-    // A rejection here used to strand the spinner forever, because nothing cleared it: the dashboard sat
-    // loading with no error and no way out but a reload. What is on screen stays on screen — the loaders
-    // write their state only on success — and the app's own unreachable-backend handling says so when
-    // that is the reason.
-    loadSingleTotals().catch(() => { }).then(() => setLoading(false))
     // Keyed on the loader (every filter) and not on the drill it reads: keying on the drill would reset
     // the very drill the user just made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2527,7 +2536,7 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
   // sync that brought rows in changes them the same way.
   const refreshTotalsInPlace = useCallback(() => {
     if (mode === 'single') {
-      loadSingleTotals()
+      reloadSingle()
       loadSpanTrend()
       loadDrillTrend()
       if (selectedGroup?.group_id) {
@@ -2542,7 +2551,7 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
         loadTagSignatureBuckets().then(buckets => { if (buckets) setTagSignatureBuckets(buckets) }).catch(() => { })
       }
     } else if (mode === 'compare') {
-      loadCompareTotals()
+      reloadCompare()
       if (cmpGroup?.group_id) {
         const isLatest = beginCompareCategories()
         Promise.all([
@@ -2551,10 +2560,10 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
         ]).then(([a, b]) => { if (isLatest()) { setCmpCatsA(a); setCmpCatsB(b) } })
       }
     } else if (mode === 'trends') {
-      if (viewIsCashFlow) loadCashFlowTrend()
-      else { loadTrendSeries(); loadTrendGroups() }
+      reloadTrend()
+      if (!viewIsCashFlow) loadTrendGroups()
     }
-  }, [mode, viewIsCashFlow, loadSingleTotals, loadSpanTrend, loadDrillTrend, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets, beginGroupCategories, beginCompareCategories])
+  }, [mode, viewIsCashFlow, reloadSingle, loadSpanTrend, loadDrillTrend, reloadCompare, reloadTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets, beginGroupCategories, beginCompareCategories])
   useEffect(() => {
     window.addEventListener('luma:transactions-changed', refreshTotalsInPlace)
     return () => window.removeEventListener('luma:transactions-changed', refreshTotalsInPlace)
@@ -2565,26 +2574,11 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
     api.getCategories().then(setCategories)
   }, [])
 
+  // A new comparison returns to the top level; its totals load with `compareLoad`.
   useEffect(() => {
     if (mode !== 'compare' || !periodA || !periodB) return
-    setLoading(true)
     setCmpLevel('groups'); setCmpGroup(null)
-    loadCompareTotals().catch(() => { }).then(() => setLoading(false))
   }, [mode, periodA, periodB, loadCompareTotals])
-
-  useEffect(() => {
-    if (mode !== 'trends') return
-    // Only the load this effect run started may clear the flag: a superseded one finishing first would
-    // otherwise drop the refreshing state while the drill the user just made is still on its way.
-    let current = true
-    setTrendLoading(true)
-    const load = viewIsCashFlow ? loadCashFlowTrend : loadTrendSeries
-    // A failed first load settles on empty — the panel's own "no data" state — instead of staying blank.
-    load()
-      .catch(() => { if (!viewIsCashFlow) setTrendSeries(prev => prev ?? { group: null, rows: [] }) })
-      .then(() => { if (current) setTrendLoading(false) })
-    return () => { current = false }
-  }, [mode, viewIsCashFlow, loadTrendSeries, loadCashFlowTrend])
 
   useEffect(() => {
     // The group drill belongs to the spending/income forms; the cash-flow form has no group selector, so
@@ -2905,12 +2899,19 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
           </div>
         )}
 
-        {/* First load gets the spinner; a reload keeps the figures up but visibly not-current, because
-            these numbers answer a question the user has just changed — leaving the previous period’s
-            totals standing as if they were the new ones is worse than a flicker. See
-            `StaleWhileRefreshing`. */}
-        {loading && !hasTotals ? <Spinner /> : (
-          <StaleWhileRefreshing refreshing={loading}>
+        {/* First load gets the spinner, once it has run long enough to notice; a reload keeps the figures
+            up but visibly not-current, because these numbers answer a question the user has just changed —
+            leaving the previous period’s totals standing as if they were the new ones is worse than a
+            flicker. See `StaleWhileRefreshing`. Trends shows its own, so `flowLoad` is null there. */}
+        {flowLoad?.error ? (
+          <LoadFailed what={mode === 'compare' ? 'the comparison' : 'the totals'} onRetry={flowLoad.reload} inline={hasTotals} />
+        ) : null}
+        {mode === 'trends' && trendLoad.error ? (
+          <LoadFailed what="the trends" onRetry={trendLoad.reload}
+            inline={viewIsCashFlow ? cashFlowTrendRows.length > 0 : trendRows != null} />
+        ) : null}
+        {flowLoad && !hasTotals && (flowLoad.loading || flowLoad.error) ? (flowLoad.loading && flowLoad.busy ? <Spinner /> : null) : (
+          <StaleWhileRefreshing refreshing={!!flowLoad?.loading}>
             {mode === 'single' && (
               <>
 
@@ -3478,7 +3479,8 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
                 onYearChange={setTrendYear}
                 span={trendSpanPref}
                 onSpanChange={setTrendSpanPref}
-                loading={trendLoading}
+                loading={trendLoad.loading}
+                busy={trendLoad.busy}
                 onOpenMonth={month => openMonthDetail(month, activeFrame)}
                 onOpenSinglePeriod={openSinglePeriodForMonth}
               />
@@ -3496,7 +3498,8 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
                 pickedGroup={trendGroup}
                 onDrillGroup={g => setTrendGroup(g)}
                 onClearDrill={() => setTrendGroup(null)}
-                loading={trendLoading}
+                loading={trendLoad.loading}
+                busy={trendLoad.busy}
                 viewIsIncome={viewIsIncome}
                 // With a group drilled the month bars are that group's totals, so a month's report is
                 // scoped to the group as well.

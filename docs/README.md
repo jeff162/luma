@@ -70,6 +70,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Reading and deleting outside the data directory](security-model.md#reading-and-deleting-outside-the-data-directory)
 - [Rendering documents a user supplied](security-model.md#rendering-documents-a-user-supplied)
 - [Text from others in a spreadsheet](security-model.md#text-from-others-in-a-spreadsheet)
+- [A user's text in the server log](security-model.md#a-users-text-in-the-server-log)
 - [Why provider credentials are the only things encrypted](security-model.md#why-provider-credentials-are-the-only-things-encrypted)
 - [Revocation, in both directions](security-model.md#revocation-in-both-directions)
 - [Identity and the network perimeter](security-model.md#identity-and-the-network-perimeter)

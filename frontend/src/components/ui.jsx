@@ -1557,6 +1557,20 @@ export function Spinner({ label = 'Loading…' }) {
   )
 }
 
+// A view's load that failed, retry included (`useViewLoad`). In place of the content when there is none to
+// show; `inline` above content kept from an earlier load, which is then no longer current.
+export function LoadFailed({ what, onRetry, inline = false }) {
+  return (
+    <div role="alert" style={{
+      display: 'flex', alignItems: 'center', justifyContent: inline ? 'flex-start' : 'center', gap: 10,
+      padding: inline ? '0 0 12px' : 40, color: 'var(--muted)', fontSize: 14,
+    }}>
+      <span>Couldn&apos;t load {what}.</span>
+      <Button variant="secondary" size="compact" onClick={onRetry}>Retry</Button>
+    </div>
+  )
+}
+
 export function EmptyState({ message }) {
   return (
     <div style={{

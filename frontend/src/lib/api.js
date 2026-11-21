@@ -115,19 +115,29 @@ function buildResponseError(body, status) {
 // to exempt every legitimately long request (sync, import, backup, demo load), and that list breaks a
 // feature whenever it is wrong. If a timeout is ever needed, it is an opt-in per call, set by a caller
 // that knows its own duration.
+//
+// A failure carries the `path` it was for, which a view reporting its failed load names (`useViewLoad`).
 async function request(path, options = {}) {
   const { suppressMutationSignal = false, ...fetchOptions } = options
-  const res = await trackedFetch(`${BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...fetchOptions.headers,
-    },
-    ...fetchOptions,
-  })
+  let res
+  try {
+    res = await trackedFetch(`${BASE}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...fetchOptions.headers,
+      },
+      ...fetchOptions,
+    })
+  } catch (e) {
+    if (e && typeof e === 'object' && e.path === undefined) e.path = path
+    throw e
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     if (res.status === 401) signalSessionLost(path)
-    throw buildResponseError(err, res.status)
+    const error = buildResponseError(err, res.status)
+    error.path = path
+    throw error
   }
   const method = (fetchOptions.method || 'GET').toUpperCase()
   if (!suppressMutationSignal && method !== 'GET' && method !== 'HEAD') signalDataMutated()
@@ -379,6 +389,9 @@ export const api = {
   acceptProxyCertificate: () => request('/app/proxy-certificate/accept', { method: 'POST' }),
   // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   getErrorLog: () => request('/diagnostics/log/errors'),
+  // A view's load failed in the browser (`useViewLoad`); `recovered` when the quiet retry succeeded.
+  logClientLoadFailure: ({ view, path, status, message, recovered }) =>
+    request('/diagnostics/log/client', { method: 'POST', suppressMutationSignal: true, body: JSON.stringify({ view, path, status, message, recovered }) }),
   // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.
   acknowledgeErrorLog: (through) =>
     request('/diagnostics/log/errors/acknowledge', { method: 'POST', body: JSON.stringify({ through }) }),
