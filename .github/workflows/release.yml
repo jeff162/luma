@@ -70,6 +70,10 @@ on:
           - macos-latest
           - macos-15-intel
 
+# Also the ceiling for the called `ci.yml`, which can be granted no more than this.
+permissions:
+  contents: read
+
 jobs:
   # The gate itself lives in `ci.yml` and is called rather than copied. A release has to pass exactly
   # what a push passes, and a second transcription of the same checks is the one that drifts — silently,
