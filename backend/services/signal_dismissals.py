@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-The keyed "seen it, it's fine" store, shared by the two derive-on-read finding surfaces.
+The keyed "seen it, it's fine" store, shared by the derive-on-read finding surfaces.
 
-Both the recurring signals (`recurring_signals.py`) and the rule range-drift findings
-(`rule_range_drift.py`) compute their findings fresh from the ledger every time and store nothing but
-the user's dismissals. That leaves one durable question — *is this key currently dismissed* — with one
-answer for both, so the table lives here rather than being reached into from two modules.
+The recurring signals (`recurring_signals.py`), the rule range-drift findings (`rule_range_drift.py`) and
+the balance-history flags (`net_worth.py`) compute their findings fresh from the ledger every time and
+store nothing but the user's dismissals. That leaves one durable question — *is this key currently
+dismissed* — with one answer for all of them, so the table lives here rather than being reached into from
+each module.
 
 Keys are disjoint by construction: a recurring signal's key is a series fingerprint or a transaction
-id prefixed by its kind, and a range-drift key is `<kind>:<rule id>:<transaction id>`. Nothing needs to
-enforce that, because a key is only ever asked about by the module that mints it.
+id prefixed by its kind, a range-drift key is `<kind>:<rule id>:<transaction id>`, and a history flag's is
+`balance_history:<account id>:<date>`. Nothing needs to enforce that, because a key is only ever asked
+about by the module that mints it.
 
-The table is still named `recurring_signal_dismissal`: it predates the second consumer, and renaming it
+The table is still named `recurring_signal_dismissal`: it predates the other consumers, and renaming it
 would be a migration that changes no behavior and drops every dismissal already recorded under the old
 name. A dismissal is shared at the data-DB level rather than per-user — saying a finding is fine is
 curation of the ledger, like confirming a series, not a UI preference — and carries no foreign key, so

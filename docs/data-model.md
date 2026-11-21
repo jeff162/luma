@@ -322,11 +322,20 @@ ledger in between, so no stored figure has to follow later edits to the ledger.
   account. A merge leaves it in place, and removing the account deletes it, since the account taking the
   history has a balance of its own.
 - **A source restating a date replaces its figure for that date**, since a provider re-reports the same day
-  on every sync. `source` is `provider` or `manual`.
+  on every sync. `source` is `provider`, `manual` or `import`.
+- **`import` is a balance read from a file's balance column** (`column_map.balance`): each date's closing
+  figure, recorded against the import (`import_batch_id`) and removed when it is undone, never on its own
+  (`account_balances.balances_from_column`). Whether the file runs oldest or newest first, and whether it
+  states a card's balance as what is owed, are read from the file: between neighbouring rows the balance
+  changes by the later row's amount, and the reading that holds for 90% of them is taken. A column no
+  reading fits is refused for that account, and its transactions still import. Only with no two
+  neighbouring balances to compare does the account's type decide the sign. Pending rows give none, and
+  a row skipped as a duplicate still gives its balance, which describes the account rather than the row.
 - **`manual` is a balance entered by hand** (`PUT /accounts/{id}/balances/manual/{date}`), for an account
   nothing reports one for, or to set one right. It is a position like any other, never dated in the
-  future, and the only kind the user can remove: a provider's next sync would restate its own. On a
-  connected account the next report is a later date and takes over as the anchor.
+  future, and the only kind the user can remove one at a time: a provider's next sync would restate its
+  own, and an imported one goes with its import. On a connected account the next report is a later date
+  and takes over as the anchor.
 - **Nothing is recorded for a provider account with no local account** (unmapped, or Skip), or for an
   account in another currency, for the reason its rows are discarded.
 - Backed up (`account_balances`): a provider reports only its current balance, so nothing re-derives an
@@ -342,8 +351,8 @@ group's top row.
   is taken as that day's closing balance, so a row posted on the anchor's own date is already in it. A
   pending row is left out, as no source's balance counts one.
 - **It is stale after `STALE_AFTER_DAYS` with no newer balance**, by the anchor's source: 7 days for
-  `provider`, since a connected account restates its balance on every sync, and 35 for `manual`, since a
-  balance entered by hand is usually copied from a monthly statement.
+  `provider`, since a connected account restates its balance on every sync, and 35 for `manual` and
+  `import`, since a balance entered by hand or imported is usually from a monthly statement.
 - **A second member stating a balance within `LIVE_FEED_WINDOW_DAYS` (7) of the anchor is reported**
   (`also_reporting`):
   two live feeds into one group, of which only the latest can count.
@@ -372,6 +381,46 @@ span before it.
 group root, as type is, so a member's own value lies dormant until it is detached, and the API refuses to
 set it on a member. An `other` account is out whatever the column says, because the type says nothing
 about what the account is; the column keeps its value so a retype restores the user's choice.
+
+### Net worth
+
+Net worth is the sum of the counted groups' balances on a date (`services/net_worth.py`), shown on the
+Dashboard's Net worth frame.
+
+- **A group counts unless its root is trashed, excluded from net worth, or of type `other`.** Only the owner
+  filters (chips and the owner lens) narrow it, read from the group root. The other facets select
+  transactions, and a balance belongs to an account.
+- **A balance on a past date comes from the nearest stated balance on or before it**, carried forward
+  through the rows posted after it; before the first stated balance it is worked back from that one. Each
+  stated balance counts from its own date on, so a figure entered to correct an old error does not move
+  the history before it. On today's date this is the balance `current_balances` gives. It differs from the
+  running balance, which runs back from today so a discrepancy stays visible; net worth wants each date's
+  best figure, and the discrepancy is shown on the account.
+- **Before a group's coverage begins it is left out**, not given the flat figure working back would
+  produce. Coverage begins at its earliest stated balance or posted row.
+- **Assets and liabilities split by the sign of each group's balance**, so no account type is asked.
+- **A group whose coverage begins inside a period opens it at zero**, so the period's change is always the
+  end's net worth less the opening's. That is right for an account opened in the period, and overstates
+  the change for one whose records merely start late.
+- **An investment account is treated like any other**: its stated balances and the money moving in and
+  out. Holdings are not tracked.
+- **A history its transactions do not explain is flagged.** Worked back from the first stated balance, a
+  balance that goes more than `HISTORY_TOLERANCE` onto the wrong side of zero for its type (owing on a
+  held account, holding on an owed one, far from zero either way on a wallet or marketplace) says rows are
+  missing, as with a wallet imported from statements that carry no balance. The flag shows on the account's
+  net worth row and its account page and changes no figure. Dismissing it is shared, in the
+  `signal_dismissals` store, keyed to the account and the stated balance the history was worked back
+  from, so entering an earlier balance judges the new history afresh. Later history is not judged: each
+  stated balance checks the span before it (`balance_checks`).
+- **The flag offers two remedies besides dismissal.** Where the group's rows switch from imported files to
+  a connection (`connection_seam`: the day before its first synced row, with earlier rows from elsewhere),
+  it offers a balance on that day, which gives the earlier history its own starting point and keeps it. It
+  also offers a start date, `suggested_from`: the earliest day from which the worked-back history stays on
+  the right side.
+- **`account.net_worth_from` is the first date net worth counts a group from**, read from the group root
+  and set only by the user. Before it the group is left out, as before its coverage begins, and the flag
+  judges only the history from it. It changes nothing else: the account's own balance, running balance and
+  checks are unaffected. A balance entered before it later does not move it.
 
 ## Transactions
 

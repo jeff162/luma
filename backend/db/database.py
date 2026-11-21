@@ -378,13 +378,15 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # `.last_listed_at`, the provider account that took over a local account and the last day a pull's listing
 # returned it. v97 adds `account_balance`, the balances a source stated for an account, and
 # `connection.realtime_balances`, whether a connection's syncs ask for a live balance. v98 adds
-# `account.exclude_from_net_worth`.
+# `account.exclude_from_net_worth`. v99 adds `account_balance.import_batch_id`, the import that stated a
+# balance read from a file's balance column. v100 adds `account.net_worth_from`, the first date net worth
+# counts a group from.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 98
+CURRENT_VERSION = 100
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2935,6 +2937,25 @@ def _add_exclude_from_net_worth(conn):
         conn.execute("ALTER TABLE account ADD COLUMN exclude_from_net_worth INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(99)
+def _add_account_balance_import_batch(conn):
+    # See the baseline CREATE. Every stored balance predates imported ones, so all stay NULL.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account_balance)")}
+    if columns and "import_batch_id" not in columns:
+        conn.execute(
+            "ALTER TABLE account_balance ADD COLUMN import_batch_id TEXT "
+            "REFERENCES import_batch(id) ON DELETE CASCADE"
+        )
+
+
+@migration(100)
+def _add_net_worth_from(conn):
+    # See the baseline CREATE. No account has had a start date set, so all stay NULL.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if columns and "net_worth_from" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN net_worth_from TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3527,7 +3548,10 @@ def init_db(db_path: str | None = None):
                 wallet_match_text   TEXT,
                 -- 1 = the user keeps this account's balance out of net worth. Read from the group root, and
                 -- an `other` account is out whatever this says (`docs/data-model.md` -> *Account balances*).
-                exclude_from_net_worth INTEGER NOT NULL DEFAULT 0
+                exclude_from_net_worth INTEGER NOT NULL DEFAULT 0,
+                -- The first date net worth counts the group from, set by the user where its earlier history
+                -- cannot be trusted. Read from the group root; NULL counts it from its own history's start.
+                net_worth_from      TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).
@@ -3734,8 +3758,8 @@ def init_db(db_path: str | None = None):
             -- Balances a source stated for an account (services/account_balances.py). Only stated balances
             -- are stored; a balance on any other date is derived from the nearest one and the ledger.
             -- `balance` is the household's position (held positive, owed negative), whatever the source's
-            -- own sign. `source` is 'provider'. Keyed to the raw account row, since a balance describes one
-            -- physical account; a group's balance is read from its members.
+            -- own sign. `source` is 'provider', 'manual' or 'import'. Keyed to the raw account row, since a
+            -- balance describes one physical account; a group's balance is read from its members.
             CREATE TABLE IF NOT EXISTS account_balance (
                 account_id  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
                 as_of_date  TEXT NOT NULL,
@@ -3745,6 +3769,8 @@ def init_db(db_path: str | None = None):
                 -- Not a position, so it takes no sign. NULL where the source gives none.
                 available   REAL,
                 recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                -- The import that stated an 'import' balance, which goes with it; NULL for the other sources.
+                import_batch_id TEXT REFERENCES import_batch(id) ON DELETE CASCADE,
                 PRIMARY KEY (account_id, as_of_date, source)
             );
 

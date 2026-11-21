@@ -125,6 +125,7 @@ from backend.services.source_transaction_ids import (
     SourceTransactionIds,
     held_row_summary,
 )
+from backend.services.account_balances import balances_from_column, record_imported_balances
 from backend.services.amount_text import DECIMAL_POINT, DECIMAL_SEPARATORS, parse_amount_text
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
@@ -298,6 +299,9 @@ class ColumnMap(AmountColumnMap):
     # The column stating each row's currency, for a file that can mix them (a wallet export). Unmapped,
     # every row is taken to be in the ledger's currency, which is what nearly every export is.
     currency:     Optional[str] = None
+    # The column stating the account's balance after each row, which a bank's own export often carries.
+    # Each date's closing figure is recorded as a stated balance (`account_balances.balances_from_column`).
+    balance:      Optional[str] = None
     description:  str
     category:     Optional[str] = None
     notes:        Optional[str] = None
@@ -2399,6 +2403,35 @@ def parse_date(val: str, fmt: str) -> Optional[str]:
     return None
 
 
+def parse_balance_cell(cell, decimal_separator: str) -> Optional[float]:
+    """A balance column's figure as the file wrote it, or None for a blank or unreadable cell. A `DR` suffix
+    is a balance overdrawn and a `CR` one a balance in credit, as a bank statement writes them."""
+    text = str(cell if cell is not None else "").strip()
+    suffix = text[-2:].upper()
+    if suffix in ("DR", "CR"):
+        text = text[:-2].strip()
+    try:
+        value = parse_amount_text(text, decimal_separator)
+    except ValueError:
+        return None
+    return -abs(value) if suffix == "DR" else abs(value) if suffix == "CR" else value
+
+
+def _record_file_balances(conn, batch_id: str, balance_rows: dict) -> tuple[int, list]:
+    """Record each account's closing balances from the file's balance column. Returns how many were
+    recorded and the names of the accounts whose column did not read as a running balance."""
+    recorded, refused = {}, []
+    for account_id, rows in balance_rows.items():
+        account = conn.execute(
+            "SELECT type, COALESCE(display_name, name) AS name FROM account WHERE id = ?", (account_id,),
+        ).fetchone()
+        closing, reason = balances_from_column(rows, account["type"] if account else None)
+        if reason:
+            refused.append(account["name"] if account else account_id)
+        recorded.update({(account_id, day): balance for day, balance in closing.items()})
+    return record_imported_balances(conn, batch_id, recorded), refused
+
+
 def parse_pending_flag(row: dict, col_map: ColumnMap) -> bool:
     if not getattr(col_map, "pending", None):
         return False
@@ -3096,6 +3129,7 @@ def run_import_parsed(
         direction   = cm_dict.get("direction"),
         pending     = cm_dict.get("pending"),
         currency    = cm_dict.get("currency"),
+        balance     = cm_dict.get("balance"),
         description = cm_dict.get("description", ""),
         category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
@@ -3149,6 +3183,11 @@ def run_import_parsed(
     invalid_rows_message = None
     zero_amount_rows = []
     currency_rows = []
+    # Each account's `(date, amount, balance)` in file order, for a file whose balance column is mapped:
+    # every row the file counts against the account, whatever dedupe then makes of it, since a balance
+    # describes the account rather than the row.
+    balance_rows: dict[str, list] = {}
+    balance_unreadable = 0
     # Resolved once per import rather than per row: the policy is a property of the source, and reading it
     # inside the loop would invite a future edit that varies it by row.
     reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(parsed.source))
@@ -3633,6 +3672,12 @@ def run_import_parsed(
             raw_imported_category = normalize_effective_imported_category(row.get(col.category, "")) if col.category else ""
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
             is_pending = parse_pending_flag(row, col)
+            # A pending row is in no source's balance, and its own cell, where it has one, is not a
+            # closing figure.
+            if col.balance and not is_pending:
+                stated_balance = parse_balance_cell(row.get(col.balance), decimal_separator)
+                balance_unreadable += stated_balance is None
+                balance_rows.setdefault(acc["id"], []).append((parsed_date, amount, stated_balance))
             content_hash = make_hash(parsed_date, amount, raw_desc)
             import_evidence = _build_import_evidence(row, col, csv_val, raw_desc, evidence_plan)
             conversion = parsed.currency_conversions.get(skip_rows + i)
@@ -3931,6 +3976,8 @@ def run_import_parsed(
                 entry.get("matched_transaction"), csv_value=entry.get("csv_value") or "")
         }
 
+        balances_recorded, balance_refusals = _record_file_balances(conn, batch_id, balance_rows)
+
         bump_rule_effect_dates(conn, _rule_effect_dates)
 
         conn.execute(
@@ -3995,6 +4042,11 @@ def run_import_parsed(
             "enriched_count": 0,
             "money_movement_suppressed_count": 0,
             "money_movement_unrecognized_types": [],
+            # Closing balances recorded from the file's balance column, cells that could not be read, and
+            # the accounts whose column did not read as a running balance, by name.
+            "balances_recorded": balances_recorded,
+            "balance_unreadable_count": balance_unreadable,
+            "balance_refused_accounts": balance_refusals,
         }
 
         enriched_count = 0
@@ -5906,6 +5958,10 @@ def undo_batches(conn, batch_ids) -> dict:
         [(i,) for i in twin_ids],
     )
     restore_txns(conn, twin_ids)
+
+    # The balances a file stated go with it; the batch row itself may stay as a tombstone, so its cascade
+    # cannot be relied on to take them.
+    conn.execute(f"DELETE FROM account_balance WHERE import_batch_id IN ({placeholders})", ids)
 
     batch_row_ids = [
         row["id"] for row in conn.execute(f"SELECT id FROM txn WHERE import_batch_id IN ({placeholders})", ids)

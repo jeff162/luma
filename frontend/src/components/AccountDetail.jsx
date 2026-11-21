@@ -6,6 +6,9 @@ import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { formatDate, formatDateRange } from '../lib/utils.js'
+import { describeHistoryFlag } from '../lib/netWorth.js'
+import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
+import NetWorthStartDialog from './accounts/NetWorthStartDialog.jsx'
 import { unusualBalanceColor } from '../lib/accountTypes.js'
 import { Spinner, FilterChip, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -255,6 +258,13 @@ export default function AccountDetail({ account, categories = [], onClose, force
     setBalanceNonce(n => n + 1)
   }
 
+  const reloadBalance = useCallback(() => setBalanceNonce(n => n + 1), [])
+  const { actionsFor: historyFlagActions, dialogs: historyFlagDialogs } = useHistoryFlagRemedies(reloadBalance)
+  const [startDialogOpen, setStartDialogOpen] = useState(false)
+  const netWorthAccount = {
+    id: balanceInfo?.root_id || account.id, type: balanceInfo?.account_type, netWorthFrom: balanceInfo?.net_worth_from,
+  }
+
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
@@ -267,6 +277,19 @@ export default function AccountDetail({ account, categories = [], onClose, force
           <span style={{ color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
             {' · '}{formatDate(balance.as_of_date)}{balance.source === 'manual' ? ' (m)' : ''}
           </span>
+        </div>
+      ) : null}
+      {balanceInfo?.history_flag ? (
+        <div role="note" style={{ fontSize: 12, marginTop: 4, maxWidth: 560 }}>
+          <span aria-hidden="true" style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span>
+          {describeHistoryFlag(balanceInfo.history_flag)}
+          <div style={{ marginTop: 2 }}>{historyFlagActions(netWorthAccount, balanceInfo.history_flag)}</div>
+        </div>
+      ) : null}
+      {balanceInfo?.net_worth_from ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+          Net worth counts it from {formatDate(balanceInfo.net_worth_from)}{' '}
+          <LinkButton onClick={() => setStartDialogOpen(true)} style={{ fontSize: 12 }}>Change</LinkButton>
         </div>
       ) : null}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
@@ -439,6 +462,15 @@ export default function AccountDetail({ account, categories = [], onClose, force
             </div>
           )}
     </DetailPanelShell>
+    {historyFlagDialogs}
+    {startDialogOpen ? (
+      <NetWorthStartDialog
+        accountId={netWorthAccount.id}
+        current={balanceInfo?.net_worth_from || null}
+        onClose={() => setStartDialogOpen(false)}
+        onSaved={reloadBalance}
+      />
+    ) : null}
     {payeeDetail && (
       <TransactionDetail
         txn={payeeDetail}

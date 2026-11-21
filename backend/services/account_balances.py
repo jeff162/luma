@@ -36,6 +36,19 @@ PROVIDER_SOURCE = "provider"
 # Entered by hand, for an account nothing reports a balance for, or to correct one. A connection's next
 # report is a later date and so becomes the anchor; the entry stays as a figure to reconcile against.
 MANUAL_SOURCE = "manual"
+# Read from a balance column in an imported file. Each carries the batch it came from and goes when that
+# batch is undone; it is not removable on its own, since one figure from a file is no more wrong than the
+# rest of it.
+IMPORT_SOURCE = "import"
+
+# Which side of zero each type's balance belongs on: money held, money owed, or about none for a wallet or
+# marketplace, which money passes through. The same judgement colours a balance on the Accounts page
+# (`NORMAL_BALANCE_SIDE` in `frontend/src/lib/accountTypes.js`); keep the two in step.
+NORMAL_BALANCE_SIDE = {
+    "depository": "held", "savings": "held", "investment": "held",
+    "credit": "owed", "loan": "owed",
+    "paypal": "zero", "p2p": "zero", "amazon": "zero",
+}
 
 
 def record_provider_balances(conn, balances: Optional[dict],
@@ -77,6 +90,80 @@ def record_manual_balance(conn, account_id: str, as_of_date: str, balance: float
     )
 
 
+# How far a row's balance may differ from what its neighbour's and its amount make it before the two are
+# taken to disagree: rounding to the cent, and no more.
+_BALANCE_MATCH_TOLERANCE = 0.005
+# The share of neighbouring rows that must agree on one reading of a file's balance column before it is
+# trusted. Not all of them: a fee a bank applies without a row of its own breaks one pair, and refusing a
+# whole file's balances for it would lose every other day.
+_BALANCE_AGREEMENT = 0.9
+
+
+def balances_from_column(rows: list, account_type: Optional[str]) -> tuple[dict, Optional[str]]:
+    """The closing balance of each date, as the household's position, from one account's rows of a file
+    that states a balance after each row. `rows` are `(date, amount, balance)` in the file's order, with
+    `amount` as stored (positive is money out) and `balance` as the file wrote it, or None where its cell
+    could not be read. Returns `({date: balance}, None)`, or `({}, reason)` when the column does not read
+    as a running balance.
+
+    A file may list its rows oldest first or newest first, and may state a card's balance as what is owed.
+    Both are read from the file itself: between neighbouring rows the balance changes by the later row's
+    amount, and which row is later and which way the change goes say the order and the sign together. The
+    account's type decides the sign only when no two neighbouring rows have balances to compare."""
+    readings = []
+    for newest_first in (False, True):
+        for owed in (False, True):
+            agree = compared = 0
+            for earlier, later in zip(rows, rows[1:]):
+                if newest_first:
+                    earlier, later = later, earlier
+                if earlier[2] is None or later[2] is None:
+                    continue
+                compared += 1
+                change = later[2] - earlier[2]
+                # A position falls by money out; a balance owed rises by it.
+                expected = later[1] if owed else -later[1]
+                agree += abs(change - expected) <= _BALANCE_MATCH_TOLERANCE
+            readings.append((agree, compared, newest_first, owed))
+    dates = [row[0] for row in rows]
+    by_dates = None if dates[0] == dates[-1] else dates[0] > dates[-1]
+    compared = readings[0][1]
+    if compared:
+        candidates = [r for r in readings if by_dates is None or r[2] == by_dates]
+        agree, _, newest_first, owed = max(candidates, key=lambda r: r[0])
+        if agree < compared * _BALANCE_AGREEMENT:
+            return {}, "the balance column does not follow the amounts"
+    else:
+        newest_first = bool(by_dates)
+        owed = NORMAL_BALANCE_SIDE.get(account_type or "") == "owed"
+    closing = {}
+    for day, _amount, balance in (reversed(rows) if newest_first else rows):
+        # The day's last row in time is its closing; a later row on the same day replaces an earlier one,
+        # and an unreadable cell there leaves the day without one rather than taking an earlier row's.
+        closing[day] = balance
+    return {
+        day: round(-balance if owed else balance, 2)
+        for day, balance in closing.items() if balance is not None
+    }, None
+
+
+def record_imported_balances(conn, batch_id: str, balances: dict) -> int:
+    """Store the closing balances an imported file stated, keyed `{(account_id, date): balance}`, against the
+    batch that brought them. A later file stating the same date restates it, as a provider does."""
+    conn.executemany(
+        """
+        INSERT INTO account_balance
+            (account_id, as_of_date, source, balance, available, recorded_at, import_batch_id)
+        VALUES (?, ?, ?, ?, NULL, datetime('now'), ?)
+        ON CONFLICT (account_id, as_of_date, source) DO UPDATE SET
+            balance = excluded.balance, recorded_at = excluded.recorded_at,
+            import_batch_id = excluded.import_batch_id
+        """,
+        [(account_id, day, IMPORT_SOURCE, balance, batch_id) for (account_id, day), balance in balances.items()],
+    )
+    return len(balances)
+
+
 def delete_manual_balance(conn, account_id: str, as_of_date: str) -> bool:
     """Remove a balance entered by hand. A provider's figure is not removable: its next sync restates it."""
     return conn.execute(
@@ -87,9 +174,9 @@ def delete_manual_balance(conn, account_id: str, as_of_date: str) -> bool:
 
 # How old an account's latest stated balance may be before it is shown as stale, by where it came from. A
 # connected account restates its balance on every sync, so a week without one means its feed has stopped; a
-# balance entered by hand is typically copied from a monthly statement, so it is stale once a statement is
-# missed.
-STALE_AFTER_DAYS = {PROVIDER_SOURCE: 7, MANUAL_SOURCE: 35}
+# balance entered by hand or imported from a file is typically from a monthly statement, so it is stale once
+# a statement is missed.
+STALE_AFTER_DAYS = {PROVIDER_SOURCE: 7, MANUAL_SOURCE: 35, IMPORT_SOURCE: 35}
 
 # How close together two members of a group must report for both to be live feeds.
 LIVE_FEED_WINDOW_DAYS = 7

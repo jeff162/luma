@@ -594,7 +594,7 @@ BACKUP_SECTIONS = (
     ("accounts", "account",
      "SELECT id, external_account_id, connection_id, provider, name, display_name, "
      "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at, wallet_match_text, "
-     "exclude_from_net_worth "
+     "exclude_from_net_worth, net_worth_from "
      "FROM account ORDER BY rowid"),
     ("categories", "category", "SELECT * FROM category ORDER BY rowid"),
     ("category_rules", "category_rule", "SELECT * FROM category_rule ORDER BY rowid"),
@@ -1817,6 +1817,8 @@ _RESTORE_DROP_LINK = (
     # order_id is an external Amazon reference and carries no ledger FK; only the batch that parked the
     # item can strand it, and an orphan without its batch is unreachable.
     ("amazon_pending_item", "parked_batch_id", "import_batch"),
+    # An imported balance is undone with its batch; one whose batch is gone could never be.
+    ("account_balance", "import_batch_id", "import_batch"),
     ("amazon_funding_map", "funding_account_id", "account"),
     ("amazon_funding_map", "amazon_account_id", "account"),
 )

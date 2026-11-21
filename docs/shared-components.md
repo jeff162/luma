@@ -76,6 +76,9 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `DetailTrendChart` | The monthly trend bar chart at the top of a detail panel. | `components/detailShared.jsx` |
 | `PanningChartFrame` | A bar chart that may be wider than its card. | `components/PanningChartFrame.jsx` |
 | `PanningChartTooltip` | The tooltip of a chart inside a scrolling element, because Recharts places its own against the whole canvas. | `components/PanningChartTooltip.jsx` |
+| `SummaryTotalCard` | A headline figure above a Dashboard report. | `components/SummaryTotalCard.jsx` |
+| `Breadcrumb` | The trail of a Dashboard drill, each step but the last going back to it. | `components/Breadcrumb.jsx` |
+| `--series-1` … `--series-8` | Colouring a chart's series by what each one is, in a fixed order that stays legible to colour-blind readers in every theme. | `index.html` |
 | `TrendsWindowSelect` + `trendsWindowOptions` / `trendsWindowRange` | Choosing which months a set of charts covers. | `components/TrendsWindowSelect.jsx`, `lib/trendBuckets.js` |
 | `TrendSpanSelect` + `lib/trendSpan.js` | Choosing how much history a chart draws. It is one persisted setting, so every chart in a frame agrees (`data-model.md` → *Reporting assumptions*). | `components/TrendSpanSelect.jsx`, `lib/trendSpan.js` |
 | `alignOnAxis` / `besideOnAxis` | Placing a floating card so it stays inside given bounds. | `lib/floatingPlacement.js` |

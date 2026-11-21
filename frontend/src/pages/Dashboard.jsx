@@ -58,6 +58,9 @@ import { useUserPreference, useDeferredDeviceLayoutPreference } from '../lib/Use
 import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
+import SummaryTotalCard from '../components/SummaryTotalCard.jsx'
+import Breadcrumb from '../components/Breadcrumb.jsx'
+import NetWorthView from '../components/NetWorthView.jsx'
 import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
 import { buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
@@ -142,11 +145,15 @@ const TRANSIENT_TAG_REPORT_ID = '__transient__'
 const DASHBOARD_VIEW_SPENDING = 'spending'
 const DASHBOARD_VIEW_INCOME = 'income'
 const DASHBOARD_VIEW_CASH_FLOW = 'cash_flow'
+// Net worth reads account balances rather than transactions, so it is drawn by its own view
+// (NetWorthView) and none of the transaction frames' loaders run for it.
+const DASHBOARD_VIEW_NET_WORTH = 'net_worth'
 
 const DASHBOARD_VIEW_OPTIONS = [
   { value: DASHBOARD_VIEW_SPENDING, label: 'Expenses' },
   { value: DASHBOARD_VIEW_INCOME, label: 'Income' },
   { value: DASHBOARD_VIEW_CASH_FLOW, label: 'Cash flow' },
+  { value: DASHBOARD_VIEW_NET_WORTH, label: 'Net worth' },
 ]
 
 const DASHBOARD_MODE_OPTIONS = [
@@ -155,11 +162,13 @@ const DASHBOARD_MODE_OPTIONS = [
   { value: 'trends', label: 'Trends' },
 ]
 
-// Compare mode has no cash-flow form (its two-period breakdown is specified for spending and income
-// only), and the frame selector is hidden there — so a persisted cash-flow preference has to be read as
-// spending for that mode rather than leaking into loaders that have no branch for it.
+// Compare mode has no cash-flow or net-worth form (its two-period breakdown is specified for spending and
+// income only), and the frame selector is hidden there — so a persisted cash-flow or net-worth preference
+// has to be read as spending for that mode rather than leaking into loaders that have no branch for it.
 function frameForMode(view, mode) {
-  if (mode === 'compare' && view === DASHBOARD_VIEW_CASH_FLOW) return DASHBOARD_VIEW_SPENDING
+  if (mode === 'compare' && (view === DASHBOARD_VIEW_CASH_FLOW || view === DASHBOARD_VIEW_NET_WORTH)) {
+    return DASHBOARD_VIEW_SPENDING
+  }
   return view
 }
 
@@ -550,23 +559,6 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
   )
 }
 
-function Breadcrumb({ items, onNavigate }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 16 }}>
-      {items.map((item, i) => (
-        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {i > 0 && <span style={{ color: 'var(--muted)' }}>›</span>}
-          {i < items.length - 1 ? (
-            <LinkButton onClick={() => onNavigate(i)} style={{ fontSize: 13 }}>{item}</LinkButton>
-          ) : (
-            <span style={{ color: 'var(--text)', fontWeight: 500 }}>{item}</span>
-          )}
-        </span>
-      ))}
-    </div>
-  )
-}
-
 /*
  * Modal that lets the user pick a set of tags to drive a tag-breakdown report on the
  * dashboard. Selection is unordered (overlap is handled by combination wedges in the
@@ -952,15 +944,6 @@ function assignColors(rows, colorKey) {
 
 // The headline figures above a Single-mode breakdown. Every one of them is scope-signed — a period that
 // net-refunded reads negative rather than being flattened to a magnitude.
-function SummaryTotalCard({ label, value, color }) {
-  return (
-    <Card style={{ padding: '14px 24px' }}>
-      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{label}</div>
-      <div data-testid="dashboard-total" style={{ fontSize: 28, fontWeight: 700, color }}>{formatSignedMoneyAmount(value)}</div>
-    </Card>
-  )
-}
-
 function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) {
   const diff = a - b
   // A percent change is only meaningful against a positive prior period. When B <= 0 (a net refund, or
@@ -1743,12 +1726,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
 
 export default function Dashboard() {
-  /*
-   * Dashboard runs three analysis modes over the same global filters, but each mode keeps its own drill state.
-   * Resetting that state on mode changes avoids carrying breadcrumbs into views that summarize the same data differently.
-   */
-  const { filters, setDateApplies, pinDateFromChart, removeSelections, setDefaultDate,
-    goBackDate, canGoBackDate, previousDate } = useFilters()
+  const { filters, setDateApplies, setDefaultDate } = useFilters()
   // The Dashboard's configurable default period: what "unset" means here (Transactions treats unset as
   // all-time). Registered into the shared filter so the date chip can show it; the Dashboard itself uses
   // the local `defaultDate` for scope to avoid a first-render all-time→default refetch.
@@ -1764,6 +1742,120 @@ export default function Dashboard() {
   // user has an explicit date or a non-auto default.
   const dateResolving = defaultPeriodPending && !filters.date
   const [mode, setMode] = useState('single')
+  const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
+  // `dashboardView` is the user's persisted frame; `activeFrame` is the one this mode can actually
+  // render, which differs only in Compare (see frameForMode).
+  const activeFrame = frameForMode(dashboardView, mode)
+  // The Trends window's pick (`TrendsWindowSelect`), shared by every frame's Trends form; null until one
+  // is made, which lets each form choose its default from its own data.
+  const [trendYear, setTrendYear] = useState(null)
+
+  // Only Single period reads the shared date chip: Compare takes its two periods from its own pickers and
+  // Trends queries its own full-history window, so mute the date button on both. Restore on unmount so
+  // other pages see the chip as live again.
+  useEffect(() => {
+    setDateApplies(mode === 'single')
+    return () => setDateApplies(true)
+  }, [mode, setDateApplies])
+
+  // Hold the paint until the 'auto' default resolves on first visit, so the Dashboard doesn't flash an
+  // all-time view before snapping to the default. Only the single-period view is scoped by the effective
+  // date; Compare/Trends have their own windows. Brief, and cached after the first visit of a session.
+  if (dateResolving && mode === 'single') {
+    return <div data-browser-context-passthrough="true" style={{ height: '100%' }} />
+  }
+
+  const header = (
+    <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
+      <PageHeader
+        title="Dashboard"
+        help={<FeatureExplainer topic="page-dashboard" placement="bottom-left" />}
+        titleAdornment={(
+          <DashboardDefaultPeriodGear
+            pref={defaultPeriodPref}
+            setPref={setDefaultPeriodPref}
+          />
+        )}
+        leftAdornment={(mode === 'single' || mode === 'trends') && (
+          <SegmentedToggle
+            value={dashboardView}
+            options={DASHBOARD_VIEW_OPTIONS}
+            onChange={setDashboardView}
+            ariaLabel="Choose dashboard frame"
+          />
+        )}
+      >
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <SegmentedToggle
+            value={mode}
+            options={DASHBOARD_MODE_OPTIONS}
+            onChange={setMode}
+            ariaLabel="Choose dashboard analysis mode"
+          />
+        </div>
+      </PageHeader>
+    </div>
+  )
+
+  if (activeFrame === DASHBOARD_VIEW_NET_WORTH) {
+    return (
+      <NetWorthDashboard header={header} mode={mode} effectiveDate={effectiveDate}
+        trendWindow={trendYear} onTrendWindowChange={setTrendYear} />
+    )
+  }
+  return (
+    <FlowDashboard
+      header={header}
+      mode={mode}
+      setMode={setMode}
+      activeFrame={activeFrame}
+      effectiveDate={effectiveDate}
+      dateResolving={dateResolving}
+      trendYear={trendYear}
+      setTrendYear={setTrendYear}
+    />
+  )
+}
+
+// The Net worth frame. It needs the categories only for the account panels it opens.
+function NetWorthDashboard({ header, mode, effectiveDate, trendWindow, onTrendWindowChange }) {
+  const [categories, setCategories] = useState([])
+  useEffect(() => {
+    api.getCategories().then(setCategories)
+  }, [])
+  return (
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {header}
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 32px 32px' }}>
+        <NetWorthView
+          mode={mode}
+          dateStart={effectiveDate?.start || null}
+          dateEnd={effectiveDate?.end || null}
+          periodLabel={periodLabelOf(effectiveDate)}
+          categories={categories}
+          trendWindow={trendWindow}
+          onTrendWindowChange={onTrendWindowChange}
+        />
+      </div>
+    </div>
+  )
+}
+
+// The period a Single-period figure covers: the preset's name, else its range; a rangeless value (all-time,
+// explicit or default) reads "All time".
+function periodLabelOf(effectiveDate) {
+  return (effectiveDate && effectiveDate.start && effectiveDate.end)
+    ? (effectiveDate.preset || formatDateRange(effectiveDate.start, effectiveDate.end))
+    : 'All time'
+}
+
+// The transaction frames: Expenses, Income and Cash flow.
+function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, dateResolving, trendYear, setTrendYear }) {
+  /*
+   * Dashboard runs three analysis modes over the same global filters, but each mode keeps its own drill state.
+   * Resetting that state on mode changes avoids carrying breadcrumbs into views that summarize the same data differently.
+   */
+  const { filters, pinDateFromChart, removeSelections, goBackDate, canGoBackDate, previousDate } = useFilters()
   // When the user double-clicks a month in the Trends top chart with a group drill active,
   // we stash the group id here and consume it after Single mode re-runs its groupRows fetch.
   // The drill can't be applied synchronously because Single mode needs the new groupRows
@@ -1784,7 +1876,6 @@ export default function Dashboard() {
   // Transient (display-without-save) tag report lives only in session state, so it
   // disappears when the user switches to anything else and never persists.
   const [transientTagReport, setTransientTagReport] = useState(null)
-  const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
   const { tags: availableTags } = useTags()
   // null when closed; `{ reportId }` opens it on that report's tags, `{ reportId: null }` starts a new one.
   const [tagBuilder, setTagBuilder] = useState(null)
@@ -1826,9 +1917,6 @@ export default function Dashboard() {
   // and a great many expense ones — so each side pages into its own tail rather than sharing the pie's
   // single depth.
   const [cashFlowDepths, setCashFlowDepths] = useState({ [INFLOW]: 0, [OUTFLOW]: 0 })
-  // `dashboardView` is the user's persisted frame; `activeFrame` is the one this mode can actually
-  // render, which differs only in Compare (see frameForMode).
-  const activeFrame = frameForMode(dashboardView, mode)
   const viewIsIncome = activeFrame === DASHBOARD_VIEW_INCOME
   const viewIsCashFlow = activeFrame === DASHBOARD_VIEW_CASH_FLOW
 
@@ -1839,23 +1927,12 @@ export default function Dashboard() {
     setCashFlowDepths({ [INFLOW]: 0, [OUTFLOW]: 0 })
   }, [spendingViewBy, activeFrame])
 
-  // Only Single period reads the shared date chip: Compare takes its two periods from its own pickers and
-  // Trends queries its own full-history window, so mute the date button on both. Restore on unmount so
-  // other pages see the chip as live again.
-  useEffect(() => {
-    setDateApplies(mode === 'single')
-    return () => setDateApplies(true)
-  }, [mode, setDateApplies])
-
   // Filter derivation is hoisted ahead of the tag-mode fetch effect so the effect's
   // dependency expression can read these without a temporal dead zone.
   const dateStart = effectiveDate?.start || null
   const dateEnd = effectiveDate?.end || null
-  // The period shown on the single-view totals cards. The effective period (explicit pick or the
-  // Dashboard default) drives it; a rangeless value (all-time, explicit or default) reads "All time".
-  const singlePeriodLabel = (effectiveDate && effectiveDate.start && effectiveDate.end)
-    ? (effectiveDate.preset || formatDateRange(effectiveDate.start, effectiveDate.end))
-    : 'All time'
+  // The period shown on the single-view totals cards.
+  const singlePeriodLabel = periodLabelOf(effectiveDate)
   // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), which
   // splits each facet by mode so an exclude chip can never leak into an include list and invert its
   // own meaning.
@@ -2175,7 +2252,6 @@ export default function Dashboard() {
   // null = "auto": let TrendsPanel resolve the default from the data (trailing 12 months if those
   // months have data, else the most recent year present) so a stale/imported dataset doesn't land on
   // an empty trailing window. An explicit pick from the dropdown overrides it.
-  const [trendYear, setTrendYear] = useState(null)
   // The group the user asked to drill into. It keys the fetch, and nothing on screen: the panel draws
   // `shownTrendGroup` — the group the series on screen was fetched for — so a drill switches the title,
   // the picker, the averages table and the charts in one frame, when the group's series arrives. Setting
@@ -2915,44 +2991,9 @@ export default function Dashboard() {
   const cmpCrumbs = [periodLabel(periodA) + ' vs ' + periodLabel(periodB)]
   if (cmpGroup) cmpCrumbs.push(cmpGroup.group_name)
 
-  // Hold the paint until the 'auto' default resolves on first visit, so the Dashboard doesn't flash an
-  // all-time view before snapping to the default. Only the single-period view is scoped by the effective
-  // date; Compare/Trends have their own windows. Brief, and cached after the first visit of a session.
-  if (dateResolving && mode === 'single') {
-    return <div data-browser-context-passthrough="true" style={{ height: '100%' }} />
-  }
-
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader
-          title="Dashboard"
-          help={<FeatureExplainer topic="page-dashboard" placement="bottom-left" />}
-          titleAdornment={(
-            <DashboardDefaultPeriodGear
-              pref={defaultPeriodPref}
-              setPref={setDefaultPeriodPref}
-            />
-          )}
-          leftAdornment={(mode === 'single' || mode === 'trends') && (
-            <SegmentedToggle
-              value={dashboardView}
-              options={DASHBOARD_VIEW_OPTIONS}
-              onChange={setDashboardView}
-              ariaLabel="Choose dashboard frame"
-            />
-          )}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <SegmentedToggle
-              value={mode}
-              options={DASHBOARD_MODE_OPTIONS}
-              onChange={setMode}
-              ariaLabel="Choose dashboard analysis mode"
-            />
-          </div>
-        </PageHeader>
-      </div>
+      {header}
 
       {/* Small top padding so a focusable control sitting at the very top of this scroll area (e.g. the
           Trends window chooser) isn't clipped at the overflow edge — its focus outline needs room above the

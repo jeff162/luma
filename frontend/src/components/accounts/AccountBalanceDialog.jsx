@@ -17,15 +17,16 @@ import { AppDialog, Button, IconButton, Input, SegmentedToggle } from '../ui.jsx
  * The entry is a stated balance like a provider's, so the account's balance today is carried forward
  * from it through the transactions after its date (`docs/data-model.md` → *Account balances*). Opened on
  * an entry made by hand, it edits that entry and can remove it; otherwise it starts a new one for today.
- * A connection's figure is not editable here, since its next sync would restate it. Earlier entries are
+ * A connection's figure is not editable here, since its next sync would restate it. `initialDate` starts a
+ * new entry on that date, as the history flag's seam does. Earlier entries are
  * listed beneath, each removable, as they go on serving as checks on the transactions after them.
  */
-export default function AccountBalanceDialog({ account, onClose, onSaved }) {
+export default function AccountBalanceDialog({ account, initialDate = null, onClose, onSaved }) {
   const balance = account.balance
   const editing = balance?.source === 'manual' && balance.account_id === account.id ? balance : null
   const today = localIsoDate()
   const [form, setForm] = useState(() => ({
-    date: editing?.as_of_date || today,
+    date: editing?.as_of_date || initialDate || today,
     amount: editing ? formatAmountInput(Math.abs(editing.stated), { cents: true }) : '',
     side: editing ? (editing.stated < 0 ? 'owed' : 'held') : defaultBalanceSide(account.type),
   }))

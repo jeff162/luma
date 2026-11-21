@@ -55,6 +55,7 @@ export function getBlankMappingSuggestions() {
     notes: '',
     pending: '',
     currency: '',
+    balance: '',
     transaction_id: '',
     account: '',
   }

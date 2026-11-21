@@ -293,6 +293,21 @@ export function ImportHistorySection({
                               nothing to open, which is the whole point — the transaction each one
                               duplicates is in the ledger, so there is no second copy to go and read. The
                               line above already says it for a file that landed nothing. */}
+                          {/* What the file's balance column gave the account. Stated here because it
+                              is the only record of it: the balances themselves show on the account. */}
+                          {summary.balancesRecorded > 0 || summary.balanceUnreadableCount > 0 || summary.balanceRefusedAccounts.length > 0 ? (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
+                              {summary.balancesRecorded > 0
+                                ? `Balances recorded for ${summary.balancesRecorded} date${summary.balancesRecorded === 1 ? '' : 's'}`
+                                : null}
+                              {summary.balanceUnreadableCount > 0
+                                ? `${summary.balancesRecorded > 0 ? '; ' : ''}${summary.balanceUnreadableCount} balance cell${summary.balanceUnreadableCount === 1 ? '' : 's'} could not be read`
+                                : null}
+                              {summary.balanceRefusedAccounts.length > 0
+                                ? `${summary.balancesRecorded > 0 || summary.balanceUnreadableCount > 0 ? '. ' : ''}No balances recorded for ${summary.balanceRefusedAccounts.join(', ')}: the balance column does not follow the amounts`
+                                : null}
+                            </div>
+                          ) : null}
                           {summary.ignoredCount > 0 && summary.importedCount > 0 ? (
                             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
                               {summary.ignoredCount} row{summary.ignoredCount === 1 ? '' : 's'} already in the ledger

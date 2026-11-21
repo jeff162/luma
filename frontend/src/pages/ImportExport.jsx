@@ -262,6 +262,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [colNotes, setColNotes] = useState(null)
   const [colPending, setColPending] = useState(null)
   const [colCurrency, setColCurrency] = useState(null)
+  const [colBalance, setColBalance] = useState(null)
   const [colTransactionId, setColTransactionId] = useState(null)
   const [colAccount, setColAccount] = useState(null)
   // The user's resolved capture picks (headers), or null = "not yet resolved" → derive the default set
@@ -702,8 +703,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   // what actually gets captured — the user's explicit picks, or the derived default when untouched —
   // filtered to columns still present and unmapped so a stale pick can't leak through.
   const mappedHeaders = useMemo(
-    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount].filter(Boolean),
-    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount],
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount],
   )
   const evidenceColumnOptions = useMemo(
     () => computeEvidenceColumnOptions(preview, mappedHeaders, skipRows),
@@ -901,7 +902,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   }, [distinctAccountValues, accounts])
 
   const hasImportWorkToSave = !!(
-    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending || colCurrency || colTransactionId ||
+    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending || colCurrency || colBalance || colTransactionId ||
     colAccount || accountId || singleAccountNew.enabled || Object.keys(accountMap).length > 0 ||
     Object.keys(categoryAssignments).length > 0 || skipRows > 0 || dateFormat !== '%m/%d/%Y' ||
     amtConv !== 'single_signed' || decimalSeparator !== DEFAULT_DECIMAL_SEPARATOR || !applyCat || useImportedCategories ||
@@ -920,7 +921,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   }, [
     dbInstanceId, preferenceSubjectId,
     preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, decimalSeparator, skipRows, applyCat, useImportedCategories, importedCategorySettings,
-    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount,
     singleAccountNew, accountMap, categoryAssignments,
   ])
 
@@ -1091,7 +1092,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   }, [
     accountMap, accountId, dateFormat, amtConv, decimalSeparator, skipRows,
     applyCat, enrichFromSource, useImportedCategories, importedCategorySettings, singleAccountNew,
-    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount,
     resolvedEvidenceColumns,
   ])
 
@@ -1218,6 +1219,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       notes: columnMap.notes || '',
       pending: columnMap.pending || '',
       currency: columnMap.currency || '',
+      balance: columnMap.balance || '',
       transaction_id: columnMap.transaction_id || '',
       account: columnMap.account || '',
     })
@@ -1245,6 +1247,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     assignSuggestion('notes', currentValues.notes)
     assignSuggestion('pending', currentValues.pending)
     assignSuggestion('currency', currentValues.currency)
+    assignSuggestion('balance', currentValues.balance)
     assignSuggestion('transaction_id', currentValues.transaction_id)
     assignSuggestion('account', currentValues.account)
 
@@ -1312,6 +1315,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setColNotes(null)
     setColPending(null)
     setColCurrency(null)
+    setColBalance(null)
     setColTransactionId(null)
     setColAccount(null)
     setEvidenceColumns(null)
@@ -1347,6 +1351,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setColNotes(null)
     setColPending(null)
     setColCurrency(null)
+    setColBalance(null)
     setColTransactionId(null)
     setColAccount(null)
     setEvidenceColumns(null)
@@ -1396,7 +1401,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setImportedCategorySettings(extractImportedCategorySettings(p))
     setColDate(mapped('date')); setColAmount(mapped('amount')); setColDebit(mapped('debit'))
     setColCredit(mapped('credit')); setColDir(mapped('direction'))
-    setColDesc(mapped('description')); setColCategory(mapped('category')); setColNotes(mapped('notes')); setColPending(mapped('pending')); setColCurrency(mapped('currency')); setColTransactionId(mapped('transaction_id'))
+    setColDesc(mapped('description')); setColCategory(mapped('category')); setColNotes(mapped('notes')); setColPending(mapped('pending')); setColCurrency(mapped('currency')); setColBalance(mapped('balance')); setColTransactionId(mapped('transaction_id'))
     // The suggestions are built from what is actually mapped, not from what the source stored: a
     // field just dropped for a missing column has to read as unmapped here or it is offered nothing.
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
@@ -1413,6 +1418,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         notes: mapped('notes') || '',
         pending: mapped('pending') || '',
         currency: mapped('currency') || '',
+        balance: mapped('balance') || '',
         transaction_id: mapped('transaction_id') || '',
         account: mapped('account') || '',
       },
@@ -1498,7 +1504,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setImportedCategorySettings(extractImportedCategorySettings(snap))
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColCurrency(cm.currency || null); setColTransactionId(cm.transaction_id || null); setColAccount(cm.account || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColCurrency(cm.currency || null); setColBalance(cm.balance || null); setColTransactionId(cm.transaction_id || null); setColAccount(cm.account || null)
     setEvidenceColumns(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
       skipRowsValue: snap.skip_rows || 0,
@@ -1514,6 +1520,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         notes: cm.notes || '',
         pending: cm.pending || '',
         currency: cm.currency || '',
+        balance: cm.balance || '',
         transaction_id: cm.transaction_id || '',
         account: cm.account || '',
       },
@@ -1649,6 +1656,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         setColNotes(null)
         setColPending(null)
         setColCurrency(null)
+        setColBalance(null)
         setColTransactionId(null)
         setColAccount(null)
         setEvidenceColumns(null)
@@ -1939,7 +1947,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   function getColumnMap() {
     return {
       date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
-      direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, currency: colCurrency, transaction_id: colTransactionId, account: colAccount,
+      direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, currency: colCurrency, balance: colBalance, transaction_id: colTransactionId, account: colAccount,
       // Authoritative capture set (see backend _build_evidence_column_plan): exactly these columns are
       // kept as import evidence. Resolved from the user's picks or the derived default.
       evidence_columns: resolvedEvidenceColumns,
@@ -2555,6 +2563,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
     setAccountMap({})
     setColPending(null)
     setColCurrency(null)
+    setColBalance(null)
     setColTransactionId(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({})
@@ -3541,6 +3550,16 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                   candidateHeaders: columnAnalysis.currencyCandidates,
                   value: colCurrency,
                   setValue: setColCurrency,
+                }),
+                // The account's balance after each row, which a bank's own export often carries. Each date's
+                // closing figure is recorded as the account's balance; what it is for is in the Import /
+                // Export help topic.
+                buildMappingFieldConfig({
+                  key: 'balance',
+                  label: 'Balance',
+                  candidateHeaders: columnAnalysis.balanceCandidates,
+                  value: colBalance,
+                  setValue: setColBalance,
                 }),
                 // The identifier the source gives each row. What it makes possible — recognizing a row
                 // already imported from this data source however its wording changed — is in the saved

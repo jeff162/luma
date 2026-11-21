@@ -26,6 +26,9 @@ export function summarizeImportOutcome(source) {
       rejectedRows: [],
       duplicateHeaders: [],
       duplicateRows: [],
+      balancesRecorded: 0,
+      balanceUnreadableCount: 0,
+      balanceRefusedAccounts: [],
     }
   }
 
@@ -83,6 +86,14 @@ export function summarizeImportOutcome(source) {
       ? source.duplicate_rows
       : []
 
+  // What the file's balance column gave: closing balances recorded, cells that could not be read, and the
+  // accounts whose column did not read as a running balance.
+  const balancesRecorded = Number(rawSummary?.balances_recorded) || 0
+  const balanceUnreadableCount = Number(rawSummary?.balance_unreadable_count) || 0
+  const balanceRefusedAccounts = Array.isArray(rawSummary?.balance_refused_accounts)
+    ? rawSummary.balance_refused_accounts
+    : []
+
   return {
     totalRows,
     importedCount,
@@ -102,6 +113,9 @@ export function summarizeImportOutcome(source) {
     rejectedRows,
     duplicateHeaders,
     duplicateRows,
+    balancesRecorded,
+    balanceUnreadableCount,
+    balanceRefusedAccounts,
   }
 }
 

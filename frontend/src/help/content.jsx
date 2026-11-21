@@ -415,9 +415,9 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow:</strong> Expense and Income are pie
+            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow, Net worth:</strong> Expense and Income are pie
             charts, <HelpLink to="/help/dashboard-cash-flow">Cash Flow</HelpLink> is a
-            Sankey diagram.
+            Sankey diagram, <HelpLink to="/help/dashboard-net-worth">Net worth</HelpLink> totals the account balances.
           </li>
           <li>
             <strong>Report sub-types:</strong> <strong>Single, Compare, Trends</strong> toggle between examining
@@ -451,6 +451,56 @@ export const HELP_TOPICS = [
           Categories{' '}
           <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not included
           in any of the dashboard reports unless the group or category is added to the filter.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'dashboard-net-worth',
+    section: 'dashboard',
+    title: 'Net worth',
+    surfaces: ['Dashboard frame selector'],
+    summary: 'The total of the account balances, by account type: what moved it over a period on Single period, each month end on Trends.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          Net worth adds up the balances of every account except those marked to be left out of it on the
+          Accounts page. Accounts of type Other are always left out. Accounts are grouped and coloured by
+          type; clicking a type opens its accounts, and clicking an account opens its report.
+        </p>
+        <ul>
+          <li>
+            <strong>Single period:</strong> the figure at the end of the period and what moved it, from net
+            worth at the start, a step for each type, to net worth at the end, the two ends drawn as what each
+            type makes of them. An account whose history begins
+            during the period counts as starting it at zero. Below, net worth at
+            the end of each month, quarter or year, as far back as the Expenses trend reaches; clicking a bar
+            makes it the period.
+          </li>
+          <li>
+            <strong>Trends:</strong> each month end, with what is held above zero, what is owed below, and
+            net worth as the line.
+          </li>
+        </ul>
+        <p>
+          Only the owner filter applies. The other filters choose transactions, and a balance belongs to an
+          account.
+        </p>
+        <p>
+          A balance on an earlier date starts from the nearest balance stated on or before that date, by a
+          connection or entered by hand, and adds the transactions since. Before the first one it is worked
+          back through the transactions. An account counts only from its first balance or transaction; an
+          account with no balance at all is not counted.
+        </p>
+        <p>
+          A ⚠ marks a balance not updated recently, or a history the transactions cannot explain: working
+          back lands an account well on the wrong side of zero, which usually means transactions are missing,
+          often where an account moved from imported files to a connection. Entering a balance from a
+          statement on that day fixes it, and the warning offers the date when it can find it. Otherwise net
+          worth can count the account only from a later date, offered as the furthest back its transactions
+          hold up, or the warning can be dismissed. The date is shown, and can be changed, on the
+          account&apos;s page.
         </p>
       </>
     ),
@@ -2203,7 +2253,11 @@ export const HELP_TOPICS = [
                   amount and the description, <HelpLink to="/help/amount-conventions">how the file
                     represents money in and out</HelpLink>, and which account the rows belong to. For a file
                   that mixes currencies, mapping its currency column keeps rows in any other currency out
-                  of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
+                  of the ledger; they are listed with the file&apos;s rejected rows instead. For a bank
+                  export with a running balance, mapping its balance column records the account&apos;s
+                  balance at the close of each day the file covers, which net worth counts from; undoing
+                  the import removes them. The file&apos;s order and whether it states a card&apos;s balance
+                  as what is owed are read from the file.</td>
               </tr>
               <tr>
                 <td><strong>Data connections</strong></td>

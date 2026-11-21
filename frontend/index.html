@@ -142,6 +142,11 @@
            future Settings → Appearance swatch will override this per user; it's a variable now so
            that stays a drop-in. */
         --review-marker-color: #e3b341;
+        /* A categorical palette for charts that colour a series by what it is (net worth by account
+           type), in its fixed order. Checked for colour-blind separation and contrast against these
+           surfaces; the light themes step each hue for a light surface rather than reusing these. */
+        --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+        --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9; --series-8: #e66767;
         color-scheme: dark;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       }
@@ -158,6 +163,8 @@
         --danger:   #dc2626;
         --warning:  #d97706;
         --review-marker-color: #b8860b;
+        --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+        --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
         color-scheme: light;
       }
       /* Soft light: a muted-grey, lower-glare member of the light family (no bright-white surfaces). */
@@ -174,6 +181,8 @@
         --danger:   #dc2626;
         --warning:  #d97706;
         --review-marker-color: #b8860b;
+        --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+        --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
         color-scheme: light;
       }
       /* Dim: a soft-charcoal, lower-contrast member of the dark family (grey page, not near-black). */

@@ -81,7 +81,7 @@ const ADD_PANEL_WIDTH = 900
 // (`account_assignments` / `account_skips` / `account_new`) is listed because the form edits it: it is
 // how a watched folder's imports are re-pointed, since those never pass through the import screen.
 const FORM_OWNED_COLUMN_MAP_KEYS = [
-  'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency', 'transaction_id',
+  'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency', 'balance', 'transaction_id',
   'category', 'notes', 'account', 'evidence_columns', 'single_account_new',
   'account_assignments', 'account_skips', 'account_new',
 ]
@@ -116,6 +116,7 @@ function getBlankSuggestedColumns() {
     notes: '',
     pending: '',
     currency: '',
+    balance: '',
     transaction_id: '',
     account: '',
   }
@@ -192,6 +193,7 @@ function ProfileForm({
   const [colNotes, setColNotes] = useState(cm.notes || '')
   const [colPending, setColPending] = useState(cm.pending || '')
   const [colCurrency, setColCurrency] = useState(cm.currency || '')
+  const [colBalance, setColBalance] = useState(cm.balance || '')
   const [colTransactionId, setColTransactionId] = useState(cm.transaction_id || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
   const [sourceAccountMap, setSourceAccountMap] = useState(() => sourceAccountMapToEntries(cm, accounts))
@@ -213,8 +215,8 @@ function ProfileForm({
     [samplePreview, skipRowsValue],
   )
   const mappedHeaders = useMemo(
-    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount].filter(Boolean),
-    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount],
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colBalance, colTransactionId, colAccount],
   )
   // "Imports from this data source have been categorized" only makes sense with a Category column mapped;
   // clear it if that mapping is removed.
@@ -317,6 +319,7 @@ function ProfileForm({
     setColNotes(preserveOrSuggest(colNotes, 'notes'))
     setColPending(preserveOrSuggest(colPending, 'pending'))
     setColCurrency(preserveOrSuggest(colCurrency, 'currency'))
+    setColBalance(preserveOrSuggest(colBalance, 'balance'))
     setColTransactionId(preserveOrSuggest(colTransactionId, 'transaction_id'))
     setColAccount(preserveOrSuggest(colAccount, 'account'))
 
@@ -392,6 +395,7 @@ function ProfileForm({
       ...(amtConv === 'single_unsigned' && colDir ? { direction: colDir } : {}),
       ...(colPending ? { pending: colPending } : {}),
       ...(colCurrency ? { currency: colCurrency } : {}),
+      ...(colBalance ? { balance: colBalance } : {}),
       ...(colTransactionId ? { transaction_id: colTransactionId } : {}),
       ...(colCategory ? { category: colCategory } : {}),
       ...(colNotes ? { notes: colNotes } : {}),
@@ -734,6 +738,25 @@ function ProfileForm({
             hint: columnAnalysis.currencyCandidates.length > 0 && !colCurrency ? formatLikelyMatchLabel(columnAnalysis.currencyCandidates.length) : '',
             placeholder: 'e.g. Currency',
             inputId: `${fid}-mapping-currency`,
+          },
+          {
+            key: 'balance',
+            label: 'Balance column',
+            headers: columnAnalysis.balanceCandidates,
+            allHeaders: sampleHeaders,
+            value: colBalance,
+            onChange: nextValue => {
+              if (nextValue) clearMappingSuggestion('balance')
+              setColBalance(nextValue)
+            },
+            suggestedValue: mappingSuggestions.balance,
+            onAcceptSuggestion: nextValue => {
+              clearMappingSuggestion('balance')
+              setColBalance(nextValue)
+            },
+            hint: columnAnalysis.balanceCandidates.length > 0 && !colBalance ? formatLikelyMatchLabel(columnAnalysis.balanceCandidates.length) : '',
+            placeholder: 'e.g. Balance',
+            inputId: `${fid}-mapping-balance`,
           },
           amtConv === 'two_column'
             ? {

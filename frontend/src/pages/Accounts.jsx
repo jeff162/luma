@@ -966,6 +966,7 @@ function AccountTagsCell({
 const BALANCE_SOURCE_PHRASES = {
   provider: 'Based on the balance the connection reported on',
   manual: 'Based on a manually entered value on',
+  import: 'Based on the balance an imported file stated on',
 }
 
 // The cell is one button whether or not there is a balance, so a balance is entered and changed the same

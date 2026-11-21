@@ -218,6 +218,7 @@ function scoreHeaderName(header, type) {
     direction: ['type', 'direction', 'dr/cr', 'transaction type'],
     pending: ['pending', 'is pending', 'pending status', 'posted', 'cleared'],
     currency: ['currency', 'ccy'],
+    balance: ['balance'],
   }
 
   return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
@@ -441,6 +442,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       directionCandidates: [],
       pendingCandidates: [],
       currencyCandidates: [],
+      balanceCandidates: [],
       transactionIdCandidates: [],
       dateAnalysisByHeader: {},
       amountAnalysisByHeader: {},
@@ -460,6 +462,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     directionCandidates: [],
     pendingCandidates: [],
     currencyCandidates: [],
+    balanceCandidates: [],
     transactionIdCandidates: [],
     dateAnalysisByHeader: {},
     amountAnalysisByHeader: {},
@@ -540,12 +543,19 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       analyses.currencyCandidates.push({ header, score: currencyBoost })
     }
 
+    // By header alone, like currency: a running balance is a column of amounts, and only its name says
+    // it is not the transaction's.
+    const balanceBoost = scoreHeaderName(header, 'balance')
+    if (balanceBoost > 0) {
+      analyses.balanceCandidates.push({ header, score: balanceBoost })
+    }
+
     if (isTransactionIdHeader(header)) {
       analyses.transactionIdCandidates.push({ header, score: 1 })
     }
   })
 
-  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates', 'currencyCandidates', 'transactionIdCandidates']) {
+  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates', 'currencyCandidates', 'balanceCandidates', 'transactionIdCandidates']) {
     analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
     analyses[key] = analyses[key].map(entry => entry.header)
   }
@@ -687,6 +697,7 @@ export function inferUnambiguousImportMappingFromPreview(preview, skipRows = 0) 
       notes: pickUnambiguousHeader(analysis.notesCandidates),
       pending: pickUnambiguousHeader(analysis.pendingCandidates),
       currency: pickUnambiguousHeader(analysis.currencyCandidates),
+      balance: pickUnambiguousHeader(analysis.balanceCandidates),
       transaction_id: pickUnambiguousHeader(analysis.transactionIdCandidates),
       account: pickUnambiguousHeader(analysis.accountCandidates),
     },
@@ -725,6 +736,7 @@ export function inferImportMappingFromPreview(preview, skipRows = 0) {
       notes: analysis.notesCandidates[0] || '',
       pending: analysis.pendingCandidates[0] || '',
       currency: analysis.currencyCandidates[0] || '',
+      balance: analysis.balanceCandidates[0] || '',
       transaction_id: analysis.transactionIdCandidates[0] || '',
       account: analysis.accountCandidates[0] || '',
     },

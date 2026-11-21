@@ -287,8 +287,14 @@ test('tag report menu edits tags and saves the unsaved report under a name', asy
   const save = page.getByRole('button', { name: 'Save', exact: true })
   await expect(save).toBeDisabled()
   await essential.uncheck()
+  // The page shows the edit before the preference write lands, so the reload below waits for the write:
+  // reloading first aborts it, and the builder then reopens on the set from before the edit.
+  const written = page.waitForResponse(response => response.url().includes('/api/auth/preferences')
+    && response.request().method() === 'POST'
+    && (response.request().postData() || '').includes('ui.dashboard.tagReports'))
   await save.click()
   await expect(selected).toHaveText(name)
+  await written
 
   // Persisted, not just held in the page: after a reload the builder opens on the edited set. A load at `/`
   // lands on the remembered startup route, which the specs running beside this one keep moving, so return to
