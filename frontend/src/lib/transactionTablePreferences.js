@@ -6,6 +6,8 @@ import { useDeviceLayoutPreference } from './UserPreferencesContext.jsx'
 
 const BASE_TRANSACTION_TABLE_COLUMNS = [
   { key: 'date', width: 96 },
+  // When the row posted. Offered where a table lets columns be chosen, and hidden until it is chosen.
+  { key: 'posted', width: 96, defaultHidden: true },
   { key: 'merchant', width: 260 },
   { key: 'category', width: 150 },
   { key: 'account', width: 140 },
@@ -15,8 +17,11 @@ const BASE_TRANSACTION_TABLE_COLUMNS = [
   { key: 'runningBalance', width: 112 },
 ]
 
-function getExpectedColumns({ showCategory = true, showAccount = true, showSourceAccount = false, showRunningBalance = false }) {
+function getExpectedColumns({
+  showCategory = true, showAccount = true, showSourceAccount = false, showRunningBalance = false, showPostedDate = false,
+}) {
   return BASE_TRANSACTION_TABLE_COLUMNS.filter(column => (
+    (column.key !== 'posted' || showPostedDate) &&
     (column.key !== 'category' || showCategory) &&
     (column.key !== 'account' || showAccount) &&
     (column.key !== 'sourceAccount' || showSourceAccount) &&
@@ -24,8 +29,15 @@ function getExpectedColumns({ showCategory = true, showAccount = true, showSourc
   ))
 }
 
+function defaultEntry(column) {
+  return column.defaultHidden
+    ? { key: column.key, width: column.width, hidden: true }
+    : { key: column.key, width: column.width }
+}
+
+// The layout is hideable (`columnVisibility.js`): every column this surface offers, hidden ones included.
 export function buildTransactionTableDefaultColumnConfig(options = {}) {
-  return getExpectedColumns(options).map(column => ({ ...column }))
+  return getExpectedColumns(options).map(defaultEntry)
 }
 
 export function normalizeTransactionTableColumnConfig(value, options = {}) {
@@ -42,14 +54,15 @@ export function normalizeTransactionTableColumnConfig(value, options = {}) {
     const key = column?.key
     if (!defaultWidthByKey.has(key) || seen.has(key)) continue
     seen.add(key)
-    normalized.push({ key, width: Number(column?.width) || defaultWidthByKey.get(key) })
+    const width = Number(column?.width) || defaultWidthByKey.get(key)
+    normalized.push(column?.hidden === true ? { key, width, hidden: true } : { key, width })
   }
   if (!normalized.length) return null
   // A column the saved layout predates goes in at its canonical position, beside its natural
   // neighbours rather than stranded at the end.
   expectedColumns.forEach((column, canonicalIndex) => {
     if (seen.has(column.key)) return
-    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, { key: column.key, width: column.width })
+    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, defaultEntry(column))
   })
   return normalized
 }
@@ -69,15 +82,18 @@ export function useTransactionTableLayout({
   showAccount = true,
   showSourceAccount = false,
   showRunningBalance = false,
+  showPostedDate = false,
 }) {
   const defaultColumns = useMemo(
-    () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount, showSourceAccount, showRunningBalance }),
-    [showAccount, showCategory, showSourceAccount, showRunningBalance],
+    () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate }),
+    [showAccount, showCategory, showSourceAccount, showRunningBalance, showPostedDate],
   )
   const [stored, setStored] = useDeviceLayoutPreference(preferenceKey, null)
   const columns = useMemo(
-    () => normalizeTransactionTableColumnConfig(stored, { showCategory, showAccount, showSourceAccount, showRunningBalance }) || defaultColumns,
-    [stored, showCategory, showAccount, showSourceAccount, showRunningBalance, defaultColumns],
+    () => normalizeTransactionTableColumnConfig(
+      stored, { showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate },
+    ) || defaultColumns,
+    [stored, showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate, defaultColumns],
   )
   return [columns, setStored]
 }

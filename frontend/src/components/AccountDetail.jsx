@@ -9,6 +9,8 @@ import { formatDate, formatDateRange } from '../lib/utils.js'
 import { unusualBalanceColor } from '../lib/accountTypes.js'
 import { Spinner, FilterChip, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import { transactionColumnLabel, transactionTableWidth } from '../lib/transactionTableColumns.js'
+import { setColumnHidden, visibleColumns } from '../lib/columnVisibility.js'
 import TransactionDetail from './TransactionDetail.jsx'
 import TransactionListToolbar from './TransactionListToolbar.jsx'
 import CategoryDetail from './CategoryDetail.jsx'
@@ -19,6 +21,7 @@ import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
   DetailPanelShell,
+  detailPanelWidthForTable,
   DetailTrendChart,
   DetailRangeControl,
   computeDetailRange,
@@ -53,7 +56,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
    * the chart picks the month, and the month list stays locally editable so inline category changes
    * feel immediate without disturbing the selected slice of history.
    */
-  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -147,7 +149,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     sortState,
     onSort,
     copy,
-  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams, sortPreferenceKey: 'ui.accountDetail.transactions.sort' })
   // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
   // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
   // registry and closes with this account panel; edits made inside it reconcile back into the month list.
@@ -158,7 +160,14 @@ export default function AccountDetail({ account, categories = [], onClose, force
     showAccount: false,
     showSourceAccount: isMerged,
     showRunningBalance: !!balance,
+    showPostedDate: true,
   })
+  // The column choice, for the Posted column: a connected card's bank lists rows by posting date, and
+  // sorting by it makes the running balance count in that order too.
+  const columnChoice = useMemo(() => ({
+    items: columnConfig.map(col => ({ key: col.key, label: transactionColumnLabel(col.key), hidden: !!col.hidden })),
+    onSetHidden: (key, hidden) => setColumnConfig(setColumnHidden(columnConfig, key, hidden)),
+  }), [columnConfig, setColumnConfig])
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
 
   // Explains an account with little/no visible activity: how many of its imported rows were skipped or
@@ -215,7 +224,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
     return () => { cancelled = true }
   }, [account.id, dateStart, dateEnd, sourceCsv])
 
-  const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
 
   // Reserve the full 7-row list height for year/all-time (their lists scroll at DETAIL_LIST_MAX_HEIGHT
   // regardless of any one month's count); month mode sizes to its busiest bar.
@@ -231,6 +239,15 @@ export default function AccountDetail({ account, categories = [], onClose, force
     filterParams: listParams,
     categories,
   })
+  // Opens wide enough for its whole table and follows the columns as they change (`fitWidth`); its own
+  // geometry is not remembered, though its columns and sort are.
+  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, {
+    forceFloating, stackIndex, initialPosition,
+    fitWidth: detailPanelWidthForTable(
+      transactionTableWidth(visibleColumns(columnConfig), { bulkActive: bulk.bulkMode }),
+    ),
+  })
+  const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
 
   // A change to the rows moves every balance after it, so the balances are re-read with the list.
   function refresh() {
@@ -367,7 +384,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={refresh} refreshing={reloading} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={refresh} refreshing={reloading} columns={columnChoice} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}
@@ -384,6 +401,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     showAccount={false}
                     showSourceAccount={isMerged}
                     showRunningBalance={!!balance}
+                    showPostedDate
                     balanceFlags={balanceFlags}
                     balanceAccountType={balanceInfo?.account_type}
                     markExcludedFromTotals

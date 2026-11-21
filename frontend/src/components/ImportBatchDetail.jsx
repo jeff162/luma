@@ -194,6 +194,7 @@ export default function ImportBatchDetail({
   } = usePagedTransactions({
     activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}|${activeAttribute || ''}`,
     loadPage,
+    sortPreferenceKey: 'ui.importBatchDetail.transactions.sort',
   })
   const refresh = useCallback(() => {
     setRefreshNonce(n => n + 1)

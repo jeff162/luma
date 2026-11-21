@@ -594,7 +594,8 @@ export const HELP_TOPICS = [
         <p>*needs review*</p>
         <p>
           The &#9881; in the corner of the list picks which columns are shown. <strong>Source</strong> is the file a
-          transaction was imported from, and its &#8599; opens that import. Columns are reordered by
+          transaction was imported from, and its &#8599; opens that import. <strong>Posted</strong> is when it
+          posted, where the source gives that apart from the date it was made. Columns are reordered by
           dragging a header and resized by dragging the edge between two headers. The choices are
           remembered separately for each kind of screen.
         </p>
@@ -1855,9 +1856,11 @@ export const HELP_TOPICS = [
           for a week from a connection, or 35 days for one entered by hand, which is marked (m). Clicking a balance, or the dash where there is none, or <strong>Edit balance…</strong> in the
           row&apos;s &#8943; menu, enters one by hand, for an account with no connection or to set one right. A merged group has one balance, from
           whichever member reported most recently. The account&apos;s &#8599; report shows the balance after
-          each transaction, and lists any stretch between two stated balances whose change the transactions in
-          it don&apos;t add up to; the last transaction in that stretch is marked &#9888;, since one is missing,
-          extra or wrong there. <strong>Exclude</strong> keeps an account out
+          each transaction, counted in the order of the date the list is sorted by, with a day&apos;s credits
+          before its debits as banks post them. Its &#9881; adds a <strong>Posted</strong> column; sorted by
+          that, the list and its balances match a bank&apos;s own listing. The report also lists any stretch
+          between two stated balances whose change the transactions in it don&apos;t add up to; the last
+          transaction in that stretch is marked &#9888;, since one is missing, extra or wrong there. <strong>Exclude</strong> keeps an account out
           of net worth; an account of type <em>Other</em> is always out.
         </p>
         <p>

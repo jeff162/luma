@@ -1435,6 +1435,7 @@ export default function Categories() {
   } = usePagedTransactions({
     activeKey: matchingTxnsKey,
     loadPage: loadMatchingTxnPage,
+    sortPreferenceKey: 'ui.categories.matchingTransactions.sort',
   })
 
   // Bulk edit over the matching-transactions list. Scope is the selected category/categories (no date

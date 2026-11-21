@@ -279,6 +279,22 @@ export function useUserPreference(key, defaultValue) {
   return [value, setValue]
 }
 
+// For a shared hook that remembers a value only when its caller names a key. With no key, or outside the
+// provider (a hook rendered on its own in a test), the value lives in component state for the mount.
+export function useOptionalUserPreference(key, defaultValue) {
+  const context = useContext(UserPreferencesContext)
+  const stableDefault = useStablePreferenceValue(defaultValue)
+  const [local, setLocal] = useState(stableDefault)
+  const remembered = Boolean(key && context)
+  const value = remembered ? getPreferenceValue(context.preferences, key, stableDefault) : local
+  const setPreference = context?.setPreference
+  const setValue = useCallback(nextValueOrUpdater => {
+    if (remembered) setPreference(key, nextValueOrUpdater, stableDefault)
+    else setLocal(nextValueOrUpdater)
+  }, [remembered, setPreference, key, stableDefault])
+  return [value, setValue]
+}
+
 // Per-device variant for a preference about how the app fits the screen, such as column geometry, the
 // display size, a pane's width or whether it is collapsed, and a floating panel's place. A layout tuned on
 // a desktop does not reach a tablet.

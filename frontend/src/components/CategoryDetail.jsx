@@ -78,7 +78,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     sortState,
     onSort,
     copy,
-  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams, sortPreferenceKey: 'ui.categoryDetail.transactions.sort' })
 
   useEffect(() => {
     let cancelled = false

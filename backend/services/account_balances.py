@@ -21,6 +21,17 @@ from bisect import bisect_right
 from datetime import date
 from typing import Callable, Optional
 
+# The two days a row can be placed on. A source's stated balance counts rows by when they posted, so
+# today's balance and the checks against stated balances use `posted`; a running balance follows whichever
+# the list is ordered by, or it would not read as a running total down the list. A row whose source gave
+# one date has it as both.
+BALANCE_DAY_SQL = {"date": "t.date", "posted": "COALESCE(t.posted_date, t.date)"}
+
+# Within one day, credits before debits, as banks generally post them, then by id so the order is fixed.
+# The list's date sorts tie-break the same way (`routers/transactions.py`), so the running balance reads
+# as cumulative down the rows.
+IN_DAY_ORDER_SQL = "CASE WHEN t.amount < 0 THEN 0 ELSE 1 END"
+
 PROVIDER_SOURCE = "provider"
 # Entered by hand, for an account nothing reports a balance for, or to correct one. A connection's next
 # report is a later date and so becomes the anchor; the entry stays as a figure to reconcile against.
@@ -88,10 +99,10 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
     """Each account group's balance today, keyed by group root, or only `root_id`'s group when given.
 
     A group has one balance, anchored on the latest balance any member stated (the latest-recorded among
-    those on the same day) and carried forward through the group's posted, live rows dated after it. The
-    anchor is taken as that day's closing balance, so a row on the anchor's own date is already in it. A
-    pending row is left out, as no source's stated balance counts one. A group with no stated balance is
-    absent.
+    those on the same day) and carried forward through the group's posted, live rows that posted after it.
+    The anchor is taken as that day's closing balance, so a row posted on the anchor's own date is already
+    in it. A pending row is left out, as no source's stated balance counts one. A group with no stated
+    balance is absent.
 
     `also_reporting` names the other members whose own latest balance falls within `LIVE_FEED_WINDOW_DAYS` of
     the anchor's: two live feeds into one group, where only one can be the group's balance."""
@@ -121,11 +132,11 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
     for root_id, anchor in anchors.items():
         as_of = date.fromisoformat(anchor["as_of_date"])
         later = conn.execute(
-            """
+            f"""
             SELECT COALESCE(SUM(t.amount), 0)
             FROM txn t
             JOIN account a ON a.id = t.account_id
-            WHERE COALESCE(a.parent_account_id, a.id) = ? AND t.date > ?
+            WHERE COALESCE(a.parent_account_id, a.id) = ? AND {BALANCE_DAY_SQL["posted"]} > ?
               AND t.trashed_at IS NULL AND t.is_pending = 0
             """, (root_id, anchor["as_of_date"])).fetchone()[0]
         result[root_id] = {
@@ -146,22 +157,22 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
     return result
 
 
-def _group_ledger(conn, root_id: str) -> list:
-    """The group's live, posted rows, oldest first, in the order the ledger lists them by date: by date,
-    then by id. The id order within a day is arbitrary but fixed, and it is the order the list shows, so a
-    running balance reads as cumulative down a list sorted by date."""
+def _group_ledger(conn, root_id: str, basis: str) -> list:
+    """The group's live, posted rows, oldest first, placed by `basis` (`BALANCE_DAY_SQL`) and ordered within
+    a day by `IN_DAY_ORDER_SQL`. `day` is the date each row is placed on."""
     return conn.execute(
-        """
-        SELECT t.id, t.date, t.amount
+        f"""
+        SELECT t.id, {BALANCE_DAY_SQL[basis]} AS day, t.amount
         FROM txn t
         JOIN account a ON a.id = t.account_id
         WHERE COALESCE(a.parent_account_id, a.id) = ? AND t.trashed_at IS NULL AND t.is_pending = 0
-        ORDER BY t.date, t.id
+        ORDER BY day, {IN_DAY_ORDER_SQL}, t.id
         """, (root_id,)).fetchall()
 
 
-def running_balances(conn, root_id: str, txn_ids) -> dict:
-    """The group's balance just after each of `txn_ids`, `{txn_id: balance}`.
+def running_balances(conn, root_id: str, txn_ids, basis: str = "date") -> dict:
+    """The group's balance just after each of `txn_ids`, `{txn_id: balance}`, counting rows in `basis`
+    order (`BALANCE_DAY_SQL`), the date the list is ordered by.
 
     Anchored on the group's balance today (`current_balances`), so every figure agrees with the Accounts
     page; earlier stated balances are checked against it rather than restarting it (`balance_checks`). A
@@ -170,7 +181,7 @@ def running_balances(conn, root_id: str, txn_ids) -> dict:
     anchor = current_balances(conn, root_id=root_id).get(root_id)
     if not anchor or not wanted:
         return {}
-    ledger = _group_ledger(conn, root_id)
+    ledger = _group_ledger(conn, root_id, basis)
     # The balance before the first row: today's balance with every row's movement undone.
     opening = anchor["amount"] + sum(row["amount"] for row in ledger)
     result, moved = {}, 0.0
@@ -185,11 +196,11 @@ def balance_checks(conn, root_id: str) -> list:
     """Where the group's stated balances and its transactions disagree, newest first.
 
     Each pair of consecutive stated balances (by date, then when recorded) is a check: the transactions
-    dated after the earlier one, up to and including the later one's date, should account for the change
-    between them. A pair that differs by a cent or more is returned with both figures and `flag_txn_id`,
-    the latest row in that span, where a list can mark it. Comparing neighbours rather than each figure to
-    the latest one puts a missing or extra transaction in the one span it belongs to, instead of every
-    figure before it."""
+    posted after the earlier one, up to and including the later one's date, should account for the change
+    between them, counted by posting date because that is what a source's balance counts. A pair that
+    differs by a cent or more is returned with both figures and `flag_txn_id`, the latest row in that span,
+    where a list can mark it. Comparing neighbours rather than each figure to the latest one puts a missing
+    or extra transaction in the one span it belongs to, instead of every figure before it."""
     stated = conn.execute(
         """
         SELECT b.account_id, b.as_of_date, b.source, b.balance
@@ -200,8 +211,8 @@ def balance_checks(conn, root_id: str) -> list:
         """, (root_id,)).fetchall()
     if len(stated) < 2:
         return []
-    ledger = _group_ledger(conn, root_id)
-    dates = [row["date"] for row in ledger]
+    ledger = _group_ledger(conn, root_id, "posted")
+    dates = [row["day"] for row in ledger]
     moved_through = [0.0]
     for row in ledger:
         moved_through.append(moved_through[-1] + row["amount"])

@@ -4,18 +4,19 @@
 /*
  * The Transactions ledger's columns and its saved layout.
  *
- * The layout is one stored list of `{ key, width, hidden? }` in display order, covering every column
- * whether shown or not. A hidden column keeps its width and stays behind the column it followed, so
- * showing it again puts it back beside the same neighbour even after the visible columns were reordered
- * (`mergeVisibleLedgerColumns`). `hidden` is stored only when true, so a layout saved before
- * columns could be hidden reads as everything shown.
+ * The layout is a hideable-column layout (`columnVisibility.js`): every column in display order, hidden
+ * or not.
  *
- * A saved layout that predates a column gets that column at its canonical position, shown or hidden as
- * its definition says (`defaultHidden`), so adding a column never discards a customized layout.
+ * A saved layout that predates a column gets that column after the one it follows by default, shown or
+ * hidden as its definition says (`defaultHidden`), so adding a column never discards a customized layout.
  */
+
+import { mergeVisibleColumns, setColumnHidden, visibleColumns } from './columnVisibility.js'
 
 export const LEDGER_COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
+  // When the row posted, or its one date where the source gave only one.
+  { key: 'posted', label: 'Posted', defaultWidth: 100, minWidth: 70, defaultHidden: true },
   { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
   { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 100 },
   // The import file a row came from. Not sortable: the list feed has no sort on it.
@@ -53,50 +54,24 @@ export function normalizeLedgerColumns(cfg) {
     const width = Number(col.width) || DEF_BY_KEY.get(col.key).defaultWidth
     return col.hidden === true ? { key: col.key, width, hidden: true } : { key: col.key, width }
   })
+  // After the column it follows by default, so it lands beside that neighbour however the layout was
+  // reordered (a new Posted column beside Date).
   LEDGER_COLUMN_DEFS.forEach((def, index) => {
-    if (keys.includes(def.key)) return
-    result.splice(Math.min(index, result.length), 0, defaultEntry(def))
+    if (result.some(col => col.key === def.key)) return
+    const previousKey = LEDGER_COLUMN_DEFS[index - 1]?.key
+    result.splice(result.findIndex(col => col.key === previousKey) + 1, 0, defaultEntry(def))
   })
   return result
 }
 
 export function visibleLedgerColumns(cols) {
-  return cols.filter(col => !col.hidden)
+  return visibleColumns(cols)
 }
 
-// Writes a new order and widths for the visible columns back into the full layout. Each hidden column
-// travels with the visible column before it (those leading the list stay first), so it comes back
-// beside the same neighbour however the others were moved.
 export function mergeVisibleLedgerColumns(cols, nextVisible) {
-  const leading = []
-  const trailingByKey = new Map()
-  let anchor = null
-  for (const col of cols) {
-    if (!col.hidden) {
-      anchor = col.key
-      continue
-    }
-    if (anchor === null) leading.push(col)
-    else trailingByKey.set(anchor, [...(trailingByKey.get(anchor) || []), col])
-  }
-  const placed = new Set(cols.filter(col => col.hidden).map(col => col.key))
-  const result = [...leading]
-  for (const col of nextVisible) {
-    if (!DEF_BY_KEY.has(col.key) || placed.has(col.key)) continue
-    placed.add(col.key)
-    result.push({ key: col.key, width: col.width }, ...(trailingByKey.get(col.key) || []))
-  }
-  // A visible column the update left out keeps its place at the end rather than vanishing.
-  for (const col of cols) {
-    if (col.hidden || placed.has(col.key)) continue
-    result.push(col, ...(trailingByKey.get(col.key) || []))
-  }
-  return result
+  return mergeVisibleColumns(cols, nextVisible, key => DEF_BY_KEY.has(key))
 }
 
 export function setLedgerColumnHidden(cols, key, hidden) {
-  return cols.map(col => {
-    if (col.key !== key) return col
-    return hidden ? { key: col.key, width: col.width, hidden: true } : { key: col.key, width: col.width }
-  })
+  return setColumnHidden(cols, key, hidden)
 }

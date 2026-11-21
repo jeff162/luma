@@ -36,7 +36,10 @@ vi.mock('../../lib/api.js', () => ({
 // state here, so a control that writes one (the status pills) still takes effect on screen.
 vi.mock('../../lib/UserPreferencesContext.jsx', async () => {
   const { useState } = await import('react')
-  return { useUserPreference: (_key, fallback) => useState(fallback) }
+  return {
+    useUserPreference: (_key, fallback) => useState(fallback),
+    useOptionalUserPreference: (_key, fallback) => useState(fallback),
+  }
 })
 vi.mock('../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../contexts/SyncStatusContext.jsx', () => ({ useAfterLedgerChange: () => {} }))

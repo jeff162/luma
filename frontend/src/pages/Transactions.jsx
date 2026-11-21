@@ -25,11 +25,11 @@ import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
-import { ActionMenu } from '../components/ActionMenu.jsx'
 import { useAfterLedgerChange } from '../contexts/SyncStatusContext.jsx'
 import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CornerTab from '../components/CornerTab.jsx'
+import ColumnsMenu, { COLUMNS_GLYPH } from '../components/ColumnsMenu.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
@@ -68,13 +68,15 @@ const DEFAULT_ATTRIBUTE_FILTER = { attribute: 'uncategorized', active: false }
 let transactionsSessionState = null
 
 function getInitialSortDirection(columnKey) {
-  return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
+  return columnKey === 'date' || columnKey === 'posted' || columnKey === 'amount' ? 'desc' : 'asc'
 }
 
 function formatTransactionClipboardCell(key, txn) {
   switch (key) {
     case 'date':
       return formatDate(txn.date)
+    case 'posted':
+      return formatDate(txn.posted_date || txn.date)
     case 'merchant':
       return getTxnMerchantLabel(txn)
     case 'category':
@@ -593,6 +595,12 @@ export default function Transactions() {
             {formatDate(txn.date)}
           </span>
         )
+      case 'posted':
+        return (
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+            {formatDate(txn.posted_date || txn.date)}
+          </span>
+        )
       case 'merchant':
         return (
           <MerchantCell
@@ -933,30 +941,18 @@ export default function Transactions() {
               setColumnsMenuAnchor(current => (current ? null : trigger))
             }}
           >
-            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>{'\u2699\uFE0E'}</span>
+            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1 }}>{COLUMNS_GLYPH}</span>
           </CornerTab>
         </Card>
 
         <TransactionRowActionsChrome controller={rowActions} />
 
         {columnsMenuAnchor ? (
-          <ActionMenu
+          <ColumnsMenu
             anchorElement={columnsMenuAnchor}
-            minWidth={160}
-            label="Columns"
+            columns={cols.map(col => ({ key: col.key, label: getLedgerColumnDef(col.key).label, hidden: !!col.hidden }))}
+            onSetHidden={(key, hidden) => setStoredCols(setLedgerColumnHidden(cols, key, hidden))}
             onClose={() => setColumnsMenuAnchor(null)}
-            items={cols.map(col => {
-              const shown = !col.hidden
-              const lastShown = shown && visibleCols.length === 1
-              return {
-                key: col.key,
-                label: getLedgerColumnDef(col.key).label,
-                toggled: shown,
-                disabled: lastShown,
-                disabledReason: lastShown ? 'At least one column stays shown' : undefined,
-                onClick: () => setStoredCols(setLedgerColumnHidden(cols, col.key, shown)),
-              }
-            })}
           />
         ) : null}
 

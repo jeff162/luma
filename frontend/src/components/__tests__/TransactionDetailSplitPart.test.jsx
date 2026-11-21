@@ -35,6 +35,7 @@ vi.mock('../../lib/api.js', () => {
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: (_key, fallback) => [fallback, vi.fn()],
   useDeviceLayoutPreference: (_key, fallback) => [fallback, vi.fn()],
+  useOptionalUserPreference: (_key, fallback) => [fallback, vi.fn()],
 }))
 vi.mock('../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../contexts/TransactionShareContext.jsx', () => ({

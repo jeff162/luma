@@ -29,7 +29,7 @@ import {
 } from 'recharts'
 import { CLICKABLE_CHART_EVENTS } from '../lib/chartInteraction.js'
 import { monthLabel } from '../lib/utils.js'
-import { useDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
+import { useDeviceLayoutPreference, useOptionalUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { DialogActions, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, IconButton, SegmentedToggle } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
@@ -40,7 +40,7 @@ import { leadingRows } from '../lib/rowSlots.js'
 import { usePagedRowSlots } from '../lib/usePagedRowSlots.js'
 import { useScrollContainment } from '../lib/scrollContainment.js'
 import { placeAboveKeyboard, useVisibleViewport, visibleLayerBox } from '../lib/visibleViewport.js'
-import { cssPoint, cssRect, cssViewport, vh, vw } from '../lib/displaySize.js'
+import { cssPoint, cssRect, cssScreenWidth, cssViewport, vh, vw } from '../lib/displaySize.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -48,6 +48,14 @@ export const DETAIL_PAGE_SIZE = 100
 // clipping the rightmost column on a typical desktop window.
 export const DETAIL_PANEL_WIDTH = `min(960px, calc(${vw(100)} - 32px))`
 export const DETAIL_PANEL_MIN_WIDTH = 480
+// What a panel adds around a table in its body: the body's side padding, the panel's border, and room for
+// the body's vertical scrollbar.
+const DETAIL_BODY_CHROME_WIDTH = 24 * 2 + 2 + 16
+
+// The width a panel opens at to show a table `tableWidth` wide whole, never narrower than the default panel.
+export function detailPanelWidthForTable(tableWidth) {
+  return Math.max(960, Math.ceil(tableWidth) + DETAIL_BODY_CHROME_WIDTH)
+}
 export const DETAIL_PANEL_MIN_HEIGHT = 320
 export const DETAIL_LIST_MAX_HEIGHT = 312
 export const DETAIL_MONTH_SECTION_MIN_HEIGHT = 420
@@ -133,6 +141,12 @@ export function useDetailPanelChrome(onClose, options = {}) {
     // `dragging`/`resizing` flag — subscribing to that flag would re-render the caller (and its
     // large body) twice on every header click. See the drag note below.
     onGestureEnd = null,
+    // The width the panel's content wants (`detailPanelWidthForTable`). The panel opens at it and follows
+    // it as it changes, until the user resizes the panel. It is capped at the screen's width rather than
+    // the window's, and drawn at what the window allows: a narrow window shows less of a panel that a
+    // widened window then shows whole, while on a tablet, whose window is its screen, the panel fits the
+    // screen and a table wider than that scrolls inside it.
+    fitWidth = null,
   } = options
   // When the caller passes a saved position (e.g., restoring a minimized dialog), seed `pos`
   // synchronously so the first paint is already at the correct location. Otherwise the panel
@@ -156,7 +170,16 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // overwrite the user's size with the smaller one, and growing it again had nothing left to restore.
   // Keeping the request intact means the panel gives room back as the window shrinks and takes it
   // straight back as the window grows, up to whatever the user originally set.
-  const [desiredSize, setDesiredSize] = useState(initialSize)
+  const fittedSize = width => (width
+    ? { width: Math.min(width, cssScreenWidth() - DETAIL_FLOATING_EDGE_GUTTER * 2) }
+    : null)
+  const [desiredSize, setDesiredSize] = useState(() => initialSize || fittedSize(fitWidth))
+  // Set by a resize: from then on the panel keeps the user's size rather than following its content.
+  const userSizedRef = useRef(false)
+  useEffect(() => {
+    if (userSizedRef.current || !fitWidth) return
+    setDesiredSize(fittedSize(fitWidth))
+  }, [fitWidth])
   const [viewport, setViewport] = useState(readViewport)
   const size = useMemo(() => clampPanelSize(desiredSize, viewport), [desiredSize, viewport])
   const panelRef = useRef(null)
@@ -260,6 +283,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     // the body — there's no direct-DOM shortcut. But the start/stop of the gesture stays off state so
     // it doesn't add two extra full re-renders bracketing the resize.
     let seededPos = pos
+    userSizedRef.current = true
     if (!size) setDesiredSize({ width: rect.width, height: rect.height })
     if (!pos) { seededPos = { x: rect.left, y: rect.top }; setPos(seededPos) }
     preventPressDefaults(e)
@@ -504,10 +528,14 @@ export function DetailRangeControl({ mode, onChange }) {
 
 // Detail lists open newest-first, matching the ledger's default.
 export const DETAIL_SORT_DEFAULT = { key: 'date', dir: 'desc' }
-// Date and amount read most-useful biggest-first; text columns start A→Z. Mirrors the ledger's
+// Dates and amount read most-useful biggest-first; text columns start A→Z. Mirrors the ledger's
 // getInitialSortDirection so a column's first-click direction is the same everywhere.
 function detailInitialSortDir(key) {
-  return key === 'date' || key === 'amount' ? 'desc' : 'asc'
+  return key === 'date' || key === 'posted' || key === 'amount' ? 'desc' : 'asc'
+}
+
+function isSortState(value) {
+  return !!value && typeof value.key === 'string' && (value.dir === 'asc' || value.dir === 'desc')
 }
 
 // Backs the detail panels' transaction lists: paged by position (DETAIL_PAGE_SIZE per page, see
@@ -521,10 +549,14 @@ function detailInitialSortDir(key) {
 // them. `rows` are the loaded rows and `setRows` edits them as a plain list would be edited. Feed
 // `sortState`/`onSort` into TransactionListTable's controlled-sort props and `paging` into its `paging` prop,
 // which draws the whole list and fetches the pages scrolled to.
-export function usePagedTransactions({ activeKey, loadPage, exportParams = null }) {
+//
+// `sortPreferenceKey` remembers the sort under that preference, as a table's column layout is remembered,
+// so a report reopens in the order it was left; without one the sort lasts while the list is mounted.
+export function usePagedTransactions({ activeKey, loadPage, exportParams = null, sortPreferenceKey = null }) {
   const [loading, setLoading] = useState(false)
   const [sumAmount, setSumAmount] = useState(0)
-  const [sortState, setSortState] = useState(DETAIL_SORT_DEFAULT)
+  const [storedSort, setSortState] = useOptionalUserPreference(sortPreferenceKey, DETAIL_SORT_DEFAULT)
+  const sortState = isSortState(storedSort) ? storedSort : DETAIL_SORT_DEFAULT
   // `reload()` bumps this to re-run the query already on screen — the Refresh affordance every list that
   // lets rows linger owes the user (`ui-patterns.md` → *Transaction lists*). It is separate from
   // `activeKey` because the query has not changed: what changed is the ledger under it.
@@ -539,10 +571,10 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
   // Header clicks pass a column key; re-clicking the same key flips direction. The load effect depends on
   // the page fetch, which closes over sortState, so a sort change re-pages from the first row.
   const onSort = useCallback(key => {
-    setSortState(prev => (prev && prev.key === key
+    setSortState(prev => (isSortState(prev) && prev.key === key
       ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
       : { key, dir: detailInitialSortDir(key) }))
-  }, [])
+  }, [setSortState])
 
   const fetchPage = useCallback((offset, limit) => loadPage(offset, limit, sortState), [loadPage, sortState])
   const paged = usePagedRowSlots({ fetchPage, pageSize: DETAIL_PAGE_SIZE })

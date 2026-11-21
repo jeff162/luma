@@ -38,6 +38,7 @@ function storedPreference(key, fallback) {
 vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
   useUserPreference: storedPreference,
   useDeviceLayoutPreference: storedPreference,
+  useOptionalUserPreference: storedPreference,
 }))
 
 const BATCH = {

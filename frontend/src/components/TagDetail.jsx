@@ -96,7 +96,7 @@ export default function TagDetail({
     sortState,
     onSort,
     copy,
-  } = usePagedTransactions({ activeKey, loadPage, exportParams: fetchParams })
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: fetchParams, sortPreferenceKey: 'ui.tagDetail.transactions.sort' })
 
   // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
   // visibly growing as its content lands (see usePanelReveal).

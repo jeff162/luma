@@ -10,7 +10,7 @@ import {
 const keys = cols => cols.map(col => col.key)
 
 describe('ledger columns', () => {
-  it('keeps an older layout and adds the source column hidden beside category', () => {
+  it('keeps an older layout and adds the newer columns hidden beside the columns they follow', () => {
     const saved = [
       { key: 'amount', width: 120 },
       { key: 'date', width: 80 },
@@ -20,8 +20,9 @@ describe('ledger columns', () => {
       { key: 'tags', width: 90 },
     ]
     const cols = normalizeLedgerColumns(saved)
-    expect(keys(cols)).toEqual(['amount', 'date', 'merchant', 'source', 'category', 'account', 'tags'])
+    expect(keys(cols)).toEqual(['amount', 'date', 'posted', 'merchant', 'category', 'source', 'account', 'tags'])
     expect(cols.find(col => col.key === 'source').hidden).toBe(true)
+    expect(cols.find(col => col.key === 'posted').hidden).toBe(true)
     expect(cols.find(col => col.key === 'merchant').width).toBe(300)
     expect(keys(visibleLedgerColumns(cols))).toEqual(['amount', 'date', 'merchant', 'category', 'account', 'tags'])
   })
@@ -38,9 +39,10 @@ describe('ledger columns', () => {
     // Move amount to the front and widen date.
     const reordered = [visible.at(-1), { ...visible[0], width: 140 }, ...visible.slice(1, -1)]
     const merged = mergeVisibleLedgerColumns(cols, reordered)
-    // The hidden columns (source, account) stay behind category, the column they followed.
+    // Each hidden column stays behind the column it followed: posted behind date, source and account
+    // behind category.
     expect(merged.map(col => (col.hidden ? `(${col.key})` : col.key)))
-      .toEqual(['amount', 'date', 'merchant', 'category', '(source)', '(account)', 'tags'])
+      .toEqual(['amount', 'date', '(posted)', 'merchant', 'category', '(source)', '(account)', 'tags'])
     expect(merged.find(col => col.key === 'date').width).toBe(140)
 
     const shown = setLedgerColumnHidden(merged, 'account', false)

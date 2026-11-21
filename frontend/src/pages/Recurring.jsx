@@ -746,6 +746,7 @@ export default function Recurring() {
   const membersPaged = usePagedTransactions({
     activeKey: openSeries ? `recurring:${openSeries.id}${openSeries._all ? `|${ownerLensParams.owner_lens || ''}` : ''}` : null,
     loadPage: membersLoadPage,
+    sortPreferenceKey: 'ui.recurring.members.sort',
   })
   const reloadMembers = membersPaged.reload
   const refreshReport = useCallback(() => {

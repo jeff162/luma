@@ -2086,6 +2086,7 @@ export default function Dashboard() {
     activeKey: selectedGroup ? JSON.stringify(selectedGroupFilterParams) : null,
     loadPage: selectedGroupLoadPage,
     exportParams: selectedGroupFilterParams,
+    sortPreferenceKey: 'ui.dashboard.groupTransactions.sort',
   })
   const groupTxnData = groupTxnPaged.rows
   const setGroupTxnData = groupTxnPaged.setRows
@@ -2107,6 +2108,7 @@ export default function Dashboard() {
     activeKey: selectedCat ? JSON.stringify(selectedCatFilterParams) : null,
     loadPage: selectedCatLoadPage,
     exportParams: selectedCatFilterParams,
+    sortPreferenceKey: 'ui.dashboard.categoryTransactions.sort',
   })
   const txnData = catTxnPaged.rows
   const setTxnData = catTxnPaged.setRows

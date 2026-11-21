@@ -22,9 +22,9 @@ header comment of its own file. Paths are under `frontend/src/`.
 | --- | --- | --- |
 | `TransactionListTable` | Any list of transactions. | `components/TransactionListTable.jsx` |
 | `TransactionRow.jsx` cells | A surface that draws its own rows: `CategoryCell`, `MerchantCell`, `TransactionAmountCell`, the name helpers (`getTxnMerchantLabel`, `getTxnName`, `NamelessMerchant`) and the row's right-click `ContextMenu` (its items, on `ActionMenu`). | `components/TransactionRow.jsx` |
-| `usePagedTransactions` | A transaction list that loads in pages. It sorts on the server, and its `copy` goes to the list's copy button so a copy reaches past the loaded pages. | `components/detailShared.jsx` |
+| `usePagedTransactions` | A transaction list that loads in pages. It sorts on the server, remembers the sort under its `sortPreferenceKey`, and its `copy` goes to the list's copy button so a copy reaches past the loaded pages. | `components/detailShared.jsx` |
 | `usePagedRowSlots` | A paged list that isn't a `TransactionListTable`. | `lib/usePagedRowSlots.js` |
-| `useTransactionTableLayout` | The column order and widths of a `TransactionListTable`. | `lib/transactionTablePreferences.js` |
+| `useTransactionTableLayout` | The column order, widths and hidden columns of a `TransactionListTable`. | `lib/transactionTablePreferences.js` |
 | `TransactionListToolbar` | The copy and bulk-edit row above a transaction list, with `BulkEditChrome` below it. | `components/TransactionListToolbar.jsx` |
 | `CopyTransactionsButton` | Copying one transaction or a list for sharing. A partly loaded list passes `loadRows` and `total`. | `components/CopyTransactionsButton.jsx`, `contexts/TransactionShareContext.jsx` |
 | `fetchAllMatchingTransactions` | Fetching every row a filter matches, past the endpoint's per-request cap. | `lib/allMatchingTransactions.js` |
@@ -54,7 +54,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 
 | Use | For | Where |
 | --- | --- | --- |
-| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. A dialog-shaped one is a `FloatingDialog`; use these directly for a panel with its own layout, such as a detail panel or a minimizable report. A form panel passes its Save and Cancel as `footer`, which stays pinned under the scrolling body. | `components/detailShared.jsx` |
+| `DetailPanelShell` + `useDetailPanelChrome` | A floating panel that drags, resizes and stacks. A dialog-shaped one is a `FloatingDialog`; use these directly for a panel with its own layout, such as a detail panel or a minimizable report. A form panel passes its Save and Cancel as `footer`, which stays pinned under the scrolling body. A panel around a wide table opens at its width with `fitWidth` (`detailPanelWidthForTable`, `transactionTableWidth`). | `components/detailShared.jsx` |
 | `useRestorablePanelGeometry` | Remembering where the user left a floating panel. | `components/detailShared.jsx` |
 | `usePanelReveal` | A panel whose size settles after its content loads. | `components/detailShared.jsx` |
 | `DetailRangeControl` + `computeDetailRange` | The Month / Year / All-time selector of a drill list. | `components/detailShared.jsx` |
@@ -98,6 +98,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `SplitButton` | A common action with its alternatives behind a caret. | `components/SplitButton.jsx` |
 | `RefreshButton` | Reloading what a title names. | `components/ui.jsx` |
 | `CornerTab` (+ `cornerTabStyle`) | A muted label or quiet action set into a card's corner, over its border. A different control in a corner takes only the geometry from `cornerTabStyle`. | `components/CornerTab.jsx`, `lib/cornerTab.js` |
+| `ColumnsMenu` (+ `columnVisibility`) | Choosing which of a table's columns are shown, from a gear: on the Transactions page and in `TransactionListToolbar`'s `columns`. The layout keeps hidden columns beside the neighbour they followed. | `components/ColumnsMenu.jsx`, `lib/columnVisibility.js` |
 | `ActionMenu` + `ActionMenuButton` | Every pop-up menu: the `⋯` menu of rarely used actions, a right-click menu (`anchorPoint`), a split button's caret, a short list to open one of. Plain, checked (one of many), on/off (several, menu stays open), disabled-with-reason and danger items, and arrow-key navigation. | `components/ActionMenu.jsx` |
 | `DropZone` | A click-or-drop file target. | `components/DropZone.jsx` |
 | `startPointerDrag` + `useDropZone` | Dragging an item onto a target, by mouse or by finger. | `lib/pointerDrag.js` |

@@ -171,11 +171,11 @@ class CurrentBalanceTests(unittest.TestCase):
             "INSERT INTO account_balance (account_id, as_of_date, source, balance, recorded_at) "
             "VALUES (?, ?, 'provider', ?, ?)", (account_id, as_of, balance, recorded_at))
 
-    def _txn(self, account_id, day, amount, pending=0, trashed_at=None):
+    def _txn(self, account_id, day, amount, pending=0, trashed_at=None, posted=None, txn_id=None):
         self.conn.execute(
-            "INSERT INTO txn (id, account_id, amount, merchant_name, display_name, raw_name, date, is_pending, "
-            "trashed_at) VALUES (?, ?, ?, 'M', 'M', 'M', ?, ?, ?)",
-            (f"{account_id}-{day}-{amount}", account_id, amount, day, pending, trashed_at))
+            "INSERT INTO txn (id, account_id, amount, merchant_name, display_name, raw_name, date, posted_date, "
+            "is_pending, trashed_at) VALUES (?, ?, ?, 'M', 'M', 'M', ?, ?, ?, ?)",
+            (txn_id or f"{account_id}-{day}-{amount}", account_id, amount, day, posted, pending, trashed_at))
 
     def test_the_latest_stated_balance_is_carried_forward_through_later_posted_rows(self):
         self._state("card", "2026-08-10", -100.0)
@@ -228,6 +228,34 @@ class CurrentBalanceTests(unittest.TestCase):
             {k: checks[0][k] for k in ("from_date", "to_date", "stated_change", "ledger_change", "gap", "flag_txn_id")},
             {"from_date": "2026-08-01", "to_date": "2026-08-10", "stated_change": 800.0, "ledger_change": 850.0,
              "gap": -50.0, "flag_txn_id": ids[0]})
+
+    def test_a_running_balance_counts_in_the_order_of_the_date_it_is_listed_by(self):
+        # Made and posted: 11/1 & 11/1, 11/2 & 11/4, 11/3 & 11/3, 11/4 & 11/4, from 500.
+        for txn_id, made, posted, amount in (("t1", "2026-11-01", "2026-11-01", 100.0),
+                                             ("t2", "2026-11-02", "2026-11-04", 300.0),
+                                             ("t3", "2026-11-03", "2026-11-03", 200.0),
+                                             ("t4", "2026-11-04", "2026-11-04", 50.0)):
+            self._txn("cash", made, amount, posted=posted, txn_id=txn_id)
+        self._state("cash", "2026-11-04", -150.0)
+        ids = ["t1", "t2", "t3", "t4"]
+        self.assertEqual(running_balances(self.conn, "cash", ids, basis="date"),
+                         {"t1": 400.0, "t2": 100.0, "t3": -100.0, "t4": -150.0})
+        self.assertEqual(running_balances(self.conn, "cash", ids, basis="posted"),
+                         {"t1": 400.0, "t3": 200.0, "t2": -100.0, "t4": -150.0})
+
+    def test_a_days_credits_count_before_its_debits(self):
+        self._txn("cash", "2026-08-10", 30.0, txn_id="a-debit")
+        self._txn("cash", "2026-08-10", -100.0, txn_id="z-credit")
+        self._state("cash", "2026-08-10", 70.0)
+        self.assertEqual(running_balances(self.conn, "cash", ["a-debit", "z-credit"]),
+                         {"z-credit": 100.0, "a-debit": 70.0})
+
+    def test_a_check_counts_a_purchase_by_when_it_posted(self):
+        # Made before the first stated balance and posted after it: inside the span, by its posting date.
+        self._state("cash", "2026-08-01", 500.0)
+        self._state("cash", "2026-08-05", 200.0)
+        self._txn("cash", "2026-07-30", 300.0, posted="2026-08-02")
+        self.assertEqual(balance_checks(self.conn, "cash"), [])
 
 
 if __name__ == "__main__":

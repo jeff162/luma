@@ -337,8 +337,9 @@ group's top row.
 
 - **It anchors on the latest balance any member stated**, the latest recorded among those on one day,
   because a group is one account to the rest of the app.
-- **It is carried forward through the group's live, posted rows dated after the anchor.** A stated
-  balance is taken as that day's closing balance, so a row on the anchor's own date is already in it. A
+- **It is carried forward through the group's live, posted rows that posted after the anchor**
+  (`posted_date`, else `date`), since a source's balance counts rows by when they posted. A stated balance
+  is taken as that day's closing balance, so a row posted on the anchor's own date is already in it. A
   pending row is left out, as no source's balance counts one.
 - **It is stale after `STALE_AFTER_DAYS` with no newer balance**, by the anchor's source: 7 days for
   `provider`, since a connected account restates its balance on every sync, and 35 for `manual`, since a
@@ -348,14 +349,21 @@ group's top row.
   two live feeds into one group, of which only the latest can count.
 
 **A running balance runs back from today's** (`running_balances`): the balance just after each row is
-today's balance with the later rows' movement undone, in the order the ledger lists rows by date (date,
-then id; the order within a day is arbitrary but fixed). Earlier stated balances do not restart it,
-because a figure that changes where a stated balance sits would hide the discrepancy instead of showing
-it. The transaction list adds it on request (`running_balance_account_id`), outside the filter, so a
-download or a bulk selection never carries it.
+today's balance with the later rows' movement undone. Earlier stated balances do not restart it, because
+a figure that changes where a stated balance sits would hide the discrepancy instead of showing it.
+
+- **It counts in the order of the date the list is sorted by**, transaction date or posting date
+  (`BALANCE_DAY_SQL`). Counted by one date and listed by the other, the figures would not read as a running
+  total down the list. A list sorted by anything else gets none.
+- **Within a day, credits count before debits** (`IN_DAY_ORDER_SQL`), as banks generally post them, then
+  by id. The list's date sorts break ties the same way, in the sort's direction.
+- The transaction list adds it on request (`running_balance_account_id`), outside the filter, so a
+  download or a bulk selection never carries it.
 
 **Earlier stated balances are checks** (`balance_checks`). Each pair of consecutive ones should differ by
-what the rows dated after the first, through the second's date, moved. A pair that differs by a cent or
+what the rows posted after the first, through the second's date, moved. Posting dates, whatever the list is
+sorted by, because they are what a source's balance counts: a purchase made before a balance date and
+posted after it belongs to the later span. A pair that differs by a cent or
 more is reported with both changes and the last row of its span. Neighbours are compared rather than each
 figure against the latest, so one missing or extra row shows in the span it belongs to and not in every
 span before it.

@@ -83,6 +83,11 @@ export function cssViewport() {
   return { width: window.innerWidth / scale, height: window.innerHeight / scale }
 }
 
+// The screen's usable width, the most a window on it can be widened to. A tablet's window is its screen.
+export function cssScreenWidth() {
+  return (window.screen?.availWidth || window.innerWidth) / scale
+}
+
 export const vh = amount => `calc(${amount}vh / var(--ui-scale, 1))`
 export const dvh = amount => `calc(${amount}dvh / var(--ui-scale, 1))`
 export const vw = amount => `calc(${amount}vw / var(--ui-scale, 1))`

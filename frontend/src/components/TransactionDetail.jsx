@@ -198,7 +198,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     sortState,
     onSort,
     copy,
-  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams, sortPreferenceKey: 'ui.transactionDetail.transactions.sort' })
 
   useEffect(() => {
     // When the caller already has the tag list (e.g. a host that loaded it), use it and skip the fetch

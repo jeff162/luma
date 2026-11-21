@@ -29,7 +29,7 @@ from backend.services.recurring_detection import owe_recurring_rescan, payee_key
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
 from backend.services.txn_trash import restore_txns, trash_txns
-from backend.services.account_balances import running_balances
+from backend.services.account_balances import BALANCE_DAY_SQL, IN_DAY_ORDER_SQL, running_balances
 from backend.services.account_groups import effective_account_id, effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
@@ -108,7 +108,9 @@ TRIM(
 QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS = {"check", "checking", "saving", "savings", "credit", "debit"}
 QUICK_FILTER_FIELD_PREFIXES = {"merchant", "raw", "category", "account", "date", "amount", "doc"}
 TRANSACTION_SORT_SQL = {
-    "date": "t.date",
+    "date": BALANCE_DAY_SQL["date"],
+    # When the row posted, or its one date where the source gave only one.
+    "posted": BALANCE_DAY_SQL["posted"],
     "merchant": "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))",
     "category": "LOWER(COALESCE(c.name, ''))",
     "account": "LOWER(COALESCE(a.display_name, a.name, ''))",
@@ -1128,9 +1130,14 @@ def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple
     if sort_key == "category":
         order_by_parts.append("CASE WHEN t.category_id IS NULL THEN 1 ELSE 0 END ASC")
     order_by_parts.append(f"{TRANSACTION_SORT_SQL[sort_key]} {sort_direction}")
-    if sort_key != "date":
+    if sort_key in BALANCE_DAY_SQL:
+        # Within a day, the order the account's running balance counts in, run in the sort's direction, so
+        # the balance reads as cumulative down the list either way (services/account_balances.py).
+        order_by_parts.append(f"{IN_DAY_ORDER_SQL} {sort_direction}")
+        order_by_parts.append(f"t.id {sort_direction}")
+    else:
         order_by_parts.append("t.date DESC")
-    order_by_parts.append("t.id DESC")
+        order_by_parts.append("t.id DESC")
     return where, params, expand_splits, ", ".join(order_by_parts)
 
 
@@ -1195,7 +1202,7 @@ def list_transactions(
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, ge=0, le=1000, description="rows per page (max 1000); 0 = no limit — returns all matching rows, for known-bounded scopes only"),
     offset:       int           = Query(0),
-    running_balance_account_id: Optional[str] = Query(None, description="Add `running_balance`, the balance of this account's group just after each row (services/account_balances.py)."),
+    running_balance_account_id: Optional[str] = Query(None, description="Add `running_balance`, the balance of this account's group just after each row, counted in the order of the date the list is sorted by (services/account_balances.py). Any other sort has none, as no running total reads down it."),
     input_format: InputFormat   = Depends(caller_input_format),
 ):
     # Direct (non-HTTP) callers may omit the dependencies; over HTTP FastAPI always supplies them.
@@ -1263,7 +1270,7 @@ def list_transactions(
         rows = conn.execute(
             f"""
             SELECT
-                t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
+                t.id, t.date, t.posted_date, t.amount, t.merchant_name, t.display_name, t.raw_name,
                 t.is_pending, t.category_overridden, t.category_source, t.notes,
                 COALESCE(a.parent_account_id, a.id) AS account_id,
                 t.account_id  AS source_account_id,
@@ -1367,10 +1374,13 @@ def list_transactions(
         # that import this one.
         from backend.routers.import_export.amazon import LINK_KIND as AMAZON_ORDER_LINK_KIND
         amazon_by_txn = partners_map(conn, AMAZON_ORDER_LINK_KIND, txn_ids) if rows else {}
-        running = (
-            running_balances(conn, effective_account_id(conn, running_balance_account_id), txn_ids)
-            if running_balance_account_id and rows else None
-        )
+        running = None
+        if running_balance_account_id and rows:
+            running = (
+                running_balances(conn, effective_account_id(conn, running_balance_account_id), txn_ids,
+                                 basis=sort_by)
+                if sort_by in BALANCE_DAY_SQL else {}
+            )
         for txn in transactions:
             if running is not None:
                 # An expanded split part is a share of a row, not a movement of its own.

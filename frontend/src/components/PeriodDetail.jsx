@@ -87,7 +87,9 @@ export default function PeriodDetail({
     sortState,
     onSort,
     copy,
-  } = usePagedTransactions({ activeKey, loadPage, exportParams: bulkFilterParams })
+  } = usePagedTransactions({
+    activeKey, loadPage, exportParams: bulkFilterParams, sortPreferenceKey: 'ui.periodDetail.transactions.sort',
+  })
 
   // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
   // visibly growing as its content lands (see usePanelReveal).

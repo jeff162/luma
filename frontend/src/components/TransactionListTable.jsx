@@ -29,29 +29,14 @@ import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
+import { mergeVisibleColumns, visibleColumns } from '../lib/columnVisibility.js'
+import { TRANSACTION_TABLE_COLUMN_DEFS as COLUMN_DEFS } from '../lib/transactionTableColumns.js'
 
-const COLUMN_DEFS = {
-  date: { key: 'date', label: 'Date', defaultWidth: 96, minWidth: 82 },
-  merchant: { key: 'merchant', label: 'Merchant', defaultWidth: 260, minWidth: 150 },
-  category: { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 110 },
-  account: { key: 'account', label: 'Account', defaultWidth: 140, minWidth: 110 },
-  // The original (source) account a row came from. Distinct from `account`, which shows the
-  // effective/top-level account — identical for every row inside a merged-account report and so
-  // surfaced only there (see AccountDetail), where it tells the merged children apart.
-  sourceAccount: { key: 'sourceAccount', label: 'Account', defaultWidth: 150, minWidth: 110 },
-  // The note/tag/status markers (see TransactionMarkersCell). Not sortable — there is no single
-  // meaningful order across a mix of tags, notes, and status flags. Left-aligned like the other
-  // text columns; overflow past its width is clipped by the cell wrapper.
-  tags: { key: 'tags', label: 'Tags', defaultWidth: 96, minWidth: 44, sortable: false },
-  amount: { key: 'amount', label: 'Amount', defaultWidth: 96, minWidth: 72, align: 'end' },
-  // The account's balance just after the row (`running_balance`, from the server). Not sortable: it
-  // follows the date order, so sorting by date is sorting by it.
-  runningBalance: { key: 'runningBalance', label: 'Balance', defaultWidth: 112, minWidth: 84, align: 'end', sortable: false },
-}
 
-function getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance }) {
+function getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate }) {
   return [
     COLUMN_DEFS.date,
+    ...(showPostedDate ? [COLUMN_DEFS.posted] : []),
     COLUMN_DEFS.merchant,
     ...(showCategory ? [COLUMN_DEFS.category] : []),
     ...(showAccount ? [COLUMN_DEFS.account] : []),
@@ -69,6 +54,7 @@ function getAvailableColumns({ showCategory, showAccount, showSourceAccount, sho
 // to ascending, matching the pattern the Transactions page already uses.
 function comparePrimary(a, b, key, sign) {
   if (key === 'date') return sign * String(a.date || '').localeCompare(String(b.date || ''))
+  if (key === 'posted') return sign * String(a.posted_date || a.date || '').localeCompare(String(b.posted_date || b.date || ''))
   if (key === 'merchant') return sign * String(getTxnMerchantLabel(a) || '').localeCompare(String(getTxnMerchantLabel(b) || ''))
   if (key === 'category') return sign * String(a.category_name || '').localeCompare(String(b.category_name || ''))
   if (key === 'account') return sign * String(a.account_name || '').localeCompare(String(b.account_name || ''))
@@ -77,23 +63,24 @@ function comparePrimary(a, b, key, sign) {
   return 0
 }
 
-// When the primary key ties, fall back to date DESC then id DESC, so rows within a group read
-// newest-first and the order is fully deterministic — mirroring the server-side ledger's explicit
-// `ORDER BY <key>, t.date DESC, t.id DESC`. The tiebreaker direction is fixed to desc regardless of the
-// primary column's direction (the ledger does the same). Sorting by `date` already resolves its own
-// ties via the id fallback below.
+// Ties resolve as the server-side ledger resolves them (`transaction_list_scope`). A date sort orders a
+// day's rows credits first, then by id, in the sort's own direction, the order an account's running
+// balance counts in (services/account_balances.py). Any other sort falls back to date DESC then id DESC,
+// so rows within a group read newest-first whatever the primary column's direction.
 function compareRows(a, b, key, sign) {
   const primary = comparePrimary(a, b, key, sign)
   if (primary !== 0) return primary
-  if (key !== 'date') {
-    const byDate = String(b.date || '').localeCompare(String(a.date || ''))
-    if (byDate !== 0) return byDate
+  if (key === 'date' || key === 'posted') {
+    const credit = row => (Number(row.amount) < 0 ? 0 : 1)
+    return sign * (credit(a) - credit(b)) || sign * String(a.id || '').localeCompare(String(b.id || ''))
   }
+  const byDate = String(b.date || '').localeCompare(String(a.date || ''))
+  if (byDate !== 0) return byDate
   return String(b.id || '').localeCompare(String(a.id || ''))
 }
 
 function getInitialSortDirection(key) {
-  return key === 'date' || key === 'amount' ? 'desc' : 'asc'
+  return key === 'date' || key === 'posted' || key === 'amount' ? 'desc' : 'asc'
 }
 
 function normalizeInteractiveColumns(columnConfig, availableColumns) {
@@ -105,10 +92,8 @@ function normalizeInteractiveColumns(columnConfig, availableColumns) {
     for (const column of columnConfig) {
       const def = defsByKey.get(column?.key)
       if (!def || usedKeys.has(def.key)) continue
-      normalized.push({
-        key: def.key,
-        width: Number(column?.width) || def.defaultWidth,
-      })
+      const width = Number(column?.width) || def.defaultWidth
+      normalized.push(column?.hidden === true ? { key: def.key, width, hidden: true } : { key: def.key, width })
       usedKeys.add(def.key)
     }
   }
@@ -118,10 +103,9 @@ function normalizeInteractiveColumns(columnConfig, availableColumns) {
   // column lands next to its natural neighbours instead of stranded to the right of Amount.
   availableColumns.forEach((def, canonicalIndex) => {
     if (usedKeys.has(def.key)) return
-    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, {
-      key: def.key,
-      width: def.defaultWidth,
-    })
+    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, def.defaultHidden
+      ? { key: def.key, width: def.defaultWidth, hidden: true }
+      : { key: def.key, width: def.defaultWidth })
     usedKeys.add(def.key)
   })
 
@@ -160,6 +144,9 @@ export default function TransactionListTable({
   // note its balance carries, a span where the stated balances and the transactions disagree.
   showRunningBalance = false,
   balanceFlags = null,
+  // Offer a Posted column. It starts hidden, so a host offering it also offers the column choice
+  // (`TransactionListToolbar`'s `columns`), editing the same `columnConfig`.
+  showPostedDate = false,
   // The account's type, which colors a balance on the unusual side of zero (`unusualBalanceColor`).
   balanceAccountType = null,
   // The merchant ↗ (opens the merchant activity report) is self-referential on a list already scoped
@@ -251,8 +238,11 @@ export default function TransactionListTable({
     return [...rows].sort((a, b) => compareRows(a, b, sortState.key, sign))
   }, [rows, externallyControlled, sortState])
 
-  const availableColumns = getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance })
-  const interactiveColumns = normalizeInteractiveColumns(columnConfig, availableColumns)
+  const availableColumns = getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate })
+  // Every column this surface offers, hidden ones included (`lib/columnVisibility.js`); only the shown ones
+  // are drawn, and a reorder or resize of those is written back around the hidden ones.
+  const layoutColumns = normalizeInteractiveColumns(columnConfig, availableColumns)
+  const interactiveColumns = visibleColumns(layoutColumns)
 
   function patchRows(txnId, patch) {
     onRowsChange?.(prev =>
@@ -275,6 +265,8 @@ export default function TransactionListTable({
         )
       case 'date':
         return <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(txn.date)}</span>
+      case 'posted':
+        return <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(txn.posted_date || txn.date)}</span>
       case 'merchant':
         return (
           <MerchantCell
@@ -484,7 +476,9 @@ export default function TransactionListTable({
         <PillGridTable
           columns={pillColumns}
           onColumnsChange={onColumnConfigChange
-            ? cols => onColumnConfigChange(cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY))
+            ? cols => onColumnConfigChange(mergeVisibleColumns(
+              layoutColumns, cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY),
+            ))
             : undefined}
           sortState={sortState}
           onSort={onSort}
