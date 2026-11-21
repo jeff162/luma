@@ -35,7 +35,7 @@
         try {
           // Display size, mirrored by src/lib/displaySize.js; keep this list in sync with its choices.
           var size = Number(localStorage.getItem('luma.displaySize'))
-          if (size === 80 || size === 90 || size === 110 || size === 125) {
+          if (size === 70 || size === 80 || size === 90 || size === 110 || size === 125) {
             document.documentElement.style.setProperty('--ui-scale', String(size / 100))
           }
         } catch (e) { /* private mode: full size */ }

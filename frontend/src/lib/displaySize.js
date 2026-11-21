@@ -26,7 +26,7 @@ export const DISPLAY_SIZE_CACHE_KEY = 'luma.displaySize'
 
 // Percentages, in display order. Steps rather than a free value, so a layout only has to hold at these.
 // Keep in sync with the list in index.html's pre-paint script.
-export const DISPLAY_SIZE_CHOICES = [80, 90, 100, 110, 125]
+export const DISPLAY_SIZE_CHOICES = [70, 80, 90, 100, 110, 125]
 export const DEFAULT_DISPLAY_SIZE = 100
 
 export function normalizeDisplaySize(value) {
