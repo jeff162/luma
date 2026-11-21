@@ -140,6 +140,21 @@ ATTRIBUTES: tuple[Attribute, ...] = (
         ),
         in_filter_bar=False,
     ),
+    # The ⊘ marker a report row carries beside a total that leaves it out. The parent group's flag wins
+    # over the leaf's, as in every summary (data-model.md → `exclude_from_totals`). An account report's
+    # footer counts these and opens the list on them; the FilterBar leaves it to the quick filter, where
+    # it sits beside the other states a row can be in.
+    Attribute(
+        key="excluded-from-totals",
+        label="Excluded from totals",
+        description="Filed under a category or group that totals and charts leave out, such as Transfers.",
+        sql=(
+            "EXISTS (SELECT 1 FROM category xc LEFT JOIN category xpc ON xpc.id = xc.parent_id "
+            "        WHERE xc.id = t.category_id "
+            "          AND COALESCE(xpc.exclude_from_totals, xc.exclude_from_totals, 0) = 1)"
+        ),
+        in_filter_bar=False,
+    ),
     Attribute(
         key="pending",
         label="Pending",

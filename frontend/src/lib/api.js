@@ -508,7 +508,6 @@ export const api = {
       ...(opts.date_end ? { date_end: opts.date_end } : {}),
       ...csvParam('tag_ids', tag_ids),
       ...csvParam('owner_ids', owner_ids),
-      ...csvParam('source_account_ids', opts.source_account_ids),
       ...(opts.granularity ? { granularity: opts.granularity } : {}),
       ...summaryFilterParams(opts),
     })
@@ -527,7 +526,6 @@ export const api = {
       ...(date_end ? { date_end } : {}),
       ...(opts.anchor ? { anchor: opts.anchor } : {}),
       ...csvParam('tag_ids', tag_ids),
-      ...csvParam('source_account_ids', opts.source_account_ids),
       ...(view ? { view } : {}),
       ...csvParam('owner_ids', owner_ids),
       ...summaryFilterParams(opts),

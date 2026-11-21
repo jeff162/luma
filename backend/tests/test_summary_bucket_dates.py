@@ -87,7 +87,7 @@ class SummaryBucketDateTests(unittest.TestCase):
         self._seed_one_month()
         with self._use_db_path():
             rows = monthly_trend(category_id=None, payee=None, account_id=None, facets=None,
-                                 source_account_ids=None, months=24, date_start=None, date_end=None,
+                                 months=24, date_start=None, date_end=None,
                                  anchor=None, view="cash_flow")
 
         self.assertEqual(len(rows), 1)
@@ -111,7 +111,7 @@ class SummaryBucketDateTests(unittest.TestCase):
             )
         with self._use_db_path():
             rows = monthly_cash_flow(months=24, account_id=None, facets=TransactionFacets(),
-                                     source_account_ids=None, date_start=None, date_end=None,
+                                     date_start=None, date_end=None,
                                      granularity="month")
 
         self.assertEqual(len(rows), 1)
@@ -124,7 +124,7 @@ class SummaryBucketDateTests(unittest.TestCase):
         self._insert_txn(date="2026-10-02")
         with self._use_db_path():
             rows = monthly_cash_flow(months=240, account_id=None, facets=TransactionFacets(),
-                                     source_account_ids=None, date_start=None, date_end=None,
+                                     date_start=None, date_end=None,
                                      granularity="year")
 
         self.assertEqual(len(rows), 1)

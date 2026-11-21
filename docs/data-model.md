@@ -233,8 +233,8 @@ nothing.
 `backend/services/account_groups.py` holds both forms of the resolution: `effective_account_id_sql` for
 queries, `effective_account_id` / `account_group_member_ids` for id lists. API filters resolve the ids
 they are given in SQL (`account_membership` in `services/transaction_facets.py`), so a child id passed
-as `account_ids` means the group it belongs to. "Exactly this underlying account" is
-`source_account_ids`.
+as `account_ids` means the group it belongs to. No list filter selects one member of a group; a list
+tells members apart by each row's own account (`source_account_raw_name` and `source_account_mask`).
 
 How a column behaves depends on whether it names a **matching scope** or a **specific account row**.
 
@@ -855,6 +855,10 @@ is the row's own marker strip, so reading a row and filtering for it use the sam
   already offers that bucket. The ledger's quick filter and `?only=` links still use it.
 - **`rule-alert`** is not on the marker strip and not in the filter bar. It is the list a rule alert's
   Task opens: every live row a live alert caught.
+- **`excluded-from-totals`** is the rows a report marks ⊘: filed under a category or group with
+  `exclude_from_totals`, the parent's flag winning as it does in every summary. It is not in the filter
+  bar; the quick filter offers it. An account report's footer counts it over the whole window and opens
+  its list on it.
 - `GET /transactions/filter-attributes` serves the vocabulary with labels and descriptions, so the
   frontend holds no copy.
 - **`require_all_attribute_ids`** is the AND counterpart, sent by the ledger's toolbar filter. Values

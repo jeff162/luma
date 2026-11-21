@@ -33,7 +33,7 @@ from backend.services.transaction_facets import split_facets
 # monthly_trend is called directly rather than through FastAPI, so every Query() parameter has to be
 # passed explicitly or it arrives as a FieldInfo.
 TREND_CASH_FLOW_KWARGS = dict(
-    category_id=None, payee=None, account_id=None, source_account_ids=None,
+    category_id=None, payee=None, account_id=None,
     months=24, date_start=None, date_end=None, anchor=None, view="cash_flow",
 )
 
@@ -43,7 +43,7 @@ def _list_kwargs(**overrides):
     # so every argument has to be passed explicitly.
     base = dict(
         month=None, date_start=None, date_end=None, import_batch_id=None,
-        sort_by="date", sort_dir="desc", account_id=None, source_account_ids=None, category_id=None, direction=None, view=None,
+        sort_by="date", sort_dir="desc", account_id=None, category_id=None, direction=None, view=None,
         search=None, quick_filter=None, ids=None, include_trashed=False, limit=200, offset=0,
     )
     base.update(overrides)
@@ -136,8 +136,7 @@ class MonthlyCashFlowTests(unittest.TestCase):
         return self._insert_category(name=leaf_name, parent_id=group_id, category_type=category_type)
 
     def _cash_flow(self, **overrides):
-        params = dict(months=24, account_id=None, source_account_ids=None,
-                      date_start=None, date_end=None, granularity="month")
+        params = dict(months=24, account_id=None, date_start=None, date_end=None, granularity="month")
         params.update(overrides)
         facets, rest = split_facets(params)
         with self._use_db_path():

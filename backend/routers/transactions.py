@@ -302,19 +302,6 @@ def _append_single_account_filter(clauses, params, *, account_id: Optional[str],
             params.extend(membership[1])
 
 
-def _append_source_account_filter(clauses, params, *, source_account_ids: Optional[str]):
-    # Filters on the row's *original* (source) account — t.account_id directly — rather than the
-    # effective/top-level account the `account_ids` filter resolves through COALESCE(parent, id).
-    # This is what lets a merged-account report narrow to one underlying child account: every row in
-    # the report already shares the same effective (parent) account, so only the source distinguishes them.
-    if source_account_ids and isinstance(source_account_ids, str):
-        ids = [i.strip() for i in source_account_ids.split(',') if i.strip()]
-        if ids:
-            placeholders = ','.join('?' * len(ids))
-            clauses.append(f"t.account_id IN ({placeholders})")
-            params.extend(ids)
-
-
 # `require_all_tag_ids` is not a facet: it is an *AND* constraint ("has all of these") that applies
 # alongside the OR tag facet rather than instead of it, and it is internal — the tag-report drill scopes
 # rows to an exact signature with it, while the app-wide FilterBar stays OR. See docs/data-model.md →
@@ -822,7 +809,7 @@ def _parse_quick_filter_amount(
 def _build_transaction_filter(
     *,
     month=None, date_start=None, date_end=None, import_batch_id=None,
-    account_id=None, source_account_ids=None, category_id=None, group_id=None, require_all_tag_ids=None,
+    account_id=None, category_id=None, group_id=None, require_all_tag_ids=None,
     require_all_attribute_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     sync_connection_id=None, expanded=False,
@@ -917,7 +904,6 @@ def _build_transaction_filter(
         clauses, params, account_id=account_id, account_ids=facet_kwargs.get('account_ids'),
     )
     append_facets(clauses, params, facets_from(facet_kwargs))
-    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     # Rows whose captured import evidence carries a specific `Type` value (the PayPal money-movement Type).
     # Matched case-insensitively against the extra_text_fields entry whose header is "Type".
     if import_evidence_type and isinstance(import_evidence_type, str):
@@ -1063,7 +1049,6 @@ def transaction_list_filters(
     date_end:     Optional[str] = Query(None, description="YYYY-MM-DD"),
     import_batch_id: Optional[str] = Query(None),
     account_id:   Optional[str] = Query(None),
-    source_account_ids: Optional[str] = Query(None),
     category_id:  Optional[str] = Query(None),
     group_id:     Optional[str] = Query(None),
     require_all_tag_ids: Optional[str] = Query(None),
@@ -1179,7 +1164,6 @@ def list_transactions(
     sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
     account_id:   Optional[str] = Query(None),
     facets:       TransactionFacets = Depends(),
-    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     category_id:  Optional[str] = Query(None),
     group_id:     Optional[str] = Query(None, description="one breakdown group (or synthetic uncategorized bucket) a drill lists; ANDs with every facet, unlike group_ids"),
     require_all_tag_ids:  Optional[str] = Query(None, description="comma-separated tag IDs the row must ALL have (AND), independent of tag_ids"),
@@ -1216,7 +1200,7 @@ def list_transactions(
         facets=facets, sort_by=sort_by, sort_dir=sort_dir,
         filters=dict(
             month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
-            account_id=account_id, source_account_ids=source_account_ids,
+            account_id=account_id,
             category_id=category_id, group_id=group_id, require_all_tag_ids=require_all_tag_ids,
             require_all_attribute_ids=require_all_attribute_ids,
             direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
@@ -2081,7 +2065,7 @@ def trash_transaction(txn_id: str):
 # to be named by hand.
 _BULK_FILTER_KEYS = FACET_PARAM_NAMES | AMOUNT_PARAM_NAMES | {
     "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id",
-    "source_account_ids", "category_id", "group_id", "require_all_tag_ids", "require_all_attribute_ids",
+    "category_id", "group_id", "require_all_tag_ids", "require_all_attribute_ids",
     "view", "search", "quick_filter", "needs_review", "recurring_only",
 }
 
@@ -2844,7 +2828,7 @@ def spending_by_category_in_group(
 #       * spending  -> filter to expense-side transactions, SUM
 #       * income    -> filter to income-side transactions, -SUM
 #       * cash_flow -> all transactions, -SUM (positive = net inflow)
-def _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id=None):
+def _trend_scope(category_id, payee, account_id, facets, amount, view, group_id=None):
     if payee:
         clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
@@ -2889,7 +2873,6 @@ def _trend_scope(category_id, payee, account_id, facets, amount, source_account_
             append_totals_exclusion(clauses, params, facets, group_alias="p")
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
-    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
     append_amount_filter(clauses, params, amount)
 
@@ -2920,7 +2903,6 @@ def monthly_trend(
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
     amount:      AmountFilter = Depends(),
-    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
@@ -2933,7 +2915,7 @@ def monthly_trend(
     group_id = group_id if isinstance(group_id, str) else None
     # Payee detail drawers want the merchant's full visible history by default, so the rolling month
     # window is suppressed for a payee scope unless the caller supplied an explicit date filter.
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, view, group_id)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -2948,7 +2930,7 @@ def monthly_trend(
     anchor_latest = anchor == "latest" and not date_start and not date_end and not payee
 
     if (not date_start and not date_end and not payee and not account_id and not facets.account_ids
-            and not source_account_ids and not anchor_latest):
+            and not anchor_latest):
         # The generic trends view stays bounded by a rolling window so dashboards do not turn into unbounded
         # all-history scans unless the caller explicitly asked for that.
         clauses.append("t.date >= date('now', ? || ' months')")
@@ -3018,7 +3000,6 @@ def range_trend(
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
     amount:      AmountFilter = Depends(),
-    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     view:        str           = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
     facets = coerce_facets(facets) or TransactionFacets()
@@ -3040,7 +3021,7 @@ def range_trend(
     if len(spans) > RANGE_TREND_MAX_RANGES:
         raise HTTPException(status_code=400, detail=f"at most {RANGE_TREND_MAX_RANGES} ranges")
 
-    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, source_account_ids, view, group_id)
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, amount, view, group_id)
     # The overall bounds let the date index prune before the per-range join does its work.
     clauses.append("t.date >= ?")
     params.append(min(s for s, _ in spans))
@@ -3112,7 +3093,6 @@ def monthly_cash_flow(
     account_id:  Optional[str] = Query(None),
     facets:      TransactionFacets = Depends(),
     amount:      AmountFilter = Depends(),
-    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
     granularity: str           = Query("month", description="month | year — the period each row covers"),
@@ -3128,7 +3108,6 @@ def monthly_cash_flow(
     params: list = []
 
     _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
-    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
     append_amount_filter(clauses, params, amount)
     # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every

@@ -94,9 +94,9 @@ def split_ids(raw: Optional[str], separator: str) -> list[str]:
 # (`EFFECTIVE_ACCOUNT_ID_SQL`), and the *given* ids are resolved here too rather than compared raw,
 # because a caller can hold an id that has since become a merged child — nothing resolves to a child
 # any more, so a raw child id matches no row at all and reports no error. Resolving both sides makes
-# a child id mean "the group it belongs to", which is the only reading anyone ever wants; "exactly
-# this underlying account" is what `source_account_ids` is for. Done in SQL, not by resolving the ids
-# in Python first, so the filter builder stays a pure function with no connection of its own.
+# a child id mean "the group it belongs to", which is the only reading anyone ever wants. Done in SQL,
+# not by resolving the ids in Python first, so the filter builder stays a pure function with no
+# connection of its own.
 # See docs/data-model.md → "A stored account id is a reference into a mutable graph".
 def account_membership(ids: list[str]) -> Optional[tuple[str, list]]:
     if not ids:

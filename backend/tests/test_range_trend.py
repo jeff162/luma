@@ -25,8 +25,7 @@ from backend.services.txn_splits import save_split
 
 # Both handlers are called directly rather than through FastAPI, so every Query() parameter has to be
 # passed explicitly or it arrives as a FieldInfo.
-SCOPE_KWARGS = dict(category_id=None, payee=None, account_id=None, source_account_ids=None,
-                    facets=TransactionFacets())
+SCOPE_KWARGS = dict(category_id=None, payee=None, account_id=None, facets=TransactionFacets())
 TREND_KWARGS = dict(SCOPE_KWARGS, months=120, date_start="2000-01-01", date_end=None, anchor=None)
 
 

@@ -98,7 +98,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         # every Query param is passed explicitly — an unset one would arrive as a FieldInfo.
         result = list_transactions(
             month=None, date_start=date_start, date_end=date_end, import_batch_id=None,
-            sort_by="date", sort_dir="desc", account_id=None, facets=facets, source_account_ids=None,
+            sort_by="date", sort_dir="desc", account_id=None, facets=facets,
             category_id=None, require_all_tag_ids=None, require_all_attribute_ids=None, direction=None,
             view=view, search=None, quick_filter=None, ids=None, sync_connection_id=None,
             recurring_series_id=None, recurring_only=False, recurring_excluded_series_id=None,

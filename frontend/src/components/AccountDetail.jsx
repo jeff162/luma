@@ -36,6 +36,12 @@ import {
 } from './detailShared.jsx'
 
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
+// The attribute key (`services/transaction_attributes.py`) for rows filed where totals leave them out.
+const EXCLUDED_FROM_TOTALS_ATTRIBUTE = 'excluded-from-totals'
+
+function countLabel(count) {
+  return `${count} transaction${count === 1 ? '' : 's'}`
+}
 
 function signedChange(amount) {
   return formatSignedMoneyAmount(amount, { positiveSign: 'plus' })
@@ -102,13 +108,22 @@ export default function AccountDetail({ account, categories = [], onClose, force
     [rangeMode, rangeKey, trend],
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
-  const activeKey = anchorReady ? `acct:${account.id}|${rangeMode}|${rangeKey}` : null
-  // The window + account: what the list fetches, what "select all matching" resolves, and what a download
-  // of the list exports.
-  const listParams = useMemo(() => ({
+  const windowKey = `${account.id}|${rangeMode}|${rangeKey}`
+  // The footer's "excluded from total" link narrows the list to those rows. The narrowing remembers the
+  // window it was chosen in, so picking another month or range shows that window whole again rather than
+  // a filter the user may no longer have in mind.
+  const [excludedOnlyWindow, setExcludedOnlyWindow] = useState(null)
+  const excludedOnly = excludedOnlyWindow === windowKey
+  const activeKey = anchorReady ? `acct:${windowKey}|${excludedOnly ? 'excluded' : 'all'}` : null
+  // The window + account. `listParams` adds any narrowing to the excluded rows: it is what the list
+  // fetches, what "select all matching" resolves, and what a download of the list exports.
+  const windowParams = useMemo(() => ({
     ...range.params,
     account_ids: String(account.id),
   }), [account.id, range])
+  const listParams = useMemo(() => (
+    excludedOnly ? { ...windowParams, attribute_ids: EXCLUDED_FROM_TOTALS_ATTRIBUTE } : windowParams
+  ), [windowParams, excludedOnly])
   // The running balance rides the page fetch only: it is not a filter, so it stays out of what a download
   // or "select all matching" reads.
   const loadPage = useCallback((offset, limit, sort) => (
@@ -124,6 +139,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     reload,
     reloading,
     paging,
+    total: txnTotal,
     sortState,
     onSort,
     copy,
@@ -203,13 +219,24 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // regardless of any one month's count); month mode sizes to its busiest bar.
   const monthSectionHeight = getDetailMonthSectionHeight(rangeMode === 'month' ? trend : [{ count: 999 }])
 
-  // Bulk edit over the current window's rows for this account. The filter mirrors the list fetch (window
-  // params + account) so "select all matching" resolves the whole window
-  // even when the list is paged; the count comes from the same trend sum.
+  // How many of the window's rows sit outside the total, counted by the server over the whole window rather
+  // than from the pages loaded so far. It follows the rows: a category change can move a row in or out.
+  const [excludedCount, setExcludedCount] = useState(0)
+  useEffect(() => {
+    if (!activeKey) { setExcludedCount(0); return undefined }
+    let cancelled = false
+    api.getTransactions({ ...windowParams, attribute_ids: EXCLUDED_FROM_TOTALS_ATTRIBUTE, limit: 1 })
+      .then(result => { if (!cancelled) setExcludedCount(Number(result?.total) || 0) })
+      .catch(() => { if (!cancelled) setExcludedCount(0) })
+    return () => { cancelled = true }
+  }, [activeKey, windowParams, monthTxns])
+
+  // Bulk edit over the list's rows. The filter mirrors the list fetch so "select all matching" resolves
+  // the whole window (or its excluded rows) even when the list is paged.
   const bulk = useBulkTransactionEditing({
     rows: monthTxns,
     setRows: setMonthTxns,
-    total: range.count || monthTxns.length,
+    total: txnTotal || monthTxns.length,
     filterParams: listParams,
     categories,
   })
@@ -397,17 +424,27 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     borderBottomLeftRadius: 8,
                     borderBottomRightRadius: 8,
                   }}>
-                    {range.count ? `${range.count} in totals · ` : ''}
-                    {/* Cash-flow-signed net (positive = money in), matching this drawer's monthly-trend
-                        view. range.total already carries that sign; the local-sum fallback negates the
-                        raw stored amounts (expense positive, income negative) to the same convention so
-                        the two branches agree. */}
-                    Total: {formatSignedMoneyAmount(range.count ? range.total : -monthTxns.reduce((s, t) => s + t.amount, 0))}
-                    {/* The total (and the chart above) omit excluded-from-totals rows like transfers; the
-                       rows stay listed and marked, so name the gap here rather than letting the count look wrong. */}
-                    {monthTxns.some(t => t.excluded_from_totals)
-                      ? ` · ${monthTxns.filter(t => t.excluded_from_totals).length} excluded`
-                      : ''}
+                    {excludedOnly ? (
+                      <>
+                        Showing {txnTotal} excluded from total ·{' '}
+                        <LinkButton onClick={() => setExcludedOnlyWindow(null)} style={{ fontSize: 13 }}>Show all</LinkButton>
+                      </>
+                    ) : (
+                      <>
+                        {countLabel(txnTotal)}
+                        {excludedCount > 0 ? (
+                          <>
+                            {', '}
+                            <LinkButton onClick={() => setExcludedOnlyWindow(windowKey)} style={{ fontSize: 13 }}>
+                              {excludedCount} excluded from total
+                            </LinkButton>
+                          </>
+                        ) : null}
+                        {/* Cash-flow-signed net (positive = money in), from the monthly trend that draws the
+                            chart above, so excluded rows are left out of both. */}
+                        , total {formatSignedMoneyAmount(range.total)}
+                      </>
+                    )}
                   </div>
                 </div>
               )}

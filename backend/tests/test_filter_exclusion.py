@@ -302,7 +302,7 @@ class FilterExclusionTests(unittest.TestCase):
             resp = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sort_by="date", sort_dir="desc",
-                account_id=None, source_account_ids=None, category_id=None,
+                account_id=None, category_id=None,
                 direction=None, view=None, search=None, quick_filter=None, ids=None,
                 recurring_series_id=None, recurring_excluded_series_id=None,
                 import_evidence_type=None,

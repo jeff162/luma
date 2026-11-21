@@ -9,9 +9,7 @@ and comparing it raw against the resolved row side then matches **nothing at all
 error. That is the failure mode these tests exist for: not a wrong answer, an empty one.
 
 So the API-parameter filters resolve the given ids too, which makes a child id mean "the group it
-belongs to" — the only reading a caller ever wants. "Exactly this underlying account" is a different
-question with its own parameter (`source_account_ids`), and the last test here pins that the two stay
-distinct, since collapsing them would make a merged account's per-source report unbuildable.
+belongs to" — the only reading a caller ever wants.
 
 Deliberately behavioral (real rows, real merge) rather than asserting SQL text: the defect this guards
 is that a *shape* which reads fine selects nothing, which only shows up when rows are involved.
@@ -126,17 +124,6 @@ class MergedAccountFilterTests(unittest.TestCase):
             self._matching(exclude_account_ids="ghost-account"),
             {"on-parent", "on-child", "elsewhere"},
         )
-
-    # ---- the question that is NOT this one -------------------------------
-
-    def test_source_account_ids_still_means_exactly_that_account(self):
-        # The merged-account report narrows a group to one underlying source. Resolving this side too
-        # would make every child in a group select the whole group, and the report could not be built.
-        self.assertEqual(self._matching(source_account_ids=self.child), {"on-child"})
-
-    def test_the_two_filters_compose_as_the_report_uses_them(self):
-        self.assertEqual(
-            self._matching(account_ids=self.parent, source_account_ids=self.child), {"on-child"})
 
     # ---- the export filter, which owns a second copy of this SQL ---------
 
