@@ -102,7 +102,9 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   in a footer pinned under the body.
 - **Wide data tables scroll; management lists reflow.** A table with hard column minimums scrolls
   horizontally inside its own region while the chrome around it wraps. A list the user navigates and
-  drags never grows a horizontal scrollbar: one fluid column absorbs the slack.
+  drags gives the slack to one fluid column instead, down to a floor that keeps that column readable;
+  below it the list holds its width and scrolls, since a column squeezed to nothing hides its content and
+  clips every column past it.
 
 ## Buttons
 

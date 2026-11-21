@@ -41,15 +41,17 @@ const ACCOUNTS_SORT_PREF_KEY = 'ui.accounts.sort'
 const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'luma.accounts.sort'
 const ACCOUNTS_COLUMNS_PREF_KEY = 'ui.accounts.columns'
 
-// Account-list column geometry. Name is the fluid filler (`minmax(0, 1fr)`) so the table always fits
-// its container with no horizontal scrollbar: the divider between Name and Type trades width between
-// those two, and the dividers after it follow the shared rule in `lib/columnDividers.js`. The
+// Account-list column geometry. Name is the fluid filler (`minmax(0, 1fr)`), taking whatever width the
+// list has beyond the other columns, down to its `minWidth`; below that the list holds its width and
+// scrolls sideways (`accountListMinWidth`) rather than squeezing Name to nothing and clipping the columns
+// past it. The divider between Name and Type trades width between those two, and the dividers after it
+// follow the shared rule in `lib/columnDividers.js`. The
 // drag-handle, net-worth and delete gutters stay fixed, so Balance is resized from its left divider. Widths/order
 // persist via the shared useColumnPreference model. Order MUST match the header config and the cell
 // order rendered by AccountRow/DraftAccountRow.
 const ACCOUNT_COLUMN_DEFAULTS = [
   { key: 'drag', width: 22, resizable: false },
-  { key: 'name', width: 'minmax(0, 1fr)' },
+  { key: 'name', width: 'minmax(0, 1fr)', minWidth: 200 },
   { key: 'type', width: 110, minWidth: 90 },
   { key: 'owner', width: 116, minWidth: 96 },
   { key: 'tags', width: 112, minWidth: 84 },
@@ -67,7 +69,19 @@ function buildAccountGridTemplate(columns) {
 
 const ACCOUNT_ROW_CHILD_INDENT = 28
 const ACCOUNT_ROW_GAP = 10
-const ACCOUNT_ROW_PADDING = '3px 10px'
+const ACCOUNT_ROW_SIDE_PADDING = 10
+const ACCOUNT_ROW_PADDING = `3px ${ACCOUNT_ROW_SIDE_PADDING}px`
+
+// The narrowest the header and rows may get: every column at its width, Name at its floor. A merged
+// account's row is indented, so the floor is measured on it; at this width a top-level row's Name gets
+// the indent's extra and the columns past it stay aligned with the header.
+function accountListMinWidth(columns) {
+  const tracks = columns.reduce(
+    (sum, column) => sum + (typeof column.width === 'number' ? column.width : Number(column.minWidth || 0)),
+    0,
+  )
+  return tracks + ACCOUNT_ROW_GAP * (columns.length - 1) + ACCOUNT_ROW_SIDE_PADDING * 2 + ACCOUNT_ROW_CHILD_INDENT
+}
 const ACCOUNT_CONTROL_HEIGHT = 22
 const ACCOUNT_DETACH_DROP_ZONE_WIDTH = 84
 // The account list fills the content area up to a readable cap; the Name column takes the extra width.
@@ -1669,6 +1683,7 @@ export default function Accounts() {
     () => buildAccountGridTemplate(effectiveAccountColumns),
     [effectiveAccountColumns],
   )
+  const accountListWidthFloor = accountListMinWidth(effectiveAccountColumns)
 
   // A member named by its own name and mask, as the row shows it, since a group's members share a display name.
   const accountLabel = useCallback(id => {
@@ -2645,9 +2660,9 @@ export default function Accounts() {
                             e.preventDefault()
                             setListContextMenu(cssPoint(e))
                           }}
-                          style={{ maxHeight: 640, overflowY: 'auto' }}
+                          style={{ maxHeight: 640, overflow: 'auto' }}
                         >
-                          <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface2)' }}>
+                          <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface2)', minWidth: accountListWidthFloor }}>
                             <PillTableHeader
                               columns={[
                                 { key: 'drag', kind: 'spacer', cellPadding: 0 },
@@ -2748,12 +2763,12 @@ export default function Accounts() {
                               onStartResize={startAccountColumnResize}
                               style={{
                                 gap: ACCOUNT_ROW_GAP,
-                                padding: '6px 10px',
+                                padding: `6px ${ACCOUNT_ROW_SIDE_PADDING}px`,
                                 alignItems: 'center',
                               }}
                             />
                           </div>
-                          <div ref={attachList} style={{ position: 'relative' }}>
+                          <div ref={attachList} style={{ position: 'relative', minWidth: accountListWidthFloor }}>
                             {draggingAccount?.parent_account_id ? (
                               <div
                                 aria-hidden="true"
