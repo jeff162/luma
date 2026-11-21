@@ -58,7 +58,7 @@ from backend.services.account_references import (
 from backend.services.account_balances import (
     balance_checks, current_balances, delete_manual_balance, manual_balances, record_manual_balance,
 )
-from backend.services.account_groups import effective_account_id, set_account_parent
+from backend.services.account_groups import effective_account_id, group_accounts_sql, set_account_parent
 from backend.services.net_worth import (
     HISTORY_FLAG_KIND, account_history_flag, history_flag_key, net_worth_by_month, net_worth_on,
 )
@@ -536,14 +536,12 @@ def get_balance_checks(account_id: str):
 
 def _posted_dates_differ(conn, root_id: str) -> bool:
     """Whether any live row in the group posted on a day other than its date. The whole group's rows decide,
-    not a window of them, so the column does not come and go as the report moves between months. The group's
-    accounts are listed first so the rows are reached through their account index; joined the other way, the
-    planner reads every transaction in the ledger."""
+    not a window of them, so the column does not come and go as the report moves between months."""
     return conn.execute(
-        """
+        f"""
         SELECT EXISTS (
             SELECT 1 FROM txn t
-            WHERE t.account_id IN (SELECT id FROM account WHERE COALESCE(parent_account_id, id) = ?)
+            WHERE t.account_id IN {group_accounts_sql("= ?")}
               AND t.trashed_at IS NULL AND t.posted_date IS NOT NULL AND t.posted_date <> t.date
         )
         """, (root_id,)).fetchone()[0] == 1

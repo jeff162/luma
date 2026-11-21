@@ -275,6 +275,13 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **Restore is wipe-and-rebuild with no merge mode**, so a chain of incremental files restores only where
   one file decides what belongs and the rest are a store to draw from. Documents fit that; the ledger
   does not.
+- **Filtering by an account group on a joined account reads the whole table.** `COALESCE(a.parent_account_id,
+  a.id) = ?` can only be tested after the join, so SQLite walks every transaction to test it, and the cost
+  grows with the ledger rather than with the group. Selecting the rows by their own account id,
+  `t.account_id IN` `group_accounts_sql(...)` (`services/account_groups.py`), reads only the group's rows. A
+  query with a selective index of its own to start from (an amount, a narrow date window) can lose that
+  start with this form, which is why the transaction list's account filter (`account_membership`) keeps the
+  resolved-root form.
 - **A bound is safe only once what falls outside it is reachable.** Paging a list before its archive
   exists hides rows with no way back to them.
 - **Paging `GET /import-export/batches` breaks the callers that read it as an aggregate over all

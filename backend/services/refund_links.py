@@ -46,6 +46,7 @@ from typing import Iterable, Optional
 
 from backend.app_logging import log_error
 from backend.services import txn_links
+from backend.services.account_groups import group_accounts_sql
 from backend.services.categorizer import FEATURE_OWNED_CATEGORY_SOURCES, category_lock_for
 from backend.services.money_movement import (
     captured_field,
@@ -110,7 +111,7 @@ def _payments_by_transaction_id(conn: sqlite3.Connection, root_ids: set[str]) ->
                    t.import_evidence_json, t.source_transaction_id
             FROM   txn t JOIN account a ON a.id = t.account_id
             WHERE  t.trashed_at IS NULL
-              AND  COALESCE(a.parent_account_id, t.account_id) IN ({placeholders})
+              AND  t.account_id IN {group_accounts_sql(f"IN ({placeholders})")}
               AND  (t.source_transaction_id IS NOT NULL
                     OR t.import_evidence_json LIKE '%"transaction id"%')""",
         sorted(root_ids),

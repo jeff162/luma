@@ -57,6 +57,19 @@ def effective_account_id_sql(account_expr: str) -> str:
     return f"COALESCE((SELECT parent_account_id FROM account WHERE id = {account_expr}), {account_expr})"
 
 
+def group_accounts_sql(roots: str) -> str:
+    """Every account in the groups `roots` selects (`= ?`, `IN (?, ?)`), as a subquery for
+    `t.account_id IN ...` — the form for selecting a group's rows from a large table.
+
+    Comparing the row's own account id keeps that table's account index usable, so the query reads only
+    the group's rows. The same filter written on a joined account's root, `COALESCE(a.parent_account_id,
+    a.id) = ?`, can only be tested after the join, and the planner reads every row in the table to test
+    it. A query that also has a selective index of its own to start from (an amount, a narrow date
+    window) gains nothing from this form and may lose that start, so it is for scoping by group alone.
+    """
+    return f"(SELECT id FROM account WHERE COALESCE(parent_account_id, id) {roots})"
+
+
 def effective_account_id(conn: sqlite3.Connection, account_id: Optional[str]) -> Optional[str]:
     """The group root of one account id, or None for a blank id. An id with no `account` row is
     returned unchanged — a dangling reference is the caller's business, not this function's, and

@@ -45,7 +45,7 @@ import sqlite3
 from typing import Optional
 
 from backend.services import txn_links
-from backend.services.account_groups import effective_account_ids
+from backend.services.account_groups import effective_account_ids, group_accounts_sql
 from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf, find_transfers_group_id
 
@@ -270,9 +270,9 @@ def _type_row_counts_for_accounts(conn: sqlite3.Connection, account_ids: list[st
     eff_placeholders = ",".join("?" for _ in effective)
     rows = conn.execute(
         f"""SELECT t.import_evidence_json, t.category_overridden
-            FROM   txn t JOIN account a ON a.id = t.account_id
+            FROM   txn t
             WHERE  t.trashed_at IS NULL
-              AND  COALESCE(a.parent_account_id, t.account_id) IN ({eff_placeholders})""",
+              AND  t.account_id IN {group_accounts_sql(f"IN ({eff_placeholders})")}""",
         effective,
     ).fetchall()
     counts: dict[str, dict] = {}

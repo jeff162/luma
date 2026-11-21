@@ -20,6 +20,7 @@ from itertools import accumulate
 from typing import Optional
 
 from backend.services.account_balances import BALANCE_DAY_SQL, NORMAL_BALANCE_SIDE, STALE_AFTER_DAYS
+from backend.services.account_groups import group_accounts_sql
 from backend.services.signal_dismissals import dismissed_keys
 from backend.services.transaction_facets import OWNER_LENS_PARAM, append_facets
 
@@ -137,9 +138,8 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
         f"""
         SELECT MIN({BALANCE_DAY_SQL["posted"]})
         FROM txn t
-        JOIN account a ON a.id = t.account_id
         JOIN import_batch b ON b.id = t.import_batch_id
-        WHERE COALESCE(a.parent_account_id, a.id) = ? AND b.source_kind = ?
+        WHERE t.account_id IN {group_accounts_sql("= ?")} AND b.source_kind = ?
           AND t.trashed_at IS NULL AND t.is_pending = 0
         """, (root_id, SYNC_SOURCE_KIND)).fetchone()[0]
     if not first_synced or first_synced > before:
@@ -147,8 +147,7 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
     earlier = conn.execute(
         f"""
         SELECT 1 FROM txn t
-        JOIN account a ON a.id = t.account_id
-        WHERE COALESCE(a.parent_account_id, a.id) = ? AND {BALANCE_DAY_SQL["posted"]} < ?
+        WHERE t.account_id IN {group_accounts_sql("= ?")} AND {BALANCE_DAY_SQL["posted"]} < ?
           AND t.trashed_at IS NULL AND t.is_pending = 0
         LIMIT 1
         """, (root_id, first_synced)).fetchone()
@@ -178,7 +177,7 @@ def load_group_balances(conn, root_ids: list) -> dict:
         SELECT COALESCE(a.parent_account_id, a.id) AS root_id, {BALANCE_DAY_SQL["posted"]} AS day, t.amount
         FROM txn t
         JOIN account a ON a.id = t.account_id
-        WHERE COALESCE(a.parent_account_id, a.id) IN ({placeholders})
+        WHERE t.account_id IN {group_accounts_sql(f"IN ({placeholders})")}
           AND t.trashed_at IS NULL AND t.is_pending = 0
         ORDER BY day
         """, root_ids):

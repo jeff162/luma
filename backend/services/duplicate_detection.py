@@ -141,6 +141,7 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Callable, Iterable, NamedTuple, Optional
 
+from backend.services.account_groups import group_accounts_sql
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.amazon_order_amount import LINK_KIND as AMAZON_ORDER_LINK_KIND
 from backend.services.connection_mapping import provider_account_label
@@ -2125,7 +2126,7 @@ def build_dedupe_context(
                        t.merchant_name, t.display_name, t.amount, t.import_evidence_json, t.import_batch_id,
                        COALESCE(a.parent_account_id, a.id) AS effective_account_id
                 FROM   txn t JOIN account a ON a.id = t.account_id
-                WHERE  COALESCE(a.parent_account_id, a.id) IN ({ph})
+                WHERE  t.account_id IN {group_accounts_sql(f"IN ({ph})")}
                   AND  t.is_pending = 0
                   AND  t.content_hash IS NOT NULL""",
             list(relevant_effective_account_ids),

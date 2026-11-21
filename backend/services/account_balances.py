@@ -21,6 +21,8 @@ from bisect import bisect_right
 from datetime import date
 from typing import Callable, Optional
 
+from backend.services.account_groups import group_accounts_sql
+
 # The two days a row can be placed on. A source's stated balance counts rows by when they posted, so
 # today's balance and the checks against stated balances use `posted`; a running balance follows whichever
 # the list is ordered by, or it would not read as a running total down the list. A row whose source gave
@@ -222,8 +224,7 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
             f"""
             SELECT COALESCE(SUM(t.amount), 0)
             FROM txn t
-            JOIN account a ON a.id = t.account_id
-            WHERE COALESCE(a.parent_account_id, a.id) = ? AND {BALANCE_DAY_SQL["posted"]} > ?
+            WHERE t.account_id IN {group_accounts_sql("= ?")} AND {BALANCE_DAY_SQL["posted"]} > ?
               AND t.trashed_at IS NULL AND t.is_pending = 0
             """, (root_id, anchor["as_of_date"])).fetchone()[0]
         result[root_id] = {
@@ -251,8 +252,7 @@ def _group_ledger(conn, root_id: str, basis: str) -> list:
         f"""
         SELECT t.id, {BALANCE_DAY_SQL[basis]} AS day, t.amount
         FROM txn t
-        JOIN account a ON a.id = t.account_id
-        WHERE COALESCE(a.parent_account_id, a.id) = ? AND t.trashed_at IS NULL AND t.is_pending = 0
+        WHERE t.account_id IN {group_accounts_sql("= ?")} AND t.trashed_at IS NULL AND t.is_pending = 0
         ORDER BY day, {IN_DAY_ORDER_SQL}, t.id
         """, (root_id,)).fetchall()
 
