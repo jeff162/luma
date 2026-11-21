@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { localIsoDate } from '../lib/utils.js'
-import { Spinner, Button, FilterChip, IconButton, LinkButton, SegmentedToggle, Select, getFormControlStyle } from './ui.jsx'
+import { Spinner, Button, FilterChip, IconButton, LinkButton, SegmentedToggle, Select, StaleWhileRefreshing, getFormControlStyle } from './ui.jsx'
 import { ActionMenu } from './ActionMenu.jsx'
 import OwnerChip from './OwnerChip.jsx'
 import { useDeviceLayoutPreference, useUserPreferences } from '../lib/UserPreferencesContext.jsx'
@@ -52,6 +52,7 @@ import { useSuggestionMatchViewer } from './importRuleSuggestions/useSuggestionM
 import { useSuggestionDrafts } from './importRuleSuggestions/useSuggestionDrafts.js'
 import { SuggestionCard } from './importRuleSuggestions/SuggestionCard.jsx'
 import { useStableOrder } from '../lib/useStableOrder.js'
+import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import TransactionDetail from './TransactionDetail.jsx'
 import { localStore } from '../lib/browserStorage.js'
 import { toCssPx, vw } from '../lib/displaySize.js'
@@ -437,8 +438,15 @@ export default function ImportRuleSuggestionReview({
     trash: 'No cleared rule suggestion sets.',
   }
   const emptyMessage = emptyMessages[reviewFilter] || emptyMessages.pending
-  const showFullScreenLoading = ruleSuggestionState?.loading && suggestions.length === 0
-  const showInlineRefreshing = ruleSuggestionState?.loading && suggestions.length > 0
+  // A load is announced only once it has lasted long enough to notice (`useBusyIndicator`). One for another
+  // owner than the list on screen changes the question, so the held list is dimmed rather than passed off as
+  // the answer; any other reload follows an action and leaves the list as it is. With nothing on screen to
+  // hold, the spinner waits out the same delay, so a quick load goes straight to its result.
+  const loadingSuggestions = Boolean(ruleSuggestionState?.loading)
+  const loadBusy = useBusyIndicator(loadingSuggestions)
+  const ownerIdsKey = selectedOwnerIds.join(',')
+  const loadingAnotherOwner = loadingSuggestions && (ruleSuggestionState?.owner_ids_key ?? ownerIdsKey) !== ownerIdsKey
+  const loadingWithNothingToHold = loadingSuggestions && suggestions.length === 0
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -1540,25 +1548,6 @@ export default function ImportRuleSuggestionReview({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   {renderLookbackControl()}
                   {renderSortControl()}
-                  <span
-                    title={showInlineRefreshing ? 'Updating' : ''}
-                    style={{
-                      width: 16,
-                      height: 16,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      visibility: showInlineRefreshing ? 'visible' : 'hidden',
-                    }}
-                  >
-                    <span style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 999,
-                      background: 'color-mix(in srgb, var(--accent) 72%, white 12%)',
-                      boxShadow: '0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent)',
-                    }} />
-                  </span>
                   {bulkAvailable ? (
                     <SuggestionActionButton
                       onClick={toggleBulkMode}
@@ -1640,45 +1629,47 @@ export default function ImportRuleSuggestionReview({
         persistentButton={false}
       />
 
-      {showFullScreenLoading ? (
-        <Spinner />
-      ) : ruleSuggestionState?.error ? (
-        <div style={{ fontSize: 13, color: 'var(--danger)' }}>{ruleSuggestionState.error}</div>
-      ) : ruleSuggestionState?.requires_owner_resolution ? (
-        <div style={{
-          fontSize: 13,
-          padding: '12px 14px',
-          borderRadius: 12,
-          background: 'color-mix(in srgb, var(--accent2) 8%, var(--surface2))',
-          border: '1px solid color-mix(in srgb, var(--accent2) 26%, var(--border))',
-          lineHeight: 1.55,
-        }}>
-          Owner filtering is blocked until these accounts have an owner: {ruleSuggestionState.unowned_accounts.join(', ')}. Assign owners in <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>Accounts</Link>, then return to filter this review.
-        </div>
-      ) : reviewFilter === 'trash' ? (
-        renderTrashSets()
-      ) : visibleSuggestions.length === 0 ? (
-        <div ref={listTopRef} style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {emptyMessage}
-        </div>
-      ) : (
-        // A single shrinkable track, as on the containers above: the implicit `auto` track would hold every
-        // card at its widest card's min-content, wider than a narrow window and out past the sticky panel.
-        <div ref={listTopRef} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
-          {(() => {
-            // Bulk-select mode stays flat: every suggestion is its own selectable card, no grouping.
-            if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))
+      <StaleWhileRefreshing refreshing={loadingAnotherOwner}>
+        {loadingWithNothingToHold ? (
+          loadBusy ? <Spinner /> : null
+        ) : ruleSuggestionState?.error ? (
+          <div style={{ fontSize: 13, color: 'var(--danger)' }}>{ruleSuggestionState.error}</div>
+        ) : ruleSuggestionState?.requires_owner_resolution ? (
+          <div style={{
+            fontSize: 13,
+            padding: '12px 14px',
+            borderRadius: 12,
+            background: 'color-mix(in srgb, var(--accent2) 8%, var(--surface2))',
+            border: '1px solid color-mix(in srgb, var(--accent2) 26%, var(--border))',
+            lineHeight: 1.55,
+          }}>
+            Owner filtering is blocked until these accounts have an owner: {ruleSuggestionState.unowned_accounts.join(', ')}. Assign owners in <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>Accounts</Link>, then return to filter this review.
+          </div>
+        ) : reviewFilter === 'trash' ? (
+          renderTrashSets()
+        ) : visibleSuggestions.length === 0 ? (
+          <div ref={listTopRef} style={{ fontSize: 13, color: 'var(--muted)' }}>
+            {emptyMessage}
+          </div>
+        ) : (
+          // A single shrinkable track, as on the containers above: the implicit `auto` track would hold every
+          // card at its widest card's min-content, wider than a narrow window and out past the sticky panel.
+          <div ref={listTopRef} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12 }}>
+            {(() => {
+              // Bulk-select mode stays flat: every suggestion is its own selectable card, no grouping.
+              if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))
 
-            // Otherwise group same-merchant suggestions into one bordered container so the whole pattern
-            // reads together. The group identity is the backend's `review_group_id` — the displayed
-            // merchant, not the exact keyword: a refined selection such as "merchant contains X renewal"
-            // is still part of merchant X's neighborhood. In pending/conflicts/older views, a conflict
-            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards.
-            const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
-            return orderedMerchantGroups.map(group => renderMerchantGroup(group, useConflictCards))
-          })()}
-        </div>
-      )}
+              // Otherwise group same-merchant suggestions into one bordered container so the whole pattern
+              // reads together. The group identity is the backend's `review_group_id` — the displayed
+              // merchant, not the exact keyword: a refined selection such as "merchant contains X renewal"
+              // is still part of merchant X's neighborhood. In pending/conflicts/older views, a conflict
+              // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards.
+              const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
+              return orderedMerchantGroups.map(group => renderMerchantGroup(group, useConflictCards))
+            })()}
+          </div>
+        )}
+      </StaleWhileRefreshing>
 
       <ConflictSetModal
         sections={conflictSetSections}

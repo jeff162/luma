@@ -69,6 +69,7 @@ from backend.routers.import_export.core import (
     _open_profile_review_scope,
     _open_system_review_scope,
 )
+from backend.routers.import_export.rule_suggestion_actions import set_system_rule_suggestion_status
 from backend.routers.rules import (
     RuleCreate,
     _apply_rule_to_existing,
@@ -1073,6 +1074,41 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(pending[0]["owner_id"], owner_b)
         self.assertEqual(pending[0]["target_category_id"], garden)
         self.assertNotIn("__global__", pending[0]["conflict_group_id"] or "")
+
+    def test_the_owner_filter_shows_the_decisions_made_on_owner_scoped_suggestions(self):
+        # The reported case: both owners' suggestions deferred in the unfiltered view came back pending under
+        # an owner filter, because one owner's rows alone made the merchant look single-owner.
+        hardware, garden = self._insert_expense_leaf("FixtureHardware"), self._insert_expense_leaf("FixtureGarden")
+        owner_a, owner_b = self._two_owners_with_rows("Larkspur Supply", hardware, garden)
+
+        with self._use_db_path():
+            unfiltered = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "larkspur supply"]
+            set_system_rule_suggestion_status(RuleSuggestionStatusRequest(
+                items=[{"suggestion_id": s["id"], "source_row_ids": s["source_row_ids"], "keyword": s["keyword"]} for s in unfiltered],
+                status="skipped",
+            ))
+            filtered = [s for s in get_system_rule_suggestions(owner_a)["suggestions"] if s["keyword"] == "larkspur supply"]
+
+        self.assertEqual({s["owner_id"] for s in unfiltered}, {owner_a, owner_b})
+        self.assertEqual([(s["id"], s["review_status"]) for s in filtered],
+                         [(s["id"], "skipped") for s in unfiltered if s["owner_id"] == owner_a])
+
+    def test_the_owner_filter_shows_a_global_suggestion_whole_with_its_decision(self):
+        hardware = self._insert_expense_leaf("FixtureHardware")
+        owner_a, _owner_b = self._two_owners_with_rows("Larkspur Supply", hardware, hardware)
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions(owner_a)["suggestions"] if s["keyword"] == "larkspur supply"]
+            accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                before[0]["id"], before[0]["source_row_ids"], {"keyword": "larkspur supply", "category_id": hardware},
+            )]))
+            after = [s for s in get_system_rule_suggestions(owner_a)["suggestions"] if s["keyword"] == "larkspur supply"]
+
+        self.assertEqual(len(before), 1)
+        self.assertIsNone(before[0]["owner_id"])
+        # Every owner's rows, since accepting it makes a rule for all of them.
+        self.assertEqual(before[0]["txn_count"], 4)
+        self.assertEqual([(s["id"], s["review_status"]) for s in after], [(before[0]["id"], "accepted")])
 
     def test_an_owner_scoped_rule_with_the_same_category_does_not_scope_the_suggestion(self):
         # The other side of the fix: folding existing rules in must not owner-scope a keyword every owner

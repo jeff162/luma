@@ -2083,6 +2083,11 @@ ordinary generation.
 - `latest_txn_date` is the newest date among a suggestion's rows. The look-back preference
   (`ui.importRuleSuggestions.lookbackYears`) filters the view only; generation and the substance
   threshold use full history.
+- **The owner filter is a lens over one generation.** Suggestions are always generated from every
+  owner's rows, because whether a merchant is split by owner is part of each suggestion's id, and the
+  stored decisions are keyed by that id. A filtered view shows the selected owner's own suggestions, and
+  global ones whose rows include theirs at their whole row count, since accepting a global suggestion
+  makes a rule for every owner's rows. Only the unfiltered view writes review state.
 - Clearing a settled pile stores its entries as one restorable set. Clear and restore change no rule
   and no transaction.
 - **A hard-deleted transaction leaves every review that names it**, in the delete's own transaction

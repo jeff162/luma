@@ -61,6 +61,8 @@ export default function ImportRuleSuggestions() {
     review_summary: null,
     trash_sets: [],
     generated_at: null,
+    // The owner filter the suggestions were loaded for, so a load for another one can mark them stale.
+    owner_ids_key: '',
   })
   // Recap of the last accept action's collision reconciliation (merged into / skipped as duplicate of
   // an existing rule, or conflicts left pending for the user). Kept outside ruleSuggestionState so a
@@ -213,6 +215,7 @@ export default function ImportRuleSuggestions() {
           review_summary: result.review_summary || null,
           trash_sets: result.trash_sets || [],
           generated_at: result.generated_at || null,
+          owner_ids_key: selectedOwnerIds.join(','),
         })
         setInitialSuggestionLoadComplete(true)
       } catch (err) {
@@ -227,6 +230,7 @@ export default function ImportRuleSuggestions() {
           review_summary: null,
           trash_sets: [],
           generated_at: null,
+          owner_ids_key: selectedOwnerIds.join(','),
         })
         setInitialSuggestionLoadComplete(true)
       }
@@ -262,6 +266,7 @@ export default function ImportRuleSuggestions() {
       review_summary: result.review_summary || null,
       trash_sets: result.trash_sets || [],
       generated_at: result.generated_at || null,
+      owner_ids_key: selectedOwnerIds.join(','),
     })
     // Accepting/replacing suggestions creates or repoints rules, so the retroactive-apply preview
     // count can change — refresh it alongside the suggestion reload.

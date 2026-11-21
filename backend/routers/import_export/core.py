@@ -1721,7 +1721,7 @@ def _partition_rule_suggestion_source_rows(rows: list[dict], source_row_ids: lis
     return matched_rows, remaining_rows
 
 
-def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_ids: list[str]) -> tuple[list[dict], dict]:
+def _generate_rule_suggestions(conn, candidate_rows: list[dict]) -> tuple[list[dict], dict]:
     threshold_meta = _calculate_rule_suggestion_threshold(candidate_rows)
     categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
     all_by_keyword: dict[str, list[dict]] = {}
@@ -1744,9 +1744,6 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
 
     for base_row in candidate_rows:
         row = dict(base_row)
-        if selected_owner_ids and row["owner_id"] not in selected_owner_ids:
-            continue
-
         keyword = _row_rule_keyword(row)
         if not keyword:
             continue
@@ -1907,7 +1904,7 @@ def _build_remainder_rule_suggestion_entries(
     if not remaining_rows:
         return []
 
-    suggestions, _ = _generate_rule_suggestions(conn, remaining_rows, [])
+    suggestions, _ = _generate_rule_suggestions(conn, remaining_rows)
     # The accepted card is both the origin and the split root: these rows left it, and they belong beside it
     # in the review however they regenerate — the leftover of an owner-scoped card can come back global, under
     # an id that shares nothing with the card it was split from.
@@ -1927,7 +1924,7 @@ def _build_remainder_rule_suggestion_entries(
     ]
 
 
-def _merge_review_state_suggestions(generated_suggestions: list[dict], review_state: dict, selected_owner_ids: list[str]) -> list[dict]:
+def _merge_review_state_suggestions(generated_suggestions: list[dict], review_state: dict, in_view: Callable[[dict], bool]) -> list[dict]:
     merged = list(generated_suggestions)
     generated_ids = {suggestion["id"] for suggestion in generated_suggestions}
     review_statuses = review_state.get("statuses") or {}
@@ -1946,7 +1943,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
         status = (review_statuses.get(suggestion_id) or {}).get("status")
         if not (_rule_suggestion_partition(entry) or status in RULE_SUGGESTION_REVIEW_STATUSES):
             continue
-        if selected_owner_ids and entry.get("owner_id") not in selected_owner_ids:
+        if not in_view({**entry, "id": suggestion_id}):
             continue
         merged.append({
             "id": suggestion_id,
@@ -2080,7 +2077,45 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
                 "should_persist": False,
             }
 
-    suggestions, _ = _generate_rule_suggestions(conn, candidate_rows, selected_owner_ids)
+    # The owner filter is a lens over the one canonical generation, never an input to it. Generation decides
+    # whether a merchant needs owner-scoped suggestions from every owner's rows, and that decision is part of
+    # each suggestion's id; generating from one owner's rows made a merchant look single-owner, so it came
+    # back under a global id carrying none of the decisions stored against its owner-scoped ids.
+    def suggestion_row_ids(suggestion: dict) -> list[str]:
+        # An entry accepted before any unfiltered read stored no rows of its own; its accept recorded them.
+        prior_rows = (review_statuses.get(suggestion.get("id")) or {}).get("accepted_prior_rows") or []
+        return [str(row_id) for row_id in (suggestion.get("source_row_ids") or [row.get("id") for row in prior_rows]) if row_id]
+
+    owner_by_row_id = {str(row["id"]): row["owner_id"] for row in rows}
+    if selected_owner_ids:
+        # A reviewed global entry's rows may have left the scope's rows (an accept makes them rule-sourced),
+        # so their owners are looked up directly.
+        unseen_row_ids = sorted({
+            row_id
+            for entry_id, entry in (review_state.get("suggestions") or {}).items()
+            if isinstance(entry, dict) and not entry.get("owner_id")
+            for row_id in suggestion_row_ids({**entry, "id": entry_id})
+            if row_id not in owner_by_row_id
+        })
+        if unseen_row_ids:
+            owner_by_row_id.update(
+                (str(row["id"]), row["owner_id"])
+                for row in conn.execute(
+                    "SELECT id, owner_id FROM txn WHERE id IN (SELECT value FROM json_each(?))",
+                    (json.dumps(unseen_row_ids),),
+                )
+            )
+
+    def in_view(suggestion: dict) -> bool:
+        if not selected_owner_ids:
+            return True
+        if suggestion.get("owner_id"):
+            return suggestion["owner_id"] in selected_owner_ids
+        # A global suggestion is the selected owner's concern when its rows include theirs. Its count stays
+        # whole, since accepting it makes a rule for every owner's rows.
+        return any(owner_by_row_id.get(row_id) in selected_owner_ids for row_id in suggestion_row_ids(suggestion))
+
+    suggestions, _ = _generate_rule_suggestions(conn, candidate_rows)
     trashed_ids = _rule_suggestion_trash_ids(review_state)
     suggestions = [suggestion for suggestion in suggestions if suggestion["id"] not in trashed_ids]
 
@@ -2111,7 +2146,7 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
     elif not isinstance(review_summary, dict):
         review_summary = summarize_rule_suggestion_review(review_state)
 
-    suggestions = _merge_review_state_suggestions(suggestions, review_state, selected_owner_ids)
+    suggestions = _merge_review_state_suggestions([s for s in suggestions if in_view(s)], review_state, in_view)
     _assign_rule_suggestion_review_groups(suggestions)
 
     return {
@@ -2199,8 +2234,8 @@ def _refine_pending_conflict_group(
     source_row_ids = sorted(set(source_row_ids))
 
     matched_rows, remaining_rows = _partition_rule_suggestion_source_rows(rows, source_row_ids, matcher_entry)
-    matched_suggestions, _ = _generate_rule_suggestions(conn, matched_rows, [])
-    remaining_suggestions, _ = _generate_rule_suggestions(conn, remaining_rows, [])
+    matched_suggestions, _ = _generate_rule_suggestions(conn, matched_rows)
+    remaining_suggestions, _ = _generate_rule_suggestions(conn, remaining_rows)
 
     matched_owner_name = None
     if matcher_entry["owner_id"]:
