@@ -16,7 +16,8 @@ import { RECONCILIATION_VENDORS } from './reconciliationVendors.js'
 // filter pill per bucket, the kind column, the intersection bulk bar, the MatchReport table and the
 // manual pairing window — and a vendor supplies only what differs (reconciliationVendors.js):
 //   kinds          { [kind]: { rank, label, stripe, warn?, review?, help } } — rank orders the rows and the
-//                  pills, problems first; `warn` marks an alarm bucket, `review` an advisory one
+//                  pills, problems first; `warn` marks an alarm bucket, `review` an advisory one. Or
+//                  (data) → that, for a vendor whose labels name something in the report
 //   buildEntries   (data) → entries, each { id, kind, … }; entryDate(entry) sorts within a kind
 //   isAcknowledged (entry) → a row the user marked reviewed: it stays listed but reads as handled
 //   rowActions     (entry) → { [action]: true } — the bulk-eligible actions a row offers
@@ -114,9 +115,13 @@ export function ReconciliationReportDialog({
 
   // An acknowledged row no longer needs attention, so it drops the warn emphasis, reads muted, and carries
   // its green ✓ Reviewed status here in the Kind cell; the Undo lives with the row's actions.
-  const kindRank = useCallback(entry => vendor.kinds[entry.kind].rank, [vendor])
+  const kinds = useMemo(
+    () => (typeof vendor.kinds === 'function' ? vendor.kinds(data || {}) : vendor.kinds),
+    [vendor, data],
+  )
+  const kindRank = useCallback(entry => kinds[entry.kind].rank, [kinds])
   const kindColumn = { key: 'kind', label: 'Kind', width: 150, sortValue: kindRank, render: (entry) => {
-    const meta = vendor.kinds[entry.kind]
+    const meta = kinds[entry.kind]
     const handled = vendor.isAcknowledged(entry)
     const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
     return (
@@ -141,7 +146,6 @@ export function ReconciliationReportDialog({
   // The picked column decides; a row with nothing in it goes last either way, and ties keep the default
   // order, so sorting by a date column still reads problems first within one day.
   const entries = useMemo(() => {
-    const kinds = vendor.kinds
     const byDefault = (a, b) => (kinds[a.kind].rank - kinds[b.kind].rank)
       || String(vendor.entryDate(a)).localeCompare(String(vendor.entryDate(b)))
     const built = vendor.buildEntries(data || {})
@@ -155,7 +159,7 @@ export function ReconciliationReportDialog({
       if (av > bv) return dir
       return byDefault(a, b)
     })
-  }, [vendor, data, sortValue, sortState?.dir])
+  }, [vendor, kinds, data, sortValue, sortState?.dir])
   // The pill flips the direction of what its column sorts by; the ▾ picks the field and starts it ascending.
   const toggleSort = (key) => setSortState(current => (current?.key === key
     ? { ...current, dir: current.dir === 'asc' ? 'desc' : 'asc' }
@@ -238,11 +242,11 @@ export function ReconciliationReportDialog({
   const kindPills = useMemo(() => {
     const counts = new Map()
     for (const e of entries) counts.set(e.kind, (counts.get(e.kind) || 0) + 1)
-    return Object.keys(vendor.kinds)
-      .sort((a, b) => vendor.kinds[a].rank - vendor.kinds[b].rank)
+    return Object.keys(kinds)
+      .sort((a, b) => kinds[a].rank - kinds[b].rank)
       .filter(kind => counts.get(kind) > 0)
       .map(kind => ({ kind, count: counts.get(kind) }))
-  }, [vendor, entries])
+  }, [kinds, entries])
 
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
@@ -293,7 +297,7 @@ export function ReconciliationReportDialog({
             All
           </FilterChip>
           {kindPills.map(({ kind, count }) => {
-            const meta = vendor.kinds[kind]
+            const meta = kinds[kind]
             const active = activeKind === kind
             const accent = meta.stripe
             return (
@@ -392,7 +396,7 @@ export function ReconciliationReportDialog({
             getRowId={(entry) => entry.id}
             getRowStripe={(entry) => (vendor.isAcknowledged(entry)
               ? 'color-mix(in srgb, var(--success) 40%, var(--border))'
-              : vendor.kinds[entry.kind].stripe)}
+              : kinds[entry.kind].stripe)}
             selectable
             selectedIds={selectedIds}
             onToggleRow={toggleEntry}

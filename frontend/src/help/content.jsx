@@ -74,7 +74,6 @@ export const HELP_SECTIONS = [
     key: 'getting-started',
     group: 'start',
     label: 'Getting started',
-    blurb: `What ${APP_NAME} is for, and loading the first data.`,
   },
   {
     key: 'accounts',
@@ -413,6 +412,35 @@ export const HELP_TOPICS = [
           categories from the incoming data and <HelpLink to="/help/generate-rules">Generate rules</HelpLink> indicates
           that {APP_NAME} should generate rules based on the
           categorization patterns in the incoming data.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'owner-lens',
+    section: 'getting-started',
+    title: 'Owner View',
+    surfaces: ['Owner view (top-right corner)'],
+    summary: 'A setting, kept for each user, that limits the Dashboard, Transactions, Accounts, Rules, Recurring and Tasks pages to chosen owners.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          When several people share one {APP_NAME} &mdash; a household, say &mdash; but each mostly wants to see
+          their own money, the <strong>Owner view</strong> narrows the app to chosen owners. The switch in the
+          top-right corner of the Dashboard, Transactions, Accounts, Rules, Recurring and Tasks pages limits them
+          to the transactions, accounts, rules and recurring series that belong to those owners.
+        </p>
+        <p>
+          A rule or recurring series belongs to every owner whose transactions it matches, so a rule two people
+          share shows for both. One that has not matched anything yet shows for everyone. <em>Unassigned</em>{' '}
+          stands for accounts with no owner and can be included or left out. On the Tasks page the counts for
+          uncategorized transactions, reimbursements and recurring findings follow the view; the other tasks
+          are about the whole ledger.
+        </p>
+        <p>
+          The owner view only changes what is shown. A rule created while it is on still applies to everyone's
+          transactions unless the rule is given an owner.
         </p>
       </>
     ),
@@ -1917,7 +1945,7 @@ export const HELP_TOPICS = [
         <p>
           <strong>Balance</strong> is what an account holds, or owes as a negative amount. One on the unusual
           side for its type is colored: red below zero on a bank or investment account, green above zero on a
-          card or loan, and either on a wallet, which normally holds nothing. It starts from
+          card or loan, and either on a payment app, which normally holds nothing. It starts from
           the latest balance its connection reported or that was entered by hand, dated beneath it, and adds
           the posted transactions dated after that. The date is highlighted when no newer balance has come
           for a week from a connection, or 35 days for one entered by hand, which is marked (m). Clicking a balance, or the dash where there is none, or <strong>Edit balance…</strong> in the
@@ -1955,35 +1983,6 @@ export const HELP_TOPICS = [
           and reported on and used in the selection criteria for rules. Each owner also chooses whether its new
           transactions arrive flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
           Each user can also <HelpLink to="/help/owner-lens">show only their own owners</HelpLink>.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: 'owner-lens',
-    section: 'accounts',
-    title: 'Showing only some owners',
-    surfaces: ['Owner view (top-right corner)'],
-    summary: 'A setting, kept for each user, that limits the Dashboard, Transactions, Accounts, Rules, Recurring and Tasks pages to chosen owners.',
-    body: () => (
-      <>
-        <p>*needs review*</p>
-        <p>
-          The <strong>Owner view</strong> switch in the top-right corner of the Dashboard, Transactions,
-          Accounts, Rules, Recurring and Tasks pages limits them to the transactions, accounts, rules and
-          recurring series that belong to the chosen owners. The &#9662; opens the list of owners, hovering
-          shows who is included, and &rsaquo; folds the tab down to the switch. Each user has their own choice.
-        </p>
-        <p>
-          A rule or recurring series belongs to every owner whose transactions it matches, so a rule two people
-          share shows for both. One that has not matched anything yet shows for everyone. <em>Unassigned</em>
-          stands for accounts with no owner and can be included or left out. On the Tasks page the counts for
-          uncategorized transactions, reimbursements and recurring findings follow the view; the other tasks
-          are about the whole ledger.
-        </p>
-        <p>
-          The owner view only changes what is shown. A rule created while it is on still applies to everyone's
-          transactions unless the rule is given an owner.
         </p>
       </>
     ),
@@ -3113,11 +3112,11 @@ export const HELP_TOPICS = [
             (see <HelpLink to="/help/amazon-funding-sources">the Amazon import form</HelpLink>).
           </li>
           <li>
-            <strong>Check the reconciliation.</strong> Each order or wallet payment is matched with the
+            <strong>Check the reconciliation.</strong> Each order or payment app payment is matched with the
             card or bank transaction that paid for it, and that transaction is moved out of the totals
             so the purchase counts once. The import&apos;s card says when a match needs a decision
             &mdash; see <HelpLink to="/help/amazon-reconciliation">Amazon
-              reconciliation</HelpLink> and <HelpLink to="/help/wallet-reconciliation">wallet
+              reconciliation</HelpLink> and <HelpLink to="/help/wallet-reconciliation">payment app
                 reconciliation</HelpLink>.
           </li>
           <li>
@@ -3487,66 +3486,67 @@ export const HELP_TOPICS = [
   {
     id: 'wallet-reconciliation',
     section: 'importing',
-    title: 'Wallet reconciliation',
-    surfaces: ['Import history (Reconciliation pill)', 'Tasks', 'Accounts (Wallet match text)'],
-    summary: 'A tracked wallet — PayPal, or a payment app — is matched with the card and bank transactions on the other side of the same money, so a purchase counts once.',
+    title: 'Payment app reconciliation',
+    surfaces: ['Import history (Reconciliation pill)', 'Tasks', 'Accounts (Match text)'],
+    summary: 'A tracked payment app — PayPal, Venmo, Cash App and the like — is matched with the card and bank transactions on the other side of the same money, so a purchase counts once.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          An account of type <strong>PayPal</strong> or <strong>P2P</strong> is a wallet. It holds the record of
-          what was bought or received &mdash; money can sit in its balance, and then the wallet transaction is the
-          only record there is. What the wallet took from a card or bank, or sent back to one, also appears on
-          that account under the wallet&apos;s name. Counting both would count the purchase twice, and money
-          received in the wallet and cashed out would be received twice, so after every import and sync each
-          wallet transaction is <strong>matched</strong> with the one on the other side, and the money counts
-          once:
+          Payment apps &mdash; PayPal, Venmo, Cash App and the like &mdash; are accounts of type{' '}
+          <strong>PayPal</strong> or <strong>P2P</strong>. A payment app holds the record of what was bought or
+          received &mdash; money can sit in its balance, and then its transaction is the only record there is.
+          What the app took from a card or bank, or sent back to one, also appears on that account under the
+          app&apos;s name. Counting both would count the purchase twice, and money received in the app and
+          cashed out would be received twice, so after every import and sync each payment app transaction is{' '}
+          <strong>matched</strong> with the one on the other side, and the money counts once:
         </p>
         <ul>
           <li>
-            A <strong>payment</strong> paid directly from a card or bank counts on the wallet side, and the card
-            or bank transaction moves to <em>Money movement</em>. When the wallet transaction was already filed as
-            a transfer, the card transaction is the one counted and nothing changes.
+            A <strong>payment</strong> paid directly from a card or bank counts on the payment app side, and the
+            card or bank transaction moves to <em>Money movement</em>. When the app&apos;s transaction was already
+            filed as a transfer, the card transaction is the one counted and nothing changes.
           </li>
           <li>
-            A <strong>transfer</strong> &mdash; money added to the wallet from a bank or card, or cashed out to
+            A <strong>transfer</strong> &mdash; money added to the app from a bank or card, or cashed out to
             one &mdash; is money moving on both sides, so both transactions move to <em>Money movement</em>. A
             cash-out filed under a <HelpLink to="/help/reimbursable-expenses">Reimbursable</HelpLink> category moves
-            too, since the repayment already counts in the wallet.
+            too, since the repayment already counts in the app.
           </li>
         </ul>
         <p>
-          A transaction on the other side is recognized by the wallet&apos;s <strong>match text</strong>, the
-          words a bank or card transaction contains when it comes from that wallet. A PayPal account&apos;s is
-          &ldquo;PayPal&rdquo;; any other wallet starts with its account name. Change it from the account&apos;s
-          &#8943; menu on the Accounts page with <strong>Wallet match text&hellip;</strong>; empty matches
-          nothing.
+          A transaction on the other side is recognized by the app&apos;s <strong>match text</strong>, the
+          words a bank or card transaction contains when it comes from that app. A PayPal account&apos;s is
+          &ldquo;PayPal&rdquo;; any other starts with its account name. Change it from the account&apos;s
+          &#8943; menu on the Accounts page with <strong>Match text&hellip;</strong>; empty matches nothing.
         </p>
         <p>
           A match is made only when it is unambiguous: one matching amount within a few days, on an account
           belonging to the same person or a shared one. A transaction a reimbursement claims is never moved, and
           is not offered. The <strong>reconciliation</strong> shows the result, for one import or sync from its
           card&apos;s <strong>Reconciliation</strong> pill (a collapsed data source or connection shows
-          <strong> &#9888; N to resolve</strong> when one of its cards needs a look), or for one wallet
-          account&apos;s whole history from that account&apos;s own Tasks entry. Each wallet account has its own
-          entry and its own reconciliation, named for the account. A transaction on a shared account that could
-          belong to either of two wallets is listed under both, and settling it in one settles it in the other:
+          <strong> &#9888; N to resolve</strong> when one of its cards needs a look), or for one payment app
+          account&apos;s whole history from that account&apos;s own Tasks entry. Each payment app account has its
+          own entry and its own reconciliation, named for the account, and the report&apos;s wording uses that
+          name &mdash; Venmo in the examples below. A transaction on a shared account that could belong to either
+          of two apps is listed under both, and settling it in one settles it in the other:
         </p>
         <ul>
           <li><strong>Several possible matches</strong> &mdash; more than one transaction could be the other side.
             <strong> Pick&hellip;</strong> the right one, or <strong>None of these</strong>.</li>
           <li><strong>Two transactions, one match</strong> &mdash; one transaction that could equally be
-            the other side of either of two wallet transactions, and only one of them can have it &mdash; usually
-            because the other payment came from the wallet balance, or its own bank transaction isn&apos;t in the
+            the other side of either of two Venmo transactions, and only one of them can have it &mdash; usually
+            because the other payment came from the Venmo balance, or its own bank transaction isn&apos;t in the
             ledger. Both are listed together against it; <strong>Pick this one</strong> beside the one it belongs
             to settles the pair, and the other drops off the list with nothing to match. <strong>Neither</strong>
             when it belongs to none of them.</li>
-          <li><strong>Matching transaction not found</strong> &mdash; a wallet deposit or withdrawal with nothing
+          <li><strong>Matching transaction not found</strong> &mdash; a Venmo deposit or withdrawal with nothing
             found on the other side. <strong>Link&hellip;</strong> one by hand, or <strong>Mark reviewed</strong>
             when that account isn&apos;t tracked.</li>
-          <li><strong>No wallet record</strong> &mdash; a transaction naming the wallet on an account that pays
-            into it, that no wallet transaction accounts for &mdash; often a gap in the wallet history. It still
-            counts as it is; <strong>Mark reviewed</strong> once checked.</li>
+          <li><strong>Not found in Venmo</strong> &mdash; a bank or card transaction naming Venmo, on an account
+            that pays into it, that no Venmo transaction accounts for &mdash; often a gap in the Venmo history,
+            or an amount that differs. It still counts as it is;{' '}
+            <strong>Mark reviewed</strong> once checked.</li>
           <li><strong>Matched</strong> &mdash; <strong>Unlink</strong> puts back whatever the match changed,
             and the same match is never made again.</li>
         </ul>
@@ -3747,7 +3747,7 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>Matched transfer</strong> &mdash; the other half of a transfer is already on another
-            account, such as the card charge that funded a wallet deposit.
+            account, such as the card charge that funded a payment app deposit.
           </li>
         </ul>
         <p>

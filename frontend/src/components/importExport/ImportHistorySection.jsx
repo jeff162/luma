@@ -465,8 +465,8 @@ export function ImportHistorySection({
                                 tone={walletAttention > 0 ? 'warning' : 'muted'}
                                 onClick={() => openReconciliationViewer({ vendor: 'wallet', batchId: b.id, title: b.filename })}
                                 title={walletAttention > 0
-                                  ? `${walletAttention} wallet reconciliation item${walletAttention === 1 ? '' : 's'} in ${batchNoun} need${walletAttention === 1 ? 's' : ''} a look — open the wallet reconciliation`
-                                  : `How the wallet transactions in ${batchNoun} match card and bank transactions`}
+                                  ? `${walletAttention} payment app reconciliation item${walletAttention === 1 ? '' : 's'} in ${batchNoun} need${walletAttention === 1 ? 's' : ''} a look — open the reconciliation`
+                                  : `How the payment app transactions in ${batchNoun} match card and bank transactions`}
                               >
                                 {walletAttention > 0 ? `⚠ ${walletAttention} to resolve` : 'Reconciliation'}
                               </StatusPill>
@@ -638,7 +638,7 @@ export function ImportHistorySection({
                                         const nextState = prev && typeof prev === 'object' ? prev : {}
                                         return { ...nextState, [row.key]: true }
                                       })}
-                                      title={`${walletAttentionCount} wallet reconciliation item${walletAttentionCount === 1 ? '' : 's'} across ${rowScopeNoun} need${walletAttentionCount === 1 ? 's' : ''} a look — expand to open the per-${isConnection ? 'card' : 'file'} reconciliation`}
+                                      title={`${walletAttentionCount} payment app reconciliation item${walletAttentionCount === 1 ? '' : 's'} across ${rowScopeNoun} need${walletAttentionCount === 1 ? 's' : ''} a look — expand to open the per-${isConnection ? 'card' : 'file'} reconciliation`}
                                     >
                                       ⚠ {walletAttentionCount} to resolve
                                     </HistoryAttentionPill>

@@ -28,17 +28,29 @@ import { txnSortFields } from './reconciliationSort.js'
 //   • matched      — a match; Unlink restores whatever the match changed and is remembered
 // One vendor of the shared reconciliation shell (ReconciliationReportDialog).
 
-const KINDS = {
-  choice: { rank: 0, label: 'Several possible matches', stripe: '#f59e0b', warn: true,
-    help: 'More than one bank or card transaction could be the other side of this wallet transaction. Pick the right one, or choose None of these.' },
-  contested: { rank: 1, label: 'Two transactions, one match', stripe: '#f59e0b', warn: true,
-    help: 'One bank or card transaction that could equally be the other side of either of these wallet transactions, and only one of them can have it — usually because the other payment came from the wallet balance, or its own bank transaction is not in the ledger. Pick this one beside the transaction it belongs to; the others are then left with none, which is what a balance-funded payment looks like. Neither, when it belongs to none of them.' },
-  unmatched: { rank: 2, label: 'Matching transaction not found', stripe: '#ef4444', warn: true,
-    help: 'This wallet transaction moved money to or from another account, but no matching bank or card transaction was found. Link one by hand, or mark it reviewed when that account is not tracked here.' },
-  unaccounted: { rank: 3, label: 'No wallet record', stripe: '#94a3b8', warn: true,
-    help: 'A charge or deposit naming a wallet, on an account that pays into it, dated within the wallet history, that no wallet transaction accounts for. It still counts as it is; mark it reviewed once checked.' },
-  matched: { rank: 4, label: 'Matched', stripe: 'var(--success, #22c55e)',
-    help: 'Each wallet transaction and the bank or card transaction on the other side. The money counts once: a transfer is excluded on both sides, a payment is counted on the wallet side.' },
+// What the report's wording calls the wallet: the account's own name ("Venmo"), since "wallet" is this
+// code's word, not one the user knows. A report covering several reads "PayPal or Venmo".
+function walletNames(data) {
+  const names = data?.wallet_names || []
+  if (!names.length) return { name: 'the payment app', heading: 'Payment app' }
+  const joined = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+  return { name: joined, heading: joined }
+}
+
+function buildKinds(data) {
+  const { name } = walletNames(data)
+  return {
+    choice: { rank: 0, label: 'Several possible matches', stripe: '#f59e0b', warn: true,
+      help: `More than one bank or card transaction could be the other side of this ${name} transaction. Pick the right one, or choose None of these.` },
+    contested: { rank: 1, label: 'Two transactions, one match', stripe: '#f59e0b', warn: true,
+      help: `One bank or card transaction that could equally be the other side of either of these ${name} transactions, and only one of them can have it — usually because the other payment came from the ${name} balance, or its own bank transaction is not in the ledger. Pick this one beside the transaction it belongs to; the others are then left with none, which is what a balance-funded payment looks like. Neither, when it belongs to none of them.` },
+    unmatched: { rank: 2, label: 'Matching transaction not found', stripe: '#ef4444', warn: true,
+      help: `This ${name} transaction moved money to or from another account, but no matching bank or card transaction was found. Link one by hand, or mark it reviewed when that account is not tracked here.` },
+    unaccounted: { rank: 3, label: `Not found in ${name}`, stripe: '#94a3b8', warn: true,
+      help: `A charge or deposit naming ${name}, on a bank or card account that pays into it and dated within the ${name} history, with no ${name} transaction to match it. It still counts as it is; mark it reviewed once checked.` },
+    matched: { rank: 4, label: 'Matched', stripe: 'var(--success, #22c55e)',
+      help: `Each ${name} transaction and the bank or card transaction on the other side. The money counts once: a transfer is excluded on both sides, a payment is counted on the ${name} side.` },
+  }
 }
 
 // The wallet cell of a contested group: the rows cornered on one bank or card transaction, stacked, each
@@ -143,7 +155,8 @@ const BULK_ACTIONS = [
   { key: 'unpair', label: 'Unlink', title: 'Undo each selected match — whatever it changed is put back, and it is not matched again' },
 ]
 
-function useColumns({ busy, run, openPicker, reportError }) {
+function useColumns({ data, busy, run, openPicker, reportError }) {
+  const { name, heading } = walletNames(data)
   const [loadingPicker, setLoadingPicker] = useState(false)
 
   // The manual linking window. A row with candidates offers exactly those; one with none asks the server
@@ -163,14 +176,14 @@ function useColumns({ busy, run, openPicker, reportError }) {
     }
     openPicker({
       title: 'Link a bank or card transaction',
-      description: 'Pick the transaction on the other side of this wallet transaction.',
-      targetLabel: 'Wallet amount',
+      description: `Pick the transaction on the other side of this ${name} transaction.`,
+      targetLabel: `${heading} amount`,
       target: entry.wallet.amount,
       targetDate: entry.wallet.date,
       candidates,
       multiple: false,
       mismatchNote: 'The amounts differ — they can still be linked.',
-      emptyMessage: 'No charges or deposits from this wallet nearby to link.',
+      emptyMessage: `No charges or deposits from ${name} nearby to link.`,
       confirmLabel: () => 'Link',
       onConfirm: ids => api.pairWalletRows({ wallet_txn_id: entry.wallet.id, counterpart_txn_id: ids[0] }),
       failMessage: 'Could not link the transactions',
@@ -193,7 +206,7 @@ function useColumns({ busy, run, openPicker, reportError }) {
   ))
 
   const columns = [
-    { key: 'wallet', label: 'Wallet', width: 380, sortFields: WALLET_SORT_FIELDS, render: (entry) => (
+    { key: 'wallet', label: heading, width: 380, sortFields: WALLET_SORT_FIELDS, render: (entry) => (
       entry.kind === 'contested'
         ? <ContestedRivals rivals={entry.rivals} disabled={busy} onPick={(wallet) => pick(entry, wallet)} />
         : <TxnCell txn={entry.wallet} />
@@ -221,7 +234,7 @@ function useColumns({ busy, run, openPicker, reportError }) {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <Button variant="secondary" disabled={busy} onClick={() => openPair(entry)}>Pick…</Button>
             <Button variant="secondary" disabled={busy} onClick={() => act('decline', entry, 'Could not record the choice')}
-              title="None of these is the other side of this wallet transaction">None of these</Button>
+              title={`None of these is the other side of this ${name} transaction`}>None of these</Button>
           </div>
         )
       }
@@ -246,7 +259,7 @@ export const walletReconciliation = {
   sortPrefKey: 'ui.walletPairs.sort',
   columnsPrefKey: WALLET_PAIR_COLUMNS_PREF_KEY,
   emptyMessage: 'Nothing to reconcile.',
-  kinds: KINDS,
+  kinds: buildKinds,
   buildEntries,
   entryDate: (entry) => (entry.wallet || entry.counterpart)?.date || '',
   isAcknowledged: (entry) => !!entry.reviewed && (entry.kind === 'unmatched' || entry.kind === 'unaccounted'),

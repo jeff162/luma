@@ -2391,7 +2391,7 @@ export default function Accounts() {
 
       {matchTextDialog ? (
         <AppTextEntryDialog
-          title="Wallet match text"
+          title="Match text"
           description={`Bank and card transactions containing this text are matched with ${matchTextDialog.name}’s transactions, so the money counts once. Leave it empty to match nothing.`}
           label="Match text"
           value={matchTextDialog.value}
@@ -2452,8 +2452,8 @@ export default function Accounts() {
               onClick: () => setBalanceDialogAccount(rowMenu.account),
             }] : []),
             ...(isWalletAccountType(rowMenu.account.type) && !rowMenu.account.parent_account_id ? [{
-              label: 'Wallet match text…',
-              title: 'The text a bank or card transaction contains when it is the other side of this wallet’s transaction.',
+              label: 'Match text…',
+              title: 'The text a bank or card transaction contains when it is the other side of one of this account’s transactions.',
               onClick: () => setMatchTextDialog({
                 accountId: rowMenu.account.id,
                 name: rowMenu.account.display_name || rowMenu.account.name,
