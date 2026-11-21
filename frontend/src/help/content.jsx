@@ -55,8 +55,8 @@ import { APP_NAME } from '../lib/appConfig.js'
  * by `id` and ignore sections entirely. A topic whose `section` matches nothing here still shows
  * (under a trailing "More" group) rather than silently vanishing.
  *
- * How the sections are chosen: most mirror a page in the left nav, in nav order, and lead with that
- * page's `page-*` hub topic -- the one its title's `?` opens, which also collects the page's related
+ * How the sections are chosen: most mirror a page in the left nav and lead with that page's `page-*` hub
+ * topic -- the one its title's `?` opens, which also collects the page's related
  * topics as links. The rest are subjects that outgrew a single page and stand on their own
  * ("Duplicates & reconciliation", "General concepts"), because a topic does **not** have to sit
  * under the hub of the page it is reached from: a topic carries one `section` but several
@@ -64,72 +64,89 @@ import { APP_NAME } from '../lib/appConfig.js'
  * within a section is deliberate rather than the order topics were written -- hub first, then the
  * core model, then common tasks, then edge cases -- because array position is the only thing
  * driving it.
+ *
+ * Sections come in three `group`s, in this order and each alphabetical by label so a section is quick
+ * to find: `start` (Getting started), `page` (one per nav page) and `subject` (the rest). The topic
+ * index starts each group on its own line.
  */
 export const HELP_SECTIONS = [
   {
     key: 'getting-started',
+    group: 'start',
     label: 'Getting started',
     blurb: `What ${APP_NAME} is for, and loading the first data.`,
   },
   {
-    key: 'dashboard',
-    label: 'Dashboard',
-    blurb: 'Reading the reports: what each breakdown counts, and the alternate frames.',
-  },
-  {
-    key: 'transactions',
-    label: 'Transactions',
-    blurb: 'Working the ledger: finding a transaction, reviewing new ones, and recording what a row does not say on its own.',
-  },
-  {
-    key: 'importing',
-    label: 'Importing data',
-    blurb: 'Mapping files, saving reusable sources, and bringing in marketplace order detail.',
-  },
-  {
-    key: 'duplicates',
-    label: 'Duplicates & reconciliation',
-    blurb: 'When the same activity arrives from more than one source: what the engine settles on its own, and how to resolve what it cannot.',
-  },
-  {
-    key: 'rules',
-    label: 'Rules',
-    blurb: 'How categorization is kept up automatically, and what happens when two rules want the same transaction.',
-  },
-  {
-    key: 'categories',
-    label: 'Categories & tags',
-    blurb: 'Two ways to organize transactions for reports: a category tree and cross-cutting tags.',
-  },
-  {
-    key: 'recurring',
-    label: 'Recurring transactions',
-    blurb: 'Transactions that repeat on a schedule: what the scan finds on its own, and how to declare one it cannot see.',
-  },
-  {
-    key: 'tasks',
-    label: 'Tasks',
-    blurb: 'The nag list: what gets raised there, and what dismissing one means.',
-  },
-  {
     key: 'accounts',
+    group: 'page',
     label: 'Accounts',
     blurb: 'Where transactions come from, connecting data providers, and pairing up accounts that turn out to be the same one.',
   },
   {
+    key: 'categories',
+    group: 'page',
+    label: 'Categories & tags',
+    blurb: 'Two ways to organize transactions for reports: a category tree and cross-cutting tags.',
+  },
+  {
+    key: 'dashboard',
+    group: 'page',
+    label: 'Dashboard',
+    blurb: 'Reading the reports: what each breakdown counts, and the alternate frames.',
+  },
+  {
+    key: 'importing',
+    group: 'page',
+    label: 'Importing data',
+    blurb: 'Mapping files, saving reusable sources, and bringing in marketplace order detail.',
+  },
+  {
+    key: 'recurring',
+    group: 'page',
+    label: 'Recurring transactions',
+    blurb: 'Transactions that repeat on a schedule: what the scan finds on its own, and how to declare one it cannot see.',
+  },
+  {
+    key: 'rules',
+    group: 'page',
+    label: 'Rules',
+    blurb: 'How categorization is kept up automatically, and what happens when two rules want the same transaction.',
+  },
+  {
     key: 'settings',
+    group: 'page',
     label: 'Settings',
     blurb: 'The one page of preferences, and what each section of it covers.',
   },
   {
-    key: 'administration',
-    label: 'Server Configuration',
-    blurb: 'Running the installation: how it starts, who can reach it, and keeping its databases in order.',
+    key: 'tasks',
+    group: 'page',
+    label: 'Tasks',
+    blurb: 'The nag list: what gets raised there, and what dismissing one means.',
+  },
+  {
+    key: 'transactions',
+    group: 'page',
+    label: 'Transactions',
+    blurb: 'Working the ledger: finding a transaction, reviewing new ones, and recording what a row does not say on its own.',
+  },
+  {
+    key: 'duplicates',
+    group: 'subject',
+    label: 'Duplicates & reconciliation',
+    blurb: 'When the same activity arrives from more than one source: what the engine settles on its own, and how to resolve what it cannot.',
   },
   {
     key: 'general-concepts',
+    group: 'subject',
     label: 'General concepts',
     blurb: `What holds for the whole ledger rather than one page: the single currency, how the data is backed up, and who can reach it.`,
+  },
+  {
+    key: 'administration',
+    group: 'subject',
+    label: 'Server Configuration',
+    blurb: 'Running the installation: how it starts, who can reach it, and keeping its databases in order.',
   },
 ]
 

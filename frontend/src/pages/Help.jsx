@@ -14,6 +14,17 @@ import { HELP_HINTS_ENABLED_PREF_KEY, HELP_DISMISSED_TIPS_PREF_KEY } from '../he
 
 const EMPTY_DISMISSED = {}
 
+// The topic index's lines: the sections that have topics, one line per `group`, in section order.
+const indexGroups = HELP_SECTIONS.reduce((groups, section) => {
+  if (!HELP_TOPICS.some(topic => topic.section === section.key)) return groups
+  const last = groups[groups.length - 1]
+  if (last?.key === section.group) last.sections.push(section)
+  else groups.push({ key: section.group, sections: [section] })
+  return groups
+}, [])
+// How far a wrapped index line hangs in from its first button.
+const INDEX_HANG = 24
+
 /*
  * Standalone Help page. Without a `:topic` URL param it renders an index of every
  * registered explainer so the user can browse end-to-end. With one, it renders the
@@ -217,20 +228,23 @@ export default function Help() {
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
             Topic index
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 12 }}>
-            {HELP_SECTIONS.map(section => (
-              HELP_TOPICS.some(t => t.section === section.key) ? (
-                <Button
-                  key={section.key}
-                  size="compact"
-                  variant="secondary"
-                  title={section.blurb}
-                  onClick={() => scrollToSection(section.key)}
-                  style={{ whiteSpace: 'nowrap' }}
-                >
-                  {section.label}
-                </Button>
-              ) : null
+          {/* One line per section group; a line that wraps hangs its continuation under the first button. */}
+          <div style={{ display: 'grid', gap: 8, paddingLeft: 12 }}>
+            {indexGroups.map(group => (
+              <div key={group.key} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: INDEX_HANG }}>
+                {group.sections.map((section, index) => (
+                  <Button
+                    key={section.key}
+                    size="compact"
+                    variant="secondary"
+                    title={section.blurb}
+                    onClick={() => scrollToSection(section.key)}
+                    style={{ whiteSpace: 'nowrap', ...(index === 0 ? { marginLeft: -INDEX_HANG } : {}) }}
+                  >
+                    {section.label}
+                  </Button>
+                ))}
+              </div>
             ))}
           </div>
         </div>

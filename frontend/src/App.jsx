@@ -286,11 +286,11 @@ const NAV_LINKS = [
   ['/', 'Dashboard', 'dashboard'],
   ['/transactions', 'Transactions', 'transactions'],
   ['/import-export', 'Import', 'import'],
+  ['/accounts', 'Accounts', 'accounts'],
+  ['/tasks', 'Tasks', 'tasks'],
   ['/rules', 'Rules', 'rules'],
   ['/categories', 'Categories', 'categories'],
   ['/recurring', 'Recurring', 'recurring'],
-  ['/tasks', 'Tasks', 'tasks'],
-  ['/accounts', 'Accounts', 'accounts'],
   ['/settings', 'Settings', 'settings'],
   ['/help', 'Help', 'help'],
 ]
