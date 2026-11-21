@@ -1278,6 +1278,7 @@ def list_transactions(
                 COALESCE(a.display_name, a.name) AS account_name,
                 COALESCE(p.mask, a.mask)         AS account_mask,
                 a.name                            AS source_account_raw_name,
+                a.mask                            AS source_account_mask,
                 t.import_batch_id,
                 -- Whether the row came from a provider, which with `import_batch_id` is how a
                 -- hand-entered row is told apart (see `data-model.md` → *Transactions*). The detail

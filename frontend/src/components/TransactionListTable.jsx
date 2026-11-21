@@ -34,6 +34,14 @@ import { ColumnsStrip } from './ColumnsMenu.jsx'
 import { TRANSACTION_TABLE_COLUMN_DEFS as COLUMN_DEFS } from '../lib/transactionTableColumns.js'
 
 
+// The account row a transaction was imported on, by its own name and mask. Members of a merged group
+// share the group's display name and often their own name too (a reissued card), so the mask is what
+// tells them apart.
+function sourceAccountLabel(txn) {
+  const name = txn.source_account_raw_name || ''
+  return txn.source_account_mask ? `${name} ···${txn.source_account_mask}` : name
+}
+
 function getAvailableColumns({ showCategory, showAccount, showSourceAccount, showRunningBalance, showPostedDate }) {
   return [
     COLUMN_DEFS.date,
@@ -59,7 +67,7 @@ function comparePrimary(a, b, key, sign) {
   if (key === 'merchant') return sign * String(getTxnMerchantLabel(a) || '').localeCompare(String(getTxnMerchantLabel(b) || ''))
   if (key === 'category') return sign * String(a.category_name || '').localeCompare(String(b.category_name || ''))
   if (key === 'account') return sign * String(a.account_name || '').localeCompare(String(b.account_name || ''))
-  if (key === 'sourceAccount') return sign * String(a.source_account_raw_name || '').localeCompare(String(b.source_account_raw_name || ''))
+  if (key === 'sourceAccount') return sign * sourceAccountLabel(a).localeCompare(sourceAccountLabel(b))
   if (key === 'amount') return sign * ((Number(a.amount) || 0) - (Number(b.amount) || 0))
   return 0
 }
@@ -322,7 +330,7 @@ export default function TransactionListTable({
       case 'sourceAccount':
         return (
           <span
-            title={txn.source_account_raw_name || ''}
+            title={sourceAccountLabel(txn)}
             style={{
               color: 'var(--muted)',
               fontSize: 12,
@@ -331,7 +339,7 @@ export default function TransactionListTable({
               whiteSpace: 'nowrap',
             }}
           >
-            {txn.source_account_raw_name || ''}
+            {sourceAccountLabel(txn)}
           </span>
         )
       case 'tags':

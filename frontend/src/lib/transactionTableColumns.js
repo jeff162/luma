@@ -13,7 +13,7 @@ export const TRANSACTION_TABLE_COLUMN_DEFS = {
   // The original (source) account a row came from. Distinct from `account`, which shows the
   // effective/top-level account — identical for every row inside a merged-account report and so
   // surfaced only there (see AccountDetail), where it tells the merged children apart.
-  sourceAccount: { key: 'sourceAccount', label: 'Account', defaultWidth: 150, minWidth: 110 },
+  sourceAccount: { key: 'sourceAccount', label: 'Source account', defaultWidth: 150, minWidth: 110 },
   // The note/tag/status markers (see TransactionMarkersCell). Not sortable — there is no single
   // meaningful order across a mix of tags, notes, and status flags. Left-aligned like the other
   // text columns; overflow past its width is clipped by the cell wrapper.

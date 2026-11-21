@@ -10,7 +10,7 @@ import { describeHistoryFlag } from '../lib/netWorth.js'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
 import NetWorthStartDialog from './accounts/NetWorthStartDialog.jsx'
 import { unusualBalanceColor } from '../lib/accountTypes.js'
-import { Spinner, FilterChip, LinkButton } from './ui.jsx'
+import { Spinner, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import { transactionTableWidth } from '../lib/transactionTableColumns.js'
 import { visibleColumns } from '../lib/columnVisibility.js'
@@ -47,12 +47,6 @@ function describeBalanceCheck(check) {
   return `${formatDateRange(check.from_date, check.to_date)}: the balance changed by ${signedChange(check.stated_change)}, the transactions by ${signedChange(check.ledger_change)}.`
 }
 
-// Toggle chip for the merged-account source filter. Multi-select: "All" clears the set, each source
-// chip toggles its own account in/out.
-function SourcePill({ label, active, onClick }) {
-  return <FilterChip selected={active} onClick={onClick}>{label}</FilterChip>
-}
-
 export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true, dateStart = null, dateEnd = null }) {
   /*
    * This panel is mostly a thin account-specific wrapper around the shared detail-sheet chrome:
@@ -62,18 +56,14 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
-  // A merged account's report spans every underlying (source) account; `mergeSources` lists them so the
-  // user can narrow the chart + list to specific originals. `sourceFilter` empty = all sources; otherwise
-  // the chosen source account ids drive both the trend and the transaction feed (server-side, so paging and
-  // bulk "select all matching" stay in scope). Only populated for a genuinely merged account.
-  const [mergeSources, setMergeSources] = useState([])
-  const [sourceFilter, setSourceFilter] = useState(() => new Set())
+  // A merged account's report covers its whole group as one account. The list offers a Source account
+  // column there, so a row can still be traced to the member it was imported on.
+  const [isMerged, setIsMerged] = useState(false)
   // The panel's body reflows as its two opening fetches land (the monthly trend fills the chart and
-  // reveals the month section; the accounts fetch may add merged-source pills). Rather than let the
+  // reveals the month section; the accounts fetch may add the Source account column). Rather than let the
   // user watch it grow and reposition, it's held invisible until both first fetches are in and the
   // panel's geometry has gone quiet (see usePanelReveal), then fades in fully formed.
   const [accountsSettled, setAccountsSettled] = useState(false)
-  const isMerged = mergeSources.length > 0
   // The group's balance today and where its stated balances disagree with its transactions. The list's
   // Balance column runs back from today's balance, so it appears only once there is one.
   const [balanceInfo, setBalanceInfo] = useState(null)
@@ -90,28 +80,14 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const balanceFlags = useMemo(() => new Map(
     balanceChecks.filter(check => check.flag_txn_id).map(check => [check.flag_txn_id, describeBalanceCheck(check)]),
   ), [balanceChecks])
-  const sourceCsv = sourceFilter.size ? Array.from(sourceFilter).join(',') : undefined
 
   useEffect(() => {
     let cancelled = false
-    setSourceFilter(new Set())
     api.getAccounts({ include_children: true }).then(rows => {
       if (cancelled) return
       setAccountsSettled(true)
-      const all = rows || []
-      const children = all.filter(r => r.parent_account_id === account.id)
-      if (children.length === 0) {
-        setMergeSources([])
-        return
-      }
-      const parent = all.find(r => r.id === account.id)
-      // Use each account's own (original) name, not the inherited display name, so the merged children
-      // read as distinct sources.
-      setMergeSources([
-        ...(parent ? [{ id: parent.id, name: parent.name, mask: parent.mask }] : []),
-        ...children.map(c => ({ id: c.id, name: c.name, mask: c.mask })),
-      ])
-    }).catch(() => { if (!cancelled) { setAccountsSettled(true); setMergeSources([]) } })
+      setIsMerged((rows || []).some(r => r.parent_account_id === account.id))
+    }).catch(() => { if (!cancelled) { setAccountsSettled(true); setIsMerged(false) } })
     return () => { cancelled = true }
   }, [account.id])
 
@@ -126,14 +102,13 @@ export default function AccountDetail({ account, categories = [], onClose, force
     [rangeMode, rangeKey, trend],
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
-  const activeKey = anchorReady ? `acct:${account.id}|${sourceCsv || 'all'}|${rangeMode}|${rangeKey}` : null
-  // The window + account + any source-account narrowing: what the list fetches, what "select all matching"
-  // resolves, and what a download of the list exports.
+  const activeKey = anchorReady ? `acct:${account.id}|${rangeMode}|${rangeKey}` : null
+  // The window + account: what the list fetches, what "select all matching" resolves, and what a download
+  // of the list exports.
   const listParams = useMemo(() => ({
     ...range.params,
     account_ids: String(account.id),
-    ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
-  }), [account.id, sourceCsv, range])
+  }), [account.id, range])
   // The running balance rides the page fetch only: it is not a filter, so it stays out of what a download
   // or "select all matching" reads.
   const loadPage = useCallback((offset, limit, sort) => (
@@ -207,7 +182,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     // money movement, including income/payments and transactions in not-yet-typed imported categories.
     // A 'spending' trend would hide both, falsely reporting "no activity" for, e.g., an account whose
     // imported rows all sit in type-less categories under Unassigned.
-    api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'cash_flow', undefined, sourceCsv ? { source_account_ids: sourceCsv } : undefined).then(rows => {
+    api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'cash_flow').then(rows => {
       if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
@@ -221,7 +196,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
       setTrendLoading(false)
     })
     return () => { cancelled = true }
-  }, [account.id, dateStart, dateEnd, sourceCsv])
+  }, [account.id, dateStart, dateEnd])
 
 
   // Reserve the full 7-row list height for year/all-time (their lists scroll at DETAIL_LIST_MAX_HEIGHT
@@ -229,7 +204,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const monthSectionHeight = getDetailMonthSectionHeight(rangeMode === 'month' ? trend : [{ count: 999 }])
 
   // Bulk edit over the current window's rows for this account. The filter mirrors the list fetch (window
-  // params + account + any source-account narrowing) so "select all matching" resolves the whole window
+  // params + account) so "select all matching" resolves the whole window
   // even when the list is paged; the count comes from the same trend sum.
   const bulk = useBulkTransactionEditing({
     rows: monthTxns,
@@ -331,26 +306,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
                   View in duplicate report
                 </LinkButton>
               ) : null}
-            </div>
-          )}
-
-          {isMerged && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 12 }}>
-              <span style={{ fontSize: 12, color: 'var(--muted)', marginRight: 2 }}>Account:</span>
-              <SourcePill label="All" active={sourceFilter.size === 0} onClick={() => setSourceFilter(new Set())} />
-              {mergeSources.map(src => (
-                <SourcePill
-                  key={src.id}
-                  label={`${src.name}${src.mask ? ` ···${src.mask}` : ''}`}
-                  active={sourceFilter.has(src.id)}
-                  onClick={() => setSourceFilter(prev => {
-                    const next = new Set(prev)
-                    if (next.has(src.id)) next.delete(src.id)
-                    else next.add(src.id)
-                    return next
-                  })}
-                />
-              ))}
             </div>
           )}
 
