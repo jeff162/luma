@@ -39,25 +39,14 @@ function trackDashboardTotals(page) {
   }
 }
 
-// The single-period trend pans by scrolling, and its hover card is PanningChartTooltip, placed against what
-// can be seen rather than against the whole scrolled canvas. This is the in-page check of that wiring: the
-// card appears for a hover near either end of a narrowed scroll area and stays inside it. Near the right end
-// the hovered bar's centre — what Recharts anchors on — lies past the visible edge, which is how this check
-// caught a flip that cleared only one edge.
-//
-// It does not reproduce the originally reported clipping on the demo data: the few months draw the plot at
-// its minimum width (420px) in wide buckets, so Recharts' own flip at the canvas edge happens to land in view
-// too, and this passes with Recharts' tooltip as well (checked). That contract is pinned in
-// components/__tests__/PanningChartTooltip.test.jsx. The scroll area is narrowed directly because a window
-// narrow enough to overflow the plot also overflows the page around it.
-test('single-period trend tooltips stay inside the visible part of a narrowed scroll area', async ({ page }) => {
-  const totals = trackDashboardTotals(page)
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Dashboard' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
-  await page.getByRole('button', { name: 'Single period' }).click()
-  await totals.loaded()
-
+// Narrows the single-period trend's scroll area so its plot overflows, and waits for the page's answer to
+// land before returning the area. The plot re-centres when it learns the new width, which a ResizeObserver
+// reports a render after the narrowing. A wait on the scroll position alone is met too early: the demo's
+// plot already overflows the full-width area and opens scrolled, so the re-centre could land after the
+// caller hovers or sets a pan, and move it. So the plot's width and scroll have to read the same twice
+// running. That covers a render landing late; it cannot tell the placeholder from the real plot, which is
+// what `totals.loaded` is for.
+async function narrowTrendScrollArea(page) {
   // Found by computed style: Chrome writes an element with both overflow axes set as the `overflow`
   // shorthand, so an attribute selector on `overflow-x` matches nothing. The innermost match (the last in
   // document order) is the trend's own scroll area; the page's content column also scrolls and holds it.
@@ -68,10 +57,6 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
   const scroller = await page.evaluateHandle(findScroller)
   await scroller.evaluate(el => { el.style.maxWidth = '220px' })
   await expect.poll(() => scroller.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(180)
-  // The page answers the narrowing by re-centring the trend, and a tooltip gives way to any scroll. That
-  // scroll has to land before the hover, and the overflow above is there before it does, so wait for the
-  // plot's width and scroll to read the same twice running. That covers a render landing just after the
-  // totals; it cannot tell the placeholder from the real plot, which is what `totals.loaded` is for.
   let lastReading = null
   await expect.poll(async () => {
     const reading = await scroller.evaluate(el => `${el.scrollWidth}:${el.scrollLeft}`)
@@ -79,6 +64,29 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
     lastReading = reading
     return settled
   }, { intervals: [250] }).toBe(true)
+  return scroller
+}
+
+// The single-period trend pans by scrolling, and its hover card is PanningChartTooltip, placed against what
+// can be seen rather than against the whole scrolled canvas. This is the in-page check of that wiring: the
+// card appears for a hover near either end of a narrowed scroll area and stays inside it. Near the right end
+// the hovered bar's centre — what Recharts anchors on — lies past the visible edge, which is how this check
+// caught a flip that cleared only one edge.
+//
+// Whether it also reproduces the originally reported clipping depends on how wide the demo's months draw
+// the plot, so that contract is pinned in components/__tests__/PanningChartTooltip.test.jsx instead. The
+// scroll area is narrowed directly because a window narrow enough to overflow the plot also overflows the
+// page around it.
+test('single-period trend tooltips stay inside the visible part of a narrowed scroll area', async ({ page }) => {
+  const totals = trackDashboardTotals(page)
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+  await totals.loaded()
+
+  // A tooltip gives way to any scroll, so the re-centre the narrowing causes has to land before the hover.
+  const scroller = await narrowTrendScrollArea(page)
   await scroller.evaluate(el => el.scrollIntoView({ block: 'center' }))
 
   const area = await scroller.boundingBox()
@@ -97,7 +105,7 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
 
 // A refresh that brings back the same buckets must leave the pan where it was. The page reloads its totals
 // on every ledger change, and re-centring on each reload moved the plot under the reader and dropped an
-// open tooltip. The scroll area is narrowed as above so the demo's few months overflow it.
+// open tooltip. The scroll area is narrowed as above, so the plot overflows it at a known width.
 test('single-period trend keeps its pan through a refresh that changes nothing', async ({ page }) => {
   const totals = trackDashboardTotals(page)
   await page.goto('/')
@@ -107,13 +115,8 @@ test('single-period trend keeps its pan through a refresh that changes nothing',
   // The first totals must be in before the pan is set, or their arrival re-centres it.
   await totals.loaded()
 
-  const findScroller = `[...document.querySelectorAll('div')].filter(el => (
-    getComputedStyle(el).overflowX === 'auto' && el.querySelector('.recharts-bar-rectangle')
-  )).pop()`
-  await expect.poll(() => page.evaluate(`!!(${findScroller})`)).toBe(true)
-  const scroller = await page.evaluateHandle(findScroller)
-  await scroller.evaluate(el => { el.style.maxWidth = '220px' })
-  await expect.poll(() => scroller.evaluate(el => el.scrollLeft)).toBeGreaterThan(0)
+  // The re-centre the narrowing causes has to land before the pan is set, or it moves the pan.
+  const scroller = await narrowTrendScrollArea(page)
 
   // Panned to a spot that centres no bucket, so a re-centre on any of them would move it.
   await scroller.evaluate(el => { el.scrollLeft = 90 })

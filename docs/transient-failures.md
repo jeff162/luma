@@ -245,9 +245,9 @@ loads, so the two responses differed. The trace does not keep response bodies, s
 
 `trackDashboardTotals` waits until the page's `/summary/` requests have finished, and none is in flight,
 before the scroll area is narrowed and hovered. The same wait guards *single-period trend keeps its pan
-through a refresh that changes nothing*, which sets a pan that a late load would re-centre. If it fires
-again, check first whether a summary request started after `loaded()` returned: a refresh triggered by
-another spec's ledger change is the one case the wait does not cover.
+through a refresh that changes nothing*, which sets a pan that a late load would re-centre. If the tooltip
+test fires again, check first whether a summary request started after `loaded()` returned: a refresh
+triggered by another spec's ledger change is the one case the wait does not cover.
 
 ### Lesson for `agent-profile.md` when this entry closes
 
