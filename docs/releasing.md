@@ -379,7 +379,8 @@ guessability estimate.
    (*Reviewing the vault's cryptography*) and update its date.
 2. `release.py --set-version X.Y.Z`, commit.
 3. `release.py --check` — version declarations agree, tree clean.
-4. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
+4. Consider reviewing the commits since the last release (`git log --oneline vPREV..HEAD`) to make sure
+   nothing notable has been left out of `[Unreleased]`. Then, in `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
    fresh empty `[Unreleased]` above it. The release date enters here and nowhere else, which is why
    this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
    Update the link definitions at the foot of the file to match.
@@ -457,4 +458,3 @@ to keep the other in step.
   unsigned applications on macOS 15. Documenting it would produce exactly the outcome it is meant to
   avoid — a tester concluding the build is broken.
 - **PyInstaller cannot cross-build**, so each platform's artifact must be produced on that platform.
-

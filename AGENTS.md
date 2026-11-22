@@ -107,6 +107,8 @@ When working on the codebase:
 
 - A change is finished only when every description of what it touched is still true — code comments, the in-app help (`frontend/src/help/content.jsx`), the README and the docs below. Update them in the same change.
 
+- A notable user-visible change, one that someone upgrading would notice or need to know about, adds its entry under `[Unreleased]` in `CHANGELOG.md` in the same change. The release checklist only renames that heading, so an entry not written at the time is easy to miss. Polish, internal work and dependency updates stay out, and a correction is listed under Fixed by the problem it solves.
+
 - Follow the commenting style in `docs/code-commenting-style.md`.
 
 - If your work introduces a system, alters one, shifts an invariant, or settles a design decision that future readers would need to know to understand the code, update the relevant doc in the same change:

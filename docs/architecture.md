@@ -1560,7 +1560,8 @@ display and a `show_by_default` flag.
 
 - **Shared detail-panel behavior:** `detailShared.jsx`
 
-- **User-facing setup or behavior changes:** `README.md` and possibly `CHANGELOG.md`
+- **User-facing setup or behavior changes:** `README.md`, and an entry under `[Unreleased]` in
+  `CHANGELOG.md` when the change is notable (see `AGENTS.md` → *Documentation Consistency*)
 
 - **Version bump:** `APP_VERSION` in `backend/runtime_config.py` is authoritative. `frontend/package.json`
   and `backend/pyproject.toml` carry their own copy because npm and Python packaging read theirs before
