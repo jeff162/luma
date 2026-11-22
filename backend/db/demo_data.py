@@ -35,6 +35,12 @@ ESSENTIAL_TAG = "Essential Expenses"
 DISCRETIONARY_TAG = "Discretionary"
 TAX_TAG = "Tax Reporting"
 
+# Balances as the household's position: positive held, negative owed (`services/account_balances.py`). The
+# bank's are each account's balance before the file's first row; the rows carry them from there.
+BANK_OPENING_BALANCES = {"checking": 3000.00, "savings": 8000.00}
+CARD_STATEMENT_BALANCE = -1800.00
+BROKERAGE_BALANCE = 40000.00
+
 # Marker (in the data DB's import_workflow_state) recording that this tenant's data is the demo set.
 # It is the contract that keeps demo and real data from ever mixing: while it is present, new imports
 # and data-source connections are blocked, and the demo-clear wipe refuses to run unless it is present
@@ -211,6 +217,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     from backend.db.database import _seed_default_categories, SHARED_OWNER_ID
     from backend.db.demo_examples import seed_all
     from backend.routers.import_export.core import run_import_core
+    from backend.services.account_balances import record_manual_balance
     from backend.services.wallet_accounts import fill_wallet_match_text
 
     # An organized starter tree to map imported labels into: a file category that matches a starter leaf
@@ -515,7 +522,20 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         posted = (date.fromisoformat(when) + timedelta(days=1)).isoformat()
         card(posted, "Payment Received - Thank You", -amount)   # the card side of each autopay
 
-    bank_cols = {"date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "account": "Account"}
+    # The bank's export states each account's balance after every row, as most bank exports do, and the
+    # import records each day's closing figure as a stated balance. The column reads as a running balance
+    # only when the rows run in date order, so the file is sorted first; rows within a day keep the order
+    # they were written in. The savings leg of the duplicate above is in the card file, outside these
+    # figures, so the savings balance checks report it as the extra row it is.
+    bank_rows.sort(key=lambda row: row[0])
+    running = {name_of["checking"]: BANK_OPENING_BALANCES["checking"],
+               name_of["savings"]: BANK_OPENING_BALANCES["savings"]}
+    for i, (when, desc, category, amount, acct_name) in enumerate(bank_rows):
+        running[acct_name] = round(running[acct_name] + float(amount), 2)
+        bank_rows[i] = (when, desc, category, amount, acct_name, f"{running[acct_name]:.2f}")
+
+    bank_cols = {"date": "Date", "description": "Description", "category": "Category", "amount": "Amount",
+                 "account": "Account", "balance": "Balance"}
     card_cols = {"date": "Transaction Date", "description": "Payee", "amount": "Amount", "account": "Account"}
     bank_profile_id = _insert_demo_profile(conn, "Everyday Bank", bank_cols, use_imported_categories=1)
     card_profile_id = _insert_demo_profile(conn, "Rewards Card", card_cols, use_imported_categories=0)
@@ -539,7 +559,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
 
     # Import the curated source first (categories trusted) — this also creates the Pet Care leaf.
     _import(
-        _render_csv(["Date", "Description", "Category", "Amount", "Account"], bank_rows),
+        _render_csv(["Date", "Description", "Category", "Amount", "Account", "Balance"], bank_rows),
         profile_id=bank_profile_id, column_map=bank_cols, account_keys=("checking", "savings"),
         use_imported_categories=True, filename="everyday-bank.csv",
     )
@@ -615,6 +635,14 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
 
     from backend.routers.rules import ensure_rule_series
     ensure_rule_series(conn, gym_rule_id, "monthly")
+
+    # The card's export has no balance column, so its balance is the last statement's, entered by hand;
+    # the ledger carries it to today and works it back from there. The brokerage's moves with the market
+    # rather than its rows, so a single current figure is all it can honestly be given: a monthly series
+    # would differ from the dividends between each pair, and the balance checks would report every span.
+    # The wallet and the marketplace are left without one, as money only passes through them.
+    record_manual_balance(conn, accounts["card"][0], monthly(20, 0), CARD_STATEMENT_BALANCE)
+    record_manual_balance(conn, accounts["brokerage"][0], d(2), BROKERAGE_BALANCE)
 
     # The wallet last, so the checking rows it pairs with are already in; the pairing runs after the
     # import as it would for a user's file.

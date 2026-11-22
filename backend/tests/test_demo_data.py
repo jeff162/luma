@@ -505,3 +505,24 @@ class DemoWorkedExampleTests(unittest.TestCase):
         self.assertIn((0, 1), [(r["done"], r["members"]) for r in records], "no month still owed")
         self.assertIsNotNone(loose_repayment, "no repayment waiting to be paired")
         self.assertEqual([r["counterpart_account_id"] for r in rent_series], [None])
+
+    def test_every_account_that_holds_or_owes_money_has_a_balance(self):
+        """The Balances dashboard, the Accounts page's balances and the running balance need a stated
+        balance to work from. The bank's come from its file's balance column, which the import refuses
+        without a word in the ledger when the rows stop reading as a running balance; the one check that
+        disagrees is the savings duplicate, which is outside the bank's figures."""
+        from backend.services.account_balances import balance_checks, current_balances
+
+        with self._conn() as conn:
+            accounts = {r["type"]: r["id"] for r in conn.execute("SELECT id, type FROM account")}
+            balances = current_balances(conn)
+            sources = {(r["account_id"], r["source"]) for r in conn.execute(
+                "SELECT DISTINCT account_id, source FROM account_balance")}
+            gaps = {kind: [c["gap"] for c in balance_checks(conn, accounts[kind])]
+                    for kind in ("depository", "savings")}
+        for kind in ("depository", "savings", "credit", "investment"):
+            self.assertIn(accounts[kind], balances, f"no balance for the {kind} account")
+            self.assertFalse(balances[accounts[kind]]["stale"])
+        for kind in ("depository", "savings"):
+            self.assertIn((accounts[kind], "import"), sources, f"the bank file gave no {kind} balances")
+        self.assertEqual(gaps, {"depository": [], "savings": [96.0]})
