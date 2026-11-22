@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   from a CSV file, and the account report shows a running balance. A Balances dashboard charts them over
   time, and an account can be left out of it.
 - A quick filter on reports for transactions excluded from totals.
+- `luma --version` prints the version and, for a downloaded build, the commit it was built from.
 
 ### Fixed
 

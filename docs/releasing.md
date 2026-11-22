@@ -265,7 +265,7 @@ A **copy run from source carries no stamp**, deliberately: its commit is a `git`
 file in a working copy would be stale as soon as anything was committed. `build_stamp()` therefore
 refuses to report one unless the copy is frozen, even if a `build-stamp` file is sitting there.
 
-Where it shows up: Settings → About (the **Build** row, absent when there is no stamp; **Copy details**
+Where it shows up: `luma --version`, Settings → About (the **Build** row, absent when there is no stamp; **Copy details**
 also asks git for a checkout's commit at the moment of copying, which leaves nothing behind to go stale) and in the startup notes
 in `luma.log` and `luma-desktop.log`. `release.py` also prints it beside the
 version when its gates pass, which is what the clean-tree gate above was for.

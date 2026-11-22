@@ -255,6 +255,14 @@ def build_stamp() -> str | None:
     return stamped or None
 
 
+def version_line() -> str:
+    """`Luma 0.3.0 (v0.3.0-14-ga1b2c3d)`: the name, the version and, for a packaged build, the commit it
+    was built from. One phrasing for `--version` and both logs' start lines, so a copy's answer reads
+    the same wherever it is asked."""
+    stamp = build_stamp()
+    return f"{app_name()} {APP_VERSION}" + (f" ({stamp})" if stamp else "")
+
+
 def checkout_commit() -> str | None:
     """Which commit a checkout is on, asked of git when the question comes up — the checkout's answer to
     `build_stamp`, in the same `git describe` shape.

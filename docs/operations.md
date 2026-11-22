@@ -473,6 +473,7 @@ perimeter*.
 | `GET /api/health` | is a server listening and answering on this port |
 | Settings → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
+| `luma --version` | the version, and for a packaged build the commit it was built from, without starting a server |
 | Settings → About | the version, and for a packaged build the commit it was built from. **Copy details** copies those with how the copy runs, the platform and the browser, for a bug report, leaving out paths, host names and data |
 | The connection sync log (**Sync log** on Accounts → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
@@ -485,7 +486,7 @@ data-location line is shown by default where the question is live, and only to a
 read the paths in Settings anyway.
 
 **"Which build is this?" is answered by the commit, not the version**, which is the same for every build
-between two releases. The **Build** row in Settings → About and both log files' start lines carry it
+between two releases. `luma --version`, the **Build** row in Settings → About and both log files' start lines carry it
 (`releasing.md` → *What identifies a build*).
 
 ### Checking the databases

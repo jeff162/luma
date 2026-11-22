@@ -272,9 +272,7 @@ def _redirect_output_to_log() -> Path | None:
 
     # Stamped like the other log's start marker, and for the same reason: this file is what a report
     # about a macOS build arrives with, and the version does not identify the build on its own.
-    stamp = runtime_config.build_stamp()
-    build = f" ({stamp})" if stamp else ""
-    print(f"\n--- {runtime_config.app_name()} {runtime_config.APP_VERSION}{build} starting {time.asctime()} ---")
+    print(f"\n--- {runtime_config.version_line()} starting {time.asctime()} ---")
     return log
 
 
@@ -579,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="luma",
         description=f"Run {app_name} as a single local process: serve the app and open it in a browser.",
     )
+    parser.add_argument("--version", action="version", version=runtime_config.version_line())
     starting = parser.add_argument_group(f"Starting {app_name}")
     starting.add_argument(
         "--no-browser",

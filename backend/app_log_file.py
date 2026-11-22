@@ -240,12 +240,9 @@ def install() -> Path | None:
     # The build stamp belongs on this line above all: a report about a packaged build arrives with this
     # file, and the version alone cannot say which of the builds carrying that version it was. Absent
     # outside a frozen build, where the version is the whole answer.
-    stamp = runtime_config.build_stamp()
     marker.info(
-        "--- %s %s%s started%s ---",
-        runtime_config.app_name(),
-        runtime_config.APP_VERSION,
-        f" ({stamp})" if stamp else "",
+        "--- %s started%s ---",
+        runtime_config.version_line(),
         f" at {_reachable_url}" if _reachable_url else "",
     )
     return path
