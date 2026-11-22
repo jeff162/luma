@@ -37,9 +37,10 @@ TAX_TAG = "Tax Reporting"
 
 # Balances as the household's position: positive held, negative owed (`services/account_balances.py`). The
 # bank's are each account's balance before the file's first row; the rows carry them from there.
-BANK_OPENING_BALANCES = {"checking": 3000.00, "savings": 8000.00}
+BANK_OPENING_BALANCES = {"checking": 4000.00, "savings": 8000.00}
 CARD_STATEMENT_BALANCE = -1800.00
 BROKERAGE_BALANCE = 40000.00
+BROKERAGE_CONTRIBUTION = 1500.00
 
 # Marker (in the data DB's import_workflow_state) recording that this tenant's data is the demo set.
 # It is the contract that keeps demo and real data from ever mixing: while it is present, new imports
@@ -375,6 +376,14 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for when, amount in zip(autopay_days, card_payments):
         bank(when, "Rewards Card Autopay", "Credit Card Payment", amount, "checking")
 
+    # What the household invests each month: without it the income left over after spending piled up in
+    # checking, which then climbed all year on the Balances dashboard. The brokerage side is in the card
+    # source below and posts a day later; a rule files it as the transfer it is. Neither side's name says
+    # "transfer": the rule-suggestion specs that filter on the word are finding the savings transfer above.
+    contribution_days = [monthly(2, m) for m in range(13)]
+    for when in contribution_days:
+        bank(when, "Brokerage Deposit", "Bank Transfer", BROKERAGE_CONTRIBUTION, "checking")
+
     # A sofa paid for in two instalments: a deposit when ordered, the balance on delivery. Each payment is
     # real money on its own date and is already counted correctly, so what the multi-payment purchase
     # built afterwards adds is only the relationship — and the expected total that shows nothing is still
@@ -515,6 +524,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     card(d(30), "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
     for q, amount in enumerate([52.40, 49.85, 47.10, 45.60]):
         card(monthly(45, q * 3), "Quarterly Dividend", -amount, "brokerage")   # uncategorized income
+    for when in contribution_days:
+        card(next_day(when), "Contribution", -BROKERAGE_CONTRIBUTION, "brokerage")   # rule → Bank Transfer
     # Leg B lands on savings, not the card: a duplicate is one account recorded twice, and a checking row
     # and a card row can never be that (duplicate_detection.account_types_can_match).
     card(d(26), "Annual Membership", 96.00, "savings")              # cross-account duplicate, leg B
@@ -591,6 +602,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         ("used bike", "Other Income"),
         # The card side of the autopay; the bank side arrives already categorized.
         ("payment received", "Credit Card Payment"),
+        # The brokerage side of the monthly contribution, likewise.
+        ("contribution", "Bank Transfer"),
         # Item names from the Amazon order history. "Amazon" says nothing about what was bought; the
         # order does, so rules can file a marketplace order by its contents. The rest stay for the user.
         ("dog bed", "Pet Care"),

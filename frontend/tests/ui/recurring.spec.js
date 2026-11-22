@@ -172,9 +172,10 @@ test('a transfer between two accounts is one series, not two', async ({ page }) 
   // which is what any movement between two tracked accounts looks like to a ledger organized by
   // account. The detector pairs those rows by the money (same amount, opposite directions, days apart)
   // and reads the rhythm off the pairs, so one series owns both legs. The demo's two sides are worded
-  // differently on purpose, which is what makes this the end-to-end proof: no name is involved.
+  // differently on purpose, which is what makes this the end-to-end proof: no name is involved. The search
+  // names it in full because the demo's other transfers share its category, which the search also matches.
   await page.goto('/recurring')
-  await page.getByPlaceholder(/Search merchant/).fill('Transfer')
+  await page.getByPlaceholder(/Search merchant/).fill('Transfer to Savings')
 
   const card = page.locator('[data-series-id]')
   await expect(card).toHaveCount(1)

@@ -114,7 +114,8 @@ class DemoDataTests(unittest.TestCase):
             # date carrying both legs — which is what the Recurring page pairs on, so a demo where the
             # dates did not line up would show the two cards this data exists to demonstrate folding.
             legs = conn.execute(
-                "SELECT account_id, amount, date FROM txn WHERE merchant_name LIKE 'Transfer %'"
+                "SELECT account_id, amount, date FROM txn "
+                "WHERE merchant_name IN ('Transfer to Savings', 'Transfer from Checking')"
             ).fetchall()
             self.assertEqual(len({r["account_id"] for r in legs}), 2)
             self.assertEqual(round(sum(r["amount"] for r in legs), 2), 0.0)
