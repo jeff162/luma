@@ -575,13 +575,13 @@ test('the filter bar amount filter narrows the dashboard and carries over to tra
   await expect(amountButton).toContainText('debit')
 })
 
-// Net worth is drawn by its own component, so leaving it remounts the other frames already in Trends. A
+// Balances is drawn by its own component, so leaving it remounts the other frames already in Trends. A
 // loading flag only Single period and Compare cleared once held that remount on "Loading…" for good.
-test('trends loads after a visit to net worth', async ({ page }) => {
+test('trends loads after a visit to balances', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('link', { name: 'Dashboard' }).click()
   await page.getByRole('button', { name: 'Trends' }).click()
-  await page.getByRole('button', { name: 'Net worth' }).click()
+  await page.getByRole('button', { name: 'Balances' }).click()
   await page.getByRole('button', { name: 'Expenses' }).click()
   await expect(page.getByTestId('trend-averages-title')).toBeVisible()
   await expect(page.getByText('Loading…')).toHaveCount(0)

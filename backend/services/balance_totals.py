@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Net worth: the household's position across its account groups on a date (`docs/data-model.md` →
-*Net worth*).
+Balance totals: the household's position across the account groups it counts, on a date
+(`docs/data-model.md` → *Balance totals*).
 
 A group's balance on a date is taken from the nearest balance it stated on or before that date, carried
 forward through the rows posted after it. Before its first stated balance it is worked back from that one.
@@ -32,7 +32,7 @@ OWNER_FILTER_PARAMS = ("owner_ids", "exclude_owner_ids", OWNER_LENS_PARAM)
 
 class GroupBalances:
     """One account group's stated balances and posted rows, for its balance on any date. `count_from` is the
-    first date net worth counts the group from where the user set one (`account.net_worth_from`)."""
+    first date the totals count the group from where the user set one (`account.balance_totals_from`)."""
 
     def __init__(self, stated: list, ledger: list, count_from: Optional[str] = None):
         # The latest recorded figure stands for each date, as it does for `current_balances`' anchor.
@@ -102,8 +102,8 @@ def history_flag_key(root_id: str, before: str) -> str:
 
 def history_flag(balances: GroupBalances, account_type: Optional[str]) -> Optional[dict]:
     """Whether the balance worked back from the group's first stated balance goes clearly onto the wrong
-    side of zero for its type, which says its transactions do not explain its history. Only the history net
-    worth counts is judged, so a start date set past the trouble settles it.
+    side of zero for its type, which says its transactions do not explain its history. Only the history the
+    totals count is judged, so a start date set past the trouble settles it.
 
     Reports the worst figure with its date, and `suggested_from`: the earliest date from which the worked-back
     history stays on the right side, as far back as the transactions hold up. None when there is nothing
@@ -155,13 +155,13 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
 
 
 def load_group_balances(conn, root_ids: list) -> dict:
-    """`{root_id: GroupBalances}` for these groups, each counted from its root's `net_worth_from`."""
+    """`{root_id: GroupBalances}` for these groups, each counted from its root's `balance_totals_from`."""
     if not root_ids:
         return {}
     placeholders = ",".join("?" * len(root_ids))
     stated, ledger = {}, {}
     count_from = dict(conn.execute(
-        f"SELECT id, net_worth_from FROM account WHERE id IN ({placeholders})", root_ids).fetchall())
+        f"SELECT id, balance_totals_from FROM account WHERE id IN ({placeholders})", root_ids).fetchall())
     for row in conn.execute(
         f"""
         SELECT COALESCE(a.parent_account_id, a.id) AS root_id, b.as_of_date, b.source, b.balance
@@ -208,12 +208,12 @@ def account_history_flag(conn, root_id: str) -> Optional[dict]:
     return _shown_flag(conn, root_id, balances, root["type"] if root else None, dismissed_keys(conn))
 
 
-def net_worth_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
-    """The account groups net worth counts, narrowed by the owner filters (`owner_ids`,
+def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
+    """The account groups the totals count, narrowed by the owner filters (`owner_ids`,
     `exclude_owner_ids`, `owner_lens`, as the facet registry names them), each with its balances and its
     history flag.
 
-    A group counts unless its root is trashed, excluded from net worth, or of type `other`, whose type says
+    A group counts unless its root is trashed, excluded from the totals, or of type `other`, whose type says
     nothing about what the account is. Owner is read from the root, as type is.
 
     `type_index` is the group's place among every counted group of its type, before the owner filters, so
@@ -222,7 +222,7 @@ def net_worth_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
     counted = [
         "t.parent_account_id IS NULL",
         "t.trashed_at IS NULL",
-        "t.exclude_from_net_worth = 0",
+        "t.exclude_from_balance_totals = 0",
         "COALESCE(t.type, 'other') != 'other'",
     ]
     every = conn.execute(
@@ -248,7 +248,7 @@ def net_worth_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
         group = balances[row["id"]]
         groups.append({
             "account_id": row["id"], "name": row["name"], "type": row["type"], "owner_id": row["owner_id"],
-            "type_index": type_index[row["id"]], "net_worth_from": group.count_from,
+            "type_index": type_index[row["id"]], "balance_totals_from": group.count_from,
             "history_flag": _shown_flag(conn, row["id"], group, row["type"], dismissed), "balances": group,
         })
     return groups
@@ -263,13 +263,13 @@ def _totals(amounts) -> dict:
     return {"assets": assets, "liabilities": liabilities, "net": round(assets + liabilities, 2)}
 
 
-def net_worth_on(conn, date_start: Optional[str], date_end: Optional[str], owner_filters=None,
-                 today: Optional[date] = None) -> dict:
-    """Net worth at the end of a period, and each group's balance then and at the period's opening.
+def balance_totals_on(conn, date_start: Optional[str], date_end: Optional[str], owner_filters=None,
+                      today: Optional[date] = None) -> dict:
+    """The totals at the end of a period, and each group's balance then and at the period's opening.
 
     The end is `date_end`, or today when the period runs past it or has no end. The opening is the close
     of the day before `date_start`; an all-time period has none. A group whose coverage begins inside the
-    period opens it at zero, so the change is the end's net worth less the opening's and the two always
+    period opens it at zero, so the change is the end's total less the opening's and the two always
     agree. That is right for an account opened in the period, and overstates the change for one whose
     records merely start late."""
     today_iso = (today or date.today()).isoformat()
@@ -277,7 +277,7 @@ def net_worth_on(conn, date_start: Optional[str], date_end: Optional[str], owner
     open_ended = end == today_iso
     opening = (date.fromisoformat(date_start) - timedelta(days=1)).isoformat() if date_start else None
     accounts = []
-    for group in net_worth_groups(conn, owner_filters):
+    for group in balance_total_groups(conn, owner_filters):
         balances = group.pop("balances")
         at_end = balances.on(end, open_ended)
         at_opening = balances.on(opening) if opening and at_end else None
@@ -308,14 +308,14 @@ def _month_ends(first: str, today: date) -> list[str]:
     return [*days, today.isoformat()]
 
 
-def net_worth_by_month(conn, owner_filters=None, today: Optional[date] = None) -> dict:
-    """Net worth at each month's end, from the month the earliest group's coverage begins through today,
+def balance_totals_by_month(conn, owner_filters=None, today: Optional[date] = None) -> dict:
+    """The totals at each month's end, from the month the earliest group's coverage begins through today,
     whose point is today's figure, with each group's balance at that point (`balances`, by account id;
     a group not yet covered is absent). `uncovered` counts the groups with a balance whose coverage has not
     begun yet on that date. `accounts` lists the counted groups, those that have never stated a balance
     with `has_balance` false, since no date counts them."""
     today = today or date.today()
-    groups = net_worth_groups(conn, owner_filters)
+    groups = balance_total_groups(conn, owner_filters)
     covered = [g for g in groups if g["balances"].stated]
     points = []
     if covered:

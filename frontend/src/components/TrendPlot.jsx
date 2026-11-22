@@ -17,7 +17,7 @@ import PanningChartTooltip from './PanningChartTooltip.jsx'
 /*
  * The bar chart under a Dashboard Single-period report: one bar per bucket of history, the selected
  * period's buckets highlighted, a click on a bucket making it the period. The Expenses, Income and Cash
- * flow frames and the Net worth frame all draw it, so a fix to its axis, panning or scroll position
+ * flow frames and the Balances frame all draw it, so a fix to its axis, panning or scroll position
  * reaches each of them.
  *
  * It is drawn as *two* charts side by side so the value axis can stay put while the plot pans: a fixed

@@ -29,7 +29,7 @@ import {
 import { TREND_SPAN_ALL, TREND_SPAN_PREF_KEY, trendSpanFloorMonth } from '../lib/trendSpan.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatDate, monthLabel } from '../lib/utils.js'
-import { accountColor, bridgeRows, buildBridge, describeHistoryFlag, groupByType } from '../lib/netWorth.js'
+import { accountColor, bridgeRows, buildBridge, describeHistoryFlag, groupByType } from '../lib/balanceTotals.js'
 import { useAccountDetailPanels } from './accounts/useAccountDetailPanels.jsx'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
 import Breadcrumb from './Breadcrumb.jsx'
@@ -43,13 +43,14 @@ import { Button, Card, EmptyState, LinkButton, LoadFailed, Select, Spinner, Stal
 import { useViewLoad } from '../lib/useViewLoad.js'
 
 /*
- * The Dashboard's Net worth frame: the household's position across its accounts, from the balances they
- * stated (`backend/services/net_worth.py`), grouped and coloured by account type (`lib/netWorth.js`).
+ * The Dashboard's Balances frame: the household's position across the accounts it counts, from the
+ * balances they stated (`backend/services/balance_totals.py`), grouped and coloured by account type
+ * (`lib/balanceTotals.js`).
  *
  * Single period reads like the Expenses frame: headline cards, a chart beside its key, and the history
- * underneath. The chart is a bridge from net worth at the period's opening to its end, one step per type;
+ * underneath. The chart is a bridge from the total at the period's opening to its end, one step per type;
  * the key is the account table. Trends shows each month's end as bars by type, held above zero and owed
- * below, with net worth across them. A type drills into its accounts in both, and an account opens its
+ * below, with the total across them. A type drills into its accounts in both, and an account opens its
  * report.
  *
  * Only the owner filters apply. The Dashboard's other filters select transactions, and a balance belongs to
@@ -70,7 +71,7 @@ function currentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, categories, trendWindow, onTrendWindowChange }) {
+export default function BalancesView({ mode, dateStart, dateEnd, periodLabel, categories, trendWindow, onTrendWindowChange }) {
   const { filters } = useFilters()
   const { params: ownerLensParams } = useOwnerLens()
   const ownerParams = useMemo(() => {
@@ -86,11 +87,11 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
 
   const load = useCallback(() => Promise.all([
     mode === 'single'
-      ? api.getNetWorth({ ...ownerParams, date_start: dateStart, date_end: dateEnd })
+      ? api.getBalanceTotals({ ...ownerParams, date_start: dateStart, date_end: dateEnd })
       : Promise.resolve(null),
-    api.getNetWorthByMonth(ownerParams),
+    api.getBalanceTotalsByMonth(ownerParams),
   ]), [mode, ownerParams, dateStart, dateEnd])
-  const { data, loading, busy, error, reload: refresh } = useViewLoad(load, { view: 'Net worth' })
+  const { data, loading, busy, error, reload: refresh } = useViewLoad(load, { view: 'Balances' })
   const [period = null, history = null] = data || []
 
   // A sync, an edit or a dismissed flag moves what is shown, so the figures are re-read in place.
@@ -103,7 +104,7 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
   // The flag's remedies open dialogs from links inside a tooltip, so the dialogs are rendered here.
   const { actionsFor, dialogs: remedyDialogs } = useHistoryFlagRemedies(refresh)
   const flagActions = useCallback(
-    account => actionsFor({ id: account.account_id, type: account.type, netWorthFrom: account.net_worth_from }, account.history_flag),
+    account => actionsFor({ id: account.account_id, type: account.type, balanceTotalsFrom: account.balance_totals_from }, account.history_flag),
     [actionsFor],
   )
 
@@ -114,15 +115,15 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
   return (
     <>
       {otherFiltersSet ? (
-        <div data-testid="net-worth-filter-note" style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          Net worth counts accounts by owner only. The other filters do not apply.
+        <div data-testid="balances-filter-note" style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+          Balances are filtered by owner only. The other filters do not apply.
         </div>
       ) : null}
-      {!ready ? (error ? <LoadFailed what="net worth" onRetry={refresh} /> : busy ? <Spinner /> : null) : (
+      {!ready ? (error ? <LoadFailed what="balances" onRetry={refresh} /> : busy ? <Spinner /> : null) : (
         <StaleWhileRefreshing refreshing={loading}>
-          {error ? <LoadFailed what="net worth" onRetry={refresh} inline /> : null}
+          {error ? <LoadFailed what="balances" onRetry={refresh} inline /> : null}
           {mode === 'trends' ? (
-            <NetWorthTrends
+            <BalancesTrends
               history={history}
               openType={openType}
               onDrill={setDrillType}
@@ -132,7 +133,7 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
               flagActions={flagActions}
             />
           ) : (
-            <NetWorthPeriod
+            <BalancesPeriod
               result={period}
               history={history}
               periodLabel={periodLabel}
@@ -154,7 +155,7 @@ export default function NetWorthView({ mode, dateStart, dateEnd, periodLabel, ca
 
 // --- Single period ------------------------------------------------------------------------------------
 
-function NetWorthPeriod({ result, history, periodLabel, dateStart, dateEnd, openType, onDrill, onOpenAccount, flagActions }) {
+function BalancesPeriod({ result, history, periodLabel, dateStart, dateEnd, openType, onDrill, onOpenAccount, flagActions }) {
   const { totals, accounts } = result
   const hasOpening = !!result.opening_date
   const groups = groupByType(accounts)
@@ -163,7 +164,6 @@ function NetWorthPeriod({ result, history, periodLabel, dateStart, dateEnd, open
   const bridgeGroups = openGroup
     ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, color: accountColor(a), accounts: [a] }))
     : groups.map(g => ({ key: g.type, label: g.label, color: g.color, accounts: g.accounts }))
-  const scope = openGroup ? openGroup.label : 'net worth'
   // The totals are named by their date alone; the chart's title says what they are totals of.
   const steps = buildBridge(bridgeGroups, {
     hasOpening,
@@ -173,7 +173,7 @@ function NetWorthPeriod({ result, history, periodLabel, dateStart, dateEnd, open
   return (
     <>
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
-        <SummaryTotalCard label={`Net worth · ${formatDate(result.date)}`} value={totals.net}
+        <SummaryTotalCard label={`Total · ${formatDate(result.date)}`} value={totals.net}
           color={totals.net < 0 ? 'var(--danger)' : undefined} />
         <SummaryTotalCard label="Assets" value={totals.assets} format={formatMoneyMagnitude} />
         <SummaryTotalCard label="Liabilities" value={totals.liabilities} format={formatMoneyMagnitude} />
@@ -184,12 +184,12 @@ function NetWorthPeriod({ result, history, periodLabel, dateStart, dateEnd, open
       </div>
       {openGroup ? <Breadcrumb items={['Overview', openGroup.label]} onNavigate={() => onDrill(null)} /> : null}
       {accounts.length === 0 ? (
-        <EmptyState message="No accounts count toward net worth." />
+        <EmptyState message="No accounts count toward the balance totals." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 20, marginBottom: 24 }}>
           <Card>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
-              {hasOpening ? 'Change' : (openGroup ? scope : 'Net worth')} by {openGroup ? 'account' : 'category'}
+              {hasOpening ? 'Change' : (openGroup ? openGroup.label : 'Total')} by {openGroup ? 'account' : 'category'}
             </div>
             <BridgeChart steps={steps} series={bridgeGroups} onDrill={openGroup ? null : onDrill} />
           </Card>
@@ -280,7 +280,7 @@ function BridgeChart({ steps, series, onDrill }) {
 
 // The history under the period's figures, drawn by the plot the Expenses trend uses (`TrendPlot`), with
 // the same two controls: how far back it reaches (the Dashboard's one span setting, counted back from the
-// period's end) and the bucket size. Net worth is a figure on a date rather than a sum, so a quarter or a
+// period's end) and the bucket size. A balance is a figure on a date rather than a sum, so a quarter or a
 // year is its balance at its last month's end, or today for the current one. The buckets the period covers
 // are highlighted, and a click makes that bucket the period.
 function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
@@ -318,7 +318,7 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
     <Card>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {openGroup ? openGroup.label : 'Net worth'} by {grainWord}
+          {openGroup ? openGroup.label : 'Total'} by {grainWord}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {canGoBackDate ? (
@@ -339,7 +339,7 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
       </div>
       <TrendPlot
         data={data}
-        name={openGroup ? openGroup.label : 'Net worth'}
+        name={openGroup ? openGroup.label : 'Total'}
         formatter={value => formatSignedMoneyAmount(value)}
         fillOf={bucket => (bucket.isSelected ? color : `color-mix(in srgb, ${color} 45%, var(--surface2))`)}
         onBucketClick={bucket => pinDateFromChart({ start: bucket.rangeStart, end: bucket.rangeEnd, preset: bucket.periodLabel })}
@@ -367,7 +367,7 @@ function sumBalances(point, accounts) {
 function AccountTable({ groups, drilled, columns, onDrill, onOpenAccount, flagActions }) {
   const template = `minmax(0, 1fr) ${columns.map(() => 'auto').join(' ')}`
   return (
-    <div role="table" aria-label="Net worth by account"
+    <div role="table" aria-label="Balances by account"
       style={{ display: 'grid', gridTemplateColumns: template, columnGap: 20, rowGap: 6, alignItems: 'baseline', fontSize: 13 }}>
       <div role="row" style={{ display: 'contents', fontSize: 12, color: 'var(--muted)' }}>
         <div role="columnheader">{drilled ? 'Account' : 'Type'}</div>
@@ -473,7 +473,7 @@ function AccountWarning({ account, flagActions }) {
 
 // --- Trends -------------------------------------------------------------------------------------------
 
-function NetWorthTrends({ history, openType, onDrill, trendWindow, onTrendWindowChange, onOpenAccount, flagActions }) {
+function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindowChange, onOpenAccount, flagActions }) {
   const thisMonth = currentMonth()
   const { points, accounts } = history
   const range = trendsWindowRange(resolveTrendsWindowKey(points, trendWindow, thisMonth), thisMonth, rowsMonthSpan(points))
@@ -495,7 +495,7 @@ function NetWorthTrends({ history, openType, onDrill, trendWindow, onTrendWindow
   const lastPoint = shown[shown.length - 1]
   const noBalance = accounts.filter(a => !a.has_balance).length
   const pans = data.length > MONTHS_FIT
-  const totalLabel = openGroup ? openGroup.label : 'Net worth'
+  const totalLabel = openGroup ? openGroup.label : 'Total'
   const chart = (
     <ResponsiveContainer width="100%" height={pans ? '100%' : CHART_HEIGHT}>
       {/* `stackOffset="sign"` keeps what is held stacking up from zero and what is owed stacking down from
@@ -523,7 +523,7 @@ function NetWorthTrends({ history, openType, onDrill, trendWindow, onTrendWindow
           itemStyle={CHART_TOOLTIP_ITEM_STYLE}
         />
         {series.map(s => (
-          <Bar key={s.key} dataKey={s.key} name={s.label} stackId="net-worth" fill={s.color} fillOpacity={0.85}
+          <Bar key={s.key} dataKey={s.key} name={s.label} stackId="balances" fill={s.color} fillOpacity={0.85}
             isAnimationActive={false} />
         ))}
         <Line type="linear" dataKey="total" name={totalLabel} stroke="var(--text)" strokeWidth={2}

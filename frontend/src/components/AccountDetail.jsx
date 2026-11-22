@@ -6,9 +6,9 @@ import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { formatDate, formatDateRange } from '../lib/utils.js'
-import { describeHistoryFlag } from '../lib/netWorth.js'
+import { describeHistoryFlag } from '../lib/balanceTotals.js'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
-import NetWorthStartDialog from './accounts/NetWorthStartDialog.jsx'
+import BalanceTotalsStartDialog from './accounts/BalanceTotalsStartDialog.jsx'
 import { unusualBalanceColor } from '../lib/accountTypes.js'
 import { Spinner, LinkButton } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -263,8 +263,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const reloadBalance = useCallback(() => setBalanceNonce(n => n + 1), [])
   const { actionsFor: historyFlagActions, dialogs: historyFlagDialogs } = useHistoryFlagRemedies(reloadBalance)
   const [startDialogOpen, setStartDialogOpen] = useState(false)
-  const netWorthAccount = {
-    id: balanceInfo?.root_id || account.id, type: balanceInfo?.account_type, netWorthFrom: balanceInfo?.net_worth_from,
+  const balanceTotalsAccount = {
+    id: balanceInfo?.root_id || account.id, type: balanceInfo?.account_type,
+    balanceTotalsFrom: balanceInfo?.balance_totals_from,
   }
 
   const header = (
@@ -285,12 +286,12 @@ export default function AccountDetail({ account, categories = [], onClose, force
         <div role="note" style={{ fontSize: 12, marginTop: 4, maxWidth: 560 }}>
           <span aria-hidden="true" style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span>
           {describeHistoryFlag(balanceInfo.history_flag)}
-          <div style={{ marginTop: 2 }}>{historyFlagActions(netWorthAccount, balanceInfo.history_flag)}</div>
+          <div style={{ marginTop: 2 }}>{historyFlagActions(balanceTotalsAccount, balanceInfo.history_flag)}</div>
         </div>
       ) : null}
-      {balanceInfo?.net_worth_from ? (
+      {balanceInfo?.balance_totals_from ? (
         <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-          Net worth counts it from {formatDate(balanceInfo.net_worth_from)}{' '}
+          Balance totals count it from {formatDate(balanceInfo.balance_totals_from)}{' '}
           <LinkButton onClick={() => setStartDialogOpen(true)} style={{ fontSize: 12 }}>Change</LinkButton>
         </div>
       ) : null}
@@ -457,9 +458,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
     </DetailPanelShell>
     {historyFlagDialogs}
     {startDialogOpen ? (
-      <NetWorthStartDialog
-        accountId={netWorthAccount.id}
-        current={balanceInfo?.net_worth_from || null}
+      <BalanceTotalsStartDialog
+        accountId={balanceTotalsAccount.id}
+        current={balanceInfo?.balance_totals_from || null}
         onClose={() => setStartDialogOpen(false)}
         onSaved={reloadBalance}
       />

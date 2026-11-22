@@ -61,7 +61,7 @@ import CashFlowSankey from '../components/CashFlowSankey.jsx'
 import TrendPlot from '../components/TrendPlot.jsx'
 import SummaryTotalCard from '../components/SummaryTotalCard.jsx'
 import Breadcrumb from '../components/Breadcrumb.jsx'
-import NetWorthView from '../components/NetWorthView.jsx'
+import BalancesView from '../components/BalancesView.jsx'
 import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
 import { buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
@@ -127,15 +127,15 @@ const TRANSIENT_TAG_REPORT_ID = '__transient__'
 const DASHBOARD_VIEW_SPENDING = 'spending'
 const DASHBOARD_VIEW_INCOME = 'income'
 const DASHBOARD_VIEW_CASH_FLOW = 'cash_flow'
-// Net worth reads account balances rather than transactions, so it is drawn by its own view
-// (NetWorthView) and none of the transaction frames' loaders run for it.
-const DASHBOARD_VIEW_NET_WORTH = 'net_worth'
+// Balances reads account balances rather than transactions, so it is drawn by its own view
+// (BalancesView) and none of the transaction frames' loaders run for it.
+const DASHBOARD_VIEW_BALANCES = 'balances'
 
 const DASHBOARD_VIEW_OPTIONS = [
   { value: DASHBOARD_VIEW_SPENDING, label: 'Expenses' },
   { value: DASHBOARD_VIEW_INCOME, label: 'Income' },
   { value: DASHBOARD_VIEW_CASH_FLOW, label: 'Cash flow' },
-  { value: DASHBOARD_VIEW_NET_WORTH, label: 'Net worth' },
+  { value: DASHBOARD_VIEW_BALANCES, label: 'Balances' },
 ]
 
 const DASHBOARD_MODE_OPTIONS = [
@@ -144,11 +144,11 @@ const DASHBOARD_MODE_OPTIONS = [
   { value: 'trends', label: 'Trends' },
 ]
 
-// Compare mode has no cash-flow or net-worth form (its two-period breakdown is specified for spending and
-// income only), and the frame selector is hidden there — so a persisted cash-flow or net-worth preference
+// Compare mode has no cash-flow or balances form (its two-period breakdown is specified for spending and
+// income only), and the frame selector is hidden there — so a persisted cash-flow or balances preference
 // has to be read as spending for that mode rather than leaking into loaders that have no branch for it.
 function frameForMode(view, mode) {
-  if (mode === 'compare' && (view === DASHBOARD_VIEW_CASH_FLOW || view === DASHBOARD_VIEW_NET_WORTH)) {
+  if (mode === 'compare' && (view === DASHBOARD_VIEW_CASH_FLOW || view === DASHBOARD_VIEW_BALANCES)) {
     return DASHBOARD_VIEW_SPENDING
   }
   return view
@@ -1760,9 +1760,9 @@ export default function Dashboard() {
     </div>
   )
 
-  if (activeFrame === DASHBOARD_VIEW_NET_WORTH) {
+  if (activeFrame === DASHBOARD_VIEW_BALANCES) {
     return (
-      <NetWorthDashboard header={header} mode={mode} effectiveDate={effectiveDate}
+      <BalancesDashboard header={header} mode={mode} effectiveDate={effectiveDate}
         trendWindow={trendYear} onTrendWindowChange={setTrendYear} />
     )
   }
@@ -1780,8 +1780,8 @@ export default function Dashboard() {
   )
 }
 
-// The Net worth frame. It needs the categories only for the account panels it opens.
-function NetWorthDashboard({ header, mode, effectiveDate, trendWindow, onTrendWindowChange }) {
+// The Balances frame. It needs the categories only for the account panels it opens.
+function BalancesDashboard({ header, mode, effectiveDate, trendWindow, onTrendWindowChange }) {
   const [categories, setCategories] = useState([])
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -1790,7 +1790,7 @@ function NetWorthDashboard({ header, mode, effectiveDate, trendWindow, onTrendWi
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       {header}
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 32px 32px' }}>
-        <NetWorthView
+        <BalancesView
           mode={mode}
           dateStart={effectiveDate?.start || null}
           dateEnd={effectiveDate?.end || null}

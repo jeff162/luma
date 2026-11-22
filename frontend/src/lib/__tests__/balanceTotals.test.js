@@ -1,10 +1,10 @@
 /*
- * The net worth bridge has to land on the closing figure the card beside it shows, and its totals have to be
+ * The balance totals bridge has to land on the closing figure the card beside it shows, and its totals have to be
  * drawn as the same parts its steps change.
  */
 
 import { describe, it, expect } from 'vitest'
-import { bridgeRows, buildBridge } from '../netWorth.js'
+import { bridgeRows, buildBridge } from '../balanceTotals.js'
 
 const labels = { openingLabel: 'Opening', closingLabel: 'Closing' }
 

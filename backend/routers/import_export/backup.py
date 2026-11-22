@@ -595,7 +595,7 @@ BACKUP_SECTIONS = (
     ("accounts", "account",
      "SELECT id, external_account_id, connection_id, provider, name, display_name, "
      "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at, wallet_match_text, "
-     "exclude_from_net_worth, net_worth_from "
+     "exclude_from_balance_totals, balance_totals_from "
      "FROM account ORDER BY rowid"),
     ("categories", "category", "SELECT * FROM category ORDER BY rowid"),
     ("category_rules", "category_rule", "SELECT * FROM category_rule ORDER BY rowid"),
@@ -1592,6 +1592,24 @@ def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
     return kept
 
 
+# An account's balance-total settings under the names a backup older than migration v101 gives them.
+_BALANCE_TOTALS_LEGACY_COLUMNS = (
+    ("exclude_from_net_worth", "exclude_from_balance_totals"),
+    ("net_worth_from", "balance_totals_from"),
+)
+
+
+def _balance_totals_columns(row):
+    """Move a pre-v101 account row's settings to their current names. The insert drops keys the schema does
+    not have, so without this every account kept out of the totals, or counted from a date, would come back
+    counted in full."""
+    for old, new in _BALANCE_TOTALS_LEGACY_COLUMNS:
+        if old in row:
+            value = row.pop(old)
+            row.setdefault(new, value)
+    return row
+
+
 def _reconcile_restored_account_links(conn, accounts, backup_version):
     """Reconcile each restored account's connection link against the live `connection` table, as
     `_restore_connections` left it. Two jobs:
@@ -2013,7 +2031,7 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
             row["connection_id"] = connection_ids[row["connection_id"]]
         return row
 
-    accounts = [_local_connection(dict(row)) for row in section_rows("accounts")]
+    accounts = [_balance_totals_columns(_local_connection(dict(row))) for row in section_rows("accounts")]
     for row in accounts:
         row["display_name"] = (row.get("display_name") or row.get("name") or "").strip() or (row.get("name") or "")
     # Resolve account→connection links against the live connection table: translate a v7 payload's legacy

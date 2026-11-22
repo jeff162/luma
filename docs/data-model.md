@@ -377,30 +377,30 @@ more is reported with both changes and the last row of its span. Neighbours are 
 figure against the latest, so one missing or extra row shows in the span it belongs to and not in every
 span before it.
 
-**`account.exclude_from_net_worth`** keeps an account's balance out of net worth. It is read from the
+**`account.exclude_from_balance_totals`** keeps an account's balance out of the balance totals. It is read from the
 group root, as type is, so a member's own value lies dormant until it is detached, and the API refuses to
 set it on a member. An `other` account is out whatever the column says, because the type says nothing
 about what the account is; the column keeps its value so a retype restores the user's choice.
 
-### Net worth
+### Balance totals
 
-Net worth is the sum of the counted groups' balances on a date (`services/net_worth.py`), shown on the
-Dashboard's Net worth frame.
+The balance total is the sum of the counted groups' balances on a date (`services/balance_totals.py`),
+shown on the Dashboard's Balances frame.
 
-- **A group counts unless its root is trashed, excluded from net worth, or of type `other`.** Only the owner
+- **A group counts unless its root is trashed, excluded from the totals, or of type `other`.** Only the owner
   filters (chips and the owner lens) narrow it, read from the group root. The other facets select
   transactions, and a balance belongs to an account.
 - **A balance on a past date comes from the nearest stated balance on or before it**, carried forward
   through the rows posted after it; before the first stated balance it is worked back from that one. Each
   stated balance counts from its own date on, so a figure entered to correct an old error does not move
   the history before it. On today's date this is the balance `current_balances` gives. It differs from the
-  running balance, which runs back from today so a discrepancy stays visible; net worth wants each date's
+  running balance, which runs back from today so a discrepancy stays visible; the totals want each date's
   best figure, and the discrepancy is shown on the account.
 - **Before a group's coverage begins it is left out**, not given the flat figure working back would
   produce. Coverage begins at its earliest stated balance or posted row.
 - **Assets and liabilities split by the sign of each group's balance**, so no account type is asked.
 - **A group whose coverage begins inside a period opens it at zero**, so the period's change is always the
-  end's net worth less the opening's. That is right for an account opened in the period, and overstates
+  end's total less the opening's. That is right for an account opened in the period, and overstates
   the change for one whose records merely start late.
 - **An investment account is treated like any other**: its stated balances and the money moving in and
   out. Holdings are not tracked.
@@ -408,7 +408,7 @@ Dashboard's Net worth frame.
   balance that goes more than `HISTORY_TOLERANCE` onto the wrong side of zero for its type (owing on a
   held account, holding on an owed one, far from zero either way on a wallet or marketplace) says rows are
   missing, as with a wallet imported from statements that carry no balance. The flag shows on the account's
-  net worth row and its account page and changes no figure. Dismissing it is shared, in the
+  Balances row and its account page and changes no figure. Dismissing it is shared, in the
   `signal_dismissals` store, keyed to the account and the stated balance the history was worked back
   from, so entering an earlier balance judges the new history afresh. Later history is not judged: each
   stated balance checks the span before it (`balance_checks`).
@@ -419,7 +419,7 @@ Dashboard's Net worth frame.
   The other is a start date, `suggested_from`: the earliest day from which the worked-back history stays
   on the right side. Nothing is entered for the user: the missing amount is not in the ledger, and a
   figure made up to fit would hide the warning without making the history right.
-- **`account.net_worth_from` is the first date net worth counts a group from**, read from the group root
+- **`account.balance_totals_from` is the first date the totals count a group from**, read from the group root
   and set only by the user. Before it the group is left out, as before its coverage begins, and the flag
   judges only the history from it. It changes nothing else: the account's own balance, running balance and
   checks are unaffected. A balance entered before it later does not move it.

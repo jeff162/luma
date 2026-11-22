@@ -8,10 +8,10 @@ import { onEnter } from '../../lib/formKeys.js'
 import { AppDialog, Button, Input } from '../ui.jsx'
 
 /*
- * The first date net worth counts an account from. It changes only here: a balance entered before it later
+ * The first date the balance totals count an account from. It changes only here: a balance entered before it later
  * does not move it. `current` is the date set now, or null.
  */
-export default function NetWorthStartDialog({ accountId, current, suggested, onClose, onSaved }) {
+export default function BalanceTotalsStartDialog({ accountId, current, suggested, onClose, onSaved }) {
   const [value, setValue] = useState(current || suggested || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -19,7 +19,7 @@ export default function NetWorthStartDialog({ accountId, current, suggested, onC
     setBusy(true)
     setError('')
     try {
-      await api.updateAccount(accountId, { net_worth_from: next })
+      await api.updateAccount(accountId, { balance_totals_from: next })
       onSaved?.()
       onClose()
     } catch (err) {
@@ -29,8 +29,8 @@ export default function NetWorthStartDialog({ accountId, current, suggested, onC
   }
   return createPortal(
     <AppDialog
-      title="Count in net worth from"
-      description="Net worth leaves the account out before this date. Its transactions and balances are unchanged."
+      title="Count in balance totals from"
+      description="The balance totals leave the account out before this date. Its transactions and balances are unchanged."
       onClose={onClose}
       width="min(420px, 100%)"
       actions={(

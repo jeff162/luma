@@ -408,13 +408,14 @@ def refresh_planner_statistics(db_path: str | None = None, *, reason: str) -> No
 # `connection.realtime_balances`, whether a connection's syncs ask for a live balance. v98 adds
 # `account.exclude_from_net_worth`. v99 adds `account_balance.import_batch_id`, the import that stated a
 # balance read from a file's balance column. v100 adds `account.net_worth_from`, the first date net worth
-# counts a group from.
+# counts a group from. v101 renames those two `exclude_from_balance_totals` and `balance_totals_from`, and
+# the Dashboard's saved `net_worth` view `balances`.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 100
+CURRENT_VERSION = 101
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2984,6 +2985,42 @@ def _add_net_worth_from(conn):
         conn.execute("ALTER TABLE account ADD COLUMN net_worth_from TEXT")
 
 
+# The Dashboard view preference's old value for the Balances view, and its new one.
+_BALANCES_VIEW_PREF = ("ui.dashboard.view", "net_worth", "balances")
+
+
+def _rename_balances_view_preference(conn):
+    """A saved Dashboard view of `net_worth` names the Balances view, which the Dashboard no longer knows by
+    that value. Registered in `POST_RESTORE_DATA_INIT`, so a restored backup older than this comes across
+    the same way."""
+    if "ui_preference" not in _table_names(conn):
+        return
+    key, old, new = _BALANCES_VIEW_PREF
+    conn.execute("UPDATE ui_preference SET pref_value = ? WHERE pref_key = ? AND pref_value = ?",
+                 (json.dumps(new), key, json.dumps(old)))
+
+
+@migration(101)
+def _rename_balance_total_settings(conn):
+    """Net worth became the Balances view, since a total of the accounts the ledger holds is not necessarily
+    the net worth. The two account settings and the saved view follow the name. A backup
+    older than this carries the old column names, which the restore translates (`_balance_totals_columns`
+    in `routers/import_export/backup.py`)."""
+    if "account" in _table_names(conn):
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+        renames = (("exclude_from_net_worth", "exclude_from_balance_totals",
+                    "INTEGER NOT NULL DEFAULT 0"),
+                   ("net_worth_from", "balance_totals_from", "TEXT"))
+        for old, new, ddl in renames:
+            if new in columns:
+                continue
+            if old in columns:
+                conn.execute(f"ALTER TABLE account RENAME COLUMN {old} TO {new}")
+            else:
+                conn.execute(f"ALTER TABLE account ADD COLUMN {new} {ddl}")
+    _rename_balances_view_preference(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3032,6 +3069,7 @@ POST_RESTORE_DATA_INIT = {
     90: _backfill_amazon_charge_text,
     92: _adopt_wallet_pairs,
     95: _mark_restored_watch_folders,
+    101: _rename_balances_view_preference,
 }
 
 
@@ -3574,12 +3612,14 @@ def init_db(db_path: str | None = None):
                 -- A wallet account's text to find its other side by on a bank or card row
                 -- (services/wallet_accounts.py). NULL = never set; '' = the user says none.
                 wallet_match_text   TEXT,
-                -- 1 = the user keeps this account's balance out of net worth. Read from the group root, and
-                -- an `other` account is out whatever this says (`docs/data-model.md` -> *Account balances*).
-                exclude_from_net_worth INTEGER NOT NULL DEFAULT 0,
-                -- The first date net worth counts the group from, set by the user where its earlier history
-                -- cannot be trusted. Read from the group root; NULL counts it from its own history's start.
-                net_worth_from      TEXT
+                -- 1 = the user keeps this account's balance out of the balance totals. Read from the group
+                -- root, and an `other` account is out whatever this says (`docs/data-model.md` -> *Account
+                -- balances*).
+                exclude_from_balance_totals INTEGER NOT NULL DEFAULT 0,
+                -- The first date the balance totals count the group from, set by the user where its earlier
+                -- history cannot be trusted. Read from the group root; NULL counts it from its own history's
+                -- start.
+                balance_totals_from TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).

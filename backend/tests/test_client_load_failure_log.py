@@ -28,13 +28,13 @@ class ClientLoadFailureLogTests(unittest.TestCase):
 
     def test_a_note_is_one_marked_line(self):
         body = diagnostics.ClientLoadFailure(
-            view="Net worth", path="/accounts/net-worth/monthly", status=500,
+            view="Balances", path="/accounts/balance-totals/monthly", status=500,
             message="boom\nERROR uvicorn.error: Traceback (most recent call last): x", recovered=False,
         )
         diagnostics.log_client_load_failure(body, _request())
         self.warning.assert_not_called()
         line = self.error.call_args.args[0]
-        self.assertTrue(line.startswith("[client-reported] Net worth failed to load"))
+        self.assertTrue(line.startswith("[client-reported] Balances failed to load"))
         self.assertNotIn("\n", line)
         self.assertNotIn(" ", line)
 

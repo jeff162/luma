@@ -46,7 +46,7 @@ const ACCOUNTS_COLUMNS_PREF_KEY = 'ui.accounts.columns'
 // scrolls sideways (`accountListMinWidth`) rather than squeezing Name to nothing and clipping the columns
 // past it. The divider between Name and Type trades width between those two, and the dividers after it
 // follow the shared rule in `lib/columnDividers.js`. The
-// drag-handle, net-worth and delete gutters stay fixed, so Balance is resized from its left divider. Widths/order
+// drag-handle, balance-totals and delete gutters stay fixed, so Balance is resized from its left divider. Widths/order
 // persist via the shared useColumnPreference model. Order MUST match the header config and the cell
 // order rendered by AccountRow/DraftAccountRow.
 const ACCOUNT_COLUMN_DEFAULTS = [
@@ -56,7 +56,7 @@ const ACCOUNT_COLUMN_DEFAULTS = [
   { key: 'owner', width: 116, minWidth: 96 },
   { key: 'tags', width: 112, minWidth: 84 },
   { key: 'balance', width: 112, minWidth: 90 },
-  { key: 'netWorth', width: 72, resizable: false },
+  { key: 'balanceTotals', width: 72, resizable: false },
   { key: 'actions', width: 28, resizable: false },
 ]
 
@@ -512,7 +512,7 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateCol
             />
           </div>
 
-          {/* Tags, balance and net worth have nothing to set until the account exists, and the action
+          {/* Tags, balance and the balance totals have nothing to set until the account exists, and the action
               track only fits the ⋯ menu, so the submit spans the last two beside the cancel. */}
           <div />
           <Button
@@ -1029,16 +1029,16 @@ function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabe
 
 // Set on the group's top row, as type is. An `other` account says nothing about what it holds, so it
 // stays out whatever its own setting.
-function NetWorthCell({ account, isChild, disabled, onChange }) {
+function BalanceTotalsCell({ account, isChild, disabled, onChange }) {
   if (isChild) return <div />
   const forced = (account.type || 'other') === 'other'
-  const title = forced ? 'Accounts of type Other cannot be included in net worth' : 'Exclude from net worth'
+  const title = forced ? 'Accounts of type Other cannot be included in balance totals' : 'Exclude from balance totals'
   return (
     <div style={{ display: 'flex', justifyContent: 'center' }}>
       <Tooltip content={title}>
         <input
           type="checkbox"
-          checked={forced || !!account.exclude_from_net_worth}
+          checked={forced || !!account.exclude_from_balance_totals}
           disabled={forced || disabled}
           onChange={e => onChange(e.target.checked)}
           aria-label={title}
@@ -1544,11 +1544,11 @@ function AccountRow({
           disabled={interactionDisabled}
         />
 
-        <NetWorthCell
+        <BalanceTotalsCell
           account={account}
           isChild={isChild}
           disabled={interactionDisabled}
-          onChange={exclude => savePatch({ exclude_from_net_worth: exclude })}
+          onChange={exclude => savePatch({ exclude_from_balance_totals: exclude })}
         />
 
         {/* An overflow menu where a one-press × used to be, and the extra press is the point rather
@@ -2744,7 +2744,7 @@ export default function Accounts() {
                                   draggable: false,
                                 },
                                 {
-                                  key: 'netWorth',
+                                  key: 'balanceTotals',
                                   label: 'Exclude',
                                   align: 'center',
                                   sortable: false,
@@ -2753,7 +2753,7 @@ export default function Accounts() {
                                   trailingInset: 0,
                                   resizable: false,
                                   draggable: false,
-                                  title: 'Exclude from net worth',
+                                  title: 'Exclude from balance totals',
                                 },
                                 { key: 'actions', kind: 'spacer', cellPadding: 0 },
                               ]}

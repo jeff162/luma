@@ -59,8 +59,8 @@ from backend.services.account_balances import (
     balance_checks, current_balances, delete_manual_balance, manual_balances, record_manual_balance,
 )
 from backend.services.account_groups import effective_account_id, group_accounts_sql, set_account_parent
-from backend.services.net_worth import (
-    HISTORY_FLAG_KIND, account_history_flag, history_flag_key, net_worth_by_month, net_worth_on,
+from backend.services.balance_totals import (
+    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
 )
 from backend.services.signal_dismissals import dismiss as dismiss_signal
 from backend.services.import_batch_totals import delete_transactions
@@ -88,9 +88,9 @@ class AccountUpdate(BaseModel):
     type: Optional[str] = None
     # A wallet's text to find its other side by (services/wallet_accounts.py); "" is none.
     wallet_match_text: Optional[str] = None
-    exclude_from_net_worth: Optional[bool] = None
-    # The first date net worth counts the group from (YYYY-MM-DD); "" clears it.
-    net_worth_from: Optional[str] = None
+    exclude_from_balance_totals: Optional[bool] = None
+    # The first date the balance totals count the group from (YYYY-MM-DD); "" clears it.
+    balance_totals_from: Optional[str] = None
 
 
 class ManualBalanceRequest(BaseModel):
@@ -148,7 +148,7 @@ def _get_account_row(conn, account_id: str):
             a.type,
             a.subtype,
             a.wallet_match_text,
-            a.exclude_from_net_worth,
+            a.exclude_from_balance_totals,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -188,7 +188,7 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.type,
             a.subtype,
             a.wallet_match_text,
-            a.exclude_from_net_worth,
+            a.exclude_from_balance_totals,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -362,9 +362,9 @@ def list_accounts(include_children: bool = False, include_trashed: bool = False)
     return accounts
 
 
-# Only the owner filters apply to net worth: the Dashboard's other facets select transactions, and a balance
+# Only the owner filters apply to the balance totals: the Dashboard's other facets select transactions, and a balance
 # belongs to an account. The names are the facet registry's, so the Dashboard sends its own.
-class NetWorthOwnerFilters:
+class BalanceOwnerFilters:
     def __init__(
         self,
         owner_ids: Optional[str] = Query(None, description="comma-separated owner IDs ('unassigned' for none)"),
@@ -374,22 +374,22 @@ class NetWorthOwnerFilters:
         self.values = {"owner_ids": owner_ids, "exclude_owner_ids": exclude_owner_ids, "owner_lens": owner_lens}
 
 
-@router.get("/net-worth")
-def get_net_worth(
+@router.get("/balance-totals")
+def get_balance_totals(
     date_start: Optional[str] = Query(None),
     date_end: Optional[str] = Query(None),
-    owners: NetWorthOwnerFilters = Depends(),
+    owners: BalanceOwnerFilters = Depends(),
 ):
-    """Net worth at the end of the period and at its opening, with each counted group's balances."""
+    """The balance totals at the end of the period and at its opening, with each counted group's balances."""
     with get_db() as conn:
-        return net_worth_on(conn, _period_date(date_start), _period_date(date_end), owners.values)
+        return balance_totals_on(conn, _period_date(date_start), _period_date(date_end), owners.values)
 
 
-@router.get("/net-worth/monthly")
-def get_net_worth_by_month(owners: NetWorthOwnerFilters = Depends()):
-    """Net worth at each month's end through today, over every month any counted group covers."""
+@router.get("/balance-totals/monthly")
+def get_balance_totals_by_month(owners: BalanceOwnerFilters = Depends()):
+    """The balance totals at each month's end through today, over every month any counted group covers."""
     with get_db() as conn:
-        return net_worth_by_month(conn, owners.values)
+        return balance_totals_by_month(conn, owners.values)
 
 
 def _period_date(value) -> Optional[str]:
@@ -465,20 +465,20 @@ def update_account(account_id: str, body: AccountUpdate):
             settings_changed = settings_changed or next_text != (acc["wallet_match_text"] or "")
             conn.execute("UPDATE account SET wallet_match_text = ? WHERE id = ?", (next_text, account_id))
 
-        if body.exclude_from_net_worth is not None:
+        if body.exclude_from_balance_totals is not None:
             # Read from the group root, as type is, so a member's own setting would do nothing until detached.
             if acc["parent_account_id"]:
                 raise HTTPException(status_code=400, detail="Set this on the group's top account")
-            conn.execute("UPDATE account SET exclude_from_net_worth = ? WHERE id = ?",
-                         (int(body.exclude_from_net_worth), account_id))
+            conn.execute("UPDATE account SET exclude_from_balance_totals = ? WHERE id = ?",
+                         (int(body.exclude_from_balance_totals), account_id))
 
-        if body.net_worth_from is not None:
+        if body.balance_totals_from is not None:
             # Read from the group root, as the exclusion is. Changed only when asked: a balance entered
             # before it later does not move it.
             if acc["parent_account_id"]:
                 raise HTTPException(status_code=400, detail="Set this on the group's top account")
-            conn.execute("UPDATE account SET net_worth_from = ? WHERE id = ?",
-                         (_period_date(body.net_worth_from.strip()), account_id))
+            conn.execute("UPDATE account SET balance_totals_from = ? WHERE id = ?",
+                         (_period_date(body.balance_totals_from.strip()), account_id))
 
         if body.owner_id is not None:
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)
@@ -518,18 +518,18 @@ def get_balance_checks(account_id: str):
         if not _get_account_row(conn, account_id):
             raise HTTPException(status_code=404, detail="Account not found")
         root_id = effective_account_id(conn, account_id)
-        root = conn.execute("SELECT type, net_worth_from FROM account WHERE id = ?", (root_id,)).fetchone()
+        root = conn.execute("SELECT type, balance_totals_from FROM account WHERE id = ?", (root_id,)).fetchone()
         return {
             # The group's type, which says which side of zero its balance normally sits on.
             "account_type": root["type"] if root else None,
             "balance": current_balances(conn, root_id=root_id).get(root_id),
             "checks": balance_checks(conn, root_id),
             "history_flag": account_history_flag(conn, root_id),
-            "net_worth_from": root["net_worth_from"] if root else None,
+            "balance_totals_from": root["balance_totals_from"] if root else None,
             # Whether the account report offers a Posted column: only where it would ever show something
             # other than the date beside it.
             "posted_dates_differ": _posted_dates_differ(conn, root_id),
-            # The group's top account, which the net worth settings are set on.
+            # The group's top account, which the balance-total settings are set on.
             "root_id": root_id,
         }
 
@@ -550,7 +550,7 @@ def _posted_dates_differ(conn, root_id: str) -> bool:
 @router.post("/{account_id}/history-flag/dismiss")
 def dismiss_history_flag(account_id: str):
     """Stop flagging the group's worked-back history. The dismissal names the stated balance the history
-    was worked back from, so entering an earlier one checks it again (`services/net_worth.py`)."""
+    was worked back from, so entering an earlier one checks it again (`services/balance_totals.py`)."""
     with get_db() as conn:
         if not _get_account_row(conn, account_id):
             raise HTTPException(status_code=404, detail="Account not found")

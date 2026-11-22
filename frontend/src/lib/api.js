@@ -594,9 +594,9 @@ export const api = {
   // The group's balance today and the spans where its stated balances and transactions disagree.
   getBalanceChecks: (id) => request(`/accounts/${id}/balance-checks`),
   getManualBalances: (id) => request(`/accounts/${id}/balances/manual`),
-  // Net worth at a period's end and opening, and at each month's end. Only the owner filters apply.
-  getNetWorth: (params) => request(`/accounts/net-worth${queryOf(params)}`),
-  getNetWorthByMonth: (params) => request(`/accounts/net-worth/monthly${queryOf(params)}`),
+  // The balance totals at a period's end and opening, and at each month's end. Only the owner filters apply.
+  getBalanceTotals: (params) => request(`/accounts/balance-totals${queryOf(params)}`),
+  getBalanceTotalsByMonth: (params) => request(`/accounts/balance-totals/monthly${queryOf(params)}`),
   // Stop flagging a history the account's transactions do not explain (`describeHistoryFlag`).
   dismissHistoryFlag: (id) => request(`/accounts/${id}/history-flag/dismiss`, { method: 'POST' }),
   setAccountTags: (id, tag_ids) =>

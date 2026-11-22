@@ -50,7 +50,7 @@ export const GENERIC_IMPORT_ACCOUNT_TYPES = ACCOUNT_TYPES.filter(t => t.kind !==
 
 // Which side of zero an account's balance normally sits on: held (positive) for a bank or investment
 // account, owed (negative) for a card or loan, and about zero for a wallet or marketplace, which money
-// passes through. `other` says nothing, as with net worth, so it has none.
+// passes through. `other` says nothing, as with the balance totals, so it has none.
 const NORMAL_BALANCE_SIDE = {
   depository: 'held', savings: 'held', investment: 'held',
   credit: 'owed', loan: 'owed',

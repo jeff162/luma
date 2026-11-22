@@ -7,8 +7,8 @@ body:
       value: |
         Before writing, two things worth knowing — both save time on scope that will not be taken:
 
-        - **Luma deliberately has no budgeting and no net worth tracking.** See *What Luma is not* in
-          the [README](../blob/main/README.md). Those are scope decisions, not gaps.
+        - **Luma deliberately has no budgeting.** See *What Luma is not* in
+          the [README](../blob/main/README.md). That is a scope decision, not a gap.
         - **Much of the obvious work is already designed and queued** in
           [`docs/backlog/`](../tree/main/docs/backlog). If an idea is already there, commenting on the
           existing plan is more useful than a new issue.

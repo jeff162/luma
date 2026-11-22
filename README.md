@@ -29,13 +29,11 @@ Luma is a local-first personal finance tool. It collects transaction data from b
 
 ## What Luma is not
 
-Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that there isn't a need for them at the moment:
+Budgeting sits at the centre of many personal finance apps, and Luma doesn't have it. This isn’t a philosophical decision, it's just that there isn't a need for it at the moment:
 
 - **No budgeting.** Nothing to allocate, no envelopes, no per-category targets, no alert when a category runs hot.
 
-- **No net worth tracking.** Luma holds transactions, not balances — no asset and liability rollup, no account values over time.
-
-Anyone whose main requirement is either of these will be better served by some other app, or they can spend the time to add them if that feels worthwhile.
+Anyone whose main requirement is budgeting will be better served by some other app, or they can spend the time to add it if that feels worthwhile.
 
 **Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
@@ -70,6 +68,8 @@ Anyone whose main requirement is either of these will be better served by some o
 - **Analyzing cash flow** — the cash-flow view nets the spending and income views. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to. The graphs can be drilled into to investigate what is behind them.
 
   ![The cash-flow view: income on the left flowing out to spending groups and net saved on the right](docs/images/cash-flow.png)
+
+- **Account balances over time** — the balances view totals the balances of the accounts in Luma by account type, for a period and month by month. It is a net worth only if every account is included.
 
 - **Getting data in** — a CSV file exported from a bank or card or a connected data source (e.g. SimpleFIN Bridge). Folder watching loads downloaded files automatically to make using CSV exports easier.
 

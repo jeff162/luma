@@ -210,7 +210,7 @@ class BackupFixtureTestCase(unittest.TestCase):
                     )
                 # Merge a1 (the lower rowid) under a2 → the backup dumps a child before its parent.
                 conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (a2, a1))
-                conn.execute("UPDATE account SET exclude_from_net_worth = 1 WHERE id = ?", (a2,))
+                conn.execute("UPDATE account SET exclude_from_balance_totals = 1 WHERE id = ?", (a2,))
 
                 # A connection + its account mapping. The connection's credential rides the accounts part
                 # and the rest of the row rides this data backup, which a ledger-only restore reconciles
@@ -660,6 +660,27 @@ class BackupRestoreTests(BackupFixtureTestCase):
         # bare id would read as new to the next sync just as surely as a missing one.
         self.assertEqual(rows["t1"]["external_transaction_id"], "plaid:prov-1")
         self.assertIsNone(rows["t2"]["external_transaction_id"])
+
+    def test_restore_before_v101_keeps_the_balance_total_settings(self):
+        # A pre-v101 backup names the two settings `exclude_from_net_worth` and `net_worth_from`. The insert
+        # drops keys the schema doesn't have, so untranslated every account would come back counted in full.
+        with self._use_db_path():
+            payload = {
+                "version": 19,
+                "schema_version": 100,
+                "owners": [{"id": "o1", "name": "Me", "color": "#111111"}],
+                "accounts": [
+                    {"id": "a1", "name": "Card", "display_name": "Card", "type": "credit", "owner_id": "o1",
+                     "parent_account_id": None, "exclude_from_net_worth": 1, "net_worth_from": None},
+                    {"id": "a2", "name": "Bank", "display_name": "Bank", "type": "depository", "owner_id": "o1",
+                     "parent_account_id": None, "exclude_from_net_worth": 0, "net_worth_from": "2026-04-01"},
+                ],
+            }
+            restore_backup(RestoreRequest(data=payload, force=True))
+            with get_db() as conn:
+                rows = {r["id"]: tuple(r)[1:] for r in conn.execute(
+                    "SELECT id, exclude_from_balance_totals, balance_totals_from FROM account")}
+        self.assertEqual(rows, {"a1": (1, None), "a2": (0, "2026-04-01")})
 
     def test_restore_before_v59_dates_synced_rows_by_when_the_charge_was_made(self):
         # A pre-v59 backup dates a synced row by its posting and carries the transaction date as

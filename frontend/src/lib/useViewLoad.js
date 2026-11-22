@@ -8,7 +8,7 @@ import { useBusyIndicator } from './useBusyIndicator.js'
 /*
  * Loading what a view shows: its loading state, its failure, and a way to load again, kept with the view
  * rather than in flags the view shares with others. A flag one mode set and only another mode cleared is
- * what left the Dashboard's Trends on "Loading…" for good after a visit to Net worth.
+ * what left the Dashboard's Trends on "Loading…" for good after a visit to Balances.
  *
  * `load` is an async function; a change of identity is a change of what the view shows, and loads again.
  * It may return what it loaded (`data`, kept through later loads until one succeeds) or write its own

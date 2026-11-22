@@ -1,5 +1,5 @@
 """
-Net worth: each group's balance on a past date, which groups count, and the owner filters.
+Balance totals: each group's balance on a past date, which groups count, and the owner filters.
 
 The derivation is the property worth pinning. A balance taken from the wrong anchor, or counted before
 the group's history begins, raises nothing; it moves the whole household's figure.
@@ -15,8 +15,8 @@ from pathlib import Path
 
 from backend.db.database import init_db
 from backend.services.account_balances import current_balances
-from backend.services.net_worth import (
-    HISTORY_FLAG_KIND, account_history_flag, history_flag_key, net_worth_by_month, net_worth_on,
+from backend.services.balance_totals import (
+    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
 )
 from backend.services.signal_dismissals import dismiss
 
@@ -27,7 +27,7 @@ class _Ledger(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
-        path = str(Path(self.tempdir.name) / "net-worth.db")
+        path = str(Path(self.tempdir.name) / "balance-totals.db")
         init_db(path)
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
@@ -37,7 +37,7 @@ class _Ledger(unittest.TestCase):
     def _account(self, account_id, kind="depository", owner="robin", parent=None, excluded=0, trashed=None):
         self.conn.execute(
             "INSERT INTO account (id, name, display_name, type, owner_id, parent_account_id, "
-            "exclude_from_net_worth, trashed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "exclude_from_balance_totals, trashed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (account_id, account_id, account_id, kind, owner, parent, excluded, trashed))
 
     def _state(self, account_id, as_of, balance, source="manual", recorded_at="2026-08-01 00:00:00"):
@@ -52,14 +52,14 @@ class _Ledger(unittest.TestCase):
             (f"{account_id}-{day}-{amount}", account_id, amount, day, posted))
 
     def _on(self, date_start=None, date_end=None, owners=None):
-        return net_worth_on(self.conn, date_start, date_end, owners, today=self.TODAY)
+        return balance_totals_on(self.conn, date_start, date_end, owners, today=self.TODAY)
 
     def _balance(self, result, account_id):
         row = next(a for a in result["accounts"] if a["account_id"] == account_id)
         return row["balance"]["amount"] if row["balance"] else None
 
 
-class NetWorthTests(_Ledger):
+class BalanceTotalsTests(_Ledger):
     def _opening(self, result, account_id):
         return next(a for a in result["accounts"] if a["account_id"] == account_id)["opening"]
 
@@ -153,7 +153,7 @@ class NetWorthTests(_Ledger):
         self._state("card", "2026-07-10", -200.0)
         self._txn("card", "2026-06-20", 30.0)
         self._txn("card", "2026-07-05", 50.0)
-        result = net_worth_by_month(self.conn, today=self.TODAY)
+        result = balance_totals_by_month(self.conn, today=self.TODAY)
         self.assertEqual({a["account_id"]: a["has_balance"] for a in result["accounts"]},
                          {"chk": True, "card": True, "cash": False})
         self.assertEqual(result["points"][0]["balances"], {"chk": 1000.0})
@@ -218,7 +218,7 @@ class HistoryFlagTests(_Ledger):
         self._txn("chk", "2026-03-01", 900.0)
         self._txn("chk", "2026-04-01", -400.0)
         self._state("chk", "2026-06-30", 0.0)
-        self.conn.execute("UPDATE account SET net_worth_from = '2026-04-01' WHERE id = 'chk'")
+        self.conn.execute("UPDATE account SET balance_totals_from = '2026-04-01' WHERE id = 'chk'")
         self.assertIsNone(self._flag("chk"))
         self.assertIsNone(self._balance(self._on(date_end="2026-03-31"), "chk"))
         self.assertEqual(self._balance(self._on(date_end="2026-04-01"), "chk"), 0.0)

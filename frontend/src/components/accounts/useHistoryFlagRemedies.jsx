@@ -6,23 +6,23 @@ import { api } from '../../lib/api.js'
 import { formatDate } from '../../lib/utils.js'
 import { LinkButton } from '../ui.jsx'
 import AccountBalanceDialog from './AccountBalanceDialog.jsx'
-import NetWorthStartDialog from './NetWorthStartDialog.jsx'
+import BalanceTotalsStartDialog from './BalanceTotalsStartDialog.jsx'
 
 /*
  * What can be done about an account whose transactions do not explain its earlier history (the history
- * flag, `backend/services/net_worth.py`), offered wherever the flag shows: the net worth table and the
+ * flag, `backend/services/balance_totals.py`), offered wherever the flag shows: the Balances table and the
  * account's page.
  *
  * - **Enter a balance from a statement**, on the day it fixes the most (`balance_date`): where the account
  *   switched from imported files to a connection when there is such a day, otherwise the last day the
  *   history goes wrong on. It gives the earlier history its own starting point, and keeps it.
- * - **Count from a date**: net worth leaves the account out before it. Offered on the furthest date back the
+ * - **Count from a date**: the balance totals leave the account out before it. Offered on the furthest date back the
  *   transactions hold up, and any other can be chosen.
  * - **Dismiss**: stop flagging it, changing nothing.
  *
  * A hook rather than a component because the links often sit in a tooltip, which closes as the pointer
  * leaves it: the dialogs they open are rendered by the caller, outside it. `onChanged` re-reads whatever
- * shows the flag. An account is `{ id, type, netWorthFrom }` for the group's top account.
+ * shows the flag. An account is `{ id, type, balanceTotalsFrom }` for the group's top account.
  */
 export function useHistoryFlagRemedies(onChanged) {
   const [open, setOpen] = useState(null)
@@ -49,9 +49,9 @@ export function useHistoryFlagRemedies(onChanged) {
       onSaved={onChanged}
     />
   ) : open?.kind === 'start' ? (
-    <NetWorthStartDialog
+    <BalanceTotalsStartDialog
       accountId={open.account.id}
-      current={open.account.netWorthFrom || null}
+      current={open.account.balanceTotalsFrom || null}
       suggested={open.flag.suggested_from}
       onClose={close}
       onSaved={onChanged}

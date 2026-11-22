@@ -460,9 +460,9 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow, Net worth:</strong> Expense and Income are pie
+            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow, Balances:</strong> Expense and Income are pie
             charts, <HelpLink to="/help/dashboard-cash-flow">Cash Flow</HelpLink> is a
-            Sankey diagram, <HelpLink to="/help/dashboard-net-worth">Net worth</HelpLink> totals the account balances.
+            Sankey diagram, <HelpLink to="/help/dashboard-balances">Balances</HelpLink> totals the account balances.
           </li>
           <li>
             <strong>Report sub-types:</strong> <strong>Single, Compare, Trends</strong> toggle between examining
@@ -501,31 +501,31 @@ export const HELP_TOPICS = [
     ),
   },
   {
-    id: 'dashboard-net-worth',
+    id: 'dashboard-balances',
     section: 'dashboard',
-    title: 'Net worth',
+    title: 'Balances',
     surfaces: ['Dashboard frame selector'],
     summary: 'The total of the account balances, by account type: what moved it over a period on Single period, each month end on Trends.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          Net worth adds up the balances of every account except those marked to be left out of it on the
+          Balances adds up the balances of every account except those marked to be left out of it on the
           Accounts page. Accounts of type Other are always left out. Accounts are grouped and coloured by
           type; clicking a type opens its accounts, and clicking an account opens its report.
         </p>
         <ul>
           <li>
-            <strong>Single period:</strong> the figure at the end of the period and what moved it, from net
-            worth at the start, a step for each type, to net worth at the end, the two ends drawn as what each
+            <strong>Single period:</strong> the figure at the end of the period and what moved it, from the
+            total at the start, a step for each type, to the total at the end, the two ends drawn as what each
             type makes of them. An account whose history begins
-            during the period counts as starting it at zero. Below, net worth at
+            during the period counts as starting it at zero. Below, the total at
             the end of each month, quarter or year, as far back as the Expenses trend reaches; clicking a bar
             makes it the period.
           </li>
           <li>
             <strong>Trends:</strong> each month end, with what is held above zero, what is owed below, and
-            net worth as the line.
+            the total as the line.
           </li>
         </ul>
         <p>
@@ -543,7 +543,7 @@ export const HELP_TOPICS = [
           back lands an account well on the wrong side of zero, which usually means transactions are missing,
           often where an account moved from imported files to a connection. Entering a balance from a
           statement fixes it; the warning offers the date it would fix the most, the day of that move when it
-          can find it. Otherwise net worth can count the account only from a later date, offered as the
+          can find it. Otherwise the total can count the account only from a later date, offered as the
           furthest back its transactions hold up, or the warning can be dismissed, which changes nothing. The date is shown, and can be changed, on the
           account&apos;s page.
         </p>
@@ -1957,7 +1957,7 @@ export const HELP_TOPICS = [
           its balances match a bank&apos;s own listing. The report also lists any stretch
           between two stated balances whose change the transactions in it don&apos;t add up to; the last
           transaction in that stretch is marked &#9888;, since one is missing, extra or wrong there. <strong>Exclude</strong> keeps an account out
-          of net worth; an account of type <em>Other</em> is always out.
+          of the Dashboard's <HelpLink to="/help/dashboard-balances">Balances</HelpLink> total; an account of type <em>Other</em> is always out.
         </p>
         <p>
           Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
@@ -2272,7 +2272,7 @@ export const HELP_TOPICS = [
                   that mixes currencies, mapping its currency column keeps rows in any other currency out
                   of the ledger; they are listed with the file&apos;s rejected rows instead. For a bank
                   export with a running balance, mapping its balance column records the account&apos;s
-                  balance at the close of each day the file covers, which net worth counts from; undoing
+                  balance at the close of each day the file covers, which the Dashboard's Balances total counts from; undoing
                   the import removes them. The file&apos;s order and whether it states a card&apos;s balance
                   as what is owed are read from the file.</td>
               </tr>
