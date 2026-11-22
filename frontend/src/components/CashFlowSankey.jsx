@@ -66,7 +66,7 @@ function CashFlowNode({ x, y, width, height, payload, onNodeClick }) {
   // Read the column off the node's own identity rather than off the Sankey depth recharts computed:
   // a period with nothing on one side would shift those depths, and a mislabelled hub is the kind of
   // defect that only shows up on the one period that produces it.
-  const isHub = node.key === CASH_FLOW_HUB_ID
+  const isHub = node.id === CASH_FLOW_HUB_ID
   const isSource = node.side === INFLOW
   const labelX = isSource ? x - 8 : x + width + 8
   const anchor = isSource ? 'end' : 'start'

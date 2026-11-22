@@ -104,7 +104,7 @@ describe('buildCashFlowGraph sides', () => {
 })
 
 describe('buildCashFlowGraph column order', () => {
-  const keysOn = (graph, side) => graph.nodes.filter(n => n.side === side).map(n => n.key)
+  const keysOn = (graph, side) => graph.nodes.filter(n => n.side === side).map(n => n.id)
 
   it('reads result first, then buckets largest first, then Other last', () => {
     const smalls = Array.from({ length: 12 }, (_, i) => row(`s${i}`, `Small ${i}`, 'expense', 1))
@@ -116,10 +116,10 @@ describe('buildCashFlowGraph column order', () => {
     ])
 
     const outflow = graph.nodes.filter(n => n.side === OUTFLOW)
-    expect(outflow[0].key).toBe(CASH_FLOW_SAVED_ID)
+    expect(outflow[0].id).toBe(CASH_FLOW_SAVED_ID)
     expect(outflow[outflow.length - 1].isOther).toBe(true)
     const buckets = outflow.slice(1, -1)
-    expect(buckets.slice(0, 2).map(n => n.key)).toEqual(['rent', 'food'])
+    expect(buckets.slice(0, 2).map(n => n.id)).toEqual(['rent', 'food'])
     expect(buckets.every((n, i) => i === 0 || buckets[i - 1].total >= n.total)).toBe(true)
   })
 
@@ -142,10 +142,10 @@ describe('buildCashFlowGraph balancing', () => {
     ])
 
     const saved = nodeNamed(graph, 'Net saved')
-    expect(saved.key).toBe(CASH_FLOW_SAVED_ID)
+    expect(saved.id).toBe(CASH_FLOW_SAVED_ID)
     expect(saved.side).toBe(OUTFLOW)
     expect(saved.total).toBeCloseTo(1200)
-    expect(graph.nodes.map(n => n.key)).not.toContain(CASH_FLOW_DRAWDOWN_ID)
+    expect(graph.nodes.map(n => n.id)).not.toContain(CASH_FLOW_DRAWDOWN_ID)
   })
 
   it('funds a shortfall from a Net drawdown terminal on the inflow side', () => {
@@ -155,10 +155,10 @@ describe('buildCashFlowGraph balancing', () => {
     ])
 
     const drawdown = nodeNamed(graph, 'Net drawdown')
-    expect(drawdown.key).toBe(CASH_FLOW_DRAWDOWN_ID)
+    expect(drawdown.id).toBe(CASH_FLOW_DRAWDOWN_ID)
     expect(drawdown.side).toBe(INFLOW)
     expect(drawdown.total).toBeCloseTo(800)
-    expect(graph.nodes.map(n => n.key)).not.toContain(CASH_FLOW_SAVED_ID)
+    expect(graph.nodes.map(n => n.id)).not.toContain(CASH_FLOW_SAVED_ID)
   })
 
   it('balances the hub: everything reaching it leaves it again', () => {
@@ -180,7 +180,7 @@ describe('buildCashFlowGraph balancing', () => {
       row('b', 'Rent', 'expense', 1800),
     ])
 
-    const keys = graph.nodes.map(n => n.key)
+    const keys = graph.nodes.map(n => n.id)
     expect(keys).not.toContain(CASH_FLOW_SAVED_ID)
     expect(keys).not.toContain(CASH_FLOW_DRAWDOWN_ID)
     expect(keys).toContain(CASH_FLOW_HUB_ID)

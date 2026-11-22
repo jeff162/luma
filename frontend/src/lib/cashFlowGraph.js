@@ -103,7 +103,7 @@ export function buildCashFlowGraph(rows, {
     .sort((a, b) => Math.abs(b.cashValue) - Math.abs(a.cashValue))
 
   const entries = priced.map((entry, index) => ({
-    key: String(entry.row[keyField]),
+    id: String(entry.row[keyField]),
     name: entry.row[nameField],
     color: palette.length ? palette[index % palette.length] : OTHER_SLICE_COLOR,
     cashValue: entry.cashValue,
@@ -134,7 +134,7 @@ export function buildCashFlowGraph(rows, {
   }
 
   const hub = {
-    key: CASH_FLOW_HUB_ID,
+    id: CASH_FLOW_HUB_ID,
     name: hubLabel,
     color: 'var(--accent)',
     // The hub carries the larger side, which after balancing is both sides.
@@ -221,9 +221,9 @@ export function nodeFromTooltipPayload(payload) {
 }
 
 
-function balanceNode(key, name, magnitude, side) {
+function balanceNode(id, name, magnitude, side) {
   return {
-    key,
+    id,
     name,
     // Neutral like the Other slice: it is an accounting remainder, not one of the user's buckets, and a
     // palette colour would claim it is.
@@ -252,7 +252,7 @@ function buildSide(entries, depth) {
   if (tail.length > 0) {
     const tailTotal = tail.reduce((sum, e) => sum + e.total, 0)
     nodes.push({
-      key: `${OTHER_SLICE_KEY}:${entries[0]?.side || ''}:${safeDepth}`,
+      id: `${OTHER_SLICE_KEY}:${entries[0]?.side || ''}:${safeDepth}`,
       name: `Other (${tail.length})`,
       color: OTHER_SLICE_COLOR,
       total: tailTotal,
