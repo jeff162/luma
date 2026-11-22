@@ -528,12 +528,6 @@ export default function ImportRuleSuggestionReview({
   }, [merchantFilterOpen, bulkMode])
 
   useEffect(() => {
-    if (selectedOwnerIds.length > 0) {
-      onOwnerFilterOpenChange(current => (current ? current : true))
-    }
-  }, [selectedOwnerIds, onOwnerFilterOpenChange])
-
-  useEffect(() => {
     localStore.set(IMPORT_RULE_SORT_STORAGE_KEY, sortOrder)
   }, [sortOrder])
 
@@ -1182,8 +1176,12 @@ export default function ImportRuleSuggestionReview({
                 owner={owner}
                 selected={selectedOwnerIds.includes(owner.id)}
                 disabled={bulkMode}
+                // Picking an owner keeps the chooser open, so switching is one click; clicking the chosen
+                // owner again clears the filter, and with nothing chosen the chooser folds back to its chip.
                 onClick={() => {
+                  const deselecting = selectedOwnerIds.includes(owner.id)
                   onToggleOwner(owner.id)
+                  if (!deselecting) return
                   onOwnerFilterOpenChange(false)
                   setTimeout(() => ownerFilterButtonRef.current?.focus(), 0)
                 }}
@@ -1214,9 +1212,7 @@ export default function ImportRuleSuggestionReview({
         onClick={() => onOwnerFilterOpenChange(true)}
         disabled={bulkMode}
       >
-        {selectedOwnerIds.length === 1
-          ? (availableOwners.find(owner => owner.id === selectedOwnerIds[0])?.name || '+Owner filter')
-          : '+Owner filter'}
+        +Owner filter
       </FilterChip>
     )
   }
