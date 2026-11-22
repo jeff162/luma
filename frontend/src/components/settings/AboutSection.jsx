@@ -107,7 +107,7 @@ export default function AboutSection({ dbInstanceId, bundledLicenseAvailable, bu
             <AboutRow
               label="Build"
               value={buildStamp}
-              help="includes number of commits since the release and the commit id"
+              help="The commit this copy was built from: a release tag alone, or the tag followed by the number of commits since it and the commit id"
             />
           ) : null}
           <AboutRow

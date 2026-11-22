@@ -4129,7 +4129,8 @@ export const HELP_TOPICS = [
           </li>
         </ol>
         <p>
-          Allow TCP port 443 and UDP port 5353 through the firewall.
+          Allow TCP port 443 in through the firewall, and UDP port 5353 both in and out (mDNS, to and from
+          224.0.0.251).
         </p>
 
         <HelpHeading anchor="on-windows">On a Windows server</HelpHeading>

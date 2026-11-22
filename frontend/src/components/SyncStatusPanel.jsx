@@ -88,7 +88,7 @@ function FinishedRow({ provider, state }) {
   return (
     <div style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
       <div style={{ display: 'flex', gap: 10 }}>
-        <span style={{ flex: 1 }}>{provider}</span>
+        <span style={{ flex: 1 }}>{providerLabel(provider)}</span>
         <span style={{ color: 'var(--muted)' }}>
           {outcome}
         </span>

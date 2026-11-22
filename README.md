@@ -259,7 +259,7 @@ On a Linux host, if Docker with the Compose plugin is available, this is a strai
    docker compose logs app
    ```
 
-The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443 have to be free for Caddy. Each connecting computer installs the server's certificate on its first visit, as described in [On each computer that connects](#on-each-computer-that-connects). The fingerprint for comparison is displayed by:
+The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the installation. A firewall on the host has to allow TCP port 443 in, and UDP port 5353 both in and out (mDNS, to and from 224.0.0.251), and ports 80 and 443 have to be free for Caddy. Each connecting computer installs the server's certificate on its first visit, as described in [On each computer that connects](#on-each-computer-that-connects). The fingerprint for comparison is displayed by:
 
 ```sh
 docker compose exec app python -m backend.desktop --certificate-fingerprint
@@ -298,7 +298,7 @@ Run these as the user the server should run as, from the folder the download was
 
 5. Open `https://luma.local` from another computer. If a different name was chosen, `journalctl -u luma` shows the address.
 
-A firewall on the server has to allow TCP port 443 and UDP port 5353. Changing `MDNS_NAME` or `FRONTEND_PORT` later means repeating step 3; moving the folder means repeating step 4.
+A firewall on the server has to allow TCP port 443 in, and UDP port 5353 both in and out (mDNS, to and from 224.0.0.251). Changing `MDNS_NAME` or `FRONTEND_PORT` later means repeating step 3; moving the folder means repeating step 4.
 
 **Which user the server runs as.** The service file from step 4 has a `User=` line naming whoever ran `./luma --systemd-unit`. Luma runs as that user and can read and write only what that user can, starting with the data folder beside the program. To change it, edit `User=` in `/etc/systemd/system/luma.service` (or run step 4 again as the other user), make the new user the owner of the folder Luma was unpacked into, and run `sudo systemctl daemon-reload` and `sudo systemctl restart luma`.
 
