@@ -2344,11 +2344,6 @@ def save_batch_snapshot(conn, batch_id: str, snapshot: dict) -> None:
     )
 
 
-# No `\s*` between the two groups: beside the lazy `.*?` it backtracks quadratically on a run of spaces,
-# so the space before the marker is trimmed from `number` by the caller instead.
-_DIRECTION_MARKER = re.compile(r"(?P<number>.*?)(?P<marker>CR|DR)", re.IGNORECASE)
-
-
 def parse_amount(row: dict, convention: str, col_map: AmountColumnMap, *,
                  decimal_separator: str) -> Optional[float]:
     """
@@ -2374,9 +2369,10 @@ def parse_amount(row: dict, convention: str, col_map: AmountColumnMap, *,
     # The cell's numeric value in FILE convention, plus its explicit direction marker if it has one.
     # Callers apply the direction; nothing here is in stored convention yet.
     def clean(raw: str) -> tuple[float, Optional[str]]:
-        marked = _DIRECTION_MARKER.fullmatch(raw.strip())
-        if marked:
-            return abs(parse_amount_text(marked.group("number").rstrip(), decimal_separator)), marked.group("marker").upper()
+        text = raw.strip()
+        marker = text[-2:].upper()
+        if marker in ("CR", "DR"):
+            return abs(parse_amount_text(text[:-2].rstrip(), decimal_separator)), marker
         return parse_amount_text(raw, decimal_separator), None
 
     # Resolve one cell to stored convention (positive = debit). An explicit marker wins; otherwise the
