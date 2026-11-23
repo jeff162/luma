@@ -661,3 +661,42 @@ class ServerErrorTaskTests(TasksFixtureTestCase):
 
         control_database.record_server_errors(1, busy_timeout_ms=500)
         self.assertEqual(self._task()["count"], 1)
+
+
+class TaskOrderTests(TaskDismissalTests):
+    """Tasks are ordered like an inbox: required first, then unread, then read, alerts before routine ones in
+    each, newest first. What makes a task unread is a rise since the last visit, so a read task keeps its place."""
+
+    def setUp(self):
+        super().setUp()
+        self.counts = {"routine": 3, "alert": 0}
+        self.clock = iter(f"2026-08-0{day}T00:00:00" for day in range(1, 10))
+
+    def _tasks(self, _request=None):
+        built = [{"id": "routine", "count": self.counts["routine"]},
+                 {"id": "pinned", "count": 1, "required": True}]
+        if self.counts["alert"]:
+            built.append({"id": "alert", "count": self.counts["alert"], "level": "alert"})
+        for task in built:
+            if not task.get("required"):
+                task["dismiss_key"] = task["id"]
+        return built
+
+    def _read(self, visit=False):
+        from backend.routers import tasks as tasks_module
+        with self._use_db_path(), mock.patch.object(tasks_module, "_build_tasks", self._tasks), \
+                mock.patch.object(tasks_module, "utcnow_iso", lambda: next(self.clock)):
+            result = get_tasks(self._request())
+            if visit:
+                tasks_module.mark_tasks_visited(self._request())
+        return [(t["id"], t["unread"]) for t in result["tasks"]]
+
+    def test_unread_alerts_lead_and_a_read_task_keeps_its_place(self):
+        # The first read dates nothing, so the list starts in its built order with nothing new.
+        self.assertEqual(self._read(visit=True), [("pinned", False), ("routine", False)])
+        self.counts.update(routine=4, alert=1)
+        self.assertEqual(self._read(visit=True), [("pinned", False), ("alert", True), ("routine", True)])
+        self.counts["routine"] = 2          # work done: not a rise, so nothing moves
+        self.assertEqual(self._read(), [("pinned", False), ("alert", False), ("routine", False)])
+        self.counts["routine"] = 3          # above the lowered count: new work, above the read alert
+        self.assertEqual(self._read(), [("pinned", False), ("routine", True), ("alert", False)])

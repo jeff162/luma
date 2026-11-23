@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useFilters } from '../lib/FilterContext.jsx'
@@ -11,6 +11,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import CornerTab from '../components/CornerTab.jsx'
 import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
+import { StatusPill } from '../components/connections/ConnectionStatus.jsx'
 
 /*
  * The nag inbox. Tasks are computed server-side (routers/tasks.py) and re-fetched whenever work
@@ -27,6 +28,10 @@ import { useVaultGateContext } from '../contexts/VaultGateContext.jsx'
  *
  * A `mutable` task can also be muted: it stays in the dismissed list however high its count goes, until it
  * is dismissed or restored there.
+ *
+ * The server orders the list like an inbox and marks a task `unread` when it appeared or rose since the last
+ * visit. The page records the visit after its first read and passes that read's `visited_at` back as `since`
+ * for the rest of the visit, so the New marks and the order hold while it is open.
  */
 
 // The page's content column, named once so the header, the cards and the dismissed list agree.
@@ -110,6 +115,7 @@ function TaskCard({ task, onDismiss, onMute }) {
       <div style={{ flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{task.title}</span>
+          {task.unread ? <StatusPill small>New</StatusPill> : null}
           <span
             style={{
               fontSize: 12,
@@ -214,14 +220,23 @@ export default function Tasks() {
   // The owner lens recounts the tasks whose page it narrows; dismissal still judges the whole count on the
   // server, so dismissing here hides the reminder for every view (`routers/tasks.py` → `_narrow_to_lens`).
   const { params: ownerLensParams } = useOwnerLens()
+  // The last visit this one's New marks are judged against, from the first read.
+  const [since, setSince] = useState(null)
+  const visitRecorded = useRef(false)
+  const params = useMemo(() => ({ ...ownerLensParams, since }), [ownerLensParams, since])
 
   useEffect(() => {
     let cancelled = false
     function fetchTasks() {
-      api.getTasks(ownerLensParams).then(r => {
+      api.getTasks(params).then(r => {
         if (cancelled) return
         setResult(r)
         setLoading(false)
+        if (!visitRecorded.current) {
+          visitRecorded.current = true
+          setSince(r?.visited_at || null)
+          api.markTasksVisited().catch(() => { })
+        }
       })
     }
     fetchTasks()
@@ -233,31 +248,31 @@ export default function Tasks() {
       cancelled = true
       window.removeEventListener('luma:data-mutated', fetchTasks)
     }
-  }, [ownerLensParams])
+  }, [params])
 
   // Every call returns the recomputed list, so the page never has to guess what dismissing changed.
   const restore = useCallback(async (task) => {
-    setResult(await api.restoreTask(task.dismiss_key, ownerLensParams))
+    setResult(await api.restoreTask(task.dismiss_key, params))
     setUndo(null)
-  }, [ownerLensParams])
+  }, [params])
 
   const dismiss = useCallback(async (task) => {
-    setResult(await api.dismissTask(task.dismiss_key, ownerLensParams))
+    setResult(await api.dismissTask(task.dismiss_key, params))
     setUndo({
       title: 'Task dismissed',
       description: `"${task.title}" is hidden until there is more of it.`,
       task,
     })
-  }, [ownerLensParams])
+  }, [params])
 
   const mute = useCallback(async (task) => {
-    setResult(await api.muteTask(task.dismiss_key, ownerLensParams))
+    setResult(await api.muteTask(task.dismiss_key, params))
     setUndo({
       title: 'Task muted',
       description: `"${task.title}" stays with the dismissed tasks until it is dismissed.`,
       task,
     })
-  }, [ownerLensParams])
+  }, [params])
 
   // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
   const closeUndo = useCallback(() => setUndo(null), [])

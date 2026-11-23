@@ -906,6 +906,8 @@ export const api = {
   restoreTask: (key, ownerLens = {}) => request(`/tasks/dismiss/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'DELETE' }),
   // A `mutable` task stays hidden however high its count goes, until it is dismissed or restored.
   muteTask: (key, ownerLens = {}) => request(`/tasks/mute/${encodeURIComponent(key)}${queryOf(ownerLens)}`, { method: 'POST' }),
+  // A visit to the Tasks page: what needed attention before it stops being unread. Changes nothing shown.
+  markTasksVisited: () => request('/tasks/visited', { method: 'POST', suppressMutationSignal: true }),
 
   // Recurring series: detection is an on-demand scan; the rest curate the recurring_series records.
   getRecurringSeries: (includeSuppressed = false) =>

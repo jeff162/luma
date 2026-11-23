@@ -13,7 +13,7 @@ import Tasks from '../Tasks.jsx'
 import { api } from '../../lib/api.js'
 
 vi.mock('../../lib/api.js', () => ({
-  api: { getTasks: vi.fn(), dismissTask: vi.fn(), restoreTask: vi.fn() },
+  api: { getTasks: vi.fn(), dismissTask: vi.fn(), restoreTask: vi.fn(), markTasksVisited: vi.fn(() => Promise.resolve({ ok: true })) },
 }))
 vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => ({ clearAll: vi.fn() }) }))
 vi.mock('../../contexts/VaultGateContext.jsx', () => ({
@@ -32,8 +32,13 @@ const NOT_DISMISSIBLE = {
   count: 1, link: '/settings', link_label: 'How to set up HTTPS', severity: 'warning', required: true,
 }
 
+const LAST_VISIT = '2026-08-01T00:00:00'
+
 function payload(tasks, dismissed = []) {
-  return { tasks, dismissed, open_items: tasks.length, total_count: tasks.reduce((n, t) => n + t.count, 0) }
+  return {
+    tasks, dismissed, open_items: tasks.length, total_count: tasks.reduce((n, t) => n + t.count, 0),
+    visited_at: LAST_VISIT,
+  }
 }
 
 function renderPage() {
@@ -59,7 +64,7 @@ describe('Tasks dismissal', () => {
     await screen.findByText('Uncategorized transactions')
 
     await userEvent.click(screen.getByText('Dismiss'))
-    await waitFor(() => expect(api.dismissTask).toHaveBeenCalledWith('uncategorized_txns', {}))
+    await waitFor(() => expect(api.dismissTask).toHaveBeenCalledWith('uncategorized_txns', { since: LAST_VISIT }))
 
     expect(screen.queryByText('4 transactions have no category.')).toBeNull()
     expect(screen.getByText('Task dismissed')).toBeTruthy()   // the undo toast
@@ -75,7 +80,16 @@ describe('Tasks dismissal', () => {
 
     await userEvent.click(await screen.findByText('1 dismissed'))
     await userEvent.click(screen.getByText('Restore'))
-    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledWith('uncategorized_txns', {}))
+    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledWith('uncategorized_txns', { since: LAST_VISIT }))
     expect(await screen.findByText('4 transactions have no category.')).toBeTruthy()
+  })
+
+  // The visit is recorded once, and the rest of it is judged against the last one, so the marks hold.
+  it('marks new tasks and records the visit once', async () => {
+    api.getTasks.mockResolvedValue(payload([{ ...DISMISSIBLE, unread: true }]))
+    renderPage()
+    expect(await screen.findByText('New')).toBeTruthy()
+    await waitFor(() => expect(api.getTasks).toHaveBeenLastCalledWith({ since: LAST_VISIT }))
+    expect(api.markTasksVisited).toHaveBeenCalledTimes(1)
   })
 })

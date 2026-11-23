@@ -3959,6 +3959,13 @@ export const HELP_TOPICS = [
         </ul>
         <p>Anything which might require attention will appear here.</p>
         <p>
+          A task that is new, or has more to it, since Tasks was last opened is marked <strong>New</strong> and
+          listed first. Occasional alerts, such as a rule alert or a transaction on a closed account, come
+          before the steady flow of work like categorizing. The rest keep their place until there is more of
+          them.
+        </p>
+        <p>*needs review*</p>
+        <p>
           <strong>Dismiss</strong> hides the notification until
           something changes. For instance, if the note about uncategorized
           transactions is dismissed, the task reappears when new ones are added to the list.

@@ -19,6 +19,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it alone, such as a replaced card number. An import whose data source sends an account to a closed one
   asks again where its rows go when the file has rows dated after the close, and a watched folder holds
   such a file.
+- Tasks are listed newest first, marked New when they appeared or grew since the page was last opened,
+  with occasional alerts above the steady flow of work.
 - A merged group's primary can be changed, from the account's menu or by dragging it onto the primary;
   the group keeps its settings. A Task suggests it when the primary has gone quiet while another account
   in the group has not.

@@ -33,6 +33,16 @@ dismissed or restored. It is for a count expected to keep rising while someone d
 rule alert's does (`services/rule_alerts.py`). A mute is kept with the dismissal marks, per person, and
 expires the same way.
 
+**Tasks are ordered like an inbox, per person.** Each task's last-needed-attention moment is when it first
+appeared or its count last rose (`ui.tasks.attention`, kept like the dismissal marks and ratcheting down
+with the count the same way, so new work after some was cleared still counts as a rise). A task is unread
+when that moment is later than the person's last visit to the Tasks page (`ui.tasks.visited_at`). Required
+tasks come first, then the unread ones, then the rest, `alert` level before `routine` in both; newest first
+within each, so a read task keeps its place among the read until its count rises again. The level is about how often a task comes
+up: an `alert` is an exception that rarely arises (a transaction on a closed account, a rule alert, a failing
+connection), a `routine` one is the steady flow of work (uncategorized rows, duplicates, recurring events).
+Tracked on the whole count, before the owner lens, as dismissal is.
+
 This reverses an earlier design that withheld dismissal from the connection, vault-access, recurring,
 rule-drift and reimbursement tasks, each for a reason about the underlying state. Those reasons are about
 the finding, not the reminder; don't re-impose them here.
@@ -63,11 +73,16 @@ from backend.services.recurring_signals import compute_signals, narrow_signals
 from backend.services.rule_range_drift import find_range_drift
 from backend.services.reimbursements import due_reminders
 from backend.services.transaction_facets import owner_lens_admits, owner_membership, split_ids
+from backend.time_utils import utcnow_iso
 
 router = APIRouter()
 
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO    = "info"
+
+# How often a task comes up, for ordering the unread ones (see the module docstring). `routine` is the default.
+LEVEL_ALERT   = "alert"
+LEVEL_ROUTINE = "routine"
 
 # The Accounts page's Connections tab, where a connection is set up and repaired and the vault strip is.
 # The frontend's `CONNECTIONS_ROUTE` names the same place.
@@ -77,6 +92,10 @@ CONNECTIONS_LINK = "/accounts?tab=connections"
 # backups and stay with the ledger they describe.
 DISMISSED_PREF_KEY = "ui.tasks.dismissed"
 MUTED_PREF_KEY = "ui.tasks.muted"
+ATTENTION_PREF_KEY = "ui.tasks.attention"
+VISITED_PREF_KEY = "ui.tasks.visited_at"
+# The last visit of someone who has never opened the page: before every task, so all of them are unread.
+NEVER_VISITED = "1970-01-01T00:00:00"
 
 
 def _https_setup_task(request: Request | None) -> dict | None:
@@ -145,6 +164,7 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "link":        CONNECTIONS_LINK,
         "link_label":  "Review vault access",
         "severity":    SEVERITY_INFO,
+        "level":       LEVEL_ALERT,
     }
 
 
@@ -278,6 +298,7 @@ def _server_error_task(request: Request | None) -> dict | None:
         "link":        "/settings?section=errorLog",
         "link_label":  "Open the error log",
         "severity":    SEVERITY_WARNING,
+        "level":       LEVEL_ALERT,
     }
 
 
@@ -302,6 +323,7 @@ def _proxy_certificate_task(request: Request | None) -> dict | None:
         "link":        "/settings?section=serverCertificate",
         "link_label":  "Review the certificate",
         "severity":    SEVERITY_WARNING,
+        "level":       LEVEL_ALERT,
         "required":    True,
     }
 
@@ -325,6 +347,7 @@ def _update_available_task(request: Request | None) -> dict | None:
         "link":        "/settings?section=about",
         "link_label":  "Open About",
         "severity":    SEVERITY_INFO,
+        "level":       LEVEL_ALERT,
     }
 
 
@@ -352,6 +375,7 @@ def _watched_folder_task(request: Request | None) -> dict | None:
         "link":        "/import-export?tab=sources",
         "link_label":  "Open File Sources",
         "severity":    SEVERITY_WARNING,
+        "level":       LEVEL_ALERT,
     }
 
 
@@ -378,6 +402,7 @@ def _restored_folder_task(request: Request | None) -> dict | None:
         "link":        "/import-export?tab=sources",
         "link_label":  "Open File Sources",
         "severity":    SEVERITY_WARNING,
+        "level":       LEVEL_ALERT,
     }
 
 
@@ -419,6 +444,7 @@ def _connection_tasks(conn) -> list[dict]:
             "link":        CONNECTIONS_LINK,
             "link_label":  "Reconnect",
             "severity":    SEVERITY_WARNING,
+            "level":       LEVEL_ALERT,
         })
 
     # A connection needing reconnection is also failing, and is reported only as the former: two entries
@@ -438,6 +464,7 @@ def _connection_tasks(conn) -> list[dict]:
             "link":        "/import-export",
             "link_label":  "Open the sync log",
             "severity":    SEVERITY_WARNING,
+            "level":       LEVEL_ALERT,
         })
 
     # Counted in provider accounts rather than connections: the number the user acts on is how many
@@ -967,6 +994,7 @@ def _rule_alert_tasks(conn, lens: list[str] | None = None) -> list[dict]:
             "link":        "/transactions?only=rule-alert",
             "link_label":  "Review transactions",
             "severity":    SEVERITY_WARNING,
+            "level":       LEVEL_ALERT,
             "mutable":     True,
         })
     return tasks
@@ -991,6 +1019,7 @@ def _after_close_task(n: int) -> dict | None:
         "link":        "/transactions?only=after-close",
         "link_label":  "Review transactions",
         "severity":    SEVERITY_WARNING,
+        "level":       LEVEL_ALERT,
         "mutable":     True,
     }
 
@@ -1054,6 +1083,57 @@ def _read_mutes(scope_id: str | None) -> set[str]:
 def _write_mutes(scope_id: str | None, mutes: set[str]) -> None:
     if scope_id:
         set_preference(scope_id, MUTED_PREF_KEY, json.dumps(sorted(mutes)))
+
+
+def _attention_key(task: dict) -> str:
+    return task.get("dismiss_key") or task["id"]
+
+
+def _track_attention(tasks: list[dict], scope_id: str | None) -> dict[str, str]:
+    """`{task key: when it last needed attention}`, recording a task that has appeared or whose count has risen
+    since the last read. The stored count falls with the task's, as a dismissal mark does, so work arriving
+    after some was cleared is a rise. A task that has gone is dropped. The first read for a person dates every
+    task as unknown (""), so the ordering starts as it was rather than marking the whole list new."""
+    if not scope_id:
+        return {}
+    raw = get_preferences(scope_id).get(ATTENTION_PREF_KEY)
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        parsed = {}
+    stored = {str(k): v for k, v in parsed.items() if isinstance(v, list) and len(v) == 2} \
+        if isinstance(parsed, dict) else {}
+    now = utcnow_iso()
+    updated: dict[str, list] = {}
+    for task in tasks:
+        key, count = _attention_key(task), task["count"]
+        previous = stored.get(key)
+        if previous is None:
+            updated[key] = [count, now if raw else ""]
+        elif count > previous[0]:
+            updated[key] = [count, now]
+        else:
+            updated[key] = [count, previous[1]]
+    if updated != stored or not raw:
+        set_preference(scope_id, ATTENTION_PREF_KEY, json.dumps(updated))
+    return {key: value[1] for key, value in updated.items()}
+
+
+def _order(tasks: list[dict], attention: dict[str, str], since: str) -> list[dict]:
+    """The shown tasks in inbox order, each carrying `unread` (see the module docstring)."""
+    for task in tasks:
+        task["unread"] = attention.get(_attention_key(task), "") > since
+    ordered = sorted(tasks, key=lambda task: attention.get(_attention_key(task), ""), reverse=True)
+
+    def group(task):
+        if task.get("required"):
+            return 0
+        return (1 if task["unread"] else 3) + (0 if task.get("level") == LEVEL_ALERT else 1)
+    return sorted(ordered, key=group)
+
+
+def _visited_at(scope_id: str | None) -> str:
+    return (get_preferences(scope_id).get(VISITED_PREF_KEY) if scope_id else None) or NEVER_VISITED
 
 
 def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dict], list[dict]]:
@@ -1153,17 +1233,26 @@ def _keep_dismissal(original: dict, rebuilt: dict | None) -> dict | None:
 def get_tasks(
     request: Request = None,
     owner_lens: Optional[str] = Query(None, description="comma-separated owner IDs ('unassigned' for none) the Tasks page's owner lens shows"),
+    since: Optional[str] = Query(None, description="the last visit to judge unread against; the stored one when absent"),
 ):
-    """The shown tasks and the dismissed ones. Under the owner lens the shown tasks that link to a lensed
-    page are recounted for its owners (`_narrow_to_lens`); the dismissed list stays whole, since it is the
-    way back to a reminder whoever's rows it counts."""
+    """The shown tasks, in inbox order, and the dismissed ones. Under the owner lens the shown tasks that link
+    to a lensed page are recounted for its owners (`_narrow_to_lens`); the dismissed list stays whole, since it
+    is the way back to a reminder whoever's rows it counts. `visited_at` is the last visit the unread marks
+    were judged against; the Tasks page passes it back as `since` for the rest of a visit, so the marks and
+    the order hold while it is open."""
+    scope_id = _dismissal_scope(request)
     tasks = _build_tasks(request)
-    visible, hidden = _apply_dismissals(tasks, _dismissal_scope(request))
+    attention = _track_attention(tasks, scope_id)
+    visible, hidden = _apply_dismissals(tasks, scope_id)
     lens = split_ids(owner_lens, ",")
     if lens:
         visible = _narrow_to_lens(visible, lens)
+    # A direct call leaves `since` as its `Query` default, which is not a visit.
+    visited_at = since if isinstance(since, str) and since else _visited_at(scope_id)
+    visible = _order(visible, attention, visited_at) if scope_id else visible
     return {
         "tasks":       visible,
+        "visited_at":  visited_at,
         "total_count": sum(t["count"] for t in visible),
         "open_items":  len(visible),
         "dismissed":   [{"id": t["id"], "dismiss_key": t["dismiss_key"], "muted": t["muted"],
@@ -1173,7 +1262,8 @@ def get_tasks(
 
 
 @router.post("/dismiss/{dismiss_key}")
-def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
+def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None),
+                 since: Optional[str] = Query(None)):
     """Put a task away at its current count. It returns when the count rises above that mark — and the
     mark falls with the count, so work that arrives after some has been cleared still surfaces. Dismissing
     a muted task ends the mute."""
@@ -1189,11 +1279,12 @@ def dismiss_task(dismiss_key: str, request: Request = None, owner_lens: Optional
     mutes = _read_mutes(scope_id)
     if dismiss_key in mutes:
         _write_mutes(scope_id, mutes - {dismiss_key})
-    return get_tasks(request, owner_lens)
+    return get_tasks(request, owner_lens, since)
 
 
 @router.post("/mute/{dismiss_key}")
-def mute_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
+def mute_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None),
+              since: Optional[str] = Query(None)):
     """Hide a `mutable` task however high its count goes, until it is dismissed or restored."""
     scope_id = _dismissal_scope(request)
     if not scope_id:
@@ -1202,11 +1293,12 @@ def mute_task(dismiss_key: str, request: Request = None, owner_lens: Optional[st
     if task is None or not task.get("mutable"):
         raise HTTPException(status_code=404, detail="No such mutable task")
     _write_mutes(scope_id, _read_mutes(scope_id) | {dismiss_key})
-    return get_tasks(request, owner_lens)
+    return get_tasks(request, owner_lens, since)
 
 
 @router.delete("/dismiss/{dismiss_key}")
-def restore_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None)):
+def restore_task(dismiss_key: str, request: Request = None, owner_lens: Optional[str] = Query(None),
+                 since: Optional[str] = Query(None)):
     """Bring a dismissed or muted task back — the undo behind the toast and the dismissed list."""
     scope_id = _dismissal_scope(request)
     if not scope_id:
@@ -1217,4 +1309,13 @@ def restore_task(dismiss_key: str, request: Request = None, owner_lens: Optional
     mutes = _read_mutes(scope_id)
     if dismiss_key in mutes:
         _write_mutes(scope_id, mutes - {dismiss_key})
-    return get_tasks(request, owner_lens)
+    return get_tasks(request, owner_lens, since)
+
+
+@router.post("/visited")
+def mark_tasks_visited(request: Request = None):
+    """Record a visit to the Tasks page: tasks needing attention before now stop being unread."""
+    scope_id = _dismissal_scope(request)
+    if scope_id:
+        set_preference(scope_id, VISITED_PREF_KEY, utcnow_iso())
+    return {"ok": True}
