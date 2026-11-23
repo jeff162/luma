@@ -409,13 +409,14 @@ def refresh_planner_statistics(db_path: str | None = None, *, reason: str) -> No
 # `account.exclude_from_net_worth`. v99 adds `account_balance.import_batch_id`, the import that stated a
 # balance read from a file's balance column. v100 adds `account.net_worth_from`, the first date net worth
 # counts a group from. v101 renames those two `exclude_from_balance_totals` and `balance_totals_from`, and
-# the Dashboard's saved `net_worth` view `balances`.
+# the Dashboard's saved `net_worth` view `balances`. v102 adds `account.closed_on`, the last day an account
+# was open.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 101
+CURRENT_VERSION = 102
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -3021,6 +3022,14 @@ def _rename_balance_total_settings(conn):
     _rename_balances_view_preference(conn)
 
 
+@migration(102)
+def _add_account_closed_on(conn):
+    # See the baseline CREATE. Every account is open until someone closes it, so all stay NULL.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if columns and "closed_on" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN closed_on TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3619,7 +3628,10 @@ def init_db(db_path: str | None = None):
                 -- The first date the balance totals count the group from, set by the user where its earlier
                 -- history cannot be trusted. Read from the group root; NULL counts it from its own history's
                 -- start.
-                balance_totals_from TEXT
+                balance_totals_from TEXT,
+                -- The last day the account was open; NULL = open. Read from the group root. Nothing dated
+                -- after it should arrive, and a row that does raises a Task (`services/closed_accounts.py`).
+                closed_on           TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).

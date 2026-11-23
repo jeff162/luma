@@ -574,6 +574,7 @@ export const api = {
   attachAccount: (id, parent_account_id) =>
     request(`/accounts/${id}/attach`, { method: 'POST', body: JSON.stringify({ parent_account_id }) }),
   detachAccount: (id) => request(`/accounts/${id}/detach`, { method: 'POST' }),
+  makePrimaryAccount: (id) => request(`/accounts/${id}/make-primary`, { method: 'POST' }),
   getDistinctAccountPairs: () => request('/accounts/distinct-pairs'),
   assertDistinctAccountPair: (accountIdA, accountIdB) =>
     request('/accounts/distinct-pairs', {
@@ -599,6 +600,7 @@ export const api = {
   getBalanceTotalsByMonth: (params) => request(`/accounts/balance-totals/monthly${queryOf(params)}`),
   // Stop flagging a history the account's transactions do not explain (`describeHistoryFlag`).
   dismissHistoryFlag: (id) => request(`/accounts/${id}/history-flag/dismiss`, { method: 'POST' }),
+  dismissClosedBalanceFlag: (id) => request(`/accounts/${id}/closed-balance-flag/dismiss`, { method: 'POST' }),
   setAccountTags: (id, tag_ids) =>
     request(`/accounts/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
   getInactiveCategories: () => request('/categories/inactive'),
@@ -1031,6 +1033,21 @@ export const api = {
         const error = new Error(err.detail || 'Request failed')
         error.status = res.status
         throw error
+      }
+      return res.json()
+    })
+  },
+  previewAccountDates: (file, { accountColumn, dateColumn, dateFormat, skipRows }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('date_column', dateColumn)
+    fd.append('date_format', dateFormat)
+    if (accountColumn) fd.append('account_column', accountColumn)
+    fd.append('skip_rows', String(skipRows || 0))
+    return trackedFetch('/api/import-export/preview/account-dates', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw new Error(err.detail || 'Request failed')
       }
       return res.json()
     })

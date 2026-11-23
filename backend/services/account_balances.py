@@ -194,7 +194,9 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
     balance is absent.
 
     `also_reporting` names the other members whose own latest balance falls within `LIVE_FEED_WINDOW_DAYS` of
-    the anchor's: two live feeds into one group, where only one can be the group's balance."""
+    the anchor's: two live feeds into one group, where only one can be the group's balance.
+
+    A closed group is never stale: nothing will state a newer balance for it."""
     today = today or date.today()
     scope = "WHERE COALESCE(a.parent_account_id, a.id) = ?" if root_id else ""
     scope_params = (root_id,) if root_id else ()
@@ -217,6 +219,8 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
         {scope}
         GROUP BY b.account_id
         """, scope_params).fetchall()
+    closed = {row["id"] for row in conn.execute(
+        "SELECT id FROM account WHERE parent_account_id IS NULL AND closed_on IS NOT NULL")}
     result = {}
     for root_id, anchor in anchors.items():
         as_of = date.fromisoformat(anchor["as_of_date"])
@@ -236,7 +240,7 @@ def current_balances(conn, today: Optional[date] = None, root_id: Optional[str] 
             "source": anchor["source"],
             "account_id": anchor["account_id"],
             "stale_after_days": STALE_AFTER_DAYS[anchor["source"]],
-            "stale": (today - as_of).days > STALE_AFTER_DAYS[anchor["source"]],
+            "stale": root_id not in closed and (today - as_of).days > STALE_AFTER_DAYS[anchor["source"]],
             "also_reporting": sorted(
                 m["account_id"] for m in member_latest
                 if m["root_id"] == root_id and m["account_id"] != anchor["account_id"]

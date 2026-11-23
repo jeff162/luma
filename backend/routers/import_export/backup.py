@@ -595,7 +595,7 @@ BACKUP_SECTIONS = (
     ("accounts", "account",
      "SELECT id, external_account_id, connection_id, provider, name, display_name, "
      "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at, wallet_match_text, "
-     "exclude_from_balance_totals, balance_totals_from "
+     "exclude_from_balance_totals, balance_totals_from, closed_on "
      "FROM account ORDER BY rowid"),
     ("categories", "category", "SELECT * FROM category ORDER BY rowid"),
     ("category_rules", "category_rule", "SELECT * FROM category_rule ORDER BY rowid"),

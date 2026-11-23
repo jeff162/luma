@@ -210,7 +210,8 @@ class BackupFixtureTestCase(unittest.TestCase):
                     )
                 # Merge a1 (the lower rowid) under a2 → the backup dumps a child before its parent.
                 conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (a2, a1))
-                conn.execute("UPDATE account SET exclude_from_balance_totals = 1 WHERE id = ?", (a2,))
+                conn.execute("UPDATE account SET exclude_from_balance_totals = 1, closed_on = '2026-04-30' "
+                             "WHERE id = ?", (a2,))
 
                 # A connection + its account mapping. The connection's credential rides the accounts part
                 # and the rest of the row rides this data backup, which a ledger-only restore reconciles

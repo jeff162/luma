@@ -52,7 +52,10 @@ from backend.db.control_database import (
     latest_vault_key_retirement,
 )
 from backend import app_log_file, runtime_config, transport
-from backend.services import crypto_service, proxy_certificate, rule_alerts, rule_conflicts, update_check, wallet_pairs
+from backend.services import (
+    closed_accounts, crypto_service, group_primary, proxy_certificate, rule_alerts, rule_conflicts, update_check,
+    wallet_pairs,
+)
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_detection import overdue_owed_rescan_count, series_shown_under_lens, transfer_review
@@ -704,6 +707,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
         tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_rule_conflict_tasks(conn))
         tasks.extend(_rule_alert_tasks(conn))
+        after_close_task = _after_close_task(closed_accounts.after_close_count(conn))
+        if after_close_task:
+            tasks.append(after_close_task)
+        tasks.extend(_group_primary_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
         tasks.extend(_connection_tasks(conn))
 
@@ -965,6 +972,49 @@ def _rule_alert_tasks(conn, lens: list[str] | None = None) -> list[dict]:
     return tasks
 
 
+AFTER_CLOSE_TASK_ID = "after_close_txns"
+
+
+def _after_close_task(n: int) -> dict | None:
+    """Transactions dated after their account closed (`services/closed_accounts.py`). They import like any
+    other, so this is what says one arrived. The count rises with each, so a dismissal returns with the next,
+    and it can be muted while a feed that should have stopped is dealt with."""
+    if not n:
+        return None
+    return {
+        "id":          AFTER_CLOSE_TASK_ID,
+        "title":       "Transactions on closed accounts",
+        "description": f"{n} transaction{'s are' if n != 1 else ' is'} dated after {'their' if n != 1 else 'its'} "
+                       "account was closed. A charge on a closed account may be a mistake or fraud, or the "
+                       "close date may be wrong.",
+        "count":       n,
+        "link":        "/transactions?only=after-close",
+        "link_label":  "Review transactions",
+        "severity":    SEVERITY_WARNING,
+        "mutable":     True,
+    }
+
+
+GROUP_PRIMARY_TASK_PREFIX = "group_primary_"
+
+
+def _group_primary_tasks(conn) -> list[dict]:
+    """One task per group whose primary looks replaced (`services/group_primary.py`). Its id names the member
+    suggested, so putting it away holds for that suggestion, and a later replacement asks again."""
+    return [{
+        "id":          f"{GROUP_PRIMARY_TASK_PREFIX}{entry['root_id']}_{entry['member_id']}",
+        "title":       f"Make {entry['member_label']} the primary?",
+        "description": f"{entry['root_label']}, the primary of its group, has had no transactions in "
+                       f"{group_primary.QUIET_DAYS} days, while {entry['member_label']} has. Making "
+                       f"{entry['member_label']} the primary lets {entry['root_label']} be closed on its own.",
+        "count":       1,
+        "link":        "/accounts",
+        "link_label":  "Open Accounts",
+        "severity":    SEVERITY_INFO,
+        "owner_id":    entry["owner_id"],
+    } for entry in group_primary.quiet_primaries(conn)]
+
+
 def _dismissal_scope(request: Request | None) -> str | None:
     """The preference scope for dismissals, or None when no identity is resolved — an unauthenticated
     caller sees the undismissed list rather than an error, since the badge is fetched early."""
@@ -1059,6 +1109,8 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
         for task in tasks:
             if task["id"] == "uncategorized_txns":
                 task = _keep_dismissal(task, _uncategorized_task(_uncategorized_count(conn, lens)))
+            elif task["id"] == AFTER_CLOSE_TASK_ID:
+                task = _keep_dismissal(task, _after_close_task(closed_accounts.after_close_count(conn, lens)))
             elif task["id"].startswith("reimbursements_due_"):
                 # One task per owner already; the owner token is the task's own.
                 owner = task["id"].removeprefix("reimbursements_due_")
@@ -1077,6 +1129,10 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
                 # One task per wallet account already; it shows to the account's owner.
                 wallet_id = task["id"].removeprefix(WALLET_PAIRS_TASK_PREFIX)
                 owner = (wallet_pairs.wallet_labels(conn, [wallet_id]).get(wallet_id) or {}).get("owner_id")
+                task = task if owner_lens_admits([owner] if owner else [], lens) else None
+            elif task["id"].startswith(GROUP_PRIMARY_TASK_PREFIX):
+                # One task per group already; it shows to the group's owner.
+                owner = task.get("owner_id")
                 task = task if owner_lens_admits([owner] if owner else [], lens) else None
             elif task["id"].startswith(RULE_ALERT_TASK_PREFIX):
                 # Counted over the caught rows' owners, so a rule scoped to an account shows to that

@@ -259,6 +259,29 @@ class ImportWatchTests(_WatchFolderCase):
         self._scan(); self._scan()
         self.assertEqual(self._files()["january.csv"]["state"], watch.WATCH_STATE_PARKED)
 
+    def test_a_closed_account_parks_only_a_file_with_rows_after_the_close_including_a_groups_close(self):
+        """The later rows may belong to the card that replaced it, which only a person can say; older rows
+        are its own statements. A member is closed by its group's date when that came first."""
+        self._create_source()
+        self._prove_source()
+        with get_db(str(self.db_path)) as conn:
+            conn.execute("INSERT INTO account (id, name, display_name, type) VALUES ('grp', 'Group', 'Group', 'depository')")
+            conn.execute("UPDATE account SET parent_account_id = 'grp', closed_on = '2026-03-31' WHERE id = 'acc-chk'")
+        self._drop("february.csv")
+        self._drop("april.csv", HEADER + "2026-04-02,Corner Market,12.50,Checking\n")
+        self._scan(); self._scan()
+        files = self._files()
+        self.assertEqual(files["february.csv"]["state"], watch.WATCH_STATE_IMPORTED)
+        self.assertEqual(files["april.csv"]["state"], watch.WATCH_STATE_PARKED)
+        self.assertIn("closed", files["april.csv"]["reason"])
+
+        with get_db(str(self.db_path)) as conn:
+            conn.execute("UPDATE account SET closed_on = NULL WHERE id = 'acc-chk'")
+            conn.execute("UPDATE account SET closed_on = '2026-02-28' WHERE id = 'grp'")
+        self._drop("march.csv", HEADER + "2026-03-02,Corner Market,13.50,Checking\n")
+        self._scan(); self._scan()
+        self.assertEqual(self._files()["march.csv"]["state"], watch.WATCH_STATE_PARKED)
+
     def test_a_file_with_the_wrong_columns_is_parked_not_read_through_the_wrong_map(self):
         self._create_source()
         self._prove_source()

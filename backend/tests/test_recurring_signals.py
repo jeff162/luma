@@ -362,6 +362,22 @@ class RecurringSignalsTests(unittest.TestCase):
         self.assertGreaterEqual(signals[0]["periods_missed"], 2)
         self.assertTrue(signals[0]["presumed_ended"])
 
+    def test_a_charge_due_after_its_account_closed_is_neither_missed_nor_upcoming(self):
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6,
+                      end=date.today() - timedelta(days=70))
+        self._monthly(payee="Gridline Power", category="Water", amounts=[60.0] * 6,
+                      end=date.today() - timedelta(days=20))
+        self._make_ledger_current()
+        self._scan()
+        self.assertTrue(self._signals("missed"))
+        self.assertTrue(self._signals("upcoming"))
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET closed_on = ? WHERE id = ?",
+                             ((date.today() - timedelta(days=60)).isoformat(), self.account_id))
+        self.assertEqual(self._signals("missed"), [])
+        self.assertEqual(self._signals("upcoming"), [])
+
     def test_missed_is_not_reported_when_the_ledger_itself_is_stale(self):
         # Same series, but nothing at all has been imported since. The app cannot know a charge is
         # missing when it has not been told about anything else either.

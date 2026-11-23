@@ -221,6 +221,30 @@ direct child of the new one.
 
 Merging sets `parent_account_id` and moves nothing, which is what lets a detach reverse it.
 
+**Making a member the primary** (`POST /accounts/{id}/make-primary`, `account_groups.make_root`) swaps it
+with the root: every other member, the old root included, becomes its direct child. Nothing is detached, so
+no duplicate pairing changes.
+
+- **The group keeps its settings.** The new root takes the old root's root-read settings (`ROOT_SETTINGS`)
+  and its tags, and leaves its own with the old root, where they lie dormant as a member's do. Making the old
+  root the primary again restores both exactly.
+- **The group takes the new root's name**, since a root's display name is its own name.
+- **Answers keyed by the root follow it** (`services/group_root_change.py`). A stored account id resolves at
+  read time, but a key that embeds the root's id is compared as text: the balance flags' dismissals
+  (`balance_history`, `closed_balance`), the recurring signals' dismissals, whose series fingerprint names
+  the account scope, and a transfer series' `transfer:<from>:<to>` key. All are re-keyed to the new root.
+- **A closed member is refused**, since the root's close date closes the whole group.
+
+**Merging a whole group into another** makes the target's root the merged group's, so its series keys are
+re-keyed the same way. Its balance flags' dismissals are not, since the merged group has another balance. A
+detach re-keys nothing: the group's answers stay with the group, and nothing tells which were about the
+account leaving.
+
+**A quiet primary is suggested for replacement** (`services/group_primary.py`): when an open group's root has
+had no live transaction for 90 days while exactly one other open member has, a Task per group suggests making
+that member the primary, since a replaced card is the usual cause and the old card cannot be closed on its
+own while it is the root. The task's id names the member, so putting it away holds for that suggestion.
+
 ### A stored account id is a reference into a mutable graph
 
 Because a merge rewrites nothing, an account id stored in another table can become a child after it was
@@ -280,13 +304,59 @@ is never destroyed implicitly. An empty account is removed without a question.
   `target_account_id` and `mapping_mode` are cleared. `account.external_account_id` is `UNIQUE`, so
   re-pointing would feed an account the user never mapped. The mode is cleared with the target because
   a mode with no target reads as decided while `apply_account_mapping` skips it.
-- **A group root refuses removal** until its children are removed or ungrouped. Removing a root means
-  promoting a member, which moves the group's dedupe scope and reverses the merge's duplicate
-  promotions; that is a separate decision from where the transactions go.
+- **A group root refuses removal** until its children are removed or ungrouped, or another member is made
+  the primary. Removing a root would mean choosing which member takes its place, a separate decision
+  from where the transactions go.
 
 `account.trashed_at` is vestigial. Nothing sets it; migration 64 cleared it, and that step replays
 after a restore because an older backup can carry trashed accounts. The column stays because every
 backup carries it, and the read paths that filter on it are left in place.
+
+### Closing an account
+
+`account.closed_on` is the last day an account was open; NULL is open (`services/closed_accounts.py`).
+Closing removes nothing and changes no row: the transactions, balances, rules and series stay, and the
+account stays in every filter and report, because its history is still real. What it records is that
+nothing dated after that day should arrive.
+
+- **Any account can be closed.** A group root's date closes the group, members and all. A member's closes
+  that account alone, as a replaced card is, while the group goes on. A member's rows are late against the
+  earlier of its own date and the group's. On the Accounts page a closed member is listed with the closed
+  accounts under its group's top row, and an open group whose other members are all closed reads as a single
+  account.
+- **Never in the future.** A close date is a fact about the past, and one ahead of today would let a
+  transaction arrive "after" a close that had not happened.
+- **A transaction dated after the close is imported like any other.** Refusing it would lose a charge
+  that did happen, which is exactly what someone needs to see. Live rows dated after their close date
+  are the `after-close` attribute and raise a Task (`after_close_txns`), dismissed by count and
+  mutable as a rule alert's is. Derived from the dates rather than recorded at arrival, so a close date the
+  ledger already contradicts is reported at once: either the date or those rows are wrong. The transaction
+  date is what is compared, so a purchase made before the close and posted after it is not reported.
+- **A closed account is still offered** by the account pickers, after the open ones and marked closed,
+  because older statements of a closed account still belong on it. It is listed among a mapping row's
+  possible matches but never offered as the one-click match, since a new value is more likely its
+  replacement.
+- **A data source's mapping to a closed account is not taken as answered for a file with rows dated after
+  the close**, because those rows may belong to the account that replaced it, and only the person importing
+  can say. The import's mapping step shows that account value as undecided, naming the closed account and
+  its date (`closedAccountCheck.js`, reading each value's latest date from `POST
+  /import-export/preview/account-dates`), and the watched-folder scan parks the file (`_late_on_closed`).
+  Choosing the closed account again answers it for that import: the source still points there, so the next
+  file with later rows asks again. A file of only older rows imports as before, and a saved Skip is not
+  affected, since skipping is not a claim about the account. A connection needs no such question: the
+  provider names each account exactly, so late rows go on it and raise the Task.
+- **A balance a closed group still holds by the ledger is flagged on its row**, since a closed account holds
+  nothing and a remainder usually means the final payment or transfer is missing. A closed member is not
+  flagged: a group has one balance, and a replaced card's usually moves to its successor with no
+  transaction to show for it. Only the user knows
+  whether it matters, so it can be dismissed; the dismissal is in the shared `signal_dismissals` store,
+  keyed to the group and its close date, so closing again on another date asks again.
+- **A closed group's balance is never stale** (see [Account balances](#account-balances)), and the balance
+  totals count nothing for it after the close (see [Balance totals](#balance-totals)). A closed member
+  changes neither, since the group's balance goes on.
+- **A recurring charge due after the group's close is neither upcoming nor missed** on a series scoped to
+  the group, since it cannot arrive there.
+- Backed up with the account row.
 
 ### Distinct-pair assertions
 
@@ -352,7 +422,8 @@ group's top row.
   pending row is left out, as no source's balance counts one.
 - **It is stale after `STALE_AFTER_DAYS` with no newer balance**, by the anchor's source: 7 days for
   `provider`, since a connected account restates its balance on every sync, and 35 for `manual` and
-  `import`, since a balance entered by hand or imported is usually from a monthly statement.
+  `import`, since a balance entered by hand or imported is usually from a monthly statement. A closed
+  group is never stale, since nothing will state a newer balance for it.
 - **A second member stating a balance within `LIVE_FEED_WINDOW_DAYS` (7) of the anchor is reported**
   (`also_reporting`):
   two live feeds into one group, of which only the latest can count.
@@ -402,6 +473,10 @@ shown on the Dashboard's Balances frame.
 - **A group whose coverage begins inside a period opens it at zero**, so the period's change is always the
   end's total less the opening's. That is right for an account opened in the period, and overstates
   the change for one whose records merely start late.
+- **After its close date a group holds nothing**, whatever its last figure was, so a group closed inside a
+  period ends it at zero, and one closed before the period (before its opening, or before its end where
+  it has none) is left out. A remainder the ledger still shows is flagged on the account instead (see
+  [Closing an account](#closing-an-account)), not carried in the totals.
 - **An investment account is treated like any other**: its stated balances and the money moving in and
   out. Holdings are not tracked.
 - **A history its transactions do not explain is flagged.** Worked back from the first stated balance, a
@@ -857,6 +932,8 @@ is the row's own marker strip, so reading a row and filtering for it use the sam
   already offers that bucket. The ledger's quick filter and `?only=` links still use it.
 - **`rule-alert`** is not on the marker strip and not in the filter bar. It is the list a rule alert's
   Task opens: every live row a live alert caught.
+- **`after-close`** is likewise the list the closed-account Task opens: rows dated after their account or
+  its group closed (see [Closing an account](#closing-an-account)).
 - **`excluded-from-totals`** is the rows a report marks ⊘: filed under a category or group with
   `exclude_from_totals`, the parent's flag winning as it does in every summary. It is not in the filter
   bar; the quick filter offers it. An account report's footer counts it over the whole window and opens
@@ -1099,8 +1176,9 @@ Adopting another replaces the body of `decide_rule_effects`; its inputs carry wh
 ### Rule alerts
 
 A rule with `alert` set raises a Task when a matching transaction arrives (`services/rule_alerts.py`).
-It is for activity that should not happen, such as charges on a closed card, where nothing written onto
-the row would get anyone's attention.
+It is for activity that should not happen, such as a charge from a merchant that was cancelled, where
+nothing written onto the row would get anyone's attention. A charge on a closed account needs no rule
+(see [Closing an account](#closing-an-account)).
 
 - **An alert records an arrival, not a match.** `rule_alert_hit` gets a `(rule_id, txn_id)` row only for
   a row new to the ledger: a file import, an Amazon orders import, a sync's added rows, a held duplicate
@@ -1486,6 +1564,8 @@ not stored.
 - **Lateness is measured against data freshness.** "Now" for a missed charge is the newest live
   transaction on the series' account (the ledger's newest for an account-agnostic series), never later
   than today, so a month without an import raises nothing.
+- **A charge due after the series' account closed is neither upcoming nor missed** (see
+  [Closing an account](#closing-an-account)). An account-agnostic series is never closed.
 - **`presumed_ended`** is a reading derived once a series has missed `_PRESUMED_ENDED_PERIODS` whole
   periods. It changes what the signal offers and writes no status.
 
@@ -2129,6 +2209,8 @@ nothing reads it as the marker.
 nothing later reports, while every other mistake is visible on the file's card. A file is parked when
 
 - any non-empty account value is unmapped, or maps to an account that no longer exists
+- an account value maps to a closed account and has rows dated after the close (see
+  [Closing an account](#closing-an-account))
 - the source's map has an `account_new` entry for a value in the file
 - the source has no account column and no `account_id`, or would create its single account
 - the source's `header_fingerprint` differs from the file's

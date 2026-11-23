@@ -17,13 +17,20 @@ amounts itself and got `single_unsigned`, `DR`/`CR` suffixes and blank two-colum
 the amounts shown come from the same `parse_amount` the import runs. It posts rows rather than a
 file because `/preview` persists nothing there is a handle to re-parse.
 
+`/preview/account-dates` answers, once the date column is mapped, the latest date each account value in the
+file carries, read as the import reads it. The mapping step compares it with the close date of the account a
+value is mapped to (`docs/data-model.md` -> *Closing an account*). It takes the whole file, since the latest
+row can be anywhere in it.
+
 The actual import (`/run`) and the shared parse/hash/header primitives it co-owns live in `core`;
 this module reuses those primitives so preview and run agree on how a file is read.
 """
 
 import json
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.db.database import get_db
@@ -33,6 +40,7 @@ from .core import (
     MAX_DISTINCT_VALUES_PER_COLUMN,
     PAYPAL_SOURCE_KIND,
     AmountColumnMap,
+    latest_date_by_value,
     parse_amount,
     parse_csv_text,
     read_import_upload,
@@ -250,3 +258,25 @@ async def preview_amounts(req: PreviewAmountsRequest):
             for row in req.rows
         ]
     }
+
+
+@router.post("/preview/account-dates")
+async def preview_account_dates(
+    file: UploadFile = File(...),
+    date_column: str = Form(...),
+    date_format: str = Form("%m/%d/%Y"),
+    account_column: Optional[str] = Form(None),
+    skip_rows: int = Form(0),
+):
+    """`{"latest": {account value: date}}` for the file, keyed `""` when it has no account column."""
+    content = await read_import_upload(file)
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+    try:
+        parsed = parse_csv_text(text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+    rows = parsed.rows[max(0, skip_rows):]
+    return {"latest": latest_date_by_value(rows, account_column or None, date_column, date_format)}

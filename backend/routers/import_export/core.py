@@ -2437,6 +2437,21 @@ def parse_date(val: str, fmt: str) -> Optional[str]:
     return None
 
 
+def latest_date_by_value(rows, account_column: Optional[str], date_column: str, date_format: str) -> dict[str, str]:
+    """`{account value: latest date}` over `rows`, as the import would read each date; one entry keyed `""` for
+    a file with no account column. Rows with a blank account cell or an unreadable date are left out, since
+    the import refuses them."""
+    latest: dict[str, str] = {}
+    for row in rows:
+        value = str(row.get(account_column, "") or "").strip() if account_column else ""
+        if account_column and not value:
+            continue
+        day = parse_date(str(row.get(date_column, "") or ""), date_format)
+        if day and day > latest.get(value, ""):
+            latest[value] = day
+    return latest
+
+
 def parse_balance_cell(cell, decimal_separator: str) -> Optional[float]:
     """A balance column's figure as the file wrote it, or None for a blank or unreadable cell. A `DR` suffix
     is a balance overdrawn and a `CR` one a balance in credit, as a bank statement writes them."""

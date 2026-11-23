@@ -42,7 +42,7 @@ from typing import NamedTuple
 
 from backend.app_logging import log_error
 from backend.db.database import get_db
-from backend.services.account_groups import effective_account_id_sql
+from backend.services.account_groups import effective_account_id_sql, replace_account_token
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql, rule_specificity_order_sql
 from backend.services.excluded_categories import money_movement_sql
 from backend.services.link_held_rows import second_record_txn_ids_sql
@@ -592,6 +592,18 @@ def _transfer_payee_key(from_account_id: str, to_account_id: str) -> str:
     scopes by, so it carries the identity that *does* hold still. Never shown; the card is titled by the
     accounts and by the most common recent descriptor among its members."""
     return f"transfer:{from_account_id}:{to_account_id}"
+
+
+def move_transfer_account(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
+    """Re-key the transfer series naming `old_id` as an end to `new_id`, for a group whose root changed
+    (`services/group_root_change.py`). A movement's key names the two groups' roots, so a confirmed series
+    left on the old key would stop covering the detector's new one, which would surface as a second series."""
+    for row in conn.execute(
+            "SELECT id, payee_key FROM recurring_series WHERE payee_key LIKE 'transfer:%' AND instr(payee_key, ?) > 0",
+            (old_id,)).fetchall():
+        moved = replace_account_token(row["payee_key"], old_id, new_id)
+        if moved != row["payee_key"]:
+            conn.execute("UPDATE recurring_series SET payee_key = ? WHERE id = ?", (moved, row["id"]))
 
 
 def load_transfer_decisions(conn: sqlite3.Connection) -> tuple[dict[str, str], set[str]]:

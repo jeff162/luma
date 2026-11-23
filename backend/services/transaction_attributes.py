@@ -47,6 +47,8 @@ class Attribute:
     in_filter_bar: bool = True
 
 
+AFTER_CLOSE_KEY = "after-close"
+
 ATTRIBUTES: tuple[Attribute, ...] = (
     Attribute(
         key="needs-review",
@@ -137,6 +139,19 @@ ATTRIBUTES: tuple[Attribute, ...] = (
         sql=(
             "EXISTS (SELECT 1 FROM rule_alert_hit h JOIN category_rule r ON r.id = h.rule_id "
             "        WHERE h.txn_id = t.id AND r.alert = 1 AND r.deleted_at IS NULL)"
+        ),
+        in_filter_bar=False,
+    ),
+    # Not on the marker strip either: the list the closed-account Task opens (`services/closed_accounts.py`).
+    # A row is late against its own account's close or its group's, whichever came first.
+    Attribute(
+        key=AFTER_CLOSE_KEY,
+        label="After its account closed",
+        description="Dated after the day its account was closed.",
+        sql=(
+            "EXISTS (SELECT 1 FROM account a LEFT JOIN account p ON p.id = a.parent_account_id "
+            "        WHERE a.id = t.account_id "
+            "          AND (t.date > a.closed_on OR t.date > p.closed_on))"
         ),
         in_filter_bar=False,
     ),
@@ -235,6 +250,7 @@ def attribute_vocabulary() -> list[dict]:
 
 
 __all__ = [
+    "AFTER_CLOSE_KEY",
     "ATTRIBUTES",
     "ATTRIBUTES_BY_KEY",
     "ATTRIBUTE_KEYS",

@@ -73,6 +73,12 @@ describe('findAccountMatchCandidates', () => {
     expect(findLikelyAccountMatch(accounts, 'Eastern Checking (...1234)')).toBe(accounts[0])
   })
 
+  it('lists a closed account as possible but never offers it in one click', () => {
+    const accounts = [{ ...acc('Eastern Checking'), closed_on: '2026-03-31' }, acc('Western Savings')]
+    expect(findAccountMatchCandidates(accounts, 'Eastern Checking (...1234)')).toEqual([accounts[0]])
+    expect(findLikelyAccountMatch(accounts, 'Eastern Checking (...1234)')).toBeNull()
+  })
+
   it('still yields nothing where there was nothing to suggest', () => {
     // An exact match is a mapping to be MADE, not a resemblance to rule out; and the generic-token
     // guard has to hold for the list too, or every savings account becomes something to assert about.
@@ -275,6 +281,14 @@ describe('selectableAccountOptions', () => {
 
   it('tolerates an absent list', () => {
     expect(selectableAccountOptions(null, 'child')).toEqual([])
+  })
+
+  it('still offers a closed account, after the open ones and marked', () => {
+    // Older statements of a closed account still belong on it.
+    const closed = { ...ROOT_A, closed_on: '2026-03-31' }
+    const options = selectableAccountOptions([closed, ROOT_B, CHILD])
+    expect(options.map(a => a.id)).toEqual(['root-b', 'root-a'])
+    expect(getAccountOptionLabel(options[1])).toBe('Rewards Card (closed)')
   })
 })
 

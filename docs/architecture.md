@@ -501,7 +501,9 @@ The mapping table's amounts are computed by the import's own `parse_amount`, via
 The client posts the rows it already holds, since `/preview` persists nothing to re-parse. The answer is
 `null` for an unparseable cell or a convention whose columns are not mapped yet.
 `frontend/src/lib/importExport/previewAmounts.js` owns the debounced fetch and the by-position merge and
-parses no amounts.
+parses no amounts. The latest date of each account value, which the mapping step compares with a closed
+account's date, comes the same way from `POST /import-export/preview/account-dates`, which takes the whole
+file because the latest row can be anywhere in it.
 
 #### Batches, history and saved data sources
 

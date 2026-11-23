@@ -32,6 +32,8 @@ Two consequences shape everything below:
   `next_due_date` to today would turn every active series into a false alarm. The reference "now" is
   the newest live transaction on the series' account (or in the ledger, for an account-agnostic
   series), which is also how the detector picks its own reference date.
+- **A charge due after the series' account closed is neither upcoming nor missed**, since it cannot
+  arrive there (`services/closed_accounts.py`).
 
 The only persisted state is the user's dismissal of a signal, keyed by a fingerprint that is stable
 across scans (the series' derived identity plus the date it concerns) rather than by a series id. The
@@ -46,6 +48,8 @@ import statistics
 from datetime import date, timedelta
 
 from backend.services import signal_dismissals
+from backend.services.account_groups import replace_account_token
+from backend.services.closed_accounts import closed_on_by_root
 from backend.services.recurring_detection import SERIES_SCOPE_ACCOUNT_SQL
 
 # How far ahead the forward view looks. Upcoming is a budgeting aid rather than an anomaly, so it is
@@ -111,6 +115,26 @@ def _identity_key(series) -> str:
         str(series["category_id"] or ""),
         str(account_id or ""),
     ])
+
+
+# The signal kinds whose key carries a series fingerprint, and through it the account ids a series is keyed by.
+_FINGERPRINT_PREFIXES = ("upcoming:", "missed:", "new_series:")
+
+
+def move_account_in_dismissals(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
+    """Re-key the fingerprinted dismissals naming `old_id` to `new_id`, for a group whose root changed
+    (`services/group_root_change.py`). A series' fingerprint names its account scope, which resolves to the
+    group's root, so without this a signal already dismissed would be asked about again."""
+    prefixes = " OR ".join("substr(signal_key, 1, ?) = ?" for _ in _FINGERPRINT_PREFIXES)
+    params = [v for prefix in _FINGERPRINT_PREFIXES for v in (len(prefix), prefix)]
+    rows = conn.execute(
+        f"SELECT signal_key FROM recurring_signal_dismissal WHERE ({prefixes}) AND instr(signal_key, ?) > 0",
+        (*params, old_id)).fetchall()
+    for row in rows:
+        moved = replace_account_token(row["signal_key"], old_id, new_id)
+        if moved != row["signal_key"]:
+            conn.execute("UPDATE OR REPLACE recurring_signal_dismissal SET signal_key = ? WHERE signal_key = ?",
+                         (moved, row["signal_key"]))
 
 
 def _missed_tolerance_days(period_days: float) -> int:
@@ -287,11 +311,19 @@ def _is_user_owned(series) -> bool:
     return bool(series["confirmed"]) or series["source"] in ("manual", "rule")
 
 
-def _upcoming(series, today: date, horizon_days: int) -> dict | None:
+def _due_after_close(series, due: date, closed_on: dict[str, str]) -> bool:
+    """Whether a charge falls due after the series' account closed, when it cannot arrive there. An
+    account-agnostic series is never closed."""
+    account_close = closed_on.get(series["scope_account_id"]) if series["scope_account_id"] else None
+    return bool(account_close) and due.isoformat() > account_close
+
+
+def _upcoming(series, today: date, horizon_days: int, closed_on: dict[str, str]) -> dict | None:
     if not _is_user_owned(series) or series["status"] != "active" or not series["occurrence_count"]:
         return None
     due = _parse_date(series["next_due_date"])
-    if due is None or due < today or due > today + timedelta(days=horizon_days):
+    if due is None or due < today or due > today + timedelta(days=horizon_days) \
+            or _due_after_close(series, due, closed_on):
         return None
     return {
         "kind": "upcoming",
@@ -304,7 +336,7 @@ def _upcoming(series, today: date, horizon_days: int) -> dict | None:
     }
 
 
-def _missed(series, ref_now: date | None) -> dict | None:
+def _missed(series, ref_now: date | None, closed_on: dict[str, str]) -> dict | None:
     """An expected occurrence that never arrived. Measured from the data's own newest date (see the
     module docstring), and reported with how many whole periods have now gone by — two of them is what
     `presumed_ended` means, which is a statement the card makes and an action it offers, not a status
@@ -314,7 +346,7 @@ def _missed(series, ref_now: date | None) -> dict | None:
         return None
     due = _parse_date(series["next_due_date"])
     period = float(series["period_days"] or 0)
-    if due is None or period <= 0:
+    if due is None or period <= 0 or _due_after_close(series, due, closed_on):
         return None
     tolerance = _missed_tolerance_days(period)
     late_days = (ref_now - due).days
@@ -477,13 +509,14 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
     per_account, ledger_newest = _load_freshness(conn)
     accepted = _load_accepted_amounts(conn)
     one_offs = _load_one_off_charges(conn)
+    closed_on = closed_on_by_root(conn)
 
     signals: list[dict] = []
     for series in series_rows:
         occurrences = members.get(series["id"], [])
         for signal in (
-            _upcoming(series, today, horizon_days),
-            _missed(series, _reference_now(series, per_account, ledger_newest)),
+            _upcoming(series, today, horizon_days, closed_on),
+            _missed(series, _reference_now(series, per_account, ledger_newest), closed_on),
             _new_series(series, today),
             _price_change(series, occurrences, accepted.get(series["id"]), one_offs),
         ):

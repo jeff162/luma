@@ -69,11 +69,13 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
     api.getAccounts()
       .then(result => {
         if (cancelled) return
-        const usable = (result.accounts || result || []).filter(account => !account.trashed_at)
-        setAccounts(usable)
-        // Pre-selected only when there is exactly one account, which is the case where there is no
+        const live = (result.accounts || result || []).filter(account => !account.trashed_at)
+        // A closed account is still offered, last, for a transaction from before it closed.
+        const open = live.filter(account => !account.closed_on)
+        setAccounts([...open, ...live.filter(account => account.closed_on)])
+        // Pre-selected only when there is exactly one open account, which is the case where there is no
         // choice to make. With several, guessing would put money in the wrong place quietly.
-        setForm(prev => (usable.length === 1 ? { ...prev, accountId: usable[0].id } : prev))
+        setForm(prev => (open.length === 1 ? { ...prev, accountId: open[0].id } : prev))
       })
       .catch(() => { if (!cancelled) setAccounts([]) })
     return () => { cancelled = true }
@@ -147,7 +149,7 @@ export default function AddTransactionDialog({ categories, onAddCategory, onClos
                   <option value="">Choose an account…</option>
                   {accounts.map(account => (
                     <option key={account.id} value={account.id}>
-                      {account.display_name || account.name}
+                      {account.display_name || account.name}{account.closed_on ? ' (closed)' : ''}
                     </option>
                   ))}
                 </select>

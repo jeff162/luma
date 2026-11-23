@@ -1960,6 +1960,24 @@ export const HELP_TOPICS = [
           of the Dashboard's <HelpLink to="/help/dashboard-balances">Balances</HelpLink> total; an account of type <em>Other</em> is always out.
         </p>
         <p>
+          <strong>Close account…</strong> in the row&apos;s &#8943; menu marks the last day an account was
+          open. Its transactions stay, and it stays in filters and reports; the Accounts page lists it
+          under <strong>Closed</strong>, where <strong>Reopen account</strong> undoes it. A transaction dated after
+          that day is still imported, and raises a <HelpLink to="/help/page-tasks">task</HelpLink>, since a
+          charge on a closed account may be a mistake or fraud. A file whose data source sends an account to a
+          closed one, and that has rows dated after the close, asks again where that account goes, since the
+          later rows may belong to its replacement; a watched folder holds such a file until it is imported by
+          hand. Choosing the closed account answers it for that file only. A closed account the ledger still shows a
+          balance on is marked &#9888;, which usually means its final payment or transfer is missing; the
+          warning can be dismissed. Balance totals count nothing for it after the close.
+        </p>
+        <p>
+          Closing a merged group&apos;s top account closes the whole group. Closing one of its other accounts
+          retires that account alone, such as a card number that was replaced: it moves under{' '}
+          <strong>Closed</strong>, listed beneath its group, and a later transaction on it raises the task while
+          the group carries on.
+        </p>
+        <p>
           Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
           usually worth it, since they carry the richest transaction detail; a bank account on its own
           represents a month of card purchases a single payment. When both the payment account and the
@@ -2002,6 +2020,14 @@ export const HELP_TOPICS = [
           sources. To merge, drag one account onto the other on the Accounts page. Only accounts of the
           same type can be merged, and dragging onto one that can't be merged says why. Dragging a merged
           account out to the top level detaches it.
+        </p>
+        <p>
+          A group&apos;s top account, its primary, is the one its name and settings come from. <strong>Make
+          primary</strong> in an account&apos;s &#8943; menu, or dragging it onto the primary, puts it at the top;
+          the group keeps its settings and takes that account&apos;s name, and no duplicates change. When a card
+          is replaced, merging the new one into the group and making it the primary lets the old one be closed
+          on its own. A primary with no transactions for 90 days while one other account in its group has some
+          raises a <HelpLink to="/help/page-tasks">task</HelpLink> suggesting the switch.
         </p>
         <p>
           A transaction both accounts hold, described the same way by both sources, is{' '}
@@ -3925,6 +3951,8 @@ export const HELP_TOPICS = [
           <li>recurring detection that has not caught up with changed transactions</li>
           <li>a problem fetching transactions from a data connection</li>
           <li>a transaction matching a rule that raises an <HelpLink to="/help/page-rules#rule-alerts">alert</HelpLink></li>
+          <li>a transaction dated after its account was closed</li>
+          <li>a merged group whose primary has gone quiet while another of its accounts has not</li>
           <li>an error recorded in the log file</li>
           <li>a change since the last backup that makes earlier backups less useful, such as a new vault
             passphrase, a replaced vault key or replaced data provider credentials</li>

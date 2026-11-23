@@ -10,7 +10,8 @@ rows, rows needing review, rule suggestions — already has a review surface on 
 this module adds a way in and a rule for when to refuse, not new places to report to.
 
 **The refusal rule is about accounts.** A file whose account values do not all resolve to an existing
-account is parked rather than imported. Everything else an unattended import gets wrong is visible and
+account is parked rather than imported, as is one with rows dated after the close of an account it
+maps to (`_late_on_closed`). Everything else an unattended import gets wrong is visible and
 reversible on the card; an invented account quietly splits a ledger. A parked file raises a Task, and
 the answer to it is always the same — open this one by hand.
 
@@ -73,6 +74,7 @@ from backend.runtime_config import app_name, data_dir
 from backend.db.database import current_db_path, get_db, refresh_planner_statistics, single_runner
 from backend.db.demo_data import is_demo_data_loaded
 from backend.json_utils import safe_json_dict
+from backend.services.closed_accounts import close_dates
 from backend.services.ledger_currency import get_ledger_currency
 from backend.services.paypal_statement import StatementError, read_statement
 from backend.services.recurring_detection import settle_owed_rescans
@@ -85,6 +87,7 @@ from .core import (
     MAX_IMPORT_FILE_BYTES,
     PAYPAL_SOURCE_KIND,
     import_file_too_large,
+    latest_date_by_value,
     make_import_file_hash,
     parse_csv_text,
     run_import_parsed,
@@ -270,6 +273,8 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
     column_map = safe_json_dict(profile.get("column_map"))
     account_column = str(column_map.get("account") or "").strip()
     live_account_ids = _live_account_ids(conn)
+    rows = parsed.rows[int(profile.get("skip_rows") or 0):]
+    date_format = profile.get("date_format") or "%m/%d/%Y"
 
     if not account_column:
         if column_map.get("single_account_new"):
@@ -279,6 +284,8 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
             return None, "This source has no account set."
         if account_id not in live_account_ids:
             return None, "The account this source imports into no longer exists."
+        if _late_on_closed(conn, rows, None, column_map, date_format, {"": account_id}):
+            return None, "The account this source imports into is closed, and the file has rows dated after the close."
         account_config = {"account_id": account_id, "account_map": None, "skip_accounts": None}
     else:
         if account_column not in parsed.headers:
@@ -293,10 +300,7 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
         # A blank cell is not an unmapped account — it is a row the file does not place, and the
         # import already refuses it row by row and records it on the card. Parking the whole file for
         # one would make every trailing footer line a Task.
-        present_values = {
-            str(row.get(account_column, "") or "").strip()
-            for row in parsed.rows[int(profile.get("skip_rows") or 0):]
-        }
+        present_values = {str(row.get(account_column, "") or "").strip() for row in rows}
         present_values.discard("")
 
         account_map = {}
@@ -322,6 +326,12 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
             return None, f"The account mapped for {_quoted_list(stale)} no longer exists."
         if unresolved:
             return None, f"This source has no account mapped for {_quoted_list(unresolved)}."
+        late = _late_on_closed(conn, rows, account_column, column_map, date_format, account_map)
+        if late:
+            return None, (
+                f"The account mapped for {_quoted_list(late)} is closed, "
+                "and the file has rows dated after the close."
+            )
         account_config = {
             "account_id": None,
             "account_map": account_map,
@@ -331,7 +341,7 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
     cfg = {
         "profile_id": profile["id"],
         "column_map": column_map,
-        "date_format": profile.get("date_format") or "%m/%d/%Y",
+        "date_format": date_format,
         "amount_convention": profile.get("amount_convention") or "single_signed",
         "decimal_separator": profile.get("decimal_separator"),
         "skip_rows": int(profile.get("skip_rows") or 0),
@@ -347,6 +357,21 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
     if IMPORTED_CATEGORY_SETTINGS_KEY in column_map:
         cfg[IMPORTED_CATEGORY_SETTINGS_KEY] = column_map[IMPORTED_CATEGORY_SETTINGS_KEY]
     return cfg, None
+
+
+def _late_on_closed(conn, rows, account_column, column_map, date_format, account_map: dict[str, str]) -> list[str]:
+    """The values in `account_map` whose account is closed and which have rows dated after the close.
+
+    A mapping to a closed account is not answered for such a file: the later rows may belong to the account
+    that replaced it, which only a person can say. Choosing the closed account by hand answers it for that one
+    file, and the next file with later rows asks again. Older rows are its own statements and import as ever.
+    """
+    closed = close_dates(conn)
+    mapped = {value: closed[account] for value, account in account_map.items() if account in closed}
+    if not mapped:
+        return []
+    latest = latest_date_by_value(rows, account_column, str(column_map.get("date") or ""), date_format)
+    return sorted(value for value, closed_on in mapped.items() if latest.get(value, "") > closed_on)
 
 
 def _quoted_list(values: list[str], limit: int = 3) -> str:

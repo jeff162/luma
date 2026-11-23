@@ -11,7 +11,9 @@ Each stated balance therefore counts from its own date on, and a figure entered 
 does not move the history before it. On today's date this is the same figure `current_balances` gives.
 
 Before the group's coverage begins (its earliest stated balance or posted row) its balance is unknown,
-not the flat figure working back would give, so the group is left out of that date.
+not the flat figure working back would give, so the group is left out of that date. After the day it closed
+(`account.closed_on`) it holds nothing, whatever its last figure was; a remainder is flagged on the account
+instead (`services/closed_accounts.py`).
 """
 
 from bisect import bisect_right
@@ -32,9 +34,11 @@ OWNER_FILTER_PARAMS = ("owner_ids", "exclude_owner_ids", OWNER_LENS_PARAM)
 
 class GroupBalances:
     """One account group's stated balances and posted rows, for its balance on any date. `count_from` is the
-    first date the totals count the group from where the user set one (`account.balance_totals_from`)."""
+    first date the totals count the group from where the user set one (`account.balance_totals_from`), and
+    `closed_on` the last day it was open."""
 
-    def __init__(self, stated: list, ledger: list, count_from: Optional[str] = None):
+    def __init__(self, stated: list, ledger: list, count_from: Optional[str] = None,
+                 closed_on: Optional[str] = None):
         # The latest recorded figure stands for each date, as it does for `current_balances`' anchor.
         by_date = {}
         for row in stated:
@@ -45,6 +49,7 @@ class GroupBalances:
         self.moved = [0.0, *accumulate(row["amount"] for row in ledger)]
         starts = [d for d in (self.stated_dates[:1] + self.days[:1]) if d]
         self.count_from = count_from
+        self.closed_on = closed_on
         self.coverage_start = max(min(starts), count_from or "") if self.stated else None
 
     def _moved_after(self, after: str, through: Optional[str]) -> float:
@@ -69,6 +74,8 @@ class GroupBalances:
         agrees with `current_balances`."""
         if not self.stated or day < self.coverage_start:
             return None
+        if self.closed_on and day > self.closed_on:
+            return {"amount": 0.0, "as_of_date": self.closed_on, "source": "closed", "stale": False}
         index = bisect_right(self.stated_dates, day) - 1
         if index >= 0:
             anchor = self.stated[index]
@@ -155,13 +162,14 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
 
 
 def load_group_balances(conn, root_ids: list) -> dict:
-    """`{root_id: GroupBalances}` for these groups, each counted from its root's `balance_totals_from`."""
+    """`{root_id: GroupBalances}` for these groups, each counted from its root's `balance_totals_from` through
+    its `closed_on`."""
     if not root_ids:
         return {}
     placeholders = ",".join("?" * len(root_ids))
     stated, ledger = {}, {}
-    count_from = dict(conn.execute(
-        f"SELECT id, balance_totals_from FROM account WHERE id IN ({placeholders})", root_ids).fetchall())
+    settings = {row["id"]: row for row in conn.execute(
+        f"SELECT id, balance_totals_from, closed_on FROM account WHERE id IN ({placeholders})", root_ids)}
     for row in conn.execute(
         f"""
         SELECT COALESCE(a.parent_account_id, a.id) AS root_id, b.as_of_date, b.source, b.balance
@@ -183,7 +191,9 @@ def load_group_balances(conn, root_ids: list) -> dict:
         """, root_ids):
         ledger.setdefault(row["root_id"], []).append(row)
     return {
-        root_id: GroupBalances(stated.get(root_id, []), ledger.get(root_id, []), count_from.get(root_id))
+        root_id: GroupBalances(stated.get(root_id, []), ledger.get(root_id, []),
+                               settings[root_id]["balance_totals_from"] if root_id in settings else None,
+                               settings[root_id]["closed_on"] if root_id in settings else None)
         for root_id in root_ids
     }
 
@@ -271,7 +281,9 @@ def balance_totals_on(conn, date_start: Optional[str], date_end: Optional[str], 
     of the day before `date_start`; an all-time period has none. A group whose coverage begins inside the
     period opens it at zero, so the change is the end's total less the opening's and the two always
     agree. That is right for an account opened in the period, and overstates the change for one whose
-    records merely start late."""
+    records merely start late. Likewise a group closed inside the period ends it at zero, and one closed
+    before the period (before its opening, or before its end where it has none) is left out, since it
+    held nothing throughout."""
     today_iso = (today or date.today()).isoformat()
     end = min(date_end, today_iso) if date_end else today_iso
     open_ended = end == today_iso
@@ -279,6 +291,8 @@ def balance_totals_on(conn, date_start: Optional[str], date_end: Optional[str], 
     accounts = []
     for group in balance_total_groups(conn, owner_filters):
         balances = group.pop("balances")
+        if balances.closed_on and balances.closed_on < (opening or end):
+            continue
         at_end = balances.on(end, open_ended)
         at_opening = balances.on(opening) if opening and at_end else None
         accounts.append({

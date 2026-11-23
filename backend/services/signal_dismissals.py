@@ -4,15 +4,15 @@
 """
 The keyed "seen it, it's fine" store, shared by the derive-on-read finding surfaces.
 
-The recurring signals (`recurring_signals.py`), the rule range-drift findings (`rule_range_drift.py`) and
-the balance-history flags (`balance_totals.py`) compute their findings fresh from the ledger every time and
-store nothing but the user's dismissals. That leaves one durable question — *is this key currently
+The recurring signals (`recurring_signals.py`), the rule range-drift findings (`rule_range_drift.py`), the
+balance-history flags (`balance_totals.py`) and the closed-account balance flags (`closed_accounts.py`)
+compute their findings fresh from the ledger every time and store nothing but the user's dismissals. That leaves one durable question — *is this key currently
 dismissed* — with one answer for all of them, so the table lives here rather than being reached into from
 each module.
 
 Keys are disjoint by construction: a recurring signal's key is a series fingerprint or a transaction
 id prefixed by its kind, a range-drift key is `<kind>:<rule id>:<transaction id>`, and a history flag's is
-`balance_history:<account id>:<date>`. Nothing needs to enforce that, because a key is only ever asked
+`balance_history:<account id>:<date>`, as a closed-account flag's is `closed_balance:<account id>:<date>`. Nothing needs to enforce that, because a key is only ever asked
 about by the module that mints it.
 
 The table is still named `recurring_signal_dismissal`: it predates the other consumers, and renaming it
@@ -53,3 +53,18 @@ def dismiss(conn: sqlite3.Connection, key: str, kind: str, *, one_off: bool = Fa
 
 def restore(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM recurring_signal_dismissal WHERE signal_key = ?", (key,))
+
+
+def move_subject(conn: sqlite3.Connection, kind: str, old_id: str, new_id: str) -> None:
+    """Re-key the `<kind>:<old_id>:...` dismissals to `new_id`, for a finding whose subject took a new id
+    while staying the same thing: a group's flags are keyed by its root, and making a member the root
+    (`account_groups.make_root`) keeps the group."""
+    old_prefix = f"{kind}:{old_id}:"
+    conn.execute(
+        """
+        UPDATE OR REPLACE recurring_signal_dismissal
+        SET signal_key = ? || substr(signal_key, ?)
+        WHERE kind = ? AND substr(signal_key, 1, ?) = ?
+        """,
+        (f"{kind}:{new_id}:", len(old_prefix) + 1, kind, len(old_prefix), old_prefix),
+    )

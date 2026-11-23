@@ -81,19 +81,23 @@ export function getAccountMatchLabel(account) {
 // listed roots alone would find no option matching the stored id and render a decision in force as an
 // empty control — inviting the user to "fix" it and silently re-point the source. That child stays
 // listed, labelled with its group, for exactly as long as it is selected.
+//
+// A closed account is still offered, after the open ones: a file of its older statements belongs on it, and
+// a row dated after the close raises its own Task.
 export function selectableAccountOptions(accounts, selectedId = '') {
   const list = accounts || []
   const roots = list.filter(account => !account?.parent_account_id)
-  if (!selectedId || roots.some(account => account?.id === selectedId)) return roots
+  const ordered = [...roots.filter(account => !account?.closed_on), ...roots.filter(account => account?.closed_on)]
+  if (!selectedId || roots.some(account => account?.id === selectedId)) return ordered
   const selectedChild = list.find(account => account?.id === selectedId)
-  return selectedChild ? [...roots, selectedChild] : roots
+  return selectedChild ? [...ordered, selectedChild] : ordered
 }
 
 // An account's label in such a picker. Only a merged child ever needs one, and only while it is the
 // selected value — but there the group suffix is load-bearing, since the child's own name is usually
 // its parent's and the entry would otherwise read as a duplicate of a root already in the list.
 export function getAccountOptionLabel(account, accountsById = null) {
-  const base = `${account?.name || ''}${account?.mask ? ` ···${account.mask}` : ''}`
+  const base = `${account?.name || ''}${account?.mask ? ` ···${account.mask}` : ''}${account?.closed_on ? ' (closed)' : ''}`
   const parentId = account?.parent_account_id
   if (!parentId) return base
   const parent = accountsById?.get?.(parentId) || null
@@ -286,9 +290,12 @@ function findMaskMatchCandidates(accounts, value, accountsById, exclude) {
 // knowing of a second possibility retires the chip even though it does not retire the first. And that
 // entry must be **name evidence**: a shared four-digit mask is worth showing in a list, and is nowhere
 // near enough to act on in a single click, since unrelated real accounts share masks routinely.
+//
+// A closed account is never the one-click answer: a source showing a new value is more likely its
+// replacement than the retired account. It stays among the possibles and in the picker.
 export function findLikelyAccountMatch(accounts, value) {
   const candidates = findAccountMatchCandidates(accounts, value)
-  if (candidates.length !== 1) return null
+  if (candidates.length !== 1 || candidates[0]?.closed_on) return null
   const byName = findNameMatchCandidates(accounts, value, new Map((accounts || []).map(a => [a?.id, a])))
   return byName.length === 1 ? candidates[0] : null
 }

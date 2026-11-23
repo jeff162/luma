@@ -7,6 +7,11 @@ Account records serve two related lifecycle models.
 - Active root accounts are the selectable/reportable physical accounts the rest of the app works with.
 - Child accounts keep historical account numbers visible on the Accounts page while sharing a parent display name elsewhere.
 - Removing an account is irreversible and says so; what it asks instead is where its transactions go (`delete_account`).
+- Closing an account (`closed_on`) removes nothing: it says nothing should be dated after that day, and the
+  Accounts page lists it apart (`services/closed_accounts.py`). A group's root closes the group; a member
+  closes alone.
+- Making a member its group's primary (`make_primary`) swaps it with the root and moves nothing else, so
+  it changes no duplicate pairing (`services/account_groups.py` -> `make_root`).
   `account.trashed_at` survives as a column — old backups carry it and the read paths still honour it — but nothing
   sets it any more: the account trash was retired once removal moved behind a deliberate menu.
 
@@ -58,11 +63,13 @@ from backend.services.account_references import (
 from backend.services.account_balances import (
     balance_checks, current_balances, delete_manual_balance, manual_balances, record_manual_balance,
 )
-from backend.services.account_groups import effective_account_id, group_accounts_sql, set_account_parent
+from backend.services.account_groups import effective_account_id, group_accounts_sql, make_root, set_account_parent
 from backend.services.balance_totals import (
     HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
 )
+from backend.services.closed_accounts import CLOSED_BALANCE_KIND, closed_balance_flags, closed_balance_key
 from backend.services.signal_dismissals import dismiss as dismiss_signal
+from backend.services.group_root_change import move_group_root, move_series_keys
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_settings_followups import settle_account_change
 from backend.services.wallet_accounts import (
@@ -91,6 +98,8 @@ class AccountUpdate(BaseModel):
     exclude_from_balance_totals: Optional[bool] = None
     # The first date the balance totals count the group from (YYYY-MM-DD); "" clears it.
     balance_totals_from: Optional[str] = None
+    # The last day the account was open (YYYY-MM-DD); "" reopens it.
+    closed_on: Optional[str] = None
 
 
 class ManualBalanceRequest(BaseModel):
@@ -149,6 +158,7 @@ def _get_account_row(conn, account_id: str):
             a.subtype,
             a.wallet_match_text,
             a.exclude_from_balance_totals,
+            a.closed_on,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -189,6 +199,7 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.subtype,
             a.wallet_match_text,
             a.exclude_from_balance_totals,
+            a.closed_on,
             a.mask,
             a.owner_id,
             a.parent_account_id,
@@ -357,8 +368,11 @@ def list_accounts(include_children: bool = False, include_trashed: bool = False)
         accounts = _attach_account_tags(conn, [_serialize_account(r) for r in rows])
         # A group has one balance, carried on its root; a member's row has none of its own to show.
         balances = current_balances(conn)
+        closed_flags = closed_balance_flags(conn, balances)
         for account in accounts:
-            account["balance"] = None if account["parent_account_id"] else balances.get(account["id"])
+            root = not account["parent_account_id"]
+            account["balance"] = balances.get(account["id"]) if root else None
+            account["closed_balance_flag"] = closed_flags.get(account["id"]) if root else None
     return accounts
 
 
@@ -480,6 +494,14 @@ def update_account(account_id: str, body: AccountUpdate):
             conn.execute("UPDATE account SET balance_totals_from = ? WHERE id = ?",
                          (_period_date(body.balance_totals_from.strip()), account_id))
 
+        if body.closed_on is not None:
+            # Any account: a root's closes its group, a member's retires that one account
+            # (`services/closed_accounts.py`).
+            closed_on = _period_date(body.closed_on.strip())
+            if closed_on and closed_on > date.today().isoformat():
+                raise HTTPException(status_code=400, detail="An account can't be closed on a future date")
+            conn.execute("UPDATE account SET closed_on = ? WHERE id = ?", (closed_on, account_id))
+
         if body.owner_id is not None:
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)
             settings_changed = settings_changed or owner_val != acc["owner_id"]
@@ -558,6 +580,20 @@ def dismiss_history_flag(account_id: str):
         flag = account_history_flag(conn, root_id)
         if flag:
             dismiss_signal(conn, history_flag_key(root_id, flag["before"]), HISTORY_FLAG_KIND)
+    return {"ok": True}
+
+
+@router.post("/{account_id}/closed-balance-flag/dismiss")
+def dismiss_closed_balance_flag(account_id: str):
+    """Stop flagging the balance a closed group still holds. The dismissal names the close date, so
+    reopening and closing on another date flags it again (`services/closed_accounts.py`)."""
+    with get_db() as conn:
+        if not _get_account_row(conn, account_id):
+            raise HTTPException(status_code=404, detail="Account not found")
+        root_id = effective_account_id(conn, account_id)
+        closed_on = conn.execute("SELECT closed_on FROM account WHERE id = ?", (root_id,)).fetchone()["closed_on"]
+        if closed_on:
+            dismiss_signal(conn, closed_balance_key(root_id, closed_on), CLOSED_BALANCE_KIND)
     return {"ok": True}
 
 
@@ -783,6 +819,10 @@ def attach_account(account_id: str, body: AccountAttachRequest):
 
         target_display_name = parent["display_name"] or parent["name"]
         set_account_parent(conn, group_member_ids, parent["id"])
+        # A whole group merged in takes the target's root, and its series keys go with it. A member moved out
+        # of another group takes none: they stay with the group it left (`services/group_root_change.py`).
+        if not account["parent_account_id"]:
+            move_series_keys(conn, account["id"], parent["id"])
         conn.executemany(
             "UPDATE account SET display_name = ? WHERE id = ?",
             [(target_display_name, member_id) for member_id in group_member_ids],
@@ -841,6 +881,26 @@ def detach_account(account_id: str):
         restored = restore_auto_merged_after_detach(conn, account_id, remaining_group_ids)
     settle_owed_rescans()
     return {"ok": True, "restored_count": restored}
+
+
+@router.post("/{account_id}/make-primary")
+def make_primary(account_id: str):
+    """Make a group member the group's primary: its root, the account the group's settings and name are
+    read from. Nothing is detached, so no duplicate pairing changes (`account_groups.make_root`)."""
+    with get_db() as conn:
+        account = _get_account_row(conn, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if not account["parent_account_id"]:
+            raise HTTPException(status_code=400, detail="This account is already its group's primary")
+        # The root's close date closes the whole group, so a closed member made the root would close it.
+        if account["closed_on"]:
+            raise HTTPException(status_code=400, detail="Reopen this account before making it the primary")
+        old_root = make_root(conn, account_id)
+        # Answers keyed by the group's root follow it, since the group is the same group.
+        move_group_root(conn, old_root, account_id)
+    settle_owed_rescans()
+    return {"ok": True, "previous_primary_id": old_root}
 
 
 # What becomes of the account's transactions. There is no third answer: `txn.account_id` is NOT NULL,

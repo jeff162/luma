@@ -131,8 +131,11 @@ import {
   findAccountMatchCandidates,
   findLikelyAccountMatch,
   buildAccountImportStateSnapshot,
+  getAccountOptionLabel,
 } from '../lib/importExport/importAccountMatching.js'
+import { accountCloseDates, applyClosedAccountCheck, useLatestAccountDates } from '../lib/importExport/closedAccountCheck.js'
 import { formatCount } from '../lib/displayFormat.js'
+import { formatDate } from '../lib/utils.js'
 
 // `UnifiedDuplicatesDialog` lives at the App level so it can stay open while the user navigates
 // between Import, Accounts, Transactions, etc. — see
@@ -529,6 +532,44 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const distinctAccountValues = accountValuesUnion.values
   const accountValueCounts = accountValuesUnion.counts
 
+  // A mapping to a closed account is undecided for a file with rows dated after the close
+  // (`closedAccountCheck.js`). The file is read for its dates only while some account is closed.
+  const closeDates = useMemo(() => accountCloseDates(accounts), [accounts])
+  const accountsById = useMemo(() => new Map(accounts.map(account => [account.id, account])), [accounts])
+  const filesToImport = useMemo(
+    () => (importFiles.length ? importFiles : (preview?.file ? [preview.file] : [])),
+    [importFiles, preview?.file],
+  )
+  const latestAccountDates = useLatestAccountDates({
+    files: closeDates.size ? filesToImport : null,
+    accountColumn: colAccount,
+    dateColumn: colDate,
+    dateFormat,
+    skipRows,
+  })
+  useEffect(() => {
+    setAccountMap(prev => applyClosedAccountCheck(prev, latestAccountDates, closeDates))
+  }, [accountMap, latestAccountDates, closeDates])
+  // The same question for a source with one account: the closed account it names is cleared, and choosing it
+  // again (`singleClosed.confirmed`) answers it for this file.
+  const [singleClosed, setSingleClosed] = useState({ note: null, confirmed: '' })
+  useEffect(() => {
+    setSingleClosed({ note: null, confirmed: '' })
+  }, [preview?.file])
+  useEffect(() => {
+    if (colAccount || !accountId || !latestAccountDates || accountId === singleClosed.confirmed) return
+    const closedOn = closeDates.get(accountId)
+    if (!closedOn || !(String(latestAccountDates[''] || '') > closedOn)) return
+    setSingleClosed(prev => ({ ...prev, note: { accountId, closedOn } }))
+    setAccountId('')
+  }, [colAccount, accountId, latestAccountDates, closeDates, singleClosed.confirmed])
+  function closedAccountNote(note) {
+    const account = accountsById.get(note.accountId)
+    // The option label's own "(closed)" would say it twice.
+    const label = account ? getAccountOptionLabel({ ...account, closed_on: null }, accountsById) : 'The mapped account'
+    return `${label} closed ${formatDate(note.closedOn)}, and this file has later rows`
+  }
+
   // Distinct new accounts the user has chosen to create in THIS import (deduped by name). Offered
   // as targets in every other label's picker so several file labels can collapse onto one new
   // account. There is no label-to-label reference — each label independently declares the name —
@@ -763,9 +804,11 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const categorySelectHint = columnAnalysis.categoryCandidates.length > 0 && !colCategory
     ? formatLikelyMatchLabel(columnAnalysis.categoryCandidates.length)
     : ''
-  const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !singleAccountNew.enabled
-    ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
-    : ''
+  const accountSelectHint = !colAccount && !accountId && !singleAccountNew.enabled && singleClosed.note
+    ? closedAccountNote(singleClosed.note)
+    : columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !singleAccountNew.enabled
+      ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
+      : ''
   function clearMappingSuggestion(field) {
     setMappingSuggestions(prev => prev[field] ? { ...prev, [field]: '' } : prev)
   }
@@ -842,6 +885,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
           exactMatch &&
           !entry.skip &&
           !entry.accountId &&
+          !entry.closedNote &&
           (!entry.createNew || String(entry.newName || '').trim().toLowerCase() === String(val || '').trim().toLowerCase())
         ) {
           next[val] = {
@@ -3598,6 +3642,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
                   } else {
                     if (acct || createNew) clearMappingSuggestion('account')
+                    setSingleClosed(prev => ({ note: null, confirmed: closeDates.has(acct) ? acct : prev.confirmed }))
                     setColAccount(null)
                     setAccountMap({})
                     setAccountId(acct)
@@ -3625,10 +3670,11 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                 sourceHeading="Account from file"
                 namePrefix="account-map"
                 accounts={accounts}
-                onUpdate={(csvVal, patch) => setAccountMap(prev => ({
-                  ...prev,
-                  [csvVal]: { ...defaultAccountMapEntry(csvVal), ...(prev[csvVal] || {}), ...patch },
-                }))}
+                onUpdate={(csvVal, patch) => setAccountMap(prev => {
+                  const entry = { ...defaultAccountMapEntry(csvVal), ...(prev[csvVal] || {}), closedNote: null, ...patch }
+                  // A closed account chosen here is this import's answer, which the check then leaves alone.
+                  return { ...prev, [csvVal]: { ...entry, closedConfirmed: closeDates.has(entry.accountId) } }
+                })}
                 inFlightOptions={inFlightNewAccounts.map(n => ({
                   value: n.name, label: `${n.name} (new)`, type: n.type,
                 }))}
@@ -3644,6 +3690,10 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
                     details: alreadyImported ? (
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
                         Already imported · {alreadyImported.row_count} rows
+                      </div>
+                    ) : accountMap[csvVal]?.closedNote && !accountMap[csvVal]?.accountId ? (
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                        {closedAccountNote(accountMap[csvVal].closedNote)}
                       </div>
                     ) : null,
                     lockedNote: alreadyImported ? 'already imported' : null,

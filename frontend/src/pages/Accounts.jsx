@@ -7,7 +7,7 @@ import { api } from '../lib/api.js'
 import { useOwnerLens } from '../lib/OwnerLensContext.jsx'
 import { ownerKey, ownerLensAdmits } from '../lib/ownerLens.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Button, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, PencilGlyph, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
+import { Button, LinkButton, SegmentedToggle, Spinner, Toggle, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, FilterChip, IconButton, PencilGlyph, Tooltip, getTooltipSurfaceStyle } from '../components/ui.jsx'
 import { useAccountDetailPanels } from '../components/accounts/useAccountDetailPanels.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
@@ -18,6 +18,7 @@ import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
 import AccountBalanceDialog from '../components/accounts/AccountBalanceDialog.jsx'
+import CloseAccountDialog from '../components/accounts/CloseAccountDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES, isWalletAccountType, unusualBalanceColor } from '../lib/accountTypes.js'
 import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
@@ -30,6 +31,7 @@ import { localStore, sessionStore } from '../lib/browserStorage.js'
 import { DRAG_SOURCE_STYLE, preventPressDefaults, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
 import { cssPoint, cssRect, cssViewport, toCssPx, uiScale } from '../lib/displaySize.js'
 import { useAnchoredPopup } from '../lib/anchoredPopup.js'
+import { StatusPill } from '../components/connections/ConnectionStatus.jsx'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -986,8 +988,9 @@ const BALANCE_SOURCE_PHRASES = {
 // The cell is one button whether or not there is a balance, so a balance is entered and changed the same
 // way; an empty top row shows a dash to click. A member row has nothing, as the group's balance is its top row's.
 // The second line dates the balance the figure was carried forward from, with (m) when it was entered by
-// hand, the one kind that stays right only while someone keeps it up.
-function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabel, onEdit, disabled }) {
+// hand, the one kind that stays right only while someone keeps it up. A closed account still holding
+// something is marked ⚠, dismissible from the hint, since only the user knows whether the remainder matters.
+function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabel, closedFlag, onDismissClosedFlag, onEdit, disabled }) {
   if (isChild) return <div />
   const buttonStyle = {
     display: 'block', width: '100%', background: 'none', border: 'none', padding: 0, color: 'var(--text)',
@@ -1008,12 +1011,24 @@ function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabe
     balance.available != null ? `${formatMoneyMagnitude(balance.available)} available, as reported.` : null,
     balance.stale ? `Has not been updated in over ${balance.stale_after_days === 7 ? 'a week' : `${balance.stale_after_days} days`}.` : null,
     others.length ? `${others.join(', ')} also reported a balance within a week of it. Only the latest counts.` : null,
+    closedFlag
+      ? `Closed on ${formatDate(closedFlag.closed_on)} and still ${closedFlag.amount > 0 ? 'holds' : 'owes'} ${formatMoneyMagnitude(closedFlag.amount)} by its transactions. The final payment or transfer may be missing.`
+      : null,
   ].filter(Boolean)
   return (
-    <Tooltip content={<div style={{ display: 'grid', gap: 4 }}>{tip.map(line => <div key={line}>{line}</div>)}</div>} align="right">
+    <Tooltip
+      interactive={!!closedFlag}
+      align="right"
+      content={(
+        <div style={{ display: 'grid', gap: 4 }}>
+          {tip.map(line => <div key={line}>{line}</div>)}
+          {closedFlag ? <div><LinkButton onClick={onDismissClosedFlag}>Dismiss</LinkButton></div> : null}
+        </div>
+      )}
+    >
       <button type="button" onClick={disabled ? undefined : onEdit} style={buttonStyle}>
         <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
-          {others.length ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
+          {others.length || closedFlag ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
           <span style={{ color: unusualBalanceColor(accountType, balance.amount) || undefined }}>
             {formatSignedMoneyAmount(balance.amount)}
           </span>
@@ -1054,6 +1069,7 @@ function AccountRow({
   account,
   accountLabel = () => '',
   onEditBalance,
+  onDismissClosedFlag,
   parentAccount = null,
   hasChildren = false,
   isLastChild = false,
@@ -1073,6 +1089,7 @@ function AccountRow({
   onError = () => { },
   interactionDisabled = false,
   dragDisabled = false,
+  contextOnly = false,
   dropActive = false,
   onDragStart,
   allTags = [],
@@ -1251,12 +1268,13 @@ function AccountRow({
           alignItems: 'center',
           padding: ACCOUNT_ROW_PADDING,
           paddingLeft: isChild ? `${10 + ACCOUNT_ROW_CHILD_INDENT}px` : undefined,
+          opacity: contextOnly ? 0.6 : undefined,
         }}>
         <button
           type="button"
           onPointerDown={canDrag ? event => onDragStart?.(event, account) : undefined}
           onClick={event => event.preventDefault()}
-          title={canDrag ? (isChild ? 'Drag to reorder or pull out to top level' : 'Drag to merge or reorder') : undefined}
+          title={canDrag ? (isChild ? 'Drag onto the primary to make it primary, or to the left edge to ungroup' : 'Drag to merge') : undefined}
           style={{
             ...DRAG_SOURCE_STYLE,
             background: 'none',
@@ -1326,6 +1344,7 @@ function AccountRow({
               }}>
                 {account.name}
               </span>
+              {contextOnly ? <StatusPill tone="muted" small>Open</StatusPill> : null}
               <span
                 onClick={e => {
                   e.stopPropagation()
@@ -1540,6 +1559,8 @@ function AccountRow({
           isChild={isChild}
           rootId={account.id}
           accountLabel={accountLabel}
+          closedFlag={account.closed_balance_flag}
+          onDismissClosedFlag={() => onDismissClosedFlag?.(account)}
           onEdit={() => onEditBalance?.(account)}
           disabled={interactionDisabled}
         />
@@ -1556,12 +1577,14 @@ function AccountRow({
             possible), so the protection has to be the path to it. A single-item menu is the right
             shape for exactly one rare, irreversible action — `danger` is reserved for those. */}
         <div style={{ justifySelf: 'end' }}>
-          <ActionMenuButton
-            open={rowMenuAccountId === account.id}
-            disabled={interactionDisabled}
-            title={`Actions for ${account.display_name || account.name}`}
-            onOpen={element => onOpenRowMenu?.(account, element)}
-          />
+          {contextOnly ? null : (
+            <ActionMenuButton
+              open={rowMenuAccountId === account.id}
+              disabled={interactionDisabled}
+              title={`Actions for ${account.display_name || account.name}`}
+              onOpen={element => onOpenRowMenu?.(account, element)}
+            />
+          )}
         </div>
       </div>
 
@@ -1578,6 +1601,9 @@ export default function Accounts() {
    */
   const [accounts, setAccounts] = useState([])
   const [balanceDialogAccount, setBalanceDialogAccount] = useState(null)
+  const [closeDialogAccount, setCloseDialogAccount] = useState(null)
+  // Which accounts the list shows: 'open' or 'closed'. Every visit starts on the open ones.
+  const [accountState, setAccountState] = useState('open')
   const [owners, setOwners] = useState([])
   const [availableTags, setAvailableTags] = useState([])
   const [tagsEditMode, setTagsEditMode] = useState(false)
@@ -1615,6 +1641,7 @@ export default function Accounts() {
   const [sortLoaded, setSortLoaded] = useState(false)
   const [sortIndicatorActive, setSortIndicatorActive] = useState(true)
   // dropIntent: null | { kind: 'merge', targetId: string } | { kind: 'detach', accountId: string }
+  //   | { kind: 'primary', accountId: string (the member to make primary), targetId: string (the row dropped on) }
   const [dropIntent, setDropIntent] = useState(null)
   const [dragTooltip, setDragTooltip] = useState(null) // { x, y, message }
   const [movingAccountId, setMovingAccountId] = useState(null)
@@ -1917,9 +1944,32 @@ export default function Accounts() {
     initialSortSeedRef.current = seed
   }, [applyAccountSort, dbInstanceId, loading, sortDir, sortKey, sortLoaded, userId])
 
+  // A new account is open, so it is created where the open ones are listed.
   function openCreateAccount() {
     setContextOpen(false)
+    setAccountState('open')
     setShowCreateAccount(true)
+  }
+
+  // Closing or reopening a group's top account changes what every member reads, and whether its balance is
+  // flagged, so the list is reloaded rather than patched.
+  async function reopenAccount(account) {
+    try {
+      await api.updateAccount(account.id, { closed_on: '' })
+      await reloadAccounts()
+      notifyAccountsChanged()
+    } catch (error) {
+      showAsyncNotice('Could not reopen the account', error)
+    }
+  }
+
+  async function dismissClosedFlag(account) {
+    try {
+      await api.dismissClosedBalanceFlag(account.id)
+      await reloadAccounts()
+    } catch (error) {
+      showAsyncNotice('Could not dismiss the warning', error)
+    }
   }
 
   const createAccount = async (data) => {
@@ -2116,6 +2166,22 @@ export default function Accounts() {
     }
   }
 
+  // The member takes the group's place at the top; the group keeps its settings and takes its name.
+  async function makePrimary(account) {
+    if (!account?.parent_account_id) return
+    setMovingAccountId(account.id)
+    try {
+      await api.makePrimaryAccount(account.id)
+      await reloadAccounts()
+      notifyAccountsChanged()
+    } catch (error) {
+      showAsyncNotice('Could not make the account primary', error)
+    } finally {
+      setMovingAccountId(null)
+      clearDragState()
+    }
+  }
+
   // The grip picks the account up; what follows the pointer is a copy of its whole row, so it reads as
   // the account record rather than as the grip.
   function handleAccountDragStart(event, account) {
@@ -2183,12 +2249,12 @@ export default function Accounts() {
       return
     }
 
-    // Within own group — highlight parent but no action.
-    const draggingGroupRootId = dragged.parent_account_id || null
-    const targetGroupRootId = target.parent_account_id || (childAccountsByParent.get(target.id)?.length > 0 && !collapsedGroups.has(target.id) ? target.id : null)
-    if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
-      setDropIntent({ kind: 'merge', targetId: draggingGroupRootId })
-      clearDragHint()
+    // Within its own group a drag can only make an account the primary.
+    const withinGroup = groupDropAction(dragged, target)
+    if (withinGroup) {
+      setDropIntent(withinGroup.intent)
+      if (withinGroup.message) showDragHint(target.id, withinGroup.message, point)
+      else clearDragHint()
       return
     }
 
@@ -2222,13 +2288,19 @@ export default function Accounts() {
       clearDragHint()
       return
     }
+    showDragHint(mergeTarget.id, `Can't merge with this account: ${reasons}`, point)
+  }
+
+  // The hint follows the pointer and appears after a pause, so a drag passing over rows does not flash one
+  // per row. A new row or message starts the pause over, so the hint always says what a drop there does.
+  function showDragHint(row, message, point) {
     const at = cssPoint(point)
-    if (dragHintTargetRef.current !== mergeTarget.id) {
-      // A new row starts the delay over, so the hint always names the row under the pointer.
+    const key = `${row}\n${message}`
+    if (dragHintTargetRef.current !== key) {
       clearDragHint()
-      dragHintTargetRef.current = mergeTarget.id
+      dragHintTargetRef.current = key
       dragTooltipTimerRef.current = setTimeout(() => {
-        setDragTooltip({ ...dragPointRef.current, message: `Can't merge with this account: ${reasons}` })
+        setDragTooltip({ ...dragPointRef.current, message })
       }, 600)
     } else if (dragTooltipElRef.current) {
       dragTooltipElRef.current.style.left = `${at.x + 14}px`
@@ -2237,8 +2309,37 @@ export default function Accounts() {
     dragPointRef.current = at
   }
 
-  // Drop handler — child accounts may detach in the left gutter, otherwise drops
-  // either merge into another top-level account or no-op within the same group.
+  // What dropping an account on a row of its own group does, or null when the rows are not in one group. A
+  // member dropped on the primary becomes the primary. The primary dropped on a member says which member
+  // only when it is the one open member; with more, the drop does nothing and the hint says what to drag.
+  function groupDropAction(dragged, target) {
+    const rootId = dragged.parent_account_id || dragged.id
+    if ((target.parent_account_id || target.id) !== rootId) return null
+    // Over its own row: nothing happens and nothing needs saying.
+    if (target.id === dragged.id) return { intent: null, message: null }
+    const openMembers = (childAccountsByParent.get(rootId) || []).filter(member => !member.closed_on)
+    let candidate = null
+    if (dragged.parent_account_id && target.id === rootId) candidate = dragged
+    else if (!dragged.parent_account_id && (target.closed_on || openMembers.length === 1)) candidate = target
+    if (!candidate) {
+      return {
+        intent: null,
+        message: dragged.parent_account_id
+          ? 'Drop on the primary to make this account the primary'
+          : 'Drag the account that should become primary onto this one',
+      }
+    }
+    if (candidate.closed_on) {
+      return { intent: null, message: `Reopen ${accountLabel(candidate.id)} before making it the primary` }
+    }
+    return {
+      intent: { kind: 'primary', accountId: candidate.id, targetId: target.id },
+      message: `Make ${accountLabel(candidate.id)} the primary`,
+    }
+  }
+
+  // Drop handler — child accounts may detach in the left gutter; otherwise a drop within the group may make an
+  // account the primary, and one on another top-level account merges into it.
   function handleListDrop(dragged, point) {
     const listRect = listRef.current?.getBoundingClientRect()
     if (!listRect) return
@@ -2256,11 +2357,11 @@ export default function Accounts() {
     const target = targetId ? activeAccounts.find(a => a.id === targetId) : null
     if (!target) { clearDragState(); return }
 
-    // Drop within own group — no-op.
-    const draggingGroupRootId = dragged.parent_account_id || null
-    const targetGroupRootId = target.parent_account_id || (childAccountsByParent.get(target.id)?.length > 0 && !collapsedGroups.has(target.id) ? target.id : null)
-    if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
-      clearDragState()
+    const withinGroup = groupDropAction(dragged, target)
+    if (withinGroup) {
+      const candidate = withinGroup.intent && activeAccounts.find(a => a.id === withinGroup.intent.accountId)
+      if (candidate) makePrimary(candidate)
+      else clearDragState()
       return
     }
 
@@ -2270,7 +2371,8 @@ export default function Accounts() {
   }
 
   const activeAccounts = accounts.filter(account => !account.trashed_at)
-  const rootAccounts = activeAccounts.filter(account => !account.parent_account_id)
+  const allRootAccounts = activeAccounts.filter(account => !account.parent_account_id)
+  // Every member of each group, closed or not: what a drag or a merge works with.
   const childAccountsByParent = activeAccounts.reduce((map, account) => {
     if (!account.parent_account_id) return map
     const list = map.get(account.parent_account_id) || []
@@ -2278,6 +2380,24 @@ export default function Accounts() {
     map.set(account.parent_account_id, list)
     return map
   }, new Map())
+  // The open and the closed accounts are listed apart. A closed group is listed with the closed ones whole; a
+  // member closed on its own is listed there under its group's top row, which gives it its context, and the
+  // group stays with the open ones without it. With none closed there is nothing to switch to, so the list is
+  // the open ones whatever was last chosen.
+  const closedRootIds = new Set(allRootAccounts.filter(account => account.closed_on).map(account => account.id))
+  const closedRootCount = closedRootIds.size
+  const closedMembers = activeAccounts.filter(account =>
+    account.parent_account_id && account.closed_on && !closedRootIds.has(account.parent_account_id))
+  const rootsWithClosedMembers = new Set(closedMembers.map(account => account.parent_account_id))
+  const closedCount = closedRootCount + closedMembers.length
+  const showingClosed = accountState === 'closed' && closedCount > 0
+  const rootAccounts = allRootAccounts.filter(account => showingClosed
+    ? account.closed_on || rootsWithClosedMembers.has(account.id)
+    : !account.closed_on)
+  const visibleChildrenByParent = new Map([...childAccountsByParent].map(([parentId, members]) => [
+    parentId,
+    closedRootIds.has(parentId) ? members : members.filter(member => !!member.closed_on === showingClosed),
+  ]))
 
   // The owner lens narrows the list and its owner pills; the owners themselves stay manageable below, and
   // the unowned-accounts warning stays, since assigning an owner is setup work for everyone.
@@ -2311,8 +2431,8 @@ export default function Accounts() {
   const detachDropActive = dropIntent?.kind === 'detach' && !!draggingAccount?.parent_account_id
 
   const ownerCount = owners.length
-  const unownedCount = rootAccounts.filter(a => !a.owner_id).length
-  const mergedChildCount = lensRootAccounts.reduce((n, root) => n + (childAccountsByParent.get(root.id) || []).length, 0)
+  const unownedCount = allRootAccounts.filter(a => !a.owner_id).length
+  const mergedChildCount = lensRootAccounts.reduce((n, root) => n + (visibleChildrenByParent.get(root.id) || []).length, 0)
   const accountListSummary = lensRootAccounts.length
     ? `${formatCountSummary(lensRootAccounts.length, 'account')}${mergedChildCount ? `, ${formatCountSummary(mergedChildCount, 'merged account')}` : ''}`
     : 'No accounts'
@@ -2466,6 +2586,23 @@ export default function Accounts() {
               title: 'Enter this account’s balance by hand, or change one entered before.',
               onClick: () => setBalanceDialogAccount(rowMenu.account),
             }] : []),
+            ...(rowMenu.account.parent_account_id ? [{
+              label: 'Make primary',
+              title: 'Put this account at the top of its group. The group keeps its settings and takes this account’s name.',
+              disabled: !!rowMenu.account.closed_on,
+              disabledReason: 'Reopen this account first.',
+              onClick: () => makePrimary(rowMenu.account),
+            }] : []),
+            // A group's top row closes the whole group; a member's closes that account alone.
+            rowMenu.account.closed_on ? {
+              label: 'Reopen account',
+              title: 'List this account with the open ones again.',
+              onClick: () => reopenAccount(rowMenu.account),
+            } : {
+              label: 'Close account…',
+              title: 'Mark the last day this account was open. Its transactions stay.',
+              onClick: () => setCloseDialogAccount(rowMenu.account),
+            },
             ...(isWalletAccountType(rowMenu.account.type) && !rowMenu.account.parent_account_id ? [{
               label: 'Match text…',
               title: 'The text a bank or card transaction contains when it is the other side of one of this account’s transactions.',
@@ -2494,6 +2631,18 @@ export default function Accounts() {
           onClose={() => setBalanceDialogAccount(null)}
           onSaved={async () => {
             setSortIndicatorActive(false)
+            await reloadAccounts()
+            notifyAccountsChanged()
+          }}
+        />
+      ) : null}
+
+      {closeDialogAccount ? (
+        <CloseAccountDialog
+          account={closeDialogAccount}
+          memberCount={closeDialogAccount.parent_account_id ? 0 : accounts.filter(a => a.parent_account_id === closeDialogAccount.id).length}
+          onClose={() => setCloseDialogAccount(null)}
+          onSaved={async () => {
             await reloadAccounts()
             notifyAccountsChanged()
           }}
@@ -2543,7 +2692,7 @@ export default function Accounts() {
             ))}
             {tab === 'accounts' ? (
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
-                <Button onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
+                <Button onClick={openCreateAccount} disabled={showCreateAccount}>
                   +New account
                 </Button>
               </div>
@@ -2597,10 +2746,10 @@ export default function Accounts() {
                     padding: 6,
                   }}>
                     <Button onClick={openCreateAccount}>Add account</Button>
-                    {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) && (
+                    {orderedRootAccounts.some(r => (visibleChildrenByParent.get(r.id) || []).length > 0) && (
                       <>
                         <Button variant="secondary" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
-                          setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                          setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (visibleChildrenByParent.get(r.id) || []).length > 0).map(r => r.id)))
                           setContextOpen(false)
                         }}>Collapse all groups</Button>
                         <Button variant="secondary" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
@@ -2619,6 +2768,22 @@ export default function Accounts() {
               {loading && accounts.length === 0 ? <Spinner /> : (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <div ref={accountsPanelRef} style={{ position: 'relative', width: '100%', maxWidth: ACCOUNTS_LIST_MAX_WIDTH }}>
+                    {closedCount ? (
+                      // Clear of the tab row when no owner pills sit between them.
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: showOwnerFilterRow ? 0 : 12, marginBottom: 8 }}>
+                        <SegmentedToggle
+                          size="compact"
+                          ariaLabel="Accounts shown"
+                          value={showingClosed ? 'closed' : 'open'}
+                          onChange={setAccountState}
+                          disabled={showCreateAccount}
+                          options={[
+                            { value: 'open', label: 'Open', badge: allRootAccounts.length - closedRootCount },
+                            { value: 'closed', label: 'Closed', badge: closedCount },
+                          ]}
+                        />
+                      </div>
+                    ) : null}
                     <SectionCard
                       summary={accountListSummary}
                       collapsible={false}
@@ -2644,7 +2809,7 @@ export default function Accounts() {
                     >
                       {rootAccounts.length === 0 && !showCreateAccount ? (
                         <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
-                          No accounts yet.
+                          {allRootAccounts.length ? 'Every account is closed.' : 'No accounts yet.'}
                         </div>
                       ) : displayRootAccounts.length === 0 && !showCreateAccount ? (
                         <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
@@ -2656,7 +2821,7 @@ export default function Accounts() {
                         // every fixed column out from under its heading.
                         <div
                           onContextMenu={e => {
-                            if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                            if (!orderedRootAccounts.some(r => (visibleChildrenByParent.get(r.id) || []).length > 0)) return
                             e.preventDefault()
                             setListContextMenu(cssPoint(e))
                           }}
@@ -2816,10 +2981,10 @@ export default function Accounts() {
                                 }}
                                 onMouseLeave={() => setListContextMenu(null)}
                               >
-                                {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) ? (
+                                {orderedRootAccounts.some(r => (visibleChildrenByParent.get(r.id) || []).length > 0) ? (
                                   <>
                                     <button type="button" onClick={() => {
-                                      setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                                      setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (visibleChildrenByParent.get(r.id) || []).length > 0).map(r => r.id)))
                                       setListContextMenu(null)
                                     }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
                                       Collapse all
@@ -2835,16 +3000,21 @@ export default function Accounts() {
                               </div>
                             )}
                             {displayRootAccounts.map(root => {
-                              const children = childAccountsByParent.get(root.id) || []
+                              const children = visibleChildrenByParent.get(root.id) || []
                               const isCollapsed = collapsedGroups.has(root.id)
                               const rootDragDisabled = !!movingAccountId
                               const groupMergeActive = dropIntent?.kind === 'merge' && dropIntent.targetId === root.id
+                              const primaryDropRowId = dropIntent?.kind === 'primary' ? dropIntent.targetId : null
+                              // An open primary in the Closed view is there only to show which group its closed
+                              // accounts belong to, so nothing on its row can be acted on.
+                              const rootContextOnly = showingClosed && !root.closed_on
                               return (
                                 <div key={root.id}>
                                   <AccountRow
                                     account={root}
                                     accountLabel={accountLabel}
                                     onEditBalance={setBalanceDialogAccount}
+                                    onDismissClosedFlag={dismissClosedFlag}
                                     gridTemplateColumns={accountGridTemplate}
                                     hasChildren={children.length}
                                     isCollapsed={isCollapsed}
@@ -2870,9 +3040,10 @@ export default function Accounts() {
                                     }}
                                     onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
                                     onError={showAsyncNotice}
-                                    interactionDisabled={showCreateAccount || !!movingAccountId}
+                                    interactionDisabled={showCreateAccount || !!movingAccountId || rootContextOnly}
                                     dragDisabled={rootDragDisabled}
-                                    dropActive={groupMergeActive}
+                                    contextOnly={rootContextOnly}
+                                    dropActive={groupMergeActive || primaryDropRowId === root.id}
                                     onDragStart={handleAccountDragStart}
                                     {...accountTagProps}
                                   />
@@ -2902,7 +3073,7 @@ export default function Accounts() {
                                         onError={showAsyncNotice}
                                       interactionDisabled={showCreateAccount || !!movingAccountId}
                                       dragDisabled={!!movingAccountId}
-                                      dropActive={groupMergeActive}
+                                      dropActive={groupMergeActive || primaryDropRowId === child.id}
                                       onDragStart={handleAccountDragStart}
                                       {...accountTagProps}
                                     />

@@ -14,6 +14,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   time, and an account can be left out of it.
 - A quick filter on reports for transactions excluded from totals.
 - `luma --version` prints the version and, for a downloaded build, the commit it was built from.
+- Accounts can be closed. A closed account is listed apart on the Accounts page and keeps its
+  transactions; one dated after the close raises a Task. Closing one account of a merged group retires
+  it alone, such as a replaced card number. An import whose data source sends an account to a closed one
+  asks again where its rows go when the file has rows dated after the close, and a watched folder holds
+  such a file.
+- A merged group's primary can be changed, from the account's menu or by dragging it onto the primary;
+  the group keeps its settings. A Task suggests it when the primary has gone quiet while another account
+  in the group has not.
 
 ### Fixed
 

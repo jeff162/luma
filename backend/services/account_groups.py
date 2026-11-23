@@ -40,6 +40,7 @@ references.py` makes that choice explicit and fails until a new column is classi
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Iterable, Optional
 
@@ -156,3 +157,54 @@ def set_account_parent(conn: sqlite3.Connection, account_ids: Iterable[str], par
         from backend.services.recurring_detection import owe_full_recurring_scan  # lazy: it imports this module
         owe_full_recurring_scan(conn)
     return changed
+
+
+# The group's own settings. Each is read from the root, so a member's copy lies dormant until it is the root
+# (`closed_on` is the exception: a member's own close is live, but a closed member is never made the root, so
+# its copy is always empty when this applies).
+ROOT_SETTINGS = ("exclude_from_balance_totals", "balance_totals_from", "wallet_match_text", "closed_on")
+
+
+def make_root(conn: sqlite3.Connection, account_id: str) -> Optional[str]:
+    """Make a group member the group's root, and return the root it replaced; None when it is not a member.
+
+    Only the group's shape changes: every other member, the old root included, becomes the new root's direct
+    child, and no row moves, so no duplicate pairing changes. The group keeps its settings, because the new
+    root takes the old root's (`ROOT_SETTINGS` and its tags) and leaves its own with the old root, where they
+    lie dormant as a member's do; making the old root the root again restores both exactly. The group takes
+    the new root's name, since a root's display name is its own name.
+    """
+    row = conn.execute("SELECT parent_account_id, name FROM account WHERE id = ?", (account_id,)).fetchone()
+    old_root = row["parent_account_id"] if row else None
+    if not old_root:
+        return None
+    others = [r["id"] for r in conn.execute(
+        "SELECT id FROM account WHERE parent_account_id = ? AND id <> ?", (old_root, account_id))]
+    set_account_parent(conn, [account_id], None)
+    set_account_parent(conn, [old_root, *others], account_id)
+
+    columns = ", ".join(ROOT_SETTINGS)
+    assignments = ", ".join(f"{column} = ?" for column in ROOT_SETTINGS)
+    old_settings = tuple(conn.execute(f"SELECT {columns} FROM account WHERE id = ?", (old_root,)).fetchone())
+    new_settings = tuple(conn.execute(f"SELECT {columns} FROM account WHERE id = ?", (account_id,)).fetchone())
+    conn.execute(f"UPDATE account SET {assignments} WHERE id = ?", (*old_settings, account_id))
+    conn.execute(f"UPDATE account SET {assignments} WHERE id = ?", (*new_settings, old_root))
+
+    tags = {
+        account: [r["tag_id"] for r in conn.execute("SELECT tag_id FROM account_tag WHERE account_id = ?", (account,))]
+        for account in (old_root, account_id)
+    }
+    conn.execute("DELETE FROM account_tag WHERE account_id IN (?, ?)", (old_root, account_id))
+    conn.executemany("INSERT INTO account_tag (account_id, tag_id) VALUES (?, ?)",
+                     [(account_id, tag) for tag in tags[old_root]] + [(old_root, tag) for tag in tags[account_id]])
+
+    conn.execute("UPDATE account SET display_name = ? WHERE id = ? OR parent_account_id = ?",
+                 (row["name"], account_id, account_id))
+    return old_root
+
+
+def replace_account_token(text: str, old_id: str, new_id: str) -> str:
+    """`text` with each `:`- or `|`-delimited field equal to `old_id` replaced by `new_id`: the form a key
+    that embeds an account id takes (`transfer:<from>:<to>`, a series fingerprint `payee|category|account`).
+    Only whole fields match, so an id that happens to appear inside a payee name is left alone."""
+    return re.sub(rf"(?<=[:|]){re.escape(old_id)}(?=[:|]|$)", new_id, text)
