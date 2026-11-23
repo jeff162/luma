@@ -29,6 +29,8 @@ class OwnerUpdate(BaseModel):
     color: Optional[str] = None
     # Whether this owner's transactions arrive flagged for review (`services/review_flagging.py`).
     flag_new_for_review: Optional[bool] = None
+    # Whether this owner's uncategorized transactions count toward the Tasks reminder (`routers/tasks.py`).
+    count_uncategorized_in_tasks: Optional[bool] = None
 
 
 @router.get("")
@@ -37,7 +39,7 @@ def list_owners():
         ensure_shared_owner(conn)
         rows = conn.execute(
             """
-            SELECT id, name, color, flag_new_for_review,
+            SELECT id, name, color, flag_new_for_review, count_uncategorized_in_tasks,
                    CASE WHEN LOWER(name) = LOWER(?) THEN 1 ELSE 0 END AS is_shared
             FROM owner
             ORDER BY CASE WHEN LOWER(name) = LOWER(?) THEN 0 ELSE 1 END, name
@@ -54,10 +56,11 @@ def create_owner(body: OwnerCreate):
     new_id = str(uuid.uuid4())
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO owner (id, name, color, flag_new_for_review) VALUES (?, ?, ?, 1)",
+            "INSERT INTO owner (id, name, color, flag_new_for_review, count_uncategorized_in_tasks) VALUES (?, ?, ?, 1, 1)",
             (new_id, body.name.strip(), body.color),
         )
-    return {"id": new_id, "name": body.name.strip(), "color": body.color, "flag_new_for_review": 1}
+    return {"id": new_id, "name": body.name.strip(), "color": body.color, "flag_new_for_review": 1,
+            "count_uncategorized_in_tasks": 1}
 
 
 @router.patch("/{owner_id}")
@@ -66,7 +69,7 @@ def update_owner(owner_id: str, body: OwnerUpdate):
         row = conn.execute("SELECT id, name FROM owner WHERE id = ?", (owner_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Owner not found")
-        # Shared keeps its built-in name and color, but whether its rows arrive flagged is a choice
+        # Shared keeps its built-in name and color, but how its rows are flagged and counted is a choice
         # like any other owner's.
         is_shared = row["name"].strip().lower() == SHARED_OWNER_NAME.lower()
         if is_shared and (body.name is not None or body.color is not None):
@@ -75,6 +78,11 @@ def update_owner(owner_id: str, body: OwnerUpdate):
             conn.execute(
                 "UPDATE owner SET flag_new_for_review = ? WHERE id = ?",
                 (1 if body.flag_new_for_review else 0, owner_id),
+            )
+        if body.count_uncategorized_in_tasks is not None:
+            conn.execute(
+                "UPDATE owner SET count_uncategorized_in_tasks = ? WHERE id = ?",
+                (1 if body.count_uncategorized_in_tasks else 0, owner_id),
             )
         if body.name is not None:
             if body.name.strip().lower() == SHARED_OWNER_NAME.lower():

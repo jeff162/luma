@@ -260,7 +260,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     }
     for oid, name, color in owners.values():
         conn.execute(
-            "INSERT INTO owner (id, name, color, flag_new_for_review) VALUES (?, ?, ?, 1)", (oid, name, color)
+            "INSERT INTO owner (id, name, color, flag_new_for_review, count_uncategorized_in_tasks) VALUES (?, ?, ?, 1, 1)", (oid, name, color)
         )
 
     accounts = {

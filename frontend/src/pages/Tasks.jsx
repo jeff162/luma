@@ -76,7 +76,7 @@ function TaskSeverityIcon({ severity }) {
 
 function TaskCard({ task, onDismiss, onMute }) {
   const style = SEVERITY_COLORS[task.severity] || SEVERITY_COLORS.info
-  const { clearAll } = useFilters()
+  const { replaceFilters } = useFilters()
   const { openVault, changePassphrase } = useVaultGateContext()
   const actions = {
     vault_passphrase_check: () => openVault('check'),
@@ -84,8 +84,11 @@ function TaskCard({ task, onDismiss, onMute }) {
   }
   // Task counts are global (e.g. all-time uncategorized), but the shared FilterBar defaults to a
   // "Past 12 months" date window. Clear filters when jumping to a transaction view so the user lands
-  // on the same set the badge counted instead of a narrower, confusingly-different number.
-  const handleClick = task.link?.startsWith('/transactions') ? () => clearAll() : undefined
+  // on the same set the badge counted instead of a narrower, confusingly-different number. A task whose
+  // count leaves something out sends `link_filters`, the chips that leave the same rows out of the list.
+  const handleClick = task.link?.startsWith('/transactions')
+    ? () => replaceFilters({ selections: task.link_filters || [] })
+    : undefined
   const actionStyle = {
     display: 'inline-block',
     fontSize: 13,

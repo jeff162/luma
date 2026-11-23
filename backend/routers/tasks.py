@@ -526,8 +526,15 @@ def security_tasks(request: Request | None) -> list[dict]:
 # reporting and categorization chores until they settle. Trashed rows are excluded too: they no longer
 # appear in the Transactions list the task links to, so counting them here would overstate the work and
 # never reach zero.
+#
+# An owner with `count_uncategorized_in_tasks` off is left out of the count, which is all the switch does: the
+# rows stay uncategorized and every other list shows them. A row with no owner has nobody to have opted out
+# for it, so it always counts.
 def _uncategorized_count(conn, lens: list[str] | None = None) -> int:
-    clauses = ["t.category_id IS NULL", "t.is_pending = 0", "t.trashed_at IS NULL"]
+    clauses = [
+        "t.category_id IS NULL", "t.is_pending = 0", "t.trashed_at IS NULL",
+        "(t.owner_id IS NULL OR t.owner_id NOT IN (SELECT id FROM owner WHERE count_uncategorized_in_tasks = 0))",
+    ]
     params: list = []
     member = owner_membership(lens or [])
     if member:
@@ -536,7 +543,15 @@ def _uncategorized_count(conn, lens: list[str] | None = None) -> int:
     return conn.execute(f"SELECT COUNT(*) AS n FROM txn t WHERE {' AND '.join(clauses)}", params).fetchone()["n"]
 
 
-def _uncategorized_task(n: int) -> dict | None:
+def _owners_not_counted(conn) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT id, name FROM owner WHERE count_uncategorized_in_tasks = 0 ORDER BY name"
+    )]
+
+
+def _uncategorized_task(n: int, not_counted: list[dict]) -> dict | None:
+    """`link_filters` are the chips following the link sets in place of clearing them: an "is not" chip for
+    each owner left out of the count, so the list it opens holds the rows counted."""
     if not n:
         return None
     return {
@@ -547,6 +562,7 @@ def _uncategorized_task(n: int) -> dict | None:
         "count":       n,
         "link":        "/transactions?only=uncategorized",
         "link_label":  "Review transactions",
+        "link_filters": [{"type": "owner", "id": o["id"], "label": o["name"], "mode": "exclude"} for o in not_counted],
         "severity":    SEVERITY_INFO,
     }
 
@@ -623,7 +639,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
         # also keeps them out of reporting and categorization chores until they settle.
         # Trashed rows are excluded too: they no longer appear in the Transactions list the
         # task links to, so counting them here would overstate the work and never reach zero.
-        uncategorized_task = _uncategorized_task(_uncategorized_count(conn))
+        uncategorized_task = _uncategorized_task(_uncategorized_count(conn), _owners_not_counted(conn))
         if uncategorized_task:
             tasks.append(uncategorized_task)
 
@@ -1188,7 +1204,9 @@ def _narrow_to_lens(tasks: list[dict], lens: list[str]) -> list[dict]:
         alert_tasks = None
         for task in tasks:
             if task["id"] == "uncategorized_txns":
-                task = _keep_dismissal(task, _uncategorized_task(_uncategorized_count(conn, lens)))
+                task = _keep_dismissal(
+                    task, _uncategorized_task(_uncategorized_count(conn, lens), _owners_not_counted(conn)),
+                )
             elif task["id"] == AFTER_CLOSE_TASK_ID:
                 task = _keep_dismissal(task, _after_close_task(closed_accounts.after_close_count(conn, lens)))
             elif task["id"].startswith("reimbursements_due_"):

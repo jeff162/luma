@@ -3974,6 +3974,15 @@ export const HELP_TOPICS = [
         </p>
         <p>*needs review*</p>
         <p>
+          The uncategorized count can leave out an owner&apos;s transactions. Turning off{' '}
+          <strong>Track uncategorized transactions</strong> beside an owner, on the <strong>Owners</strong> tab of
+          the <HelpLink to="/help/page-accounts">Accounts</HelpLink> page, stops that owner&apos;s uncategorized
+          transactions counting here, including ones already in the ledger. Transactions in an account with no
+          owner always count. <strong>Review transactions</strong> then opens the list with that owner left
+          out, so it shows the transactions counted.
+        </p>
+        <p>*needs review*</p>
+        <p>
           A rule alert can also be muted. <strong>Mute</strong> moves it to the dismissed list, where its
           count keeps going up without it coming back, until it is dismissed or unmuted there.
         </p>

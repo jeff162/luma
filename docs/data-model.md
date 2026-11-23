@@ -41,6 +41,13 @@ Owners are household members or shared buckets (Alice, Bob, Shared). An owner ho
 some rules, divides dashboard views, and decides whether its new transactions arrive flagged for review
 (`owner.flag_new_for_review`, see [`needs_review`](#needs_review)).
 
+`owner.count_uncategorized_in_tasks` (default on) decides whether the owner's uncategorized rows count
+toward the Uncategorized transactions task (`routers/tasks.py`). Unlike the review switch it is read
+whenever the task is counted and stores nothing on a row, so switching it off takes every one of the
+owner's uncategorized rows out of the count, older ones included, and switching it back puts them in. A
+row with no owner always counts. The task's link carries an "is not" owner chip for each owner switched
+off (`link_filters`), so the list it opens holds the rows it counted.
+
 `txn.owner_id` is copied from the account when a row is created, so owner filters need no join. It is
 the owner axis every filter and task reads. Changing an account's owner rewrites every one of its rows
 in the same write, which is what keeps the stored axis and the account in step; the column exists so

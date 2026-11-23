@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from backend.authorization import SHOW_ADMIN_FEATURES_PREF_KEY
 from backend.db import control_database
-from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import SHARED_OWNER_ID, ensure_shared_owner, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.tasks import dismiss_task, get_tasks, restore_task
 from backend.services import proxy_certificate
 from backend.services.preferences import set_preference
@@ -135,6 +135,48 @@ class TasksUncategorizedCountTests(TasksFixtureTestCase):
                     (live,),
                 )
         self.assertEqual(self._uncategorized_count(), 0)
+
+
+class TasksUncategorizedOwnerSwitchTests(TasksFixtureTestCase):
+    """An owner with `count_uncategorized_in_tasks` off is left out of the count, and the link carries an
+    "is not" chip for that owner so the list it opens holds the rows counted."""
+
+    def setUp(self):
+        super().setUp()
+        self.alex = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            ensure_shared_owner(conn)
+            conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Alex')", (self.alex,))
+        self._insert_txn(category_id=None)  # Shared's
+        alex_txn = self._insert_txn(category_id=None)
+        unowned_txn = self._insert_txn(category_id=None)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET owner_id = ? WHERE id = ?", (self.alex, alex_txn))
+            conn.execute("UPDATE txn SET owner_id = NULL WHERE id = ?", (unowned_txn,))
+
+    def _set_counting(self, owner_id: str, on: bool):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE owner SET count_uncategorized_in_tasks = ? WHERE id = ?", (int(on), owner_id))
+
+    def _task(self, lens: str | None = None):
+        with self._use_db_path():
+            return next((t for t in get_tasks(None, lens)["tasks"] if t["id"] == "uncategorized_txns"), None)
+
+    def test_an_owner_switched_off_is_left_out_and_excluded_by_the_link(self):
+        self._set_counting(self.alex, False)
+        task = self._task()
+        self.assertEqual(task["count"], 2)
+        self.assertEqual(task["link_filters"], [{"type": "owner", "id": self.alex, "label": "Alex", "mode": "exclude"}])
+
+    def test_rows_with_no_owner_count_with_every_owner_switched_off(self):
+        self._set_counting(self.alex, False)
+        self._set_counting(SHARED_OWNER_ID, False)
+        self.assertEqual(self._task()["count"], 1)
+
+    def test_the_lens_recount_leaves_the_owner_out_too(self):
+        self._set_counting(self.alex, False)
+        self.assertIsNone(self._task(self.alex))
+        self.assertEqual(self._task(f"{self.alex},unassigned")["count"], 1)
 
 
 class TasksSuspectDuplicateDescriptionTests(unittest.TestCase):

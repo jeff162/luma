@@ -15,7 +15,7 @@ import { api } from '../../lib/api.js'
 vi.mock('../../lib/api.js', () => ({
   api: { getTasks: vi.fn(), dismissTask: vi.fn(), restoreTask: vi.fn(), markTasksVisited: vi.fn(() => Promise.resolve({ ok: true })) },
 }))
-vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => ({ clearAll: vi.fn() }) }))
+vi.mock('../../lib/FilterContext.jsx', () => ({ useFilters: () => ({ replaceFilters: vi.fn() }) }))
 vi.mock('../../contexts/VaultGateContext.jsx', () => ({
   useVaultGateContext: () => ({ openVault: vi.fn(), changePassphrase: vi.fn() }),
 }))

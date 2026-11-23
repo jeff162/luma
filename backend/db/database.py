@@ -83,7 +83,7 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
             )
         return row["id"]
     conn.execute(
-        "INSERT INTO owner (id, name, color, flag_new_for_review) VALUES (?, ?, ?, 1)",
+        "INSERT INTO owner (id, name, color, flag_new_for_review, count_uncategorized_in_tasks) VALUES (?, ?, ?, 1, 1)",
         (SHARED_OWNER_ID, SHARED_OWNER_NAME, SHARED_OWNER_COLOR),
     )
     return SHARED_OWNER_ID
@@ -410,13 +410,14 @@ def refresh_planner_statistics(db_path: str | None = None, *, reason: str) -> No
 # balance read from a file's balance column. v100 adds `account.net_worth_from`, the first date net worth
 # counts a group from. v101 renames those two `exclude_from_balance_totals` and `balance_totals_from`, and
 # the Dashboard's saved `net_worth` view `balances`. v102 adds `account.closed_on`, the last day an account
-# was open.
+# was open. v103 adds `owner.count_uncategorized_in_tasks`, whether an owner's uncategorized transactions
+# count toward the Tasks reminder.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 102
+CURRENT_VERSION = 103
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -3030,6 +3031,14 @@ def _add_account_closed_on(conn):
         conn.execute("ALTER TABLE account ADD COLUMN closed_on TEXT")
 
 
+@migration(103)
+def _add_owner_uncategorized_task_counting(conn):
+    # See the baseline CREATE. Every owner's uncategorized rows counted before, which the 1 default states.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(owner)")}
+    if columns and "count_uncategorized_in_tasks" not in columns:
+        conn.execute("ALTER TABLE owner ADD COLUMN count_uncategorized_in_tasks INTEGER NOT NULL DEFAULT 1")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3591,12 +3600,14 @@ def init_db(db_path: str | None = None):
             );
 
             -- `flag_new_for_review`: whether this owner's transactions arrive flagged `needs_review`
-            -- (services/review_flagging.py).
+            -- (services/review_flagging.py). `count_uncategorized_in_tasks`: whether this owner's
+            -- uncategorized transactions count toward the Tasks reminder (routers/tasks.py).
             CREATE TABLE IF NOT EXISTS owner (
                 id    TEXT PRIMARY KEY,
                 name  TEXT NOT NULL UNIQUE,
                 color TEXT NOT NULL DEFAULT '#6366f1',
-                flag_new_for_review INTEGER NOT NULL DEFAULT 1
+                flag_new_for_review INTEGER NOT NULL DEFAULT 1,
+                count_uncategorized_in_tasks INTEGER NOT NULL DEFAULT 1
             );
 
             -- `external_account_id` is the provider's stable per-account handle (Plaid's account_id, a
