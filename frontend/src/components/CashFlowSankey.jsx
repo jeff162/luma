@@ -138,7 +138,7 @@ function CashFlowTooltip({ payload }) {
         {amountText(node)}
       </div>
       {node.isOther && (
-        <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Click to see what is in here</div>
+        <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Click to expand</div>
       )}
     </div>
   )

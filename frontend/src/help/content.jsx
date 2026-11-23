@@ -461,9 +461,9 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow, Balances:</strong> Expense and Income are pie
-            charts, <HelpLink to="/help/dashboard-cash-flow">Cash Flow</HelpLink> is a
-            Sankey diagram, <HelpLink to="/help/dashboard-balances">Balances</HelpLink> totals the account balances.
+            <strong>Report types:</strong> <strong>Expense, Income, Balances, Cash Flow:</strong> Expense and
+            Income are pie charts, <HelpLink to="/help/dashboard-balances">Balances</HelpLink> totals the account
+            balances, <HelpLink to="/help/dashboard-cash-flow">Cash Flow</HelpLink> is a Sankey diagram.
           </li>
           <li>
             <strong>Report sub-types:</strong> <strong>Single, Compare, Trends</strong> toggle between examining
@@ -517,9 +517,10 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Single period:</strong> the figure at the end of the period and what moved it, from the
-            total at the start, a step for each type, to the total at the end, the two ends drawn as what each
-            type makes of them. An account whose history begins
+            <strong>Single period:</strong> the figure at the end of the period, a line of the total across the
+            period (inside a type, that type&apos;s balance), and under it what moved it: from the total at the
+            start, a step for each type, to the total at the end, the two ends drawn as what each type makes of
+            them. An account whose history begins
             during the period counts as starting it at zero. Below, the total at
             the end of each month, quarter or year, as far back as the Expenses trend reaches; clicking a bar
             makes it the period.

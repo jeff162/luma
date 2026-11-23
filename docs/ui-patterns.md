@@ -288,6 +288,10 @@ scroll behavior and first-paint placement belong to the shared control, not to p
   hint. Converting a `title` to `Tooltip` needs an `aria-label`, or `describeTrigger` for a description. A
   hint on a row of a scrolling list takes `openDelay={ROW_HOVER_OPEN_DELAY_MS}`. A `title` always shows on
   hover, so an element that needs only an accessible name, such as an `<iframe>`, takes `aria-label`.
+- **Hover text and captions add detail, not instructions.** Nearly everything is clickable and is expected
+  to be, so a "Click to…" line in a tooltip or under a chart says nothing the reader did not assume. An
+  instruction earns its place where how to use something would not be guessed, such as a double-click, or
+  an aggregate that expands when clicked.
 - **A bulk action reports partial success as partial** (`Promise.allSettled` with
   `summarizeBulkOutcome`). Rows that failed stay selected and the reload runs regardless.
 

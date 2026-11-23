@@ -65,8 +65,8 @@ from backend.services.account_balances import (
 )
 from backend.services.account_groups import effective_account_id, group_accounts_sql, make_root, set_account_parent
 from backend.services.balance_totals import (
-    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
-    history_flags,
+    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_day, balance_totals_by_month, balance_totals_on,
+    history_flag_key, history_flags,
 )
 from backend.services.closed_accounts import CLOSED_BALANCE_KIND, closed_balance_flags, closed_balance_key
 from backend.services.signal_dismissals import dismiss as dismiss_signal
@@ -408,6 +408,18 @@ def get_balance_totals_by_month(owners: BalanceOwnerFilters = Depends()):
     """The balance totals at each month's end through today, over every month any counted group covers."""
     with get_db() as conn:
         return balance_totals_by_month(conn, owners.values)
+
+
+@router.get("/balance-totals/daily")
+def get_balance_totals_by_day(
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    owners: BalanceOwnerFilters = Depends(),
+):
+    """The net balance total across the period, from its opening to its end, a day apart (a week apart past
+    `DAILY_SPAN_DAYS`)."""
+    with get_db() as conn:
+        return balance_totals_by_day(conn, _period_date(date_start), _period_date(date_end), owners.values)
 
 
 def _period_date(value) -> Optional[str]:

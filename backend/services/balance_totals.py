@@ -305,7 +305,7 @@ def account_history_flag(conn, root_id: str) -> Optional[dict]:
 def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
     """The account groups the totals count, narrowed by the owner filters (`owner_ids`,
     `exclude_owner_ids`, `owner_lens`, as the facet registry names them), each with its balances and its
-    history flag.
+    history flag, read from the flags' cache (`history_flags`).
 
     A group counts unless its root is trashed, excluded from the totals, or of type `other`, whose type says
     nothing about what the account is. Owner is read from the root, as type is.
@@ -330,15 +330,16 @@ def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dic
     append_facets(clauses, params, owner_filters)
     shown = {row["id"] for row in conn.execute(f"SELECT t.id FROM account t WHERE {' AND '.join(clauses)}", params)}
     roots = [row for row in every if row["id"] in shown]
-    balances = load_group_balances(conn, [row["id"] for row in roots])
-    dismissed = dismissed_keys(conn)
+    root_ids = [row["id"] for row in roots]
+    balances = load_group_balances(conn, root_ids)
+    flags = history_flags(conn, root_ids)
     groups = []
     for row in roots:
         group = balances[row["id"]]
         groups.append({
             "account_id": row["id"], "name": row["name"], "type": row["type"], "owner_id": row["owner_id"],
             "type_index": type_index[row["id"]], "balance_totals_from": group.count_from,
-            "history_flag": _shown_flag(conn, row["id"], group, row["type"], dismissed), "balances": group,
+            "history_flag": flags.get(row["id"]), "balances": group,
         })
     return groups
 
@@ -388,6 +389,50 @@ def balance_totals_on(conn, date_start: Optional[str], date_end: Optional[str], 
         "change": round(sum(a["balance"]["amount"] - a["opening"] for a in with_end), 2) if opening else None,
         "accounts": accounts,
     }
+
+
+# A period longer than this many days is drawn a week at a time: a small chart cannot show a day's movement
+# over more than about a year, and a point per day would only add to the payload.
+DAILY_SPAN_DAYS = 366
+
+
+def _curve_days(first: date, end: date) -> list[str]:
+    """`first` through `end`, a day apart, or a week apart counted back from `end` past `DAILY_SPAN_DAYS`,
+    always with both ends."""
+    span = (end - first).days
+    step = 1 if span <= DAILY_SPAN_DAYS else 7
+    days = [end - timedelta(days=offset) for offset in range(0, span + 1, step)]
+    if days[-1] != first:
+        days.append(first)
+    return [day.isoformat() for day in reversed(days)]
+
+
+def balance_totals_by_day(conn, date_start: Optional[str], date_end: Optional[str], owner_filters=None,
+                          today: Optional[date] = None) -> dict:
+    """The net total across a period, for the curve under its bridge: a point at the period's opening (the
+    close of the day before `date_start`), then each day through its end, a week apart where the period is
+    longer than `DAILY_SPAN_DAYS`. Each point carries each group's balance then (`balances`, by account id;
+    a group outside its coverage is absent), so a type's or an account's curve can be summed from it. The end and the opening are those `balance_totals_on` takes, so the first
+    and last points are the bridge's two totals. An all-time period starts where the earliest group's
+    coverage begins. A group outside its coverage counts as zero, which is how the bridge opens one whose
+    coverage begins inside the period."""
+    today_iso = (today or date.today()).isoformat()
+    end = min(date_end, today_iso) if date_end else today_iso
+    groups = [(g["account_id"], g["balances"]) for g in balance_total_groups(conn, owner_filters)
+              if g["balances"].stated]
+    if not groups:
+        return {"points": []}
+    first = ((date.fromisoformat(date_start) - timedelta(days=1)).isoformat() if date_start
+             else min(balances.coverage_start for _, balances in groups))
+    if first > end:
+        return {"points": []}
+    points = []
+    for day in _curve_days(date.fromisoformat(first), date.fromisoformat(end)):
+        open_ended = day == today_iso
+        figures = {account_id: balances.on(day, open_ended) for account_id, balances in groups}
+        amounts = {account_id: f["amount"] for account_id, f in figures.items() if f}
+        points.append({"date": day, "net": _totals(amounts.values())["net"], "balances": amounts})
+    return {"points": points}
 
 
 def _month_ends(first: str, today: date) -> list[str]:

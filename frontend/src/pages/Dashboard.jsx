@@ -134,8 +134,8 @@ const DASHBOARD_VIEW_BALANCES = 'balances'
 const DASHBOARD_VIEW_OPTIONS = [
   { value: DASHBOARD_VIEW_SPENDING, label: 'Expenses' },
   { value: DASHBOARD_VIEW_INCOME, label: 'Income' },
-  { value: DASHBOARD_VIEW_CASH_FLOW, label: 'Cash flow' },
   { value: DASHBOARD_VIEW_BALANCES, label: 'Balances' },
+  { value: DASHBOARD_VIEW_CASH_FLOW, label: 'Cash flow' },
 ]
 
 const DASHBOARD_MODE_OPTIONS = [
@@ -1055,9 +1055,8 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
           {annual.avgNet == null ? null : (
-            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span>{' · '}</>
+            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span></>
           )}
-          {'click a year to show its months below'}
         </div>
         {annual.chartData.length === 0 ? (
           <EmptyState message="No cash flow for this selection" />
@@ -1081,9 +1080,10 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
           {avgNet == null ? null : (
-            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>{' · '}</>
+            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span></>
           )}
-          {'click a month to open a transaction report'}
+          {/* A click opens the month as anything here would; the double-click is the part no one would guess. */}
+          {onOpenSinglePeriod ? `${avgNet == null ? '' : ' · '}double-click a month to open the single-period view for that month` : null}
         </div>
         {chartData.length === 0 ? (
           <EmptyState message="No cash flow for this selection" />
@@ -1587,7 +1587,6 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
             <div style={{ fontSize: 14, fontWeight: 600 }}>{viewIsIncome ? 'Annual income totals' : 'Annual spending totals'}</div>
             <TrendSpanSelect value={span} onChange={onSpanChange} />
           </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>Click a year to focus the charts above on it</div>
           {annualData.length === 0 ? (
             <EmptyState message="Not enough data" />
           ) : (
@@ -1600,9 +1599,6 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
         <div data-testid="trend-averages-title" style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Average monthly {viewIsIncome ? 'income' : 'spending'}{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
           <span data-testid="trend-averages-window" style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{trendWindow.label.toLowerCase()}</span>
-          {!drillGroup && (
-            <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>· click a group to see its categories</span>
-          )}
         </div>
         {/* The group picker above is a long way up from here, so the drill offers its way back in place. */}
         {drillGroup && <Breadcrumb items={['All groups', drillGroup.series_name]} onNavigate={onClearDrill} />}
@@ -3123,11 +3119,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
                                   </PieChart>
                                 </ResponsiveContainer>
                               )}
-                              {!isEmpty && (
-                                <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
-                                  {viewIsTag || viewIsCategory ? 'Click to see transactions' : 'Click to drill down'}
-                                </div>
-                              )}
                             </Card>
                             {!isEmpty && <Card>
                               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
@@ -3219,7 +3210,6 @@ function FlowDashboard({ header, mode, setMode, activeFrame, effectiveDate, date
                                     />
                                   </PieChart>
                                 </ResponsiveContainer>
-                                <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>Click to see transactions</div>
                               </>
                             )}
                           </Card>

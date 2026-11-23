@@ -18,7 +18,8 @@ from backend.db.database import init_db
 from backend.services.account_balances import current_balances
 from backend.services import balance_totals
 from backend.services.balance_totals import (
-    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
+    HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_day, balance_totals_by_month, balance_totals_on,
+    history_flag_key,
 )
 from backend.services.signal_dismissals import dismiss
 
@@ -163,6 +164,32 @@ class BalanceTotalsTests(_Ledger):
             [(p["date"], p["net"], p["uncovered"]) for p in result["points"]],
             [("2026-05-31", 1000.0, 1), ("2026-06-30", 850.0, 0), ("2026-07-31", 800.0, 0), ("2026-08-16", 800.0, 0)],
         )
+
+
+    def test_the_curve_runs_from_the_bridges_opening_total_to_its_closing_one(self):
+        # The curve is drawn under the bridge, so its two ends must be the bridge's two totals.
+        self._account("chk")
+        self._account("new-savings", "savings")
+        self._state("chk", "2026-06-30", 1000.0)
+        self._txn("chk", "2026-07-10", 200.0)
+        self._state("new-savings", "2026-07-20", 5000.0)
+        points = balance_totals_by_day(self.conn, "2026-07-01", "2026-07-31", today=self.TODAY)["points"]
+        bridge = self._on(date_start="2026-07-01", date_end="2026-07-31")
+        self.assertEqual((points[0]["date"], points[0]["net"]), ("2026-06-30", bridge["totals"]["net"] - bridge["change"]))
+        self.assertEqual((points[-1]["date"], points[-1]["net"]), ("2026-07-31", bridge["totals"]["net"]))
+        self.assertEqual(points[-1]["balances"], {"chk": 800.0, "new-savings": 5000.0})
+        self.assertEqual(len(points), 32)
+        by_date = {p["date"]: p["net"] for p in points}
+        # Before its coverage begins a group counts as zero, as the bridge opens it.
+        self.assertEqual((by_date["2026-07-10"], by_date["2026-07-19"], by_date["2026-07-20"]), (800.0, 800.0, 5800.0))
+
+    def test_a_period_past_a_year_is_drawn_a_week_apart_from_its_end(self):
+        self._account("chk")
+        self._state("chk", "2024-01-01", 1000.0)
+        points = balance_totals_by_day(self.conn, "2024-06-01", None, today=self.TODAY)["points"]
+        dates = [p["date"] for p in points]
+        self.assertEqual((dates[0], dates[-1], dates[-2]), ("2024-05-31", "2026-08-16", "2026-08-09"))
+        self.assertTrue(all(p["net"] == 1000.0 for p in points))
 
 
     def test_colours_follow_the_account_whichever_owners_are_shown(self):
