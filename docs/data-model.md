@@ -484,7 +484,9 @@ shown on the Dashboard's Balances frame.
   balance that goes more than `HISTORY_TOLERANCE` onto the wrong side of zero for its type (owing on a
   held account, holding on an owed one, far from zero either way on a wallet or marketplace) says rows are
   missing, as with a wallet imported from statements that carry no balance. The flag shows on the account's
-  Balances row and its account page and changes no figure. Dismissing it is shared, in the
+  Balances row, its Accounts-page balance and its account page, and changes no figure. It is judged only
+  for a group the totals count (`COUNTED_GROUP_SQL`), since leaving the group out of them is one of its
+  remedies; excluding a group hides its flag and dismisses nothing. Dismissing it is shared, in the
   `signal_dismissals` store, keyed to the account and the stated balance the history was worked back
   from, so entering an earlier balance judges the new history afresh. Later history is not judged: each
   stated balance checks the span before it (`balance_checks`).

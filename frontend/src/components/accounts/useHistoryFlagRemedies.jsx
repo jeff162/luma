@@ -10,8 +10,8 @@ import BalanceTotalsStartDialog from './BalanceTotalsStartDialog.jsx'
 
 /*
  * What can be done about an account whose transactions do not explain its earlier history (the history
- * flag, `backend/services/balance_totals.py`), offered wherever the flag shows: the Balances table and the
- * account's page.
+ * flag, `backend/services/balance_totals.py`), offered wherever the flag shows: the Balances table, the
+ * Accounts page's balance column and the account's page.
  *
  * - **Enter a balance from a statement**, on the day it fixes the most (`balance_date`): where the account
  *   switched from imported files to a connection when there is such a day, otherwise the last day the

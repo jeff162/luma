@@ -39,7 +39,7 @@ import SummaryTotalCard from './SummaryTotalCard.jsx'
 import TrendPlot from './TrendPlot.jsx'
 import TrendSpanSelect from './TrendSpanSelect.jsx'
 import TrendsWindowSelect from './TrendsWindowSelect.jsx'
-import { Button, Card, EmptyState, LinkButton, LoadFailed, Select, Spinner, StaleWhileRefreshing, Tooltip, getFormControlStyle } from './ui.jsx'
+import { Button, Card, EmptyState, IconButton, LinkButton, LoadFailed, Select, Spinner, StaleWhileRefreshing, Tooltip, getFormControlStyle } from './ui.jsx'
 import { useViewLoad } from '../lib/useViewLoad.js'
 
 /*
@@ -458,6 +458,8 @@ function AccountWarning({ account, flagActions }) {
     <Tooltip
       interactive={!!flag}
       maxWidth={320}
+      // Set further off than the cell's gap, so a tap aimed at the ⚠ does not open the account.
+      triggerStyle={{ marginLeft: 4 }}
       content={(
         <div style={{ display: 'grid', gap: 6 }}>
           {stale ? <div>No balance stated since {formatDate(account.balance.as_of_date)}.</div> : null}
@@ -466,7 +468,8 @@ function AccountWarning({ account, flagActions }) {
         </div>
       )}
     >
-      <span role="img" aria-label="Warning" style={{ color: BALANCE_WARNING_COLOR }}>⚠</span>
+      {/* A button of its own, so a finger has a target and a keyboard can reach the hint. */}
+      <IconButton size="compact" aria-label="Balance warning" title="" style={{ color: BALANCE_WARNING_COLOR }}>⚠</IconButton>
     </Tooltip>
   )
 }

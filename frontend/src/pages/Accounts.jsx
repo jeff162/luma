@@ -23,6 +23,8 @@ import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES, isWalletAccountType, unusualBalanceColor } from '../lib/accountTypes.js'
 import { BALANCE_WARNING_COLOR, formatSignedMoneyAmount, formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { formatDate } from '../lib/utils.js'
+import { describeHistoryFlag } from '../lib/balanceTotals.js'
+import { useHistoryFlagRemedies } from '../components/accounts/useHistoryFlagRemedies.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
@@ -988,18 +990,21 @@ const BALANCE_SOURCE_PHRASES = {
 // The cell is one button whether or not there is a balance, so a balance is entered and changed the same
 // way; an empty top row shows a dash to click. A member row has nothing, as the group's balance is its top row's.
 // The second line dates the balance the figure was carried forward from, with (m) when it was entered by
-// hand, the one kind that stays right only while someone keeps it up. A closed account still holding
-// something is marked ⚠, dismissible from the hint, since only the user knows whether the remainder matters.
-function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabel, closedFlag, onDismissClosedFlag, onEdit, disabled }) {
+// hand, the one kind that stays right only while someone keeps it up. Anything wrong with the figure is a ⚠
+// beside it with a hint of its own: two members reporting at once, a closed account still holding
+// something (dismissible, since only the user knows whether the remainder matters), or a history the
+// transactions do not explain (with the remedies the Dashboard's Balances table offers). The ⚠ is its own
+// target, apart from the figure that opens the balance editor, so a tap on one never does the other.
+function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabel, closedFlag, historyFlag, historyFlagActions, onDismissClosedFlag, onEdit, disabled }) {
   if (isChild) return <div />
   const buttonStyle = {
-    display: 'block', width: '100%', background: 'none', border: 'none', padding: 0, color: 'var(--text)',
+    display: 'block', background: 'none', border: 'none', padding: 0, color: 'var(--text)',
     textAlign: 'right', minWidth: 0, fontVariantNumeric: 'tabular-nums', cursor: disabled ? 'default' : 'pointer',
   }
   if (!balance) {
     return (
       <button type="button" aria-label="Enter a balance" onClick={disabled ? undefined : onEdit}
-        style={{ ...buttonStyle, color: 'var(--muted)', fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px` }}>
+        style={{ ...buttonStyle, width: '100%', color: 'var(--muted)', fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px` }}>
         —
       </button>
     )
@@ -1010,35 +1015,52 @@ function AccountBalanceCell({ balance, accountType, isChild, rootId, accountLabe
     balance.account_id !== rootId ? `From ${accountLabel(balance.account_id)}.` : null,
     balance.available != null ? `${formatMoneyMagnitude(balance.available)} available, as reported.` : null,
     balance.stale ? `Has not been updated in over ${balance.stale_after_days === 7 ? 'a week' : `${balance.stale_after_days} days`}.` : null,
-    others.length ? `${others.join(', ')} also reported a balance within a week of it. Only the latest counts.` : null,
-    closedFlag
-      ? `Closed on ${formatDate(closedFlag.closed_on)} and still ${closedFlag.amount > 0 ? 'holds' : 'owes'} ${formatMoneyMagnitude(closedFlag.amount)} by its transactions. The final payment or transfer may be missing.`
-      : null,
   ].filter(Boolean)
+  const warned = others.length || closedFlag || historyFlag
   return (
-    <Tooltip
-      interactive={!!closedFlag}
-      align="right"
-      content={(
-        <div style={{ display: 'grid', gap: 4 }}>
-          {tip.map(line => <div key={line}>{line}</div>)}
-          {closedFlag ? <div><LinkButton onClick={onDismissClosedFlag}>Dismiss</LinkButton></div> : null}
-        </div>
-      )}
-    >
-      <button type="button" onClick={disabled ? undefined : onEdit} style={buttonStyle}>
-        <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
-          {others.length || closedFlag ? <span style={{ color: BALANCE_WARNING_COLOR, marginRight: 4 }}>⚠</span> : null}
-          <span style={{ color: unusualBalanceColor(accountType, balance.amount) || undefined }}>
-            {formatSignedMoneyAmount(balance.amount)}
-          </span>
-        </div>
-        <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
-          {formatDate(balance.as_of_date)}
-          {balance.source === 'manual' ? ' (m)' : null}
-        </div>
-      </button>
-    </Tooltip>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+      {warned ? (
+        <Tooltip
+          interactive={!!(closedFlag || historyFlag)}
+          align="right"
+          maxWidth={320}
+          triggerStyle={{ height: ACCOUNT_CONTROL_HEIGHT, alignItems: 'center' }}
+          content={(
+            <div style={{ display: 'grid', gap: 6 }}>
+              {others.length ? <div>{others.join(', ')} also reported a balance within a week of it. Only the latest counts.</div> : null}
+              {closedFlag ? (
+                <div>
+                  Closed on {formatDate(closedFlag.closed_on)} and still {closedFlag.amount > 0 ? 'holds' : 'owes'}
+                  {' '}{formatMoneyMagnitude(closedFlag.amount)} by its transactions. The final payment or transfer may be missing.
+                  <div style={{ marginTop: 2 }}><LinkButton onClick={onDismissClosedFlag}>Dismiss</LinkButton></div>
+                </div>
+              ) : null}
+              {historyFlag ? (
+                <div>
+                  {describeHistoryFlag(historyFlag)}
+                  <div style={{ marginTop: 2 }}>{historyFlagActions(historyFlag)}</div>
+                </div>
+              ) : null}
+            </div>
+          )}
+        >
+          <IconButton size="compact" aria-label="Balance warning" title="" style={{ color: BALANCE_WARNING_COLOR }}>⚠</IconButton>
+        </Tooltip>
+      ) : null}
+      <Tooltip align="right" content={<div style={{ display: 'grid', gap: 4 }}>{tip.map(line => <div key={line}>{line}</div>)}</div>}>
+        <button type="button" onClick={disabled ? undefined : onEdit} style={buttonStyle}>
+          <div style={{ fontSize: 12, lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`, whiteSpace: 'nowrap' }}>
+            <span style={{ color: unusualBalanceColor(accountType, balance.amount) || undefined }}>
+              {formatSignedMoneyAmount(balance.amount)}
+            </span>
+          </div>
+          <div style={{ marginTop: 2, fontSize: 10, whiteSpace: 'nowrap', color: balance.stale ? BALANCE_WARNING_COLOR : 'var(--muted)' }}>
+            {formatDate(balance.as_of_date)}
+            {balance.source === 'manual' ? ' (m)' : null}
+          </div>
+        </button>
+      </Tooltip>
+    </div>
   )
 }
 
@@ -1070,6 +1092,7 @@ function AccountRow({
   accountLabel = () => '',
   onEditBalance,
   onDismissClosedFlag,
+  historyFlagActions,
   parentAccount = null,
   hasChildren = false,
   isLastChild = false,
@@ -1307,68 +1330,55 @@ function AccountRow({
               })}
             />
           ) : (
-            <button
-              type="button"
-              onClick={() => {
-                if (interactionDisabled) return
-                beginEditingName(account.name || '')
-              }}
-              onMouseEnter={() => {
-                if (interactionDisabled) return
-                const el = nameTextRef.current
-                setNameHoverTitle(el && el.scrollWidth > el.clientWidth ? account.name : 'Click to edit name')
-              }}
-              title={interactionDisabled ? undefined : nameHoverTitle}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: 'var(--text)',
-                cursor: interactionDisabled ? 'default' : 'text',
-                minWidth: 0,
-                width: '100%',
-                textAlign: 'left',
-                opacity: interactionDisabled ? 0.75 : 1,
-              }}
-            >
-              <span ref={nameTextRef} style={{
-                fontWeight: 500,
-                fontSize: 12,
-                lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {account.name}
-              </span>
-              {contextOnly ? <StatusPill tone="muted" small>Open</StatusPill> : null}
-              <span
-                onClick={e => {
-                  e.stopPropagation()
+            // Only the name itself edits it, so a tap beside it does nothing and the ↗ is a target of its own.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+              <button
+                type="button"
+                onClick={() => {
                   if (interactionDisabled) return
-                  onOpenDetail?.({ id: detailAccount.id, name: detailAccount.display_name || detailAccount.name, mask: detailAccount.mask })
+                  beginEditingName(account.name || '')
                 }}
-                title={interactionDisabled ? undefined : 'View account detail'}
+                onMouseEnter={() => {
+                  if (interactionDisabled) return
+                  const el = nameTextRef.current
+                  setNameHoverTitle(el && el.scrollWidth > el.clientWidth ? account.name : 'Click to edit name')
+                }}
+                title={interactionDisabled ? undefined : nameHoverTitle}
                 style={{
-                  color: 'var(--accent2)',
-                  cursor: interactionDisabled ? 'default' : 'pointer',
-                  fontSize: 10,
-                  padding: '3px 5px',
-                  opacity: interactionDisabled ? 0.4 : 0.75,
-                  lineHeight: 1,
-                  flexShrink: 0,
                   display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 6,
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  color: 'var(--text)',
+                  cursor: interactionDisabled ? 'default' : 'text',
+                  minWidth: 0,
+                  textAlign: 'left',
+                  opacity: interactionDisabled ? 0.75 : 1,
                 }}
               >
+                <span ref={nameTextRef} style={{
+                  fontWeight: 500,
+                  fontSize: 12,
+                  lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {account.name}
+                </span>
+              </button>
+              {contextOnly ? <StatusPill tone="muted" small>Open</StatusPill> : null}
+              <IconButton
+                size="compact"
+                tone="accent"
+                aria-label="View account detail"
+                disabled={interactionDisabled}
+                onClick={() => onOpenDetail?.({ id: detailAccount.id, name: detailAccount.display_name || detailAccount.name, mask: detailAccount.mask })}
+                style={{ fontSize: 10, flexShrink: 0 }}
+              >
                 ↗
-              </span>
-            </button>
+              </IconButton>
+            </div>
           )}
           {/* Lines under the account name. The connection detail line (institution · ···mask) comes first so
               it stays paired with the name on line 1; a merged *parent's* expand/collapse control sits below
@@ -1560,6 +1570,8 @@ function AccountRow({
           rootId={account.id}
           accountLabel={accountLabel}
           closedFlag={account.closed_balance_flag}
+          historyFlag={account.history_flag}
+          historyFlagActions={flag => historyFlagActions(account, flag)}
           onDismissClosedFlag={() => onDismissClosedFlag?.(account)}
           onEdit={() => onEditBalance?.(account)}
           disabled={interactionDisabled}
@@ -1962,6 +1974,15 @@ export default function Accounts() {
       showAsyncNotice('Could not reopen the account', error)
     }
   }
+
+  // The history flag's remedies open dialogs from links inside the ⚠'s hint, so the dialogs are rendered
+  // here, outside the tooltip that closes as the pointer leaves it.
+  const { actionsFor: historyFlagRemedies, dialogs: historyFlagDialogs } = useHistoryFlagRemedies(async () => {
+    await reloadAccounts()
+    notifyAccountsChanged()
+  })
+  const historyFlagActions = (account, flag) => historyFlagRemedies(
+    { id: account.id, type: account.type, balanceTotalsFrom: account.balance_totals_from }, flag)
 
   async function dismissClosedFlag(account) {
     try {
@@ -3015,6 +3036,7 @@ export default function Accounts() {
                                     accountLabel={accountLabel}
                                     onEditBalance={setBalanceDialogAccount}
                                     onDismissClosedFlag={dismissClosedFlag}
+                                    historyFlagActions={historyFlagActions}
                                     gridTemplateColumns={accountGridTemplate}
                                     hasChildren={children.length}
                                     isCollapsed={isCollapsed}
@@ -3120,6 +3142,7 @@ export default function Accounts() {
           )}
 
           {accountDetailPanelsNode}
+          {historyFlagDialogs}
         </div>
       </div>
     </div>

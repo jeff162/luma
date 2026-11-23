@@ -31,6 +31,14 @@ from backend.services.transaction_facets import OWNER_LENS_PARAM, append_facets
 # mean everywhere else.
 OWNER_FILTER_PARAMS = ("owner_ids", "exclude_owner_ids", OWNER_LENS_PARAM)
 
+# The groups the totals count, over an `account` aliased `t`: a root that is not trashed, not excluded from
+# the totals, and not of type `other`, whose type says nothing about what the account is. The history flag
+# is judged by the same rule, so the totals and the flag never disagree about which groups they cover.
+COUNTED_GROUP_SQL = (
+    "t.parent_account_id IS NULL AND t.trashed_at IS NULL AND t.exclude_from_balance_totals = 0"
+    " AND COALESCE(t.type, 'other') != 'other'"
+)
+
 
 class GroupBalances:
     """One account group's stated balances and posted rows, for its balance on any date. `count_from` is the
@@ -163,7 +171,11 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
 
 def load_group_balances(conn, root_ids: list) -> dict:
     """`{root_id: GroupBalances}` for these groups, each counted from its root's `balance_totals_from` through
-    its `closed_on`."""
+    its `closed_on`.
+
+    The rows come back summed by group and posting day, since a balance only ever moves by a day's net, so
+    the work grows with the days a group has activity on rather than with its row count. A group that has
+    never stated a balance has no figure on any date, so its rows are not read at all."""
     if not root_ids:
         return {}
     placeholders = ",".join("?" * len(root_ids))
@@ -180,16 +192,21 @@ def load_group_balances(conn, root_ids: list) -> dict:
         """, root_ids):
         stated.setdefault(row["root_id"], []).append(row)
     # Live, posted rows by posting date, which is what a source's balance counts.
-    for row in conn.execute(
-        f"""
-        SELECT COALESCE(a.parent_account_id, a.id) AS root_id, {BALANCE_DAY_SQL["posted"]} AS day, t.amount
-        FROM txn t
-        JOIN account a ON a.id = t.account_id
-        WHERE t.account_id IN {group_accounts_sql(f"IN ({placeholders})")}
-          AND t.trashed_at IS NULL AND t.is_pending = 0
-        ORDER BY day
-        """, root_ids):
-        ledger.setdefault(row["root_id"], []).append(row)
+    with_stated = sorted(stated)
+    if with_stated:
+        stated_placeholders = ",".join("?" * len(with_stated))
+        for row in conn.execute(
+            f"""
+            SELECT COALESCE(a.parent_account_id, a.id) AS root_id, {BALANCE_DAY_SQL["posted"]} AS day,
+                   SUM(t.amount) AS amount
+            FROM txn t
+            JOIN account a ON a.id = t.account_id
+            WHERE t.account_id IN {group_accounts_sql(f"IN ({stated_placeholders})")}
+              AND t.trashed_at IS NULL AND t.is_pending = 0
+            GROUP BY root_id, day
+            ORDER BY day
+            """, with_stated):
+            ledger.setdefault(row["root_id"], []).append(row)
     return {
         root_id: GroupBalances(stated.get(root_id, []), ledger.get(root_id, []),
                                settings[root_id]["balance_totals_from"] if root_id in settings else None,
@@ -211,11 +228,32 @@ def _shown_flag(conn, root_id: str, balances: GroupBalances, account_type, dismi
     return {**flag, "seam": seam, "balance_date": balance_date}
 
 
+def history_flags(conn, root_ids: list) -> dict:
+    """`{root_id: flag}` for those of these groups that have a history flag still shown.
+
+    Only a group the totals count is judged (`COUNTED_GROUP_SQL`): the flag is about the history the totals
+    count, and leaving the group out of them is one of its remedies. Excluding a group hides its flag and
+    dismisses nothing, so counting it again shows the flag again. A type with no normal side of zero is never
+    flagged, so those groups' rows are not read either."""
+    if not root_ids:
+        return {}
+    placeholders = ",".join("?" * len(root_ids))
+    root_types = {
+        row["id"]: row["type"] for row in conn.execute(
+            f"SELECT t.id, t.type FROM account t WHERE t.id IN ({placeholders}) AND {COUNTED_GROUP_SQL}",
+            list(root_ids))
+        if NORMAL_BALANCE_SIDE.get(row["type"] or "")
+    }
+    balances = load_group_balances(conn, list(root_types))
+    dismissed = dismissed_keys(conn)
+    flags = {root_id: _shown_flag(conn, root_id, balances[root_id], account_type, dismissed)
+             for root_id, account_type in root_types.items()}
+    return {root_id: flag for root_id, flag in flags.items() if flag}
+
+
 def account_history_flag(conn, root_id: str) -> Optional[dict]:
-    """The group's history flag, or None when it has none or it was dismissed."""
-    root = conn.execute("SELECT type FROM account WHERE id = ?", (root_id,)).fetchone()
-    balances = load_group_balances(conn, [root_id])[root_id]
-    return _shown_flag(conn, root_id, balances, root["type"] if root else None, dismissed_keys(conn))
+    """The group's history flag, or None when it has none, it was dismissed, or the totals do not count it."""
+    return history_flags(conn, [root_id]).get(root_id)
 
 
 def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dict]:
@@ -229,12 +267,7 @@ def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dic
     `type_index` is the group's place among every counted group of its type, before the owner filters, so
     a colour given by it stays with the account whichever owners are shown."""
     owner_filters = {key: (owner_filters or {}).get(key) for key in OWNER_FILTER_PARAMS}
-    counted = [
-        "t.parent_account_id IS NULL",
-        "t.trashed_at IS NULL",
-        "t.exclude_from_balance_totals = 0",
-        "COALESCE(t.type, 'other') != 'other'",
-    ]
+    counted = [COUNTED_GROUP_SQL]
     every = conn.execute(
         f"""
         SELECT t.id, COALESCE(t.display_name, t.name) AS name, t.type, t.owner_id

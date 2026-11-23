@@ -1950,7 +1950,9 @@ export const HELP_TOPICS = [
           the posted transactions dated after that. The date is highlighted when no newer balance has come
           for a week from a connection, or 35 days for one entered by hand, which is marked (m). Clicking a balance, or the dash where there is none, or <strong>Edit balance…</strong> in the
           row&apos;s &#8943; menu, enters one by hand, for an account with no connection or to set one right. A merged group has one balance, from
-          whichever member reported most recently. The account&apos;s &#8599; report shows the balance after
+          whichever member reported most recently. A &#9888; beside a balance marks a history its transactions
+          cannot explain, with the same remedies as on the Dashboard&apos;s{' '}
+          <HelpLink to="/help/dashboard-balances">Balances</HelpLink>. The account&apos;s &#8599; report shows the balance after
           each transaction, counted in the order of the date the list is sorted by, with a day&apos;s credits
           before its debits as banks post them. Where some of an account&apos;s transactions posted on a later day
           than they were made, its &#9881; adds a <strong>Posted</strong> column; sorted by that, the list and

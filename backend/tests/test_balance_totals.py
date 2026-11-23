@@ -200,6 +200,14 @@ class HistoryFlagTests(_Ledger):
         self._state("pp", "2026-06-30", 0.0)
         self.assertEqual(self._flag("pp", "paypal")["amount"], -500.0)
 
+    def test_excluding_a_group_from_the_totals_hides_its_flag_until_it_counts_again(self):
+        self._account("chk", excluded=1)
+        self._txn("chk", "2026-03-01", -900.0)  # a deposit, with nothing recorded before it
+        self._state("chk", "2026-06-30", 0.0)
+        self.assertIsNone(self._flag("chk"))
+        self.conn.execute("UPDATE account SET exclude_from_balance_totals = 0 WHERE id = 'chk'")
+        self.assertEqual(self._flag("chk")["before"], "2026-06-30")
+
     def test_a_dismissal_lasts_until_an_earlier_balance_is_stated(self):
         self._account("chk")
         self._txn("chk", "2026-03-01", 900.0)

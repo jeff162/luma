@@ -66,6 +66,7 @@ from backend.services.account_balances import (
 from backend.services.account_groups import effective_account_id, group_accounts_sql, make_root, set_account_parent
 from backend.services.balance_totals import (
     HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
+    history_flags,
 )
 from backend.services.closed_accounts import CLOSED_BALANCE_KIND, closed_balance_flags, closed_balance_key
 from backend.services.signal_dismissals import dismiss as dismiss_signal
@@ -199,6 +200,7 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.subtype,
             a.wallet_match_text,
             a.exclude_from_balance_totals,
+            a.balance_totals_from,
             a.closed_on,
             a.mask,
             a.owner_id,
@@ -369,10 +371,12 @@ def list_accounts(include_children: bool = False, include_trashed: bool = False)
         # A group has one balance, carried on its root; a member's row has none of its own to show.
         balances = current_balances(conn)
         closed_flags = closed_balance_flags(conn, balances)
+        flags = history_flags(conn, [account["id"] for account in accounts if not account["parent_account_id"]])
         for account in accounts:
             root = not account["parent_account_id"]
             account["balance"] = balances.get(account["id"]) if root else None
             account["closed_balance_flag"] = closed_flags.get(account["id"]) if root else None
+            account["history_flag"] = flags.get(account["id"]) if root else None
     return accounts
 
 
