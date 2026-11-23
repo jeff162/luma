@@ -146,6 +146,12 @@ When working on the codebase:
   `BULK_CONFIRM_THRESHOLD`) and let the reader look. Where the value genuinely has to appear (user-facing
   copy, a worked example), say where the authoritative one lives in the same breath.
 
+- **State the rule behind a set; don't enumerate the set.** A prose list of which cases a behavior covers
+  (which tasks follow the owner view, which pages a filter reaches) is another copy that a new case
+  makes wrong, and nothing flags it when it does. Write the rule that decides membership, give a few
+  examples worded as examples ("including", "for example"), and name the code that holds the full list.
+  Enumerate only where completeness is the point, such as a security rule's deliberate exceptions.
+
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
 
 ### Obstacles and owed decisions

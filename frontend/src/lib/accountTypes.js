@@ -57,6 +57,12 @@ const NORMAL_BALANCE_SIDE = {
   paypal: 'zero', p2p: 'zero', amazon: 'zero',
 }
 
+// Which side of zero a type's balance normally sits on: 'held', 'owed' or 'zero', or null for one that says
+// nothing (`other`).
+export function normalBalanceSide(accountType) {
+  return NORMAL_BALANCE_SIDE[accountType] || null
+}
+
 // The color for a balance on the unusual side for its type, or null for one where it belongs: red below
 // zero where money is normally held (an overdraft), green above it where money is normally owed (a credit
 // balance) or should be near none (a wallet holding money).

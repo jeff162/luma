@@ -29,7 +29,9 @@ import {
 import { TREND_SPAN_ALL, TREND_SPAN_PREF_KEY, trendSpanFloorMonth } from '../lib/trendSpan.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatDate, monthLabel } from '../lib/utils.js'
-import { accountColor, bridgeRows, buildBridge, describeHistoryFlag, groupByType } from '../lib/balanceTotals.js'
+import {
+  accountColor, bridgeAxis, bridgeRows, buildBridge, describeBalanceChange, describeHistoryFlag, groupByType, isOwedBalanceType, unusualBalanceBarColor,
+} from '../lib/balanceTotals.js'
 import { useAccountDetailPanels } from './accounts/useAccountDetailPanels.jsx'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
 import Breadcrumb from './Breadcrumb.jsx'
@@ -51,7 +53,8 @@ import { useViewLoad } from '../lib/useViewLoad.js'
  * underneath. The chart is a bridge from the total at the period's opening to its end, one step per type;
  * the key is the account table. Trends shows each month's end as bars by type, held above zero and owed
  * below, with the total across them. A type drills into its accounts in both, and an account opens its
- * report.
+ * report. Inside credit cards or loans the history's value axis is turned over, so what is owed grows
+ * upward, and a bar on the wrong side of zero for its type takes the table's warning colour.
  *
  * Only the owner filters apply. The Dashboard's other filters select transactions, and a balance belongs to
  * an account, so a note says so whenever one of them is set rather than leaving the figure to look
@@ -162,8 +165,8 @@ function BalancesPeriod({ result, history, periodLabel, dateStart, dateEnd, open
   const openGroup = openType ? groups.find(g => g.type === openType) : null
   // The bridge's steps are the types, or inside one type its accounts.
   const bridgeGroups = openGroup
-    ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, color: accountColor(a), accounts: [a] }))
-    : groups.map(g => ({ key: g.type, label: g.label, color: g.color, accounts: g.accounts }))
+    ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, type: a.type, color: accountColor(a), accounts: [a] }))
+    : groups.map(g => ({ key: g.type, label: g.label, type: g.type, color: g.color, accounts: g.accounts }))
   // The totals are named by their date alone; the chart's title says what they are totals of.
   const steps = buildBridge(bridgeGroups, {
     hasOpening,
@@ -189,9 +192,10 @@ function BalancesPeriod({ result, history, periodLabel, dateStart, dateEnd, open
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 20, marginBottom: 24 }}>
           <Card>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
-              {hasOpening ? 'Change' : (openGroup ? openGroup.label : 'Total')} by {openGroup ? 'account' : 'category'}
+              {hasOpening ? 'Change' : balanceTitle(openGroup)} by {openGroup ? 'account' : 'account type'}
             </div>
-            <BridgeChart steps={steps} series={bridgeGroups} onDrill={openGroup ? null : onDrill} />
+            <BridgeChart steps={steps} series={bridgeGroups} onDrill={openGroup ? null : onDrill}
+              reversed={!!openGroup && isOwedBalanceType(openGroup.type)} changes={hasOpening} />
           </Card>
           <Card>
             <AccountTable
@@ -200,7 +204,7 @@ function BalancesPeriod({ result, history, periodLabel, dateStart, dateEnd, open
               columns={[
                 { label: 'Balance', of: a => a.balance?.amount ?? null },
                 ...(hasOpening
-                  ? [{ label: 'Change', of: a => (a.balance && a.opening != null ? a.balance.amount - a.opening : null) }]
+                  ? [{ label: 'Change', change: true, of: a => (a.balance && a.opening != null ? a.balance.amount - a.opening : null) }]
                   : []),
               ]}
               onDrill={onDrill}
@@ -218,12 +222,23 @@ function BalancesPeriod({ result, history, periodLabel, dateStart, dateEnd, open
 // A bridge laid on its side, so its steps read top to bottom with their names beside them and their figures
 // in a column at the right. The two totals are drawn as what each group makes of them, in the groups'
 // colours, so the bars between them read as the change in those same parts.
-function BridgeChart({ steps, series, onDrill }) {
+//
+// Where the steps are `changes` (the period has an opening), a step's figure is an arrow and an amount as in
+// the table (`describeBalanceChange`, by its series' type), so a row says the same thing in both; on the
+// overview a card paid down is ↓ while its bar, which moves the total up, goes right. Without an opening
+// the steps are balances, and they and the totals keep their sign. Inside a type whose balances run below
+// zero the value axis is `reversed`, zero at the left.
+function BridgeChart({ steps, series, onDrill, reversed = false, changes = false }) {
+  const changeOf = row => (changes && row.kind === 'step'
+    ? describeBalanceChange(series.find(s => s.key === row.key)?.type, row.value)
+    : null)
   const data = bridgeRows(steps).map(row => ({
     ...row,
-    figure: formatSignedMoneyAmount(row.value),
+    figure: changeOf(row)?.text ?? formatSignedMoneyAmount(row.value),
+    change: changeOf(row),
     drillable: !!onDrill && row.kind === 'step' && !row.key.startsWith('__'),
   }))
+  const axis = bridgeAxis(data)
   function handleClick(state) {
     const row = data[clickedDataIndex(state)]
     if (row?.drillable) onDrill(row.key)
@@ -234,20 +249,25 @@ function BridgeChart({ steps, series, onDrill }) {
       <BarChart data={data} layout="vertical" stackOffset="sign" margin={{ top: 4, right: 8, bottom: 4, left: 8 }}
         {...CLICKABLE_CHART_EVENTS} onClick={handleClick}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-        <XAxis type="number" tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-        <YAxis yAxisId="names" type="category" dataKey="label" width={120} interval={0}
-          tick={{ fill: 'var(--text)', fontSize: 12 }} />
-        <YAxis yAxisId="figures" orientation="right" type="category" dataKey="figure" width={84} interval={0}
+        <XAxis type="number" reversed={reversed} domain={axis?.domain} ticks={axis?.ticks} interval={0} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+        <YAxis yAxisId="names" type="category" dataKey="label" width={NAME_AXIS_WIDTH} interval={0}
+          tick={<BridgeNameTick />} />
+        <YAxis yAxisId="figures" orientation="right" type="category" dataKey="figure" width={100} interval={0}
           axisLine={false} tickLine={false} tick={{ fill: 'var(--text)', fontSize: 11 }} />
         <ReferenceLine yAxisId="names" x={0} stroke="var(--muted)" />
+        {/* Tied to the names axis, as the bars are. Left to itself the tooltip takes the axis with id 0, which
+            this chart does not have, and picks rows that do not match the bars. */}
         <ChartTooltip
+          axisId="names"
           cursor={{ fill: 'var(--surface2)' }}
           content={({ active, payload }) => {
             const row = active ? payload?.[0]?.payload : null
             if (!row) return null
             return (
               <div style={{ ...CHART_TOOLTIP_CONTENT_STYLE, padding: '8px 10px', fontSize: 12 }}>
-                <div style={CHART_TOOLTIP_LABEL_STYLE}>{row.label} · {formatSignedMoneyAmount(row.value)}</div>
+                <div style={CHART_TOOLTIP_LABEL_STYLE}>
+                  {row.label} · {row.change?.title ?? row.figure}
+                </div>
                 {row.kind === 'total' ? series.filter(s => row[`part:${s.key}`]).map(s => (
                   <div key={s.key}>{s.label} {formatSignedMoneyAmount(row[`part:${s.key}`])}</div>
                 )) : null}
@@ -276,6 +296,63 @@ function BridgeChart({ steps, series, onDrill }) {
       </BarChart>
     </ResponsiveContainer>
   )
+}
+
+// A step's name beside the bridge: on up to two lines, the second cut short with an ellipsis when the name
+// is longer still, the full name in its hover text and the chart's tooltip. The axis's own ticks wrap only
+// where the name has spaces and clip a longer line at its start, which loses the front of a long account
+// name.
+const NAME_AXIS_WIDTH = 120
+const NAME_FONT_SIZE = 12
+const NAME_LINE_HEIGHT = 14
+// What the text may fill: the axis less the tick mark and the gap beside it.
+const NAME_TEXT_WIDTH = NAME_AXIS_WIDTH - 12
+
+function BridgeNameTick({ x, y, payload }) {
+  const name = String(payload?.value ?? '')
+  const lines = fitLines(name, NAME_TEXT_WIDTH, 2)
+  const top = y - ((lines.length - 1) * NAME_LINE_HEIGHT) / 2
+  return (
+    <text x={x} y={top} textAnchor="end" dominantBaseline="central" fill="var(--text)" fontSize={NAME_FONT_SIZE}>
+      {lines.join(' ') !== name ? <title>{name}</title> : null}
+      {lines.map((line, index) => <tspan key={index} x={x} y={top + index * NAME_LINE_HEIGHT}>{line}</tspan>)}
+    </text>
+  )
+}
+
+let measureContext
+function textWidth(text) {
+  if (measureContext === undefined) {
+    measureContext = document.createElement('canvas').getContext?.('2d') ?? null
+    if (measureContext) measureContext.font = `${NAME_FONT_SIZE}px ${getComputedStyle(document.body).fontFamily}`
+  }
+  // Without a canvas (a test DOM), an average character width.
+  return measureContext ? measureContext.measureText(text).width : text.length * NAME_FONT_SIZE * 0.55
+}
+
+// `text` broken at spaces into at most `maxLines` lines of `width`, the last ending in an ellipsis where the
+// rest does not fit, and a word too long for a line cut the same way.
+function fitLines(text, width, maxLines) {
+  const clip = line => {
+    if (textWidth(line) <= width) return line
+    let cut = line
+    while (cut.length > 1 && textWidth(`${cut}…`) > width) cut = cut.slice(0, -1)
+    return `${cut.trimEnd()}…`
+  }
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines = []
+  let current = ''
+  for (let i = 0; i < words.length; i++) {
+    const candidate = current ? `${current} ${words[i]}` : words[i]
+    if (!current || textWidth(candidate) <= width) {
+      current = candidate
+      continue
+    }
+    if (lines.length === maxLines - 1) return [...lines, clip(`${current} ${words.slice(i).join(' ')}`)]
+    lines.push(clip(current))
+    current = words[i]
+  }
+  return current ? [...lines, clip(current)] : lines
 }
 
 // The history under the period's figures, drawn by the plot the Expenses trend uses (`TrendPlot`), with
@@ -313,12 +390,15 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
       }
     })
   const color = openGroup ? openGroup.color : 'var(--accent)'
+  // A bar on the wrong side of zero for the open type takes the colour its figure has in the table.
+  const barColor = bucket => (openGroup && bucket.plotted != null
+    ? unusualBalanceBarColor(openGroup.type, bucket.plotted) : null) || color
   const grainWord = { month: 'month', quarter: 'quarter', year: 'year' }[grain]
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {openGroup ? openGroup.label : 'Total'} by {grainWord}
+          {balanceTitle(openGroup)} by {grainWord}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {canGoBackDate ? (
@@ -339,13 +419,20 @@ function HistoryStrip({ history, openGroup, dateStart, dateEnd }) {
       </div>
       <TrendPlot
         data={data}
-        name={openGroup ? openGroup.label : 'Total'}
+        name={balanceTitle(openGroup)}
         formatter={value => formatSignedMoneyAmount(value)}
-        fillOf={bucket => (bucket.isSelected ? color : `color-mix(in srgb, ${color} 45%, var(--surface2))`)}
+        fillOf={bucket => (bucket.isSelected ? barColor(bucket) : `color-mix(in srgb, ${barColor(bucket)} 45%, var(--surface2))`)}
+        reversed={!!openGroup && isOwedBalanceType(openGroup.type)}
         onBucketClick={bucket => pinDateFromChart({ start: bucket.rangeStart, end: bucket.rangeEnd, preset: bucket.periodLabel })}
       />
     </Card>
   )
+}
+
+// What a balance chart is of: the total, or inside a type that type's balance. Never "Total" alone, which
+// does not say what is totalled.
+function balanceTitle(openGroup) {
+  return openGroup ? `${openGroup.label} balance` : 'Balance'
 }
 
 // A bucket's name on the axis and as the period it becomes when clicked.
@@ -363,14 +450,15 @@ function sumBalances(point, accounts) {
 
 // Grouped by type, each type's row carrying its subtotal and opening its accounts. Inside a type every
 // account takes its own colour, as it does in that type's charts. `columns` are the figures each row
-// shows, the first of them the account's balance as of something.
+// shows, the first of them the account's balance as of something; one marked `change` is drawn as an arrow
+// and an amount.
 function AccountTable({ groups, drilled, columns, onDrill, onOpenAccount, flagActions }) {
   const template = `minmax(0, 1fr) ${columns.map(() => 'auto').join(' ')}`
   return (
     <div role="table" aria-label="Balances by account"
       style={{ display: 'grid', gridTemplateColumns: template, columnGap: 20, rowGap: 6, alignItems: 'baseline', fontSize: 13 }}>
       <div role="row" style={{ display: 'contents', fontSize: 12, color: 'var(--muted)' }}>
-        <div role="columnheader">{drilled ? 'Account' : 'Type'}</div>
+        <div role="columnheader">{drilled ? 'Account' : 'Account type'}</div>
         {columns.map((col, index) => <div key={index} role="columnheader" style={{ textAlign: 'right' }}>{col.label}</div>)}
       </div>
       {groups.map(group => (
@@ -401,7 +489,11 @@ function GroupRows({ group, drilled, columns, onDrill, onOpenAccount, flagAction
           </div>
           {columns.map((col, index) => {
             const value = columnTotal(group.accounts, col)
-            return <div key={index} role="cell" style={{ ...FIGURE_STYLE, paddingTop: 6 }}>{value == null ? '' : formatSignedMoneyAmount(value)}</div>
+            return (
+              <div key={index} role="cell" style={{ ...FIGURE_STYLE, paddingTop: 6 }}>
+                <ColumnFigure col={col} type={group.type} value={value} />
+              </div>
+            )
           })}
         </div>
       )}
@@ -419,13 +511,23 @@ function GroupRows({ group, drilled, columns, onDrill, onOpenAccount, flagAction
             <div key={index} role="cell" style={FIGURE_STYLE}>
               {index === 0
                 ? <AccountFigure account={account} value={col.of(account)} />
-                : (col.of(account) == null ? '' : formatSignedMoneyAmount(col.of(account)))}
+                : <ColumnFigure col={col} type={account.type} value={col.of(account)} />}
             </div>
           ))}
         </div>
       ))}
     </>
   )
+}
+
+// A figure after the first column: a change as an arrow and an amount (`describeBalanceChange`), anything
+// else signed.
+function ColumnFigure({ col, type, value }) {
+  if (value == null) return null
+  if (!col.change) return formatSignedMoneyAmount(value)
+  const { text, title } = describeBalanceChange(type, value)
+  if (!title) return text
+  return <Tooltip content={title} align="right"><span>{text}</span></Tooltip>
 }
 
 function Swatch({ color }) {
@@ -485,8 +587,8 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
   const openGroup = openType ? groups.find(g => g.type === openType) : null
   // A series per type, or inside one type per account.
   const series = openGroup
-    ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, color: accountColor(a), accounts: [a] }))
-    : groups.map(g => ({ key: g.type, label: g.label, color: g.color, accounts: g.accounts }))
+    ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, type: a.type, color: accountColor(a), accounts: [a] }))
+    : groups.map(g => ({ key: g.type, label: g.label, type: g.type, color: g.color, accounts: g.accounts }))
   const data = shown.map(point => ({
     month: point.month,
     date: point.date,
@@ -498,7 +600,9 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
   const lastPoint = shown[shown.length - 1]
   const noBalance = accounts.filter(a => !a.has_balance).length
   const pans = data.length > MONTHS_FIT
-  const totalLabel = openGroup ? openGroup.label : 'Total'
+  const totalLabel = balanceTitle(openGroup)
+  // Inside credit cards or loans the axis is turned over so what is owed grows upward (`isOwedBalanceType`).
+  const reversed = !!openGroup && isOwedBalanceType(openGroup.type)
   const chart = (
     <ResponsiveContainer width="100%" height={pans ? '100%' : CHART_HEIGHT}>
       {/* `stackOffset="sign"` keeps what is held stacking up from zero and what is owed stacking down from
@@ -507,7 +611,7 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fill: 'var(--muted)', fontSize: 10 }}
           interval={pans ? 2 : data.length <= 12 ? 0 : Math.floor(data.length / 12)} />
-        <YAxis orientation={pans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+        <YAxis reversed={reversed} orientation={pans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
         <ReferenceLine y={0} stroke="var(--muted)" />
         <ChartTooltip
           content={<PanningChartTooltip />}
@@ -525,16 +629,21 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
           labelStyle={CHART_TOOLTIP_LABEL_STYLE}
           itemStyle={CHART_TOOLTIP_ITEM_STYLE}
         />
+        {/* A month on the wrong side of zero for its type takes the colour its figure has in the table. */}
         {series.map(s => (
           <Bar key={s.key} dataKey={s.key} name={s.label} stackId="balances" fill={s.color} fillOpacity={0.85}
-            isAnimationActive={false} />
+            isAnimationActive={false}>
+            {data.map(row => (
+              <Cell key={row.month} fill={unusualBalanceBarColor(s.type, row[s.key]) || s.color} />
+            ))}
+          </Bar>
         ))}
         <Line type="linear" dataKey="total" name={totalLabel} stroke="var(--text)" strokeWidth={2}
           dot={data.length === 1} isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   )
-  const typeOptions = [{ value: '', label: 'All sources' }, ...groups.map(g => ({ value: g.type, label: g.label }))]
+  const typeOptions = [{ value: '', label: 'All account types' }, ...groups.map(g => ({ value: g.type, label: g.label }))]
   return (
     <>
       {openGroup ? <Breadcrumb items={['Overview', openGroup.label]} onNavigate={() => onDrill(null)} /> : null}
@@ -576,6 +685,7 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
               { label: formatDate(lastPoint.date), of: a => lastPoint.balances[a.account_id] ?? null },
               {
                 label: 'Change',
+                change: true,
                 // An account whose history starts inside the window starts it at zero, as on Single period.
                 of: a => (lastPoint.balances[a.account_id] != null
                   ? lastPoint.balances[a.account_id] - (firstPoint.balances[a.account_id] ?? 0)

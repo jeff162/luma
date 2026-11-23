@@ -530,6 +530,15 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
+          Inside Credit cards or Loans the history is drawn upside down, so what is owed rises from zero; the
+          figures keep their minus sign. A balance on the wrong side of zero for its type is red (an overdrawn
+          account) or green (a card in credit).
+        </p>
+        <p>
+          A change is shown as an arrow and an amount: ↑ is more in the account, or on a card or loan more
+          owed, the way its chart moves.
+        </p>
+        <p>
           Only the owner filter applies. The other filters choose transactions, and a balance belongs to an
           account.
         </p>

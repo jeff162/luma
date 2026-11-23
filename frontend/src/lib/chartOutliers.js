@@ -76,7 +76,7 @@ function unclamped(numbers) {
 // the round ticks, and the zero, that an auto-scaled axis would have had.
 const NICE_STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]
 
-function niceOutward(value) {
+export function niceOutward(value) {
   if (!Number.isFinite(value) || value === 0) return 0
   const magnitude = 10 ** Math.floor(Math.log10(Math.abs(value)))
   const ratio = Math.abs(value) / magnitude

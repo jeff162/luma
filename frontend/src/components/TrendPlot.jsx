@@ -29,8 +29,9 @@ import PanningChartTooltip from './PanningChartTooltip.jsx'
  * `data` are the buckets: `label` (the axis), `fullLabel` (the tooltip), `bucketStart`/`bucketEnd` months,
  * `rangeStart`/`rangeEnd` days, `isSelected`, and the drawn figure under `plotted` (with `__clipped` /
  * `__clippedValue` where an outlier is drawn torn off, see ClippedBar). `average` draws a reference line
- * with its pill in the axis column. `fillOf(bucket)` colours a bar; `formatter` and `name` are the
- * tooltip's.
+ * with its pill in the axis column. `reversed` turns the value axis over, larger values downward, for a
+ * series that normally runs below zero; both axes take it. `fillOf(bucket)` colours a bar; `formatter`
+ * and `name` are the tooltip's.
  */
 
 const CHART_HEIGHT = 224
@@ -43,7 +44,7 @@ const XAXIS_HEIGHT = 48
 const AXIS_COLUMN_WIDTH = 76
 const AXIS_LABEL_WIDTH = 60
 
-export default function TrendPlot({ data, domain, clamped = false, average = null, name, formatter, fillOf, onBucketClick }) {
+export default function TrendPlot({ data, domain, clamped = false, reversed = false, average = null, name, formatter, fillOf, onBucketClick }) {
   // The plot is handed an explicit width rather than discovering one after it has drawn, so the only
   // measurement left is the viewport it may have to stretch to fill. Observing it here — once, on the
   // scroll container itself — is what keeps a re-bucket free of any measure-then-redraw: this width does
@@ -135,6 +136,7 @@ export default function TrendPlot({ data, domain, clamped = false, average = nul
             tick={{ fill: 'var(--muted)', fontSize: 11 }}
             domain={domain}
             allowDataOverflow={clamped}
+            reversed={reversed}
           />
           {/* Draws nothing; it reserves exactly the height the plot's category axis reserves, which is
               what keeps the two vertical scales in step. */}
@@ -177,7 +179,7 @@ export default function TrendPlot({ data, domain, clamped = false, average = nul
             <XAxis dataKey="label" interval={0} tick={<TrendBucketTick />} height={XAXIS_HEIGHT} />
             {/* Hidden, not absent: the scale still has to be computed here, and it is identical to the
               column's because the domain and data are. */}
-            <YAxis hide domain={domain} allowDataOverflow={clamped} />
+            <YAxis hide domain={domain} allowDataOverflow={clamped} reversed={reversed} />
             <Tooltip
               // The plot pans, so the card is placed against what is visible rather than against the whole
               // canvas — see PanningChartTooltip.
