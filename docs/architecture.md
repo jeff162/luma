@@ -175,7 +175,9 @@ server-computed counts refresh. The page's own writes are absorbed by re-reading
 (`lib/ledgerEpoch.js`), so it never reloads to show its own edit. The epoch is separate from
 `recon_epoch`, which watches fewer tables because each of its moves recomputes the reconciliation
 reports. A third, `rule_reach_epoch`, keeps the owner lens's rule reach
-cached (`data-model.md` → *Owner lens*).
+cached (`data-model.md` → *Owner lens*), and a fourth, `balance_history_epoch`, the balance totals' history
+flags (`services/balance_totals.py`). Both are moved by triggers scoped to the columns their answer reads,
+so the most frequent edits (categorizing, tagging) leave those caches alone.
 
 **The derived caches are filled ahead of the pages that read them.** A start moves `recon_epoch` and
 `rule_reach_epoch`, so every cache they stamp is stale until read, and a read that finds one stale runs

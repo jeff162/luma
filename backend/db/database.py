@@ -4482,6 +4482,10 @@ def init_db(db_path: str | None = None):
         # Once per start, for the reason `_bump_recon_epoch` gives: a cached reach is stamped only with
         # the data it came from, so a start is what keeps one from outliving the code that computed it.
         _bump_epoch(conn, RULE_REACH_EPOCH_KEY)
+        _create_column_epoch_triggers(conn, BALANCE_HISTORY_EPOCH_KEY, _BALANCE_HISTORY_EPOCH_SOURCES,
+                                      _BALANCE_HISTORY_EPOCH_ROW_FILTERS)
+        # Once per start, as for the rule reach.
+        _bump_epoch(conn, BALANCE_HISTORY_EPOCH_KEY)
         _create_purchase_link_prune_trigger(conn)
         _create_refund_follow_trigger(conn)
         _create_document_search_index(conn)
@@ -4599,16 +4603,50 @@ _RULE_REACH_EPOCH_SOURCES = {
 }
 
 
+# The history flag of every account group the balance totals count (`services/balance_totals.py`) works
+# each group's balance back through its whole ledger, so the flags are cached and recomputed only when this
+# epoch has moved. It watches what the flags read: the rows' amounts, days, state, account and import batch
+# (the batch says where a group switched from files to a connection), the stated balances, the account
+# fields that make up the groups and decide which the totals count, and the flag's own dismissals, which
+# share their table with other findings and so are filtered to the flag's kind (`HISTORY_FLAG_KIND`).
+# Categorizing, tagging and renaming, the edits made most often, leave it alone.
+BALANCE_HISTORY_EPOCH_KEY = "balance_history_epoch"
+_BALANCE_HISTORY_EPOCH_SOURCES = {
+    "txn": ("amount", "date", "posted_date", "trashed_at", "is_pending", "account_id", "import_batch_id"),
+    "account_balance": None,
+    "account": ("parent_account_id", "type", "trashed_at", "exclude_from_balance_totals", "balance_totals_from",
+                "closed_on"),
+    "import_batch": ("source_kind",),
+    "recurring_signal_dismissal": None,
+}
+_BALANCE_HISTORY_EPOCH_ROW_FILTERS = {"recurring_signal_dismissal": "{row}.kind = 'balance_history'"}
+
+
 def _create_rule_reach_epoch_triggers(conn: sqlite3.Connection) -> None:
-    key = RULE_REACH_EPOCH_KEY
-    for table, columns in _RULE_REACH_EPOCH_SOURCES.items():
+    _create_column_epoch_triggers(conn, RULE_REACH_EPOCH_KEY, _RULE_REACH_EPOCH_SOURCES)
+
+
+def _create_column_epoch_triggers(conn: sqlite3.Connection, key: str, sources: dict,
+                                  row_filters: dict | None = None) -> None:
+    """The triggers that bump db_meta `key` on an insert or delete in each table of `sources`, and on an
+    update of the listed columns (any column where the list is None). A `row_filters` entry limits a table's
+    triggers to the rows it matches, written against `{row}`, which stands for the old and new row. Dropped
+    and created again each time, so a change to a column list or filter takes effect."""
+    row_filters = row_filters or {}
+    for table, columns in sources.items():
         for event in ("INSERT", "UPDATE", "DELETE"):
             name = f"trg_{key}_{table}_{event.lower()}"
             on = f"UPDATE OF {', '.join(columns)}" if event == "UPDATE" and columns else event
+            row_filter = row_filters.get(table)
+            when = ""
+            if row_filter:
+                rows = {"INSERT": ("NEW",), "DELETE": ("OLD",), "UPDATE": ("NEW", "OLD")}[event]
+                when = "WHEN " + " OR ".join(f"({row_filter.format(row=row)})" for row in rows)
             conn.execute(f"DROP TRIGGER IF EXISTS {name}")
             conn.execute(f"""
                 CREATE TRIGGER {name}
                 AFTER {on} ON {table}
+                {when}
                 BEGIN
                     INSERT INTO db_meta (key, value) VALUES ('{key}', 1)
                     ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;

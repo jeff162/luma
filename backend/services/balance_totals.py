@@ -16,13 +16,16 @@ not the flat figure working back would give, so the group is left out of that da
 instead (`services/closed_accounts.py`).
 """
 
+import json
 from bisect import bisect_right
 from datetime import date, timedelta
 from itertools import accumulate
 from typing import Optional
 
+from backend.db.database import BALANCE_HISTORY_EPOCH_KEY, db_meta_epoch
 from backend.services.account_balances import BALANCE_DAY_SQL, NORMAL_BALANCE_SIDE, STALE_AFTER_DAYS
 from backend.services.account_groups import group_accounts_sql
+from backend.services.cache_fill import MISS, fill_once
 from backend.services.signal_dismissals import dismissed_keys
 from backend.services.transaction_facets import OWNER_LENS_PARAM, append_facets
 
@@ -228,20 +231,63 @@ def _shown_flag(conn, root_id: str, balances: GroupBalances, account_type, dismi
     return {**flag, "seam": seam, "balance_date": balance_date}
 
 
+# Where every counted group's flag is cached in db_meta, stamped with `BALANCE_HISTORY_EPOCH_KEY`.
+HISTORY_FLAGS_CACHE_KEY = "balance_history_flags"
+
+
 def history_flags(conn, root_ids: list) -> dict:
     """`{root_id: flag}` for those of these groups that have a history flag still shown.
 
     Only a group the totals count is judged (`COUNTED_GROUP_SQL`): the flag is about the history the totals
     count, and leaving the group out of them is one of its remedies. Excluding a group hides its flag and
-    dismisses nothing, so counting it again shows the flag again. A type with no normal side of zero is never
-    flagged, so those groups' rows are not read either."""
-    if not root_ids:
-        return {}
-    placeholders = ",".join("?" * len(root_ids))
+    dismisses nothing, so counting it again shows the flag again.
+
+    Served from a cache of every counted group's flag, since judging one works its balance back through its
+    whole ledger while the history it judges rarely changes. The cache is recomputed on the first read after
+    a write the flags depend on, which triggers record by moving `BALANCE_HISTORY_EPOCH_KEY`
+    (`db/database.py`); the flag depends on no date but the data's, so it never goes stale by itself."""
+    flags = _cached_history_flags(conn)
+    return {root_id: flags[root_id] for root_id in root_ids if root_id in flags}
+
+
+def _cached_history_flags(conn) -> dict:
+    def read():
+        row = conn.execute("SELECT value FROM db_meta WHERE key = ?", (HISTORY_FLAGS_CACHE_KEY,)).fetchone()
+        if row:
+            try:
+                cached = json.loads(row["value"])
+                if cached.get("epoch") == db_meta_epoch(conn, BALANCE_HISTORY_EPOCH_KEY):
+                    return cached["flags"]
+            except (TypeError, ValueError, KeyError, AttributeError):
+                pass
+        return MISS
+
+    def fill() -> dict:
+        # Read before computing, so a write landing during the computation leaves the stored result stamped
+        # older than it, and the next read recomputes.
+        epoch = db_meta_epoch(conn, BALANCE_HISTORY_EPOCH_KEY)
+        flags = _compute_history_flags(conn)
+        # A write on a read path: committed at once when the caller had nothing open, so the write lock is
+        # not held across the rest of the request, as the rule reach does. db_meta has no triggers, so this
+        # write cannot move the epoch it is stamped with.
+        held = conn.in_transaction
+        conn.execute(
+            "INSERT INTO db_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (HISTORY_FLAGS_CACHE_KEY, json.dumps({"epoch": epoch, "flags": flags})),
+        )
+        if not held:
+            conn.commit()
+        return flags
+
+    return fill_once(conn, HISTORY_FLAGS_CACHE_KEY, read, fill)
+
+
+def _compute_history_flags(conn) -> dict:
+    """Every counted group's shown flag. A type with no normal side of zero is never flagged, so those
+    groups' rows are not read."""
     root_types = {
-        row["id"]: row["type"] for row in conn.execute(
-            f"SELECT t.id, t.type FROM account t WHERE t.id IN ({placeholders}) AND {COUNTED_GROUP_SQL}",
-            list(root_ids))
+        row["id"]: row["type"]
+        for row in conn.execute(f"SELECT t.id, t.type FROM account t WHERE {COUNTED_GROUP_SQL}")
         if NORMAL_BALANCE_SIDE.get(row["type"] or "")
     }
     balances = load_group_balances(conn, list(root_types))

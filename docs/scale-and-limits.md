@@ -23,6 +23,7 @@ The mechanism behind each bound is owned elsewhere:
 - [Bulk operations must not accumulate](#bulk-operations-must-not-accumulate)
 - [The rule co-match scan reads the whole ledger](#the-rule-co-match-scan-reads-the-whole-ledger)
 - [The Tasks list is recomputed on every mutation](#the-tasks-list-is-recomputed-on-every-mutation)
+- [Balance history is read whole on every request](#balance-history-is-read-whole-on-every-request)
 - [Many sessions on one server](#many-sessions-on-one-server)
 - [Measuring performance](#measuring-performance)
 - [Obstacles](#obstacles)
@@ -165,6 +166,44 @@ cost should follow use, not ledger size.
 The transactions holding receivable money include the members of completed reimbursements, which stay
 in the group. They are excluded before the per-row work but are still scanned. Revisit if that scan
 shows up in a mutation's latency; the fix is a due-query that never assembles the report.
+
+## Balance history is read whole on every request
+
+`load_group_balances` (`services/balance_totals.py`) reads every live, posted row of every group that has
+stated a balance, summed by group and posting day, and works each group's balance on any date from that.
+The Dashboard's Balances frame (single period and trends) pays it on every request. The history flag,
+which the Accounts list and the account report need it for, is cached behind `balance_history_epoch`, so
+they pay it only on the first read after a write the flags depend on (an import, a stated balance, an
+account's grouping or settings).
+
+Measured on a copy of a real ledger with stated balances added: about 40 ms at ~19.5k transactions and
+roughly 250–400 ms at ~195k, linear in row count. Most of it is SQLite reading the rows, not the Python
+over them, so summing by day in the query took only ~5% off at real scale. The flag itself, once the
+rows are loaded, is under a millisecond per group.
+
+Three levers, roughly in order of size:
+
+- **Cache the result behind a column-scoped epoch**, as the flags already are: triggers bump the epoch
+  only on writes to the columns the answer reads, so no write site has to remember to clear it. The
+  Balances frame's figures could be cached the same way, keyed by the period and owner filters as well.
+  It removes the repeat cost but not the first read after a write.
+- **Checkpoint the flag**, if the first read after a write becomes the cost. Store per group the anchor (first stated balance's date), a checkpoint day,
+  the worked-back balance there, and the lowest and highest worked-back points before it relative to that
+  balance. A change between the checkpoint and the anchor shifts every older day by the same amount, so
+  the stored extremes still answer it; only the rows after the checkpoint are read. Cleared by a write to
+  the group's rows before the checkpoint (a backfilled file, a trashed duplicate, an edit, a merge), an
+  earlier stated balance, a type change or a new start date. A checkpoint is a stored calculation, never a
+  sign-off; accepting a history is what a dismissal already does.
+- **Roll up closed months.** Per-account monthly sums, maintained by triggers on `txn` and keyed by
+  account so a merge never rewrites them, turn the read into a few hundred rows. Month ends serve the
+  trends directly; the flag's worst day, an arbitrary period date and a mid-month stated balance still
+  need the partial month at day grain, so it is a hybrid. Sums kept incrementally over `REAL` amounts
+  drift, so they are stored in cents or rounded on read.
+
+The checkpoint and the rollup read a date range per group, which needs an index on the posting day
+(`COALESCE(posted_date, date)`): `idx_txn_date` serves only a range on `date`, and a margin for posting
+lag is not safe in a correctness check, because nothing bounds that lag. Check any of these plans on a
+real ledger (`scripts/query_plan_survey.py`), since the planner picks differently without statistics.
 
 ## Many sessions on one server
 
@@ -311,6 +350,9 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **Incremental backups for attached documents**, once the backup history shows documents as the bulk
   of a backup. The ledger half needs nothing.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
+- **Caching or narrowing the balance-history read**, once the Balances frame, or the first Accounts load
+  after an import, shows it; the levers are under [Balance history is read whole on every
+  request](#balance-history-is-read-whole-on-every-request).
 - **Dependency-based cache invalidation**, if transaction-derived views proliferate enough that the
   hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
 - **A structural database check does not answer whether the data is coherent**: a cursor ahead of a

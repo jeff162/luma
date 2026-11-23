@@ -12,9 +12,11 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from backend.db.database import init_db
 from backend.services.account_balances import current_balances
+from backend.services import balance_totals
 from backend.services.balance_totals import (
     HISTORY_FLAG_KIND, account_history_flag, balance_totals_by_month, balance_totals_on, history_flag_key,
 )
@@ -244,3 +246,42 @@ class HistoryFlagTests(_Ledger):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryFlagCacheTests(_Ledger):
+    """The flags are judged once and served until a write they depend on, which a trigger records."""
+
+    def setUp(self):
+        super().setUp()
+        self._account("chk")
+        self._txn("chk", "2026-03-01", -900.0)  # a deposit, with nothing recorded before it
+        self._state("chk", "2026-06-30", 0.0)
+        self.conn.commit()
+        self.assertEqual(account_history_flag(self.conn, "chk")["amount"], -900.0)
+
+    def _judged_again(self):
+        """Whether the next read works the flags out again rather than serving the cache."""
+        with mock.patch.object(balance_totals, "load_group_balances", wraps=balance_totals.load_group_balances) as load:
+            account_history_flag(self.conn, "chk")
+        return load.called
+
+    def test_a_flag_is_served_from_the_cache_until_its_history_changes(self):
+        self.assertFalse(self._judged_again())
+        self.conn.execute("UPDATE txn SET amount = -1200.0 WHERE account_id = 'chk'")
+        self.conn.commit()
+        self.assertEqual(account_history_flag(self.conn, "chk")["amount"], -1200.0)
+
+    def test_categorizing_a_row_leaves_the_cache_alone(self):
+        self.conn.execute("INSERT INTO category (id, name) VALUES ('food', 'Food')")
+        self.conn.execute("UPDATE txn SET category_id = 'food' WHERE account_id = 'chk'")
+        self.conn.commit()
+        self.assertFalse(self._judged_again())
+
+    def test_dismissing_the_flag_takes_it_off_at_once_and_other_dismissals_do_not_recompute(self):
+        dismiss(self.conn, "range_drift:some-rule:some-row", "range_drift")
+        self.conn.commit()
+        self.assertFalse(self._judged_again())
+        dismiss(self.conn, history_flag_key("chk", "2026-06-30"), HISTORY_FLAG_KIND)
+        self.conn.commit()
+        self.assertIsNone(account_history_flag(self.conn, "chk"))
+

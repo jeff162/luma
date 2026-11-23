@@ -6,7 +6,8 @@ The keyed "seen it, it's fine" store, shared by the derive-on-read finding surfa
 
 The recurring signals (`recurring_signals.py`), the rule range-drift findings (`rule_range_drift.py`), the
 balance-history flags (`balance_totals.py`) and the closed-account balance flags (`closed_accounts.py`)
-compute their findings fresh from the ledger every time and store nothing but the user's dismissals. That leaves one durable question — *is this key currently
+compute their findings from the ledger and store nothing of their own but the user's dismissals (the
+balance-history flags are cached, and a dismissal of one moves the epoch that cache is stamped with). That leaves one durable question — *is this key currently
 dismissed* — with one answer for all of them, so the table lives here rather than being reached into from
 each module.
 
