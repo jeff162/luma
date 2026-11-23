@@ -2,12 +2,14 @@
 
 ## What it is
 
-Two passes to repeat every so often. Neither changes what users see:
+Three passes to repeat every so often. None changes what users see:
 
 - **Duplicated code.** Find places where one small change has to be made in many near-identical spots,
   and merge them before they drift apart.
 - **Docs against code.** Check that the code actually does what a topic doc claims, claim by claim, and
   fix whichever side is wrong.
+- **Recomputed on every request.** Find what is worked out afresh on each page load or mutation at a cost
+  that grows with the ledger, and decide for each whether it should be stored instead.
 
 **Where it stands:** recurring, never finished. Each has a next scope:
 
@@ -15,6 +17,7 @@ Two passes to repeat every so often. Neither changes what users see:
 | --- | --- |
 | [Refactor smells](#refactor-smells) (duplication, shotgun surgery) | the **backend**; the frontend has had one pass |
 | [Doc conformance](#doc-conformance) (does the code do what a doc says) | **`architecture.md`**, whose cross-subsystem contracts have never had one; `data-model.md` is fully covered |
+| [Recomputation at volume](#recomputation-at-volume) (derived on every read, cost grows with the ledger) | never run; the **page-load reads** first |
 
 Verify each change with `cd frontend && npm run lint` and `npm run build`, plus
 `backend/venv/bin/python -m pytest backend/tests` for backend changes.
@@ -128,3 +131,34 @@ moved on), **UNVERIFIABLE** (say what would settle it).
   value is stored with a throwaway import before asserting against it.
 - **The tree moves under a long audit.** Re-grep every doc and code line number against the current tree
   before acting on a finding list, and re-read `git log`.
+
+## Recomputation at volume
+
+Much of the app derives on read rather than storing: a recurring finding, an account group or the owner
+lens is worked out when asked for, because a stored copy would go stale with nothing to notice
+(`architecture.md`). That is right where the cost is small or follows use. It goes wrong where the cost
+grows with the ledger and is paid on every page load for an answer that rarely changes; the balance
+history flag was one, and is now cached (`scale-and-limits.md` → *Balance history is read whole on every
+request*). Nobody has swept for the rest.
+
+### How to run it
+
+- **List what runs per request.** Every endpoint a page calls on load, `/tasks` (fetched on every route
+  change and mutation), and the background catch-up. `scripts/query_plan_survey.py --db <ledger>` times
+  each statement the suite issues; a `py-spy` profile under `npm run ui:stress` shows which requests take
+  the time (`scale-and-limits.md` → *Finding out what is slow*).
+- **Measure on a copy of a real ledger, and on a larger one.** The test fixtures cannot show a cost that
+  appears only at ledger scale. A synthetic ledger made by duplicating rows flatters anything that
+  groups by day, so say which kind of copy a figure comes from.
+- **Classify each.** Constant or following use: leave it. Growing with the ledger, but the answer
+  changes with most edits: leave it, as the Tasks checks are (`scale-and-limits.md`). Growing with the
+  ledger, and the answer rarely changes: cache it behind a column-scoped epoch, the `rule_reach_epoch` and
+  `balance_history_epoch` pattern (`db/database.py`), whose triggers watch only the columns the answer
+  reads, so no write site has to remember to clear it.
+- **Record the verdict** in `scale-and-limits.md` beside the existing sections, a deliberate "leave it"
+  included, since an unrecorded one gets investigated again.
+
+### Known candidates
+
+- **The Dashboard's Balances frame** reads every group's balance history on each request; the options are
+  in `scale-and-limits.md`.

@@ -82,8 +82,9 @@ one file, not scan a monolith for the paragraph that applies.
 
 ## Code health
 
-- [Periodic code-health audits](code-health-audits.md) — duplicated code (next: the backend) and docs
-  checked against code (next: `architecture.md`).
+- [Periodic code-health audits](code-health-audits.md) — duplicated code (next: the backend), docs
+  checked against code (next: `architecture.md`), and work recomputed on every request at a cost that
+  grows with the ledger (never run).
 - [Small UI cleanups to batch](cleanup-pass.md) — the import card's rejected count, and button labels that
   flash for an instant.
 - [Screens that refresh themselves when the data they show changes](query-cache-invalidation.md) —
