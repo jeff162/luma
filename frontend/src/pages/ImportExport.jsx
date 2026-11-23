@@ -3231,6 +3231,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
         <WatchedFoldersPanel
           onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
           onImported={() => api.listBatches().then(setBatches).catch(() => { })}
+          onSourcesChanged={() => api.getImportProfiles().then(setProfiles).catch(() => { })}
         />
       )}
 

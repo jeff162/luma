@@ -45,7 +45,11 @@ const WAITING_LIST_MAX_HEIGHT = 420
 // **Dismiss** out of line with every row that also offers **Import…**.
 const WAITING_ROW_ACTIONS_WIDTH = 164
 
-export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
+// `onSourcesChanged` runs when a data source changed under the panel, so a host holding its own copy of the
+// sources, as the import page does for the Data sources tab, can reload it: after a restored folder is
+// answered here, and after a scan that changed a folder's notice (each scan rewrites them). A scan that
+// changed none asks for nothing. The first scan after mounting has nothing to compare with, so it asks.
+export default function WatchedFoldersPanel({ onOpenFile, onImported, onSourcesChanged }) {
   const [status, setStatus] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [opening, setOpening] = useState('')
@@ -54,7 +58,17 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
   // against a later refresh that changes the count.
   const [listOpen, setListOpen] = useState(null)
 
-  const refresh = useCallback(() => api.getWatchStatus().then(setStatus).catch(() => { }), [])
+  const onSourcesChangedRef = useRef(onSourcesChanged)
+  onSourcesChangedRef.current = onSourcesChanged
+  const noticesRef = useRef(null)
+  const refresh = useCallback(async ({ scanned = false } = {}) => {
+    const next = await api.getWatchStatus().catch(() => null)
+    if (!next) return
+    setStatus(next)
+    const notices = JSON.stringify((next.sources || []).map(source => [source.id, source.watch_notice || null]))
+    if (scanned && notices !== noticesRef.current) onSourcesChangedRef.current?.()
+    noticesRef.current = notices
+  }, [])
 
   // The notice lines' buttons sit in a column just past the longest line. The column only widens while
   // the panel is mounted: answering one restored folder removes its line, and if that was the longest a
@@ -78,10 +92,14 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
     // The page-entry trigger. A no-op when a scan already ran within the hour, which is what makes it
     // safe to fire on every visit; the status read that follows costs nothing either way.
     let live = true
+    let scanned = false
     api.autoScanWatchedFolders()
-      .then(result => { if (live && result?.sources?.some(source => source.imported)) onImportedRef.current?.() })
+      .then(result => {
+        scanned = !result?.skipped
+        if (live && result?.sources?.some(source => source.imported)) onImportedRef.current?.()
+      })
       .catch(() => { })
-      .finally(() => { if (live) refresh() })
+      .finally(() => { if (live) refresh({ scanned }) })
     return () => { live = false }
   }, [refresh])
 
@@ -91,7 +109,7 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
       const result = await api.scanWatchedFolders()
       if (result?.sources?.some(source => source.imported)) onImported?.()
     } catch { /* the status below is the report; a failed scan leaves the last one on screen */ }
-    await refresh()
+    await refresh({ scanned: true })
     setScanning(false)
   }
 
@@ -176,7 +194,8 @@ export default function WatchedFoldersPanel({ onOpenFile, onImported }) {
                 {' — '}
                 <span style={{ color: 'var(--danger)' }}>{source.watch_notice}</span>
               </span>
-              <span><RestoredFolderDecision profile={source} onSettled={refresh} /></span>
+              <span><RestoredFolderDecision profile={source}
+                onSettled={() => Promise.all([refresh(), onSourcesChanged?.()])} /></span>
             </Fragment>
           ))}
         </div>
