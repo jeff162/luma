@@ -13,6 +13,9 @@ re-keyed to the new root wherever the group as a whole takes one.
 - **Merging one group into another** makes the target's root the merged group's. Its series now resolve to
   the target, so their keys follow (`move_series_keys`). Its balance flags do not: the merged group has
   another balance, and a dismissal of the old one says nothing about it.
+- **Removing an account with its transactions moved** (`reassign_account_references`) is a merge for this
+  purpose: its rows join the target's group, so its series keys follow to that group's root and its balance
+  flags do not. Only a root can be named in a key, and only a root without members can be removed.
 - **A detach** moves nothing: the account leaving takes none of the group's answers, which stay with the
   group, and nothing tells which of them were about that account.
 """

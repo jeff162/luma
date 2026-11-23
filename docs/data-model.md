@@ -236,8 +236,9 @@ no duplicate pairing changes.
 - **A closed member is refused**, since the root's close date closes the whole group.
 
 **Merging a whole group into another** makes the target's root the merged group's, so its series keys are
-re-keyed the same way. Its balance flags' dismissals are not, since the merged group has another balance. A
-detach re-keys nothing: the group's answers stay with the group, and nothing tells which were about the
+re-keyed the same way. Its balance flags' dismissals are not, since the merged group has another balance.
+**Removing an account with its transactions moved** to another is the same as a merge here: its series keys
+take the target group's root (`reassign_account_references`). A detach re-keys nothing: the group's answers stay with the group, and nothing tells which were about the
 account leaving.
 
 **A quiet primary is suggested for replacement** (`services/group_primary.py`): when an open group's root has

@@ -202,6 +202,12 @@ def reassign_account_references(conn, source_account_id: str, target_account_id:
     _clear_references(conn, source_account_id, on="on_reassign")
     replace_account_reference_in_profile_column_maps(conn, source_account_id, target_account_id)
     replace_account_reference_in_batch_snapshots(conn, source_account_id, target_account_id)
+    # Keys that embed the source as its group's root are text, not references, so the loop above cannot see
+    # them; they take the target's root, as a merged group's do (`services/group_root_change.py`). Imported
+    # here: that module reaches this one through `recurring_detection`.
+    from backend.services.account_groups import effective_account_id
+    from backend.services.group_root_change import move_series_keys
+    move_series_keys(conn, source_account_id, effective_account_id(conn, target_account_id))
 
 
 def discard_account_references(conn, source_account_id: str) -> None:

@@ -15,8 +15,8 @@ from fastapi import HTTPException
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.accounts import (
-    AccountAttachRequest, AccountUpdate, attach_account, dismiss_closed_balance_flag, list_accounts, make_primary,
-    update_account,
+    AccountAttachRequest, AccountUpdate, attach_account, delete_account, dismiss_closed_balance_flag, list_accounts,
+    make_primary, update_account,
 )
 from backend.services.group_primary import quiet_primaries
 from backend.tests.test_balance_totals import _Ledger
@@ -114,6 +114,13 @@ class RootChangeKeysTests(unittest.TestCase):
                                           "upcoming:transfer:chk:new|c2|chk:2026-09-01",
                                           "missed:old navy|c3|chk:2026-08-01",
                                           "balance_history:new:2026-01-31"}, "transfer:chk:new"))
+
+    def test_removing_an_account_into_another_moves_its_series_keys_to_that_group(self):
+        delete_account("chk", transactions="reassign", target_account_id="new")
+        self.assertEqual(self._state(), ({"new_series:streamco|c1|old",
+                                          "upcoming:transfer:old:old|c2|old:2026-09-01",
+                                          "missed:old navy|c3|old:2026-08-01",
+                                          "balance_history:old:2026-01-31"}, "transfer:old:old"))
 
     def test_merging_a_group_moves_its_series_keys_but_not_its_balance_flags(self):
         attach_account("old", AccountAttachRequest(parent_account_id="chk"))
