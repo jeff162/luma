@@ -434,9 +434,10 @@ export const HELP_TOPICS = [
         <p>
           A rule or recurring series belongs to every owner whose transactions it matches, so a rule two people
           share shows for both. One that has not matched anything yet shows for everyone. <em>Unassigned</em>{' '}
-          stands for accounts with no owner and can be included or left out. On the Tasks page the counts for
-          uncategorized transactions, reimbursements and recurring findings follow the view; the other tasks
-          are about the whole ledger.
+          stands for accounts with no owner and can be included or left out. On the Tasks page, tasks about owners'
+          transactions or accounts follow the view, including uncategorized transactions, reimbursements and
+          recurring findings, and so does the Tasks count in the navigation pane, on every page. Tasks about
+          import folders, connections or the installation as a whole do not.
         </p>
         <p>
           The owner view only changes what is shown. A rule created while it is on still applies to everyone's

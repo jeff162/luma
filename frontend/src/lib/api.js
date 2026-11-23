@@ -898,7 +898,8 @@ export const api = {
       method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
     }),
 
-  // `ownerLens` is the Tasks page's owner lens params (`lib/OwnerLensContext.jsx`); the nav badge omits it.
+  // `ownerLens` is the Tasks page's owner lens params (`lib/OwnerLensContext.jsx`); the nav badge sends the
+  // lens as chosen on every page (`choiceParams`), so it counts what the Tasks page will show.
   getTasks:    (ownerLens = {}) => request(`/tasks${queryOf(ownerLens)}`),
   // Task dismissal is a ratcheting high-water mark on the task's count (see routers/tasks.py), so both
   // calls return the freshly recomputed task list rather than just an ack.

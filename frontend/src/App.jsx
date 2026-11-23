@@ -9,6 +9,7 @@ import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import OwnerLensTab from './components/OwnerLensTab.jsx'
 import { OwnerLensProvider, useOwnerLens } from './lib/OwnerLensContext.jsx'
+import { NavTaskBadge } from './components/NavTaskBadge.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api, SESSION_LOST_EVENT, signalDataMutated } from './lib/api.js'
 import { useOnForeground } from './lib/useOnForeground.js'
@@ -297,26 +298,6 @@ const NAV_LINKS = [
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
-// Severity-to-color mapping for the nav Tasks badge. Mirrors the palette used by
-// `SEVERITY_COLORS` in Tasks.jsx so the badge in the nav reads as the same severity
-// the task cards on the page render with. Ordered by ascending urgency so that
-// pickTopTaskSeverity() can pick the worst pending task. Extending: add the new
-// severity here AND in TASK_SEVERITY_ORDER, then ensure the backend uses the same key.
-const TASK_BADGE_COLORS = {
-  info: 'var(--accent)',
-  warning: 'var(--warning)',
-}
-const TASK_SEVERITY_ORDER = ['info', 'warning']
-function pickTopTaskSeverity(tasks) {
-  let best = null
-  let bestRank = -1
-  for (const task of tasks || []) {
-    const rank = TASK_SEVERITY_ORDER.indexOf(task?.severity)
-    if (rank > bestRank) { bestRank = rank; best = task?.severity || null }
-  }
-  return best
-}
-
 const GLOBAL_SCROLLBAR_STYLES = `
   * {
     scrollbar-width: thin;
@@ -1246,8 +1227,6 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   useRevealFocusedField()
-  const [taskCount, setTaskCount] = useState(0)
-  const [topTaskSeverity, setTopTaskSeverity] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
   // Bumped when the api layer reports a lost session; the identity bootstrap below keys on it so the
   // shell re-establishes or re-gates rather than sitting on a dead session.
@@ -1532,35 +1511,6 @@ export default function App() {
   ])
 
   useEffect(() => {
-    if (authEnabled && !currentUser) return
-    if (!authEnabled && !activeLocalProfile) return
-
-    function fetchTasks() {
-      api.getTasks()
-        .then(r => {
-          setTaskCount(r?.open_items || 0)
-          setTopTaskSeverity(pickTopTaskSeverity(r?.tasks))
-        })
-        .catch(() => { })
-    }
-
-    fetchTasks()
-    window.addEventListener('luma:data-mutated', fetchTasks)
-    return () => window.removeEventListener('luma:data-mutated', fetchTasks)
-    // Two refresh triggers, by design:
-    //   * `luma:data-mutated` — same-session immediacy: any successful mutation anywhere emits
-    //     this from the api layer (see `signalDataMutated` in api.js), so the badge updates without
-    //     the user navigating, and no call site has to remember to refresh it. `BackgroundCatchUp`
-    //     emits it too, for what changed while the page was out of view.
-    //   * `location.pathname` in the deps — navigation backstop: re-fetch on every route change to
-    //     pick up changes this session didn't make (another tab, a background sync). With the api
-    //     emit covering local mutations, this is no longer compensating for a missed broadcast.
-    // activeLocalProfile is gated by the !authEnabled guard above — without it in deps the effect
-    // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
-    // even when /tasks itself is showing pending items.
-  }, [authEnabled, currentUser, activeLocalProfile, location.pathname])
-
-  useEffect(() => {
     if (!startupRouteApplied) return
     if (authEnabled && !currentUser) return
     if (!authEnabled && !activeLocalProfile) return
@@ -1637,8 +1587,6 @@ export default function App() {
   async function handleLogout() {
     await api.logout().catch(() => { })
     setCurrentUser(null)
-    setTaskCount(0)
-    setTopTaskSeverity(null)
   }
 
   async function confirmShutdownApp() {
@@ -2087,20 +2035,7 @@ export default function App() {
                                             <span style={navCollapsed ? s.visuallyHidden : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                               {label}
                                             </span>
-                                            {to === '/tasks' && taskCount > 0 && (
-                                              <span style={{
-                                                background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
-                                                color: '#fff',
-                                                fontWeight: 700,
-                                                borderRadius: 99,
-                                                textAlign: 'center',
-                                                ...(navCollapsed
-                                                  ? { position: 'absolute', top: 3, left: 22, fontSize: 10, padding: '0 4px', lineHeight: '15px', minWidth: 15 }
-                                                  : { fontSize: 11, padding: '1px 7px', lineHeight: '18px', minWidth: 20 }),
-                                              }}>
-                                                {taskCount}
-                                              </span>
-                                            )}
+                                            {to === '/tasks' ? <NavTaskBadge collapsed={navCollapsed} /> : null}
                                           </NavLink>
                                         </NavPaneHint>
                                       ))}

@@ -82,12 +82,15 @@ off, and it never changes what a write does. A rule created under the lens gets 
 - **Recurring signals are narrowed on the server**, by their series, and counted again over what is
   left, so the Needs attention badge counts only findings the list shows.
 - A single series' own report is not narrowed: its count is a fact about the series.
-- **Tasks are recounted only where the page they link to is narrowed**: uncategorized transactions,
-  reimbursements to chase, and the recurring findings. The rest link to unscoped pages (Import, the rule
-  checkup, account setup) or are about the installation, and stay whole. Dismissal runs first, on the
-  whole count, because a dismissal mark ratchets down to the lowest count it sees: a narrowed count would
-  lower it, and the task would come back as soon as the view was switched off. The navigation badge is
-  never narrowed, since it is on every page.
+- **A task follows the view when what it reports belongs to owners**: one counting rows is recounted
+  over the chosen owners' rows (uncategorized transactions and the recurring findings, for example), and
+  one about a single owner's account or group shows only to that owner. Tasks about import folders, the
+  rule checkup, connections or the installation stay whole. `_narrow_to_lens` (`routers/tasks.py`) holds
+  the list. Dismissal runs first, on the whole count, because a dismissal mark ratchets down to the lowest
+  count it sees: a narrowed count would lower it, and the task would come back as soon as the view was
+  switched off. The navigation badge counts what the Tasks page will show, so it is narrowed by the view
+  as chosen on every page, not only on the scoped ones (`choiceParams`); otherwise it would change as the
+  user moved between pages.
 
 ## Accounts
 

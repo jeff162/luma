@@ -1188,9 +1188,9 @@ def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dic
     return visible, hidden
 
 
-# The tasks the owner lens narrows: each links to a page the lens narrows, so the count it shows is the count
-# that page lists. Every other task links to an unscoped page (Import, the rule checkup, Accounts setup) or
-# is about the installation, and stays whole.
+# The tasks the owner lens narrows: each reports something that belongs to owners, so it is recounted over
+# the lens owners' rows or, when it is about one owner's account or group, shown only to that owner. Every
+# other task is about import folders, the rule checkup, connections or the installation, and stays whole.
 _RECURRING_SIGNAL_TASK_IDS = {spec["id"] for spec in _SIGNAL_TASKS}
 
 
