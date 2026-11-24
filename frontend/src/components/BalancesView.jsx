@@ -86,7 +86,7 @@ function currentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-export default function BalancesView({ mode, dateStart, dateEnd, periodLabel, categories, trendWindow, onTrendWindowChange }) {
+export default function BalancesView({ mode, dateStart, dateEnd, periodLabel, categories, trendWindow, onTrendWindowChange, onHide }) {
   const { filters } = useFilters()
   const { params: ownerLensParams } = useOwnerLens()
   const ownerParams = useMemo(() => {
@@ -139,7 +139,14 @@ export default function BalancesView({ mode, dateStart, dateEnd, periodLabel, ca
       {!ready ? (error ? <LoadFailed what="balances" onRetry={refresh} /> : busy ? <Spinner /> : null) : (
         <StaleWhileRefreshing refreshing={loading}>
           {error ? <LoadFailed what="balances" onRetry={refresh} inline /> : null}
-          {mode === 'trends' ? (
+          {history.any_balance === false ? (
+            // Nothing anywhere to total, so neither form has a figure to draw, and the frame can be hidden
+            // until a balance arrives (`lib/balancesFrame.js`).
+            <EmptyState
+              message="None of the accounts have any balance information so this page has nothing to display."
+              action={onHide ? <Button onClick={onHide}>Hide Balances Page</Button> : null}
+            />
+          ) : mode === 'trends' ? (
             <BalancesTrends
               history={history}
               openType={openType}
@@ -228,19 +235,19 @@ function BalancesPeriod({ result, history, curve, periodLabel, dateStart, dateEn
               reversed={!!openGroup && isOwedBalanceType(openGroup.type)} changes={hasOpening} />
           </Card>
           <AccountTable
-              sections={openGroup ? [openGroup] : sections}
-              drilled={!!openGroup}
-              arrangement={arrangement} onArrange={arrange}
-              columns={[
-                { label: 'Balance', of: a => a.balance?.amount ?? null },
-                ...(hasOpening
-                  ? [{ label: 'Change', change: true, of: a => (a.balance && a.opening != null ? a.balance.amount - a.opening : null) }]
-                  : []),
-              ]}
-              onDrill={onDrill}
-              onOpenAccount={onOpenAccount}
-              flagActions={flagActions}
-            />
+            sections={openGroup ? [openGroup] : sections}
+            drilled={!!openGroup}
+            arrangement={arrangement} onArrange={arrange}
+            columns={[
+              { label: 'Balance', of: a => a.balance?.amount ?? null },
+              ...(hasOpening
+                ? [{ label: 'Change', change: true, of: a => (a.balance && a.opening != null ? a.balance.amount - a.opening : null) }]
+                : []),
+            ]}
+            onDrill={onDrill}
+            onOpenAccount={onOpenAccount}
+            flagActions={flagActions}
+          />
         </div>
       )}
       <HistoryStrip history={history} openGroup={openGroup} dateStart={dateStart} dateEnd={dateEnd} />
@@ -1010,27 +1017,27 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
         ) : null}
       </Card>
       {firstPoint ? (
-          <AccountTable
-            style={{ maxWidth: 760 }}
-            sections={openGroup ? [openGroup] : sections}
-            drilled={!!openGroup}
-            arrangement={arrangement} onArrange={arrange}
-            onDrill={onDrill}
-            onOpenAccount={onOpenAccount}
-            flagActions={flagActions}
-            columns={[
-              { label: formatDate(firstPoint.date), of: a => firstPoint.balances[a.account_id] ?? null },
-              { label: formatDate(lastPoint.date), of: a => lastPoint.balances[a.account_id] ?? null },
-              {
-                label: 'Change',
-                change: true,
-                // An account whose history starts inside the window starts it at zero, as on Single period.
-                of: a => (lastPoint.balances[a.account_id] != null
-                  ? lastPoint.balances[a.account_id] - (firstPoint.balances[a.account_id] ?? 0)
-                  : null),
-              },
-            ]}
-          />
+        <AccountTable
+          style={{ maxWidth: 760 }}
+          sections={openGroup ? [openGroup] : sections}
+          drilled={!!openGroup}
+          arrangement={arrangement} onArrange={arrange}
+          onDrill={onDrill}
+          onOpenAccount={onOpenAccount}
+          flagActions={flagActions}
+          columns={[
+            { label: formatDate(firstPoint.date), of: a => firstPoint.balances[a.account_id] ?? null },
+            { label: formatDate(lastPoint.date), of: a => lastPoint.balances[a.account_id] ?? null },
+            {
+              label: 'Change',
+              change: true,
+              // An account whose history starts inside the window starts it at zero, as on Single period.
+              of: a => (lastPoint.balances[a.account_id] != null
+                ? lastPoint.balances[a.account_id] - (firstPoint.balances[a.account_id] ?? 0)
+                : null),
+            },
+          ]}
+        />
       ) : null}
     </>
   )

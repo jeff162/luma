@@ -393,6 +393,21 @@ def balance_total_groups(conn, owner_filters: Optional[dict] = None) -> list[dic
     return groups
 
 
+def any_balance_stated(conn) -> bool:
+    """Whether any group the totals count has stated a balance, whatever the owner filters. Without one the
+    totals have nothing to show, which is what the Balances frame's offer to hide itself rests on, and the
+    household's answer rather than the viewer's, so the frame does not come and go with the owner view."""
+    return bool(conn.execute(
+        f"""
+        SELECT EXISTS (
+            SELECT 1 FROM account_balance b
+            JOIN account a ON a.id = b.account_id
+            JOIN account t ON t.id = COALESCE(a.parent_account_id, a.id)
+            WHERE {COUNTED_GROUP_SQL}
+        )
+        """).fetchone()[0])
+
+
 def _totals(amounts) -> dict:
     """Assets and liabilities by the sign of each group's position, which is what each source converted
     its own convention to, so no account type is asked."""
@@ -504,7 +519,8 @@ def balance_totals_by_month(conn, owner_filters=None, today: Optional[date] = No
 
     `existing_account_ids` is every group root, counted or not and whatever the owner filters, so the
     Balances table's saved arrangement can tell an account that is gone (deleted, or merged into another)
-    from one only left out of what is shown, and drop the first's place while keeping the second's."""
+    from one only left out of what is shown, and drop the first's place while keeping the second's.
+    `any_balance` is `any_balance_stated`."""
     today = today or date.today()
     groups = balance_total_groups(conn, owner_filters)
     covered = [g for g in groups if g["balances"].stated]
@@ -528,4 +544,5 @@ def balance_totals_by_month(conn, owner_filters=None, today: Optional[date] = No
     ]
     existing = [row["id"] for row in conn.execute(
         "SELECT id FROM account WHERE parent_account_id IS NULL AND trashed_at IS NULL ORDER BY id")]
-    return {"points": points, "accounts": accounts, "existing_account_ids": existing}
+    return {"points": points, "accounts": accounts, "existing_account_ids": existing,
+            "any_balance": any_balance_stated(conn)}

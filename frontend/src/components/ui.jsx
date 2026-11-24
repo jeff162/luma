@@ -1571,13 +1571,15 @@ export function LoadFailed({ what, onRetry, inline = false }) {
   )
 }
 
-export function EmptyState({ message }) {
+// `action`, when given, is the one thing to do about the emptiness, under the message.
+export function EmptyState({ message, action }) {
   return (
     <div style={{
       textAlign: 'center', padding: '48px 24px',
       color: 'var(--muted)', fontSize: 14,
     }}>
       {message}
+      {action ? <div style={{ marginTop: 14 }}>{action}</div> : null}
     </div>
   )
 }

@@ -325,6 +325,29 @@ class HistoryFlagCacheTests(_Ledger):
         self.assertIsNone(account_history_flag(self.conn, "chk"))
 
 
+class AnyBalanceStatedTests(_Ledger):
+    """Whether the totals have anything to show, which decides whether the Balances frame may hide itself."""
+
+    def test_only_a_balance_the_totals_count_answers_yes(self):
+        self._account("house", "other")
+        self._account("joint", excluded=1)
+        self._account("gone", trashed="2026-08-01 00:00:00")
+        for account_id in ("house", "joint", "gone"):
+            self._state(account_id, "2026-07-31", 100.0)
+        self.assertFalse(balance_totals.any_balance_stated(self.conn))
+        self._account("chk", owner="sam")
+        self._account("old-chk", parent="chk")
+        self._state("old-chk", "2026-07-31", 100.0)
+        self.assertTrue(balance_totals.any_balance_stated(self.conn))
+
+    def test_the_owner_filters_do_not_change_the_answer(self):
+        self._account("chk", owner="sam")
+        self._state("chk", "2026-07-31", 100.0)
+        result = balance_totals_by_month(self.conn, {"owner_ids": "robin"}, today=self.TODAY)
+        self.assertEqual(result["accounts"], [])
+        self.assertTrue(result["any_balance"])
+
+
 class GroupBalancesCacheTests(_Ledger):
     """The totals' per-day ledger is read once and served until a write it depends on moves the epoch."""
 

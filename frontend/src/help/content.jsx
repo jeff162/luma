@@ -558,6 +558,11 @@ export const HELP_TOPICS = [
           account with no balance at all is not counted.
         </p>
         <p>
+          With no balance on any account, Balances offers to hide itself. It comes back as soon as any account
+          has a balance. While it is hidden, <strong>Settings → Appearance</strong> has a switch to bring it
+          back.
+        </p>
+        <p>
           A ⚠ marks a balance not updated recently, or a history the transactions cannot explain: working
           back lands an account well on the wrong side of zero, which usually means transactions are missing,
           often where an account moved from imported files to a connection. Entering a balance from a

@@ -39,6 +39,8 @@ import DisplaySizeSection from '../components/settings/DisplaySizeSection.jsx'
 import DataLocationSection from '../components/settings/DataLocationSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import DisplayFormatSection from '../components/settings/DisplayFormatSection.jsx'
+import DashboardSection from '../components/settings/DashboardSection.jsx'
+import { useBalancesHiddenAtOpen } from '../lib/balancesFrame.js'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
 import {
@@ -66,6 +68,7 @@ export default function Settings() {
     dataLocation,
   } = useAppSession()
   const showsAdminFeatures = useShowsAdminFeatures()
+  const balancesHidden = useBalancesHiddenAtOpen()
 
   // Read here rather than inside the section so its refresh can sit on the section's title, where every
   // refresh control goes. It still reads only while the section is open.
@@ -97,6 +100,7 @@ export default function Settings() {
               <Subsection title="Theme"><ThemeSection /></Subsection>
               <Subsection title="Display size"><DisplaySizeSection /></Subsection>
               <Subsection title="Dates and numbers"><DisplayFormatSection /></Subsection>
+              {balancesHidden ? <Subsection title="Dashboard"><DashboardSection /></Subsection> : null}
               {dataLocation ? (
                 <Subsection title="Navigation pane"><DataLocationSection dataLocation={dataLocation} /></Subsection>
               ) : null}

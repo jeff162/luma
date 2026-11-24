@@ -55,6 +55,7 @@ import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransac
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { useUserPreference, useDeferredDeviceLayoutPreference } from '../lib/UserPreferencesContext.jsx'
+import { useBalancesFrameShown, useBalancesHiddenWhenEmpty } from '../lib/balancesFrame.js'
 import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
@@ -1702,9 +1703,21 @@ export default function Dashboard() {
   const dateResolving = defaultPeriodPending && !filters.date
   const [mode, setMode] = useState('single')
   const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
+  // Balances can be hidden while no account has a balance (`lib/balancesFrame.js`); a persisted Balances
+  // frame then opens on Expenses.
+  const balancesShown = useBalancesFrameShown()
+  const [, setBalancesHiddenWhenEmpty] = useBalancesHiddenWhenEmpty()
+  const shownView = balancesShown || dashboardView !== DASHBOARD_VIEW_BALANCES ? dashboardView : DASHBOARD_VIEW_SPENDING
+  const viewOptions = balancesShown
+    ? DASHBOARD_VIEW_OPTIONS
+    : DASHBOARD_VIEW_OPTIONS.filter(option => option.value !== DASHBOARD_VIEW_BALANCES)
+  const hideBalances = useCallback(() => {
+    setBalancesHiddenWhenEmpty(true)
+    setDashboardView(DASHBOARD_VIEW_SPENDING)
+  }, [setBalancesHiddenWhenEmpty, setDashboardView])
   // `dashboardView` is the user's persisted frame; `activeFrame` is the one this mode can actually
   // render, which differs only in Compare (see frameForMode).
-  const activeFrame = frameForMode(dashboardView, mode)
+  const activeFrame = frameForMode(shownView, mode)
   // The Trends window's pick (`TrendsWindowSelect`), shared by every frame's Trends form; null until one
   // is made, which lets each form choose its default from its own data.
   const [trendYear, setTrendYear] = useState(null)
@@ -1737,8 +1750,8 @@ export default function Dashboard() {
         )}
         leftAdornment={(mode === 'single' || mode === 'trends') && (
           <SegmentedToggle
-            value={dashboardView}
-            options={DASHBOARD_VIEW_OPTIONS}
+            value={shownView}
+            options={viewOptions}
             onChange={setDashboardView}
             ariaLabel="Choose dashboard frame"
           />
@@ -1759,7 +1772,7 @@ export default function Dashboard() {
   if (activeFrame === DASHBOARD_VIEW_BALANCES) {
     return (
       <BalancesDashboard header={header} mode={mode} effectiveDate={effectiveDate}
-        trendWindow={trendYear} onTrendWindowChange={setTrendYear} />
+        trendWindow={trendYear} onTrendWindowChange={setTrendYear} onHide={hideBalances} />
     )
   }
   return (
@@ -1777,7 +1790,7 @@ export default function Dashboard() {
 }
 
 // The Balances frame. It needs the categories only for the account panels it opens.
-function BalancesDashboard({ header, mode, effectiveDate, trendWindow, onTrendWindowChange }) {
+function BalancesDashboard({ header, mode, effectiveDate, trendWindow, onTrendWindowChange, onHide }) {
   const [categories, setCategories] = useState([])
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -1794,6 +1807,7 @@ function BalancesDashboard({ header, mode, effectiveDate, trendWindow, onTrendWi
           categories={categories}
           trendWindow={trendWindow}
           onTrendWindowChange={onTrendWindowChange}
+          onHide={onHide}
         />
       </div>
     </div>

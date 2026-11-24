@@ -606,6 +606,8 @@ export const api = {
   getBalanceTotals: (params) => request(`/accounts/balance-totals${queryOf(params)}`),
   getBalanceTotalsByDay: (params) => request(`/accounts/balance-totals/daily${queryOf(params)}`),
   getBalanceTotalsByMonth: (params) => request(`/accounts/balance-totals/monthly${queryOf(params)}`),
+  // Whether any account the totals count has a balance, whatever the owner filters.
+  getAnyBalance: () => request('/accounts/balance-totals/any'),
   // Stop flagging a history the account's transactions do not explain (`describeHistoryFlag`).
   dismissHistoryFlag: (id) => request(`/accounts/${id}/history-flag/dismiss`, { method: 'POST' }),
   dismissClosedBalanceFlag: (id) => request(`/accounts/${id}/closed-balance-flag/dismiss`, { method: 'POST' }),
