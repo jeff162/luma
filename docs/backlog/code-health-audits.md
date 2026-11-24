@@ -138,8 +138,8 @@ Much of the app derives on read rather than storing: a recurring finding, an acc
 lens is worked out when asked for, because a stored copy would go stale with nothing to notice
 (`architecture.md`). That is right where the cost is small or follows use. It goes wrong where the cost
 grows with the ledger and is paid on every page load for an answer that rarely changes; the balance
-history flag was one, and is now cached (`scale-and-limits.md` → *Balance history is read whole on every
-request*). Nobody has swept for the rest.
+history was one, for its flag and for the Balances frame, and is now cached (`scale-and-limits.md` →
+*Balance history is read whole once per change*). Nobody has swept for the rest.
 
 ### How to run it
 

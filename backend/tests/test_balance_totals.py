@@ -324,3 +324,37 @@ class HistoryFlagCacheTests(_Ledger):
         self.conn.commit()
         self.assertIsNone(account_history_flag(self.conn, "chk"))
 
+
+class GroupBalancesCacheTests(_Ledger):
+    """The totals' per-day ledger is read once and served until a write it depends on moves the epoch."""
+
+    def setUp(self):
+        super().setUp()
+        self._account("chk")
+        self._state("chk", "2026-06-30", 1000.0)
+        self._txn("chk", "2026-07-10", 200.0)
+        self.conn.commit()
+        self.assertEqual(self._balance(self._on(), "chk"), 800.0)
+
+    def _read_again(self):
+        """Whether the next totals read goes back to the ledger rather than serving the cache."""
+        with mock.patch.object(balance_totals, "_read_group_balances", wraps=balance_totals._read_group_balances) as read:
+            self._on()
+        return read.called
+
+    def test_the_ledger_is_served_from_the_cache_until_a_row_it_counts_changes(self):
+        self.assertFalse(self._read_again())
+        self.conn.execute("UPDATE txn SET amount = 300.0 WHERE account_id = 'chk'")
+        self.conn.commit()
+        self.assertEqual(self._balance(self._on(), "chk"), 700.0)
+
+    def test_figures_read_inside_a_transaction_that_rolls_back_are_not_kept(self):
+        # Read inside the transaction, the uncommitted row counts and the epoch has moved by one. Rolled back,
+        # a different committed write then moves the epoch to that same value.
+        self._txn("chk", "2026-07-11", 50.0)
+        self.assertEqual(self._balance(self._on(), "chk"), 750.0)
+        self.conn.rollback()
+        self._txn("chk", "2026-07-12", 10.0)
+        self.conn.commit()
+        self.assertEqual(self._balance(self._on(), "chk"), 790.0)
+

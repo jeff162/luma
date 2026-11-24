@@ -23,7 +23,7 @@ The mechanism behind each bound is owned elsewhere:
 - [Bulk operations must not accumulate](#bulk-operations-must-not-accumulate)
 - [The rule co-match scan reads the whole ledger](#the-rule-co-match-scan-reads-the-whole-ledger)
 - [The Tasks list is recomputed on every mutation](#the-tasks-list-is-recomputed-on-every-mutation)
-- [Balance history is read whole on every request](#balance-history-is-read-whole-on-every-request)
+- [Balance history is read whole once per change](#balance-history-is-read-whole-once-per-change)
 - [Many sessions on one server](#many-sessions-on-one-server)
 - [Measuring performance](#measuring-performance)
 - [Obstacles](#obstacles)
@@ -149,8 +149,9 @@ representation — the cost is finding the matches, not combining them.
 
 ## The Tasks list is recomputed on every mutation
 
-`/tasks` has no timer. It is fetched on every route change, on every successful mutation anywhere in
-the app (the `luma:data-mutated` broadcast), and on each background catch-up (`architecture.md` →
+`/tasks` has no timer. It is fetched on every route change, on every successful write anywhere in
+the app that changes data (the `luma:data-mutated` broadcast, which a saved preference does not raise:
+`signalDataMutated` in `lib/api.js`), and on each background catch-up (`architecture.md` →
 *Data flow*), so each of its conditions runs at that cadence. Two do work that is not constant-time:
 
 - **Amazon reconciliation** runs a whole report per completed Amazon batch. Its count is cached against
@@ -167,27 +168,24 @@ The transactions holding receivable money include the members of completed reimb
 in the group. They are excluded before the per-row work but are still scanned. Revisit if that scan
 shows up in a mutation's latency; the fix is a due-query that never assembles the report.
 
-## Balance history is read whole on every request
+## Balance history is read whole once per change
 
-`load_group_balances` (`services/balance_totals.py`) reads every live, posted row of every group that has
-stated a balance, summed by group and posting day, and works each group's balance on any date from that.
-The Dashboard's Balances frame (single period and trends) pays it on every request. The history flag,
-which the Accounts list and the account report need it for, is cached behind `balance_history_epoch`, so
-they pay it only on the first read after a write the flags depend on (an import, a stated balance, an
-account's grouping or settings).
+`load_group_balances` (`services/balance_totals.py`) works each group's balance on any date from every
+live, posted row of every group that has stated a balance, summed by group and posting day. That read is
+cached in the server process, stamped with `balance_history_epoch`, which triggers move only on writes to
+the columns it reads, so the Balances frame's requests and the history flags (which the Accounts list and
+the account report show) pay it once after a write they depend on (an import, a stated balance, an
+account's grouping or settings) and are served from memory after that. Categorizing and tagging leave it
+alone. What each request still does is work its dates from the cached days, a few milliseconds.
 
-Measured on a copy of a real ledger with stated balances added: about 40 ms at ~19.5k transactions and
-roughly 250–400 ms at ~195k, linear in row count. Most of it is SQLite reading the rows, not the Python
-over them, so summing by day in the query took only ~5% off at real scale. The flag itself, once the
-rows are loaded, is under a millisecond per group.
+The read itself, measured on a copy of a real ledger with stated balances added: about 40 ms at ~19.5k
+transactions and roughly 250–400 ms at ~195k, linear in row count. Most of it is SQLite reading the rows,
+not the Python over them, so summing by day in the query took only ~5% off at real scale. The flag
+itself, once the rows are loaded, is under a millisecond per group.
 
-Three levers, roughly in order of size:
+If the first read after a write becomes the cost, two levers narrow it:
 
-- **Cache the result behind a column-scoped epoch**, as the flags already are: triggers bump the epoch
-  only on writes to the columns the answer reads, so no write site has to remember to clear it. The
-  Balances frame's figures could be cached the same way, keyed by the period and owner filters as well.
-  It removes the repeat cost but not the first read after a write.
-- **Checkpoint the flag**, if the first read after a write becomes the cost. Store per group the anchor (first stated balance's date), a checkpoint day,
+- **Checkpoint the flag.** Store per group the anchor (first stated balance's date), a checkpoint day,
   the worked-back balance there, and the lowest and highest worked-back points before it relative to that
   balance. A change between the checkpoint and the anchor shifts every older day by the same amount, so
   the stored extremes still answer it; only the rows after the checkpoint are read. Cleared by a write to
@@ -350,9 +348,6 @@ build and the DevTools hook each inflate render cost enough to change which cost
 - **Incremental backups for attached documents**, once the backup history shows documents as the bulk
   of a backup. The ledger half needs nothing.
   → [`backlog/document-incremental-backups.md`](backlog/document-incremental-backups.md)
-- **Caching or narrowing the balance-history read**, once the Balances frame, or the first Accounts load
-  after an import, shows it; the levers are under [Balance history is read whole on every
-  request](#balance-history-is-read-whole-on-every-request).
 - **Dependency-based cache invalidation**, if transaction-derived views proliferate enough that the
   hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
 - **A structural database check does not answer whether the data is coherent**: a cursor ahead of a

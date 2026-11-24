@@ -4616,7 +4616,8 @@ _RULE_REACH_EPOCH_SOURCES = {
 
 # The history flag of every account group the balance totals count (`services/balance_totals.py`) works
 # each group's balance back through its whole ledger, so the flags are cached and recomputed only when this
-# epoch has moved. It watches what the flags read: the rows' amounts, days, state, account and import batch
+# epoch has moved, and so is the per-day ledger the totals themselves are worked from, which reads a subset
+# of the same data. It watches what the flags read: the rows' amounts, days, state, account and import batch
 # (the batch says where a group switched from files to a connection), the stated balances, the account
 # fields that make up the groups and decide which the totals count, and the flag's own dismissals, which
 # share their table with other findings and so are filtered to the flag's kind (`HISTORY_FLAG_KIND`).

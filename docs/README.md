@@ -168,7 +168,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Bulk operations must not accumulate](scale-and-limits.md#bulk-operations-must-not-accumulate)
 - [The rule co-match scan reads the whole ledger](scale-and-limits.md#the-rule-co-match-scan-reads-the-whole-ledger)
 - [The Tasks list is recomputed on every mutation](scale-and-limits.md#the-tasks-list-is-recomputed-on-every-mutation)
-- [Balance history is read whole on every request](scale-and-limits.md#balance-history-is-read-whole-on-every-request)
+- [Balance history is read whole once per change](scale-and-limits.md#balance-history-is-read-whole-once-per-change)
 - [Many sessions on one server](scale-and-limits.md#many-sessions-on-one-server)
 - [Measuring performance](scale-and-limits.md#measuring-performance)
 - [Obstacles](scale-and-limits.md#obstacles)

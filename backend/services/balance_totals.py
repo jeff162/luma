@@ -25,7 +25,7 @@ from typing import Optional
 from backend.db.database import BALANCE_HISTORY_EPOCH_KEY, db_meta_epoch
 from backend.services.account_balances import BALANCE_DAY_SQL, NORMAL_BALANCE_SIDE, STALE_AFTER_DAYS
 from backend.services.account_groups import group_accounts_sql
-from backend.services.cache_fill import MISS, fill_once
+from backend.services.cache_fill import MISS, database_file, fill_once
 from backend.services.signal_dismissals import dismissed_keys
 from backend.services.transaction_facets import OWNER_LENS_PARAM, append_facets
 
@@ -174,7 +174,56 @@ def connection_seam(conn, root_id: str, before: str) -> Optional[str]:
 
 def load_group_balances(conn, root_ids: list) -> dict:
     """`{root_id: GroupBalances}` for these groups, each counted from its root's `balance_totals_from` through
-    its `closed_on`.
+    its `closed_on`, served from the cache of every group's (`_every_group_balances`). A group the cache does
+    not hold, one that became a root after it was filled, is read on its own."""
+    every = _every_group_balances(conn)
+    missing = [root_id for root_id in root_ids if root_id not in every]
+    if missing:
+        every = {**every, **_read_group_balances(conn, missing)}
+    return {root_id: every[root_id] for root_id in root_ids}
+
+
+# Every root group's `GroupBalances`, by database file, with the `BALANCE_HISTORY_EPOCH_KEY` value it was
+# read at. Each Balances request needs the same history, and three arrive together whenever the frame opens.
+# Held in the process rather than in db_meta, as the flags are, because what is cached is the per-day ledger
+# itself, which grows with the ledger: parsing it back on every request would cost about what reading it
+# does. A start empties it, which is what the epoch's start bump does for the db_meta caches.
+_group_balances_cache: dict[str, tuple[int, dict]] = {}
+GROUP_BALANCES_CACHE_KEY = "balance_group_balances"
+
+
+def _every_group_balances(conn) -> dict:
+    """Every root group's balances, read again only when the epoch has moved since they were cached.
+
+    A caller with a transaction open reads them itself and stores nothing: its writes have moved the epoch
+    within a transaction that may yet roll back, after which the same epoch value can stand for other data."""
+    if conn.in_transaction:
+        return _read_group_balances(conn, _root_ids(conn))
+    db_file = database_file(conn)
+
+    def read():
+        cached = _group_balances_cache.get(db_file)
+        if cached and cached[0] == db_meta_epoch(conn, BALANCE_HISTORY_EPOCH_KEY):
+            return cached[1]
+        return MISS
+
+    def fill() -> dict:
+        # The epoch is read first, so a write landing during the read leaves the result stamped older than
+        # the data it holds, and the next read reads again.
+        epoch = db_meta_epoch(conn, BALANCE_HISTORY_EPOCH_KEY)
+        balances = _read_group_balances(conn, _root_ids(conn))
+        _group_balances_cache[db_file] = (epoch, balances)
+        return balances
+
+    return fill_once(conn, GROUP_BALANCES_CACHE_KEY, read, fill)
+
+
+def _root_ids(conn) -> list:
+    return [row[0] for row in conn.execute("SELECT id FROM account WHERE parent_account_id IS NULL")]
+
+
+def _read_group_balances(conn, root_ids: list) -> dict:
+    """`{root_id: GroupBalances}` for these groups, read from the ledger.
 
     The rows come back summed by group and posting day, since a balance only ever moves by a day's net, so
     the work grows with the days a group has activity on rather than with its row count. A group that has

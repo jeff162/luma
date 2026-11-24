@@ -38,9 +38,13 @@ async function trackedFetch(input, init) {
 // Trailing-debounced so a burst of writes (bulk categorize, an import inserting many rows, a bulk
 // duplicate-resolve) coalesces into one refetch instead of N. The point is that *mutating is the
 // invalidation*: no individual call site has to remember to refresh a derived view, so none can
-// forget to (the failure mode that left the badge stale). It fires for mutations that can't affect
-// those counts too (e.g. saving a UI preference); that refetch is cheap and idempotent, and paying
-// it is the price of never maintaining a list of "which endpoints affect which view."
+// forget to (the failure mode that left the badge stale). It fires for writes that cannot affect
+// those counts too, rather than keeping a list of which endpoints affect which view. The exceptions
+// are writes that change no data at all, which pass `suppressMutationSignal`: a saved preference, a
+// diagnostic log line. Those are made on ordinary clicks, such as switching a Dashboard frame, and the
+// Tasks check the signal sets off is the costliest request the server answers, landing on top of the
+// very load the click began. A view whose answer does depend on a preference (the owner lens) reloads
+// on the preference's value instead.
 //
 // Exported for the one trigger that is not a request: `BackgroundCatchUp` (App.jsx), after which
 // anything another device or the server changed may be out of date here.
@@ -193,8 +197,10 @@ function uploadDocument(path, file) {
 export const api = {
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
+  // `suppressMutationSignal` because no view the signal refreshes depends on a saved preference (see
+  // `signalDataMutated`).
   saveUserPreference: (key, value) =>
-    request('/auth/preferences', { method: 'POST', body: JSON.stringify({ key, value }) }),
+    request('/auth/preferences', { method: 'POST', body: JSON.stringify({ key, value }), suppressMutationSignal: true }),
   clearUserPreferences: () => request('/auth/preferences', { method: 'DELETE' }),
   // Perimeter-off identities: the unified `user_account` rows presented as the local chooser. Selecting
   // one establishes a passwordless session server-side (see /auth/select-identity).
