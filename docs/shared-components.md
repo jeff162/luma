@@ -27,6 +27,7 @@ header comment of its own file. Paths are under `frontend/src/`.
 | `useTransactionTableLayout` | The column order, widths and hidden columns of a `TransactionListTable`. | `lib/transactionTablePreferences.js` |
 | `TransactionListToolbar` | The copy and bulk-edit row above a transaction list, with `BulkEditChrome` below it. | `components/TransactionListToolbar.jsx` |
 | `CopyTransactionsButton` | Copying one transaction or a list for sharing. A partly loaded list passes `loadRows` and `total`. | `components/CopyTransactionsButton.jsx`, `contexts/TransactionShareContext.jsx` |
+| `buildTableShare` + `copyShare` | Copying a table other than a transaction list, such as the Balances accounts: rich HTML for a document and CSV for a plain editor, guarded against spreadsheet formulas, and working over plain HTTP where the browser's clipboard API is missing. Its button draws `CopyGlyph`. | `lib/transactionShare.js`, `components/CopyTransactionsButton.jsx` |
 | `fetchAllMatchingTransactions` | Fetching every row a filter matches, past the endpoint's per-request cap. | `lib/allMatchingTransactions.js` |
 | `useTransactionRowActions` | The row menu and its note, tag, trash, rule and split editors. It owns the surface's split editor, so the row's split marker opens through its `openSplitFromMenu`. | `lib/useTransactionRowActions.jsx` |
 | `useBulkTransactionEditing` (+ `BulkEditPanel`, `useTransactionSelection`) | Bulk select and edit. | `lib/useBulkTransactionEditing.jsx`, `components/BulkEditPanel.jsx`, `lib/useTransactionSelection.js` |
