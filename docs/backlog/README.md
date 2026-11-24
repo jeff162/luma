@@ -27,9 +27,6 @@ one file, not scan a monolith for the paragraph that applies.
   recommendation.
 - [Showing what was bought on eBay](ebay-purchase-detail.md) — import eBay's purchase history and
   add the item to the card charge that paid for it, so the row reads `eBay: <item>`. No decisions owed.
-- [Balances page: an arranged account table](balances-page.md) — the account table in a chosen order, a
-  type split across sections, sections collapsible and accounts hidden; layout only, the charts keep one
-  group per type. No decisions owed.
 
 ## Sign-in
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer,
   Tooltip as ChartTooltip, XAxis, YAxis,
@@ -30,8 +30,19 @@ import { TREND_SPAN_ALL, TREND_SPAN_PREF_KEY, trendSpanFloorMonth } from '../lib
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatDate, monthLabel } from '../lib/utils.js'
 import {
-  accountColor, bridgeAxis, bridgeRows, buildBridge, describeBalanceChange, describeHistoryFlag, groupByType, isOwedBalanceType, unusualBalanceBarColor,
+  accountColor, balanceTypeLabel, bridgeAxis, bridgeRows, buildBridge, describeBalanceChange, describeHistoryFlag, groupByType, isOwedBalanceType, unusualBalanceBarColor,
 } from '../lib/balanceTotals.js'
+import {
+  BALANCE_ARRANGEMENT_PREF_KEY, accountDropAt, arrangedAccountsOfType, balanceTableCopy, moveAccount, moveSection, resolveArrangement,
+  sameArrangement, sectionDropAt, setSectionCollapsed, setSectionNote,
+} from '../lib/balanceArrangement.js'
+import { cssPoint, cssRect } from '../lib/displaySize.js'
+import { DRAG_SOURCE_STYLE, startPointerDrag, useDropZone } from '../lib/pointerDrag.js'
+import { cornerTabStyle } from '../lib/cornerTab.js'
+import { copyShare } from '../lib/transactionShare.js'
+import { useFlash } from '../lib/useFlash.js'
+import { CopyGlyph } from './CopyTransactionsButton.jsx'
+import TransientTextInput from './TransientTextInput.jsx'
 import { useAccountDetailPanels } from './accounts/useAccountDetailPanels.jsx'
 import { useHistoryFlagRemedies } from './accounts/useHistoryFlagRemedies.jsx'
 import Breadcrumb from './Breadcrumb.jsx'
@@ -168,7 +179,8 @@ function BalancesPeriod({ result, history, curve, periodLabel, dateStart, dateEn
   const { totals, accounts } = result
   const hasOpening = !!result.opening_date
   const groups = groupByType(accounts)
-  const openGroup = openType ? groups.find(g => g.type === openType) : null
+  const { arrangement, sections, arrange } = useBalanceArrangement(accounts, history.existing_account_ids)
+  const openGroup = drilledGroup(groups, sections, openType)
   // The bridge's steps are the types, or inside one type its accounts.
   const bridgeGroups = openGroup
     ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, type: a.type, color: accountColor(a), accounts: [a] }))
@@ -215,10 +227,10 @@ function BalancesPeriod({ result, history, curve, periodLabel, dateStart, dateEn
             <BridgeChart steps={steps} series={bridgeGroups} onSelect={key => selectSeries(openGroup, key, onDrill, onOpenAccount)}
               reversed={!!openGroup && isOwedBalanceType(openGroup.type)} changes={hasOpening} />
           </Card>
-          <Card>
-            <AccountTable
-              groups={openGroup ? [openGroup] : groups}
+          <AccountTable
+              sections={openGroup ? [openGroup] : sections}
               drilled={!!openGroup}
+              arrangement={arrangement} onArrange={arrange}
               columns={[
                 { label: 'Balance', of: a => a.balance?.amount ?? null },
                 ...(hasOpening
@@ -229,7 +241,6 @@ function BalancesPeriod({ result, history, curve, periodLabel, dateStart, dateEn
               onOpenAccount={onOpenAccount}
               flagActions={flagActions}
             />
-          </Card>
         </div>
       )}
       <HistoryStrip history={history} openGroup={openGroup} dateStart={dateStart} dateEnd={dateEnd} />
@@ -522,75 +533,324 @@ function sumBalances(point, accounts) {
 
 // --- The account table: the charts' key ---------------------------------------------------------------
 
-// Grouped by type, each type's row carrying its subtotal and opening its accounts. Inside a type every
-// account takes its own colour, as it does in that type's charts. `columns` are the figures each row
-// shows, the first of them the account's balance as of something; one marked `change` is drawn as an arrow
-// and an amount.
-function AccountTable({ groups, drilled, columns, onDrill, onOpenAccount, flagActions }) {
+// The table's arrangement (`lib/balanceArrangement.js`) for the accounts shown, and `arrange`, which applies a
+// change to it. A change is made to the saved list brought up to date with these accounts, so the first one
+// saves the default arrangement with it.
+function useBalanceArrangement(accounts, existingIds) {
+  const [saved, setSaved] = useUserPreference(BALANCE_ARRANGEMENT_PREF_KEY, null)
+  const { arrangement, sections } = resolveArrangement(saved, accounts, existingIds)
+  const arrange = useCallback(change => {
+    setSaved(prev => change(resolveArrangement(prev, accounts, existingIds).arrangement))
+  }, [setSaved, accounts, existingIds])
+  return { arrangement, sections, arrange }
+}
+
+// The open type's group, its accounts in the arranged order across every section of the type, so the drilled
+// table and the charts beside it list them as the overview did.
+function drilledGroup(groups, sections, openType) {
+  const group = openType ? groups.find(g => g.type === openType) : null
+  return group ? { ...group, id: group.type, accounts: arrangedAccountsOfType(sections, openType) } : null
+}
+
+const FIGURE_STYLE = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
+// A heading's collapse toggle, or its grip in edit mode, hangs in the card's padding left of the swatch, so the
+// headings and the accounts under them keep the alignment the table has without it. An account's grip sits in
+// its indent, under the swatch.
+const GUTTER_CONTROL_WIDTH = 14
+const GUTTER_CONTROL_GAP = 4
+const GUTTER = GUTTER_CONTROL_WIDTH + GUTTER_CONTROL_GAP
+const ACCOUNT_INDENT = 18
+const DRAG_KINDS = { account: 'balance-account', section: 'balance-section' }
+
+/*
+ * In the arranged sections, each heading carrying its section's subtotal and opening the whole type, and a
+ * toggle beside it that collapses the section to that row. Drilled into a type, its accounts alone, each in
+ * its own colour as in that type's charts. `columns` are the figures each row shows, the first of them the
+ * account's balance as of something; one marked `change` is drawn as an arrow and an amount.
+ *
+ * The card's corner tab copies the table and opens edit mode. Edit mode shows every section open, puts a
+ * grip on each account and heading and a note field on each heading. A drag goes through
+ * `lib/pointerDrag.js`, the whole table one drop zone. Where it would land is worked out from the rows as
+ * laid out (`accountDropAt`, `sectionDropAt`) and marked by a line drawn over the table rather than a row
+ * inserted into it, so the rows never move under the pointer while it is deciding. The line is indented
+ * where the account joins a section and runs full width where it starts one, and then the copy of the row
+ * that follows the pointer says which ("→ New Checking section"). A drop that would leave the table as it
+ * is is not marked and does nothing.
+ */
+function AccountTable({ arrangement, sections, drilled, columns, onArrange, onDrill, onOpenAccount, flagActions, style }) {
+  const [editing, setEditing] = useState(false)
+  const [copied, flashCopied] = useFlash(COPIED_MESSAGE_MS)
+  const [dragging, setDragging] = useState(null)
+  const [mark, setMark] = useState(null)
+  const frameRef = useRef(null)
+  const previewLabelRef = useRef(null)
+  const arranging = editing && !drilled
+
+  function placement(item, point) {
+    const frame = frameRef.current
+    if (!frame) return null
+    const layout = []
+    for (const cell of frame.querySelectorAll('[data-arrange-cell]')) {
+      const { top, bottom } = cssRect(cell)
+      const { sectionId, sectionType, accountId } = cell.dataset
+      if (accountId == null) {
+        layout.push({ id: sectionId, type: sectionType, top, headingBottom: bottom, bottom, rows: [] })
+      } else if (layout.length) {
+        const current = layout[layout.length - 1]
+        current.rows.push({ id: accountId, top, bottom })
+        current.bottom = bottom
+      }
+    }
+    const y = cssPoint(point).y
+    const found = item.kind === DRAG_KINDS.section ? sectionDropAt(layout, y) : accountDropAt(layout, y, item.type)
+    if (!found || sameArrangement(moved(arrangement, item, found.drop), arrangement)) return null
+    return {
+      ...found,
+      top: found.line - cssRect(frame).top,
+      label: found.newSection && item.kind === DRAG_KINDS.account ? `New ${balanceTypeLabel(item.type)} section` : null,
+    }
+  }
+
+  const dropRef = useDropZone({
+    accepts: item => item?.kind === DRAG_KINDS.account || item?.kind === DRAG_KINDS.section,
+    onOver: (item, point) => showMark(placement(item, point)),
+    onLeave: () => showMark(null),
+    onDrop: (item, point) => {
+      const found = placement(item, point)
+      showMark(null)
+      if (found) onArrange(current => moved(current, item, found.drop))
+    },
+  })
+  const attachFrame = useCallback(element => {
+    frameRef.current = element
+    dropRef(element)
+  }, [dropRef])
+
+  // The copy that follows the pointer belongs to `pointerDrag`, outside React, so its label is set directly.
+  function showMark(found) {
+    setMark(found)
+    const label = previewLabelRef.current
+    if (!label) return
+    label.textContent = found?.label ? `→ ${found.label}` : ''
+    label.style.display = found?.label ? '' : 'none'
+  }
+
+  // What follows the pointer is a copy of the row's name cell, so it reads as the account or the section
+  // rather than as the grip.
+  function startDrag(event, item) {
+    startPointerDrag(event, {
+      onStart: () => {
+        setDragging(item)
+        return item
+      },
+      onEnd: () => {
+        setDragging(null)
+        setMark(null)
+        previewLabelRef.current = null
+      },
+      preview: source => {
+        const cell = source.closest('[data-arrange-cell]')
+        if (!cell) return {}
+        const clone = cell.cloneNode(true)
+        const computed = window.getComputedStyle(cell)
+        Object.assign(clone.style, {
+          font: computed.font, color: computed.color,
+          width: 'max-content', padding: '4px 8px', opacity: '0.92', borderRadius: '8px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.22)', background: 'var(--surface)', border: '1px solid var(--border)',
+        })
+        const label = document.createElement('span')
+        Object.assign(label.style, { display: 'none', marginLeft: '4px', fontSize: '11px', fontWeight: '600', color: 'var(--muted)' })
+        clone.appendChild(label)
+        previewLabelRef.current = label
+        return { element: clone, offsetX: 12, offsetY: cell.offsetHeight / 2 }
+      },
+    })
+  }
+
+  async function copy() {
+    flashCopied(await copyShare(balanceTableCopy(sections, columns)) ? 'Copied' : 'Could not copy')
+  }
+
   const template = `minmax(0, 1fr) ${columns.map(() => 'auto').join(' ')}`
   return (
-    <div role="table" aria-label="Balances by account"
-      style={{ display: 'grid', gridTemplateColumns: template, columnGap: 20, rowGap: 6, alignItems: 'baseline', fontSize: 13 }}>
-      <div role="row" style={{ display: 'contents', fontSize: 12, color: 'var(--muted)' }}>
-        <div role="columnheader">{drilled ? 'Account' : 'Account type'}</div>
-        {columns.map((col, index) => <div key={index} role="columnheader" style={{ textAlign: 'right' }}>{col.label}</div>)}
+    <Card style={{ position: 'relative', ...style }}>
+      <TableCornerTab copied={copied} onCopy={copy} arranging={arranging} canArrange={!drilled}
+        onArrange={() => setEditing(!arranging)} />
+      <div ref={attachFrame} style={{ position: 'relative', paddingBottom: arranging ? 32 : 0 }}>
+        <div role="table" aria-label="Balances by account"
+          style={{ display: 'grid', gridTemplateColumns: template, columnGap: 20, rowGap: 6, alignItems: 'baseline', fontSize: 13 }}>
+          <div role="row" style={{ display: 'contents', fontSize: 12, color: 'var(--muted)' }}>
+            <div role="columnheader">{drilled ? 'Account' : 'Account type'}</div>
+            {columns.map((col, index) => <div key={index} role="columnheader" style={{ textAlign: 'right' }}>{col.label}</div>)}
+          </div>
+          {sections.map(section => (
+            <SectionRows key={section.id} section={section} drilled={drilled} arranging={arranging} dragging={dragging}
+              columns={columns} onArrange={onArrange} onStartDrag={startDrag}
+              onDrill={onDrill} onOpenAccount={onOpenAccount} flagActions={flagActions} />
+          ))}
+        </div>
+        {mark ? (
+          <div aria-hidden="true" style={{
+            position: 'absolute', left: mark.indented ? ACCOUNT_INDENT : -GUTTER, right: 0, top: mark.top - 1, height: 2,
+            background: 'var(--accent)', borderRadius: 1, pointerEvents: 'none',
+          }} />
+        ) : null}
       </div>
-      {groups.map(group => (
-        <GroupRows key={group.type} group={group} drilled={drilled} columns={columns}
-          onDrill={onDrill} onOpenAccount={onOpenAccount} flagActions={flagActions} />
-      ))}
+    </Card>
+  )
+}
+
+const COPIED_MESSAGE_MS = 1400
+const CORNER_BUTTON_STYLE = {
+  padding: 0, border: 'none', background: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center',
+}
+
+// The table's two quiet actions in one tab set into the card's top-right corner (`cornerTabStyle`), as a
+// table's column gear is elsewhere: copy, then the gear that opens edit mode, or Done while it is open.
+// Arranging applies only to the overview, so a drilled table offers copy alone.
+function TableCornerTab({ copied, onCopy, arranging, canArrange, onArrange }) {
+  return (
+    <div style={{
+      ...cornerTabStyle({ corner: 'top-right', radius: 12 }), display: 'inline-flex', alignItems: 'center', gap: 10,
+      minHeight: 20, padding: '2px 10px', boxSizing: 'border-box', fontSize: 11, fontWeight: 500,
+      background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted)', zIndex: 1,
+    }}>
+      <button type="button" onClick={onCopy} aria-label="Copy the table" title="Copy the accounts and their balances"
+        style={CORNER_BUTTON_STYLE}>
+        {copied || <CopyGlyph size={13} />}
+      </button>
+      {canArrange ? (
+        <button type="button" onClick={onArrange} aria-label={arranging ? 'Done arranging' : 'Arrange the table'}
+          aria-pressed={arranging} title={arranging ? undefined : 'Arrange the table'} style={CORNER_BUTTON_STYLE}>
+          {arranging ? 'Done' : <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>⚙︎</span>}
+        </button>
+      ) : null}
     </div>
   )
 }
 
-const FIGURE_STYLE = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
+function moved(arrangement, item, drop) {
+  return item.kind === DRAG_KINDS.section ? moveSection(arrangement, item.id, drop) : moveAccount(arrangement, item.id, drop)
+}
 
 function columnTotal(accounts, col) {
   const values = accounts.map(col.of).filter(v => v != null)
   return values.length ? values.reduce((s, v) => s + v, 0) : null
 }
 
-function GroupRows({ group, drilled, columns, onDrill, onOpenAccount, flagActions }) {
+function SectionRows({ section, drilled, arranging, dragging, columns, onArrange, onStartDrag, onDrill, onOpenAccount, flagActions }) {
+  const heading = section.note ? `${section.label} · ${section.note}` : section.label
+  const collapsed = !drilled && !arranging && section.collapsed
+  const sectionDimmed = dragging?.kind === DRAG_KINDS.section && dragging.id === section.id
+  const dim = dimmed => (dimmed ? { opacity: 0.4 } : null)
   return (
     <>
       {drilled ? null : (
         <div role="row" style={{ display: 'contents', fontWeight: 600 }}>
-          <div role="cell" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 6 }}>
-            <Swatch color={group.color} />
-            <LinkButton onClick={() => onDrill(group.type)} title={`See the ${group.label} accounts`} style={{ fontWeight: 600 }}>
-              {group.label}
+          <div role="cell" data-arrange-cell="" data-section-id={section.id} data-section-type={section.type}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 6, ...dim(sectionDimmed) }}>
+            {arranging ? (
+              <Grip label={`Move ${heading}`} hanging
+                onPointerDown={event => onStartDrag(event, { kind: DRAG_KINDS.section, id: section.id })} />
+            ) : (
+              <button type="button" onClick={() => onArrange(a => setSectionCollapsed(a, section.id, !collapsed))}
+                aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${heading}`}
+                title={collapsed ? 'Expand' : 'Collapse'}
+                style={{
+                  ...gutterControlStyle(true), padding: 0, border: 'none', background: 'none', color: 'var(--muted)',
+                  fontSize: 10, lineHeight: 1, cursor: 'pointer',
+                }}>
+                {collapsed ? '▸' : '▾'}
+              </button>
+            )}
+            <Swatch color={section.color} />
+            <LinkButton onClick={() => onDrill(section.type)} title={`See the ${section.label} accounts`} style={{ fontWeight: 600 }}>
+              {section.label}
             </LinkButton>
+            {arranging ? (
+              <SectionNoteField key={section.note} section={section} onArrange={onArrange} />
+            ) : section.note ? (
+              <span style={{ fontWeight: 400, color: 'var(--muted)', marginLeft: -4 }}>· {section.note}</span>
+            ) : null}
           </div>
           {columns.map((col, index) => {
-            const value = columnTotal(group.accounts, col)
+            const value = columnTotal(section.accounts, col)
             return (
-              <div key={index} role="cell" style={{ ...FIGURE_STYLE, paddingTop: 6 }}>
-                <ColumnFigure col={col} type={group.type} value={value} />
+              <div key={index} role="cell" style={{ ...FIGURE_STYLE, paddingTop: 6, ...dim(sectionDimmed) }}>
+                <ColumnFigure col={col} type={section.type} value={value} />
               </div>
             )
           })}
         </div>
       )}
-      {group.accounts.map(account => (
-        <div role="row" key={account.account_id} style={{ display: 'contents' }}>
-          <div role="cell" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, paddingLeft: drilled ? 0 : 18 }}>
-            {drilled ? <Swatch color={accountColor(account)} /> : null}
-            <LinkButton onClick={() => onOpenAccount({ id: account.account_id, name: account.name })}
-              style={{ overflowWrap: 'anywhere', textAlign: 'left' }}>
-              {account.name}
-            </LinkButton>
-            <AccountWarning account={account} flagActions={flagActions} />
-          </div>
-          {columns.map((col, index) => (
-            <div key={index} role="cell" style={FIGURE_STYLE}>
-              {index === 0
-                ? <AccountFigure account={account} value={col.of(account)} />
-                : <ColumnFigure col={col} type={account.type} value={col.of(account)} />}
+      {collapsed ? null : section.accounts.map(account => {
+        const dimmed = sectionDimmed || (dragging?.kind === DRAG_KINDS.account && dragging.id === account.account_id)
+        return (
+          <div role="row" key={account.account_id} style={{ display: 'contents' }}>
+            <div role="cell" data-arrange-cell="" data-section-id={section.id} data-account-id={account.account_id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+                paddingLeft: drilled || arranging ? 0 : ACCOUNT_INDENT, ...dim(dimmed),
+              }}>
+              {drilled ? <Swatch color={accountColor(account)} /> : null}
+              {arranging ? (
+                <Grip label={`Move ${account.name}`}
+                  onPointerDown={event => onStartDrag(event, { kind: DRAG_KINDS.account, id: account.account_id, type: account.type })} />
+              ) : null}
+              <LinkButton onClick={() => onOpenAccount({ id: account.account_id, name: account.name })}
+                style={{ overflowWrap: 'anywhere', textAlign: 'left' }}>
+                {account.name}
+              </LinkButton>
+              <AccountWarning account={account} flagActions={flagActions} />
             </div>
-          ))}
-        </div>
-      ))}
+            {columns.map((col, index) => (
+              <div key={index} role="cell" style={{ ...FIGURE_STYLE, ...dim(dimmed) }}>
+                {index === 0
+                  ? <AccountFigure account={account} value={col.of(account)} />
+                  : <ColumnFigure col={col} type={account.type} value={col.of(account)} />}
+              </div>
+            ))}
+          </div>
+        )
+      })}
     </>
+  )
+}
+
+// A control in a row's leading gutter, inside a flex cell whose gap is 8: on a heading it hangs left of the
+// swatch, on an account it fills the indent.
+function gutterControlStyle(hanging) {
+  return {
+    width: GUTTER_CONTROL_WIDTH, flexShrink: 0,
+    marginLeft: hanging ? -GUTTER : 0, marginRight: GUTTER_CONTROL_GAP - 8,
+  }
+}
+
+function Grip({ label, hanging = false, onPointerDown }) {
+  return (
+    <button type="button" aria-label={label} title="Drag to move" onPointerDown={onPointerDown}
+      onClick={event => event.preventDefault()}
+      style={{
+        ...DRAG_SOURCE_STYLE, ...gutterControlStyle(hanging), padding: 0, border: 'none', background: 'none',
+        color: 'var(--muted)', fontSize: 11, lineHeight: 1, letterSpacing: -3, textAlign: 'left', overflow: 'hidden',
+        cursor: 'grab', fontWeight: 400,
+      }}>
+      ⋮⋮
+    </button>
+  )
+}
+
+// Keyed by the saved note, so a note saved elsewhere (another device) replaces the draft.
+function SectionNoteField({ section, onArrange }) {
+  const [draft, setDraft] = useState(section.note)
+  function commit() {
+    if (draft.trim() !== section.note) onArrange(a => setSectionNote(a, section.id, draft))
+  }
+  return (
+    <TransientTextInput value={draft} onChange={setDraft} onCommit={commit} restoreOnEscape autoFocus={false}
+      placeholder="Note" aria-label={`Note for ${section.label}`}
+      style={{ ...getFormControlStyle({ size: 'compact' }), width: 160, minWidth: 0, fontWeight: 400 }} />
   )
 }
 
@@ -657,8 +917,10 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
   const { points, accounts } = history
   const range = trendsWindowRange(resolveTrendsWindowKey(points, trendWindow, thisMonth), thisMonth, rowsMonthSpan(points))
   const shown = points.filter(p => p.month >= range.startMonth && p.month <= range.endMonth)
-  const groups = groupByType(accounts.filter(a => a.has_balance))
-  const openGroup = openType ? groups.find(g => g.type === openType) : null
+  const counted = accounts.filter(a => a.has_balance)
+  const groups = groupByType(counted)
+  const { arrangement, sections, arrange } = useBalanceArrangement(counted, history.existing_account_ids)
+  const openGroup = drilledGroup(groups, sections, openType)
   // A series per type, or inside one type per account.
   const series = openGroup
     ? openGroup.accounts.map(a => ({ key: a.account_id, label: a.name, type: a.type, color: accountColor(a), accounts: [a] }))
@@ -748,10 +1010,11 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
         ) : null}
       </Card>
       {firstPoint ? (
-        <Card style={{ maxWidth: 760 }}>
           <AccountTable
-            groups={openGroup ? [openGroup] : groups}
+            style={{ maxWidth: 760 }}
+            sections={openGroup ? [openGroup] : sections}
             drilled={!!openGroup}
+            arrangement={arrangement} onArrange={arrange}
             onDrill={onDrill}
             onOpenAccount={onOpenAccount}
             flagActions={flagActions}
@@ -768,7 +1031,6 @@ function BalancesTrends({ history, openType, onDrill, trendWindow, onTrendWindow
               },
             ]}
           />
-        </Card>
       ) : null}
     </>
   )

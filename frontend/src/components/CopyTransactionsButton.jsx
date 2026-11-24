@@ -12,7 +12,7 @@
 import { Tooltip, IconButton } from './ui.jsx'
 import { useTransactionShare } from '../contexts/TransactionShareContext.jsx'
 
-function CopyGlyph({ size = 14 }) {
+export function CopyGlyph({ size = 14 }) {
   return (
     <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
       <rect x="5.5" y="5.5" width="8" height="8.5" rx="1.4" stroke="currentColor" strokeWidth="1.2" />

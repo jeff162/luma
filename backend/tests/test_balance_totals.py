@@ -166,6 +166,18 @@ class BalanceTotalsTests(_Ledger):
         )
 
 
+    def test_existing_ids_name_every_root_whatever_the_totals_count_or_the_filters_show(self):
+        # The table's arrangement drops a saved place for an id missing here, so an account the totals or
+        # the filters leave out must still be named, and a merged member must not be.
+        self._account("chk", owner="robin")
+        self._account("sams", owner="sam")
+        self._account("kept-out", excluded=1)
+        self._account("misc", "other")
+        self._account("member", parent="chk")
+        result = balance_totals_by_month(self.conn, {"owner_ids": "robin"}, today=self.TODAY)
+        self.assertEqual([a["account_id"] for a in result["accounts"]], ["chk"])
+        self.assertEqual(result["existing_account_ids"], ["chk", "kept-out", "misc", "sams"])
+
     def test_the_curve_runs_from_the_bridges_opening_total_to_its_closing_one(self):
         # The curve is drawn under the bridge, so its two ends must be the bridge's two totals.
         self._account("chk")

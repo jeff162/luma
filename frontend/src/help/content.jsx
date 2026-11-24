@@ -540,6 +540,14 @@ export const HELP_TOPICS = [
           owed, the way its chart moves.
         </p>
         <p>
+          The account table can be arranged from the ⚙ in its corner: drag accounts and types into any order, give a
+          type more than one section (the everyday accounts on top, the rest below), and add a note to a
+          section&apos;s heading. ▾ beside a heading collapses the section to its subtotal, which is how an
+          account is kept out of view: a section of its own, collapsed. Arranging changes only the table; the
+          charts keep one group per type. The copy button beside the ⚙ copies the accounts and their balances,
+          one row per account and without the Change column, ready to paste into a document or a spreadsheet.
+        </p>
+        <p>
           Only the owner filter applies. The other filters choose transactions, and a balance belongs to an
           account.
         </p>

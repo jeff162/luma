@@ -451,7 +451,11 @@ def balance_totals_by_month(conn, owner_filters=None, today: Optional[date] = No
     whose point is today's figure, with each group's balance at that point (`balances`, by account id;
     a group not yet covered is absent). `uncovered` counts the groups with a balance whose coverage has not
     begun yet on that date. `accounts` lists the counted groups, those that have never stated a balance
-    with `has_balance` false, since no date counts them."""
+    with `has_balance` false, since no date counts them.
+
+    `existing_account_ids` is every group root, counted or not and whatever the owner filters, so the
+    Balances table's saved arrangement can tell an account that is gone (deleted, or merged into another)
+    from one only left out of what is shown, and drop the first's place while keeping the second's."""
     today = today or date.today()
     groups = balance_total_groups(conn, owner_filters)
     covered = [g for g in groups if g["balances"].stated]
@@ -473,4 +477,6 @@ def balance_totals_by_month(conn, owner_filters=None, today: Optional[date] = No
         {key: value for key, value in g.items() if key != "balances"} | {"has_balance": bool(g["balances"].stated)}
         for g in groups
     ]
-    return {"points": points, "accounts": accounts}
+    existing = [row["id"] for row in conn.execute(
+        "SELECT id FROM account WHERE parent_account_id IS NULL AND trashed_at IS NULL ORDER BY id")]
+    return {"points": points, "accounts": accounts, "existing_account_ids": existing}

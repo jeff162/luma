@@ -73,17 +73,17 @@ export const TRANSACTION_SHARE_COLUMNS = [
   { key: 'merchant', label: 'Merchant', get: txn => getTxnMerchantLabel(txn) },
   { key: 'category', label: 'Category', get: txn => splitCategoryNames(txn) || txn.category_name || 'Uncategorized' },
   { key: 'account', label: 'Account', get: accountLabel },
-  { key: 'amount', label: 'Amount', get: txn => formatTransactionAmount(txn.amount), align: 'right' },
+  { key: 'amount', label: 'Amount', get: txn => formatTransactionAmount(txn.amount), align: 'right', numeric: true },
 ]
 
 // Leading characters a spreadsheet reads as the start of a formula. Merchant names and the like are
 // largely written by others, so a text cell starting with one is prefixed with `'` in the plain-text
-// copy, which a spreadsheet takes as "this is text" (backup.py's CSV export does the same). The amount
+// copy, which a spreadsheet takes as "this is text" (backup.py's CSV export does the same). A `numeric`
 // column is left alone: a negative amount starts with `-` and has to stay a number.
 const SPREADSHEET_FORMULA_START = /^[=+\-@\t\r]/
 
 function spreadsheetSafe(text, col) {
-  return col.key !== 'amount' && SPREADSHEET_FORMULA_START.test(text) ? `'${text}` : text
+  return !col.numeric && SPREADSHEET_FORMULA_START.test(text) ? `'${text}` : text
 }
 
 export function getTransactionListRows(rows) {
@@ -116,10 +116,13 @@ function csvField(value) {
 }
 
 export function buildListShareText(rows) {
-  const header = TRANSACTION_SHARE_COLUMNS.map(col => csvField(col.label)).join(',')
-  const body = getTransactionListRows(rows).map(cells => (
-    cells.map((cell, i) => csvField(spreadsheetSafe(cell, TRANSACTION_SHARE_COLUMNS[i]))).join(',')
-  ))
+  return tableShareText(TRANSACTION_SHARE_COLUMNS, getTransactionListRows(rows))
+}
+
+// Any table as CSV: `columns` are `{ label, align, numeric }`, `rows` arrays of cell text in their order.
+function tableShareText(columns, rows) {
+  const header = columns.map(col => csvField(col.label)).join(',')
+  const body = rows.map(cells => cells.map((cell, i) => csvField(spreadsheetSafe(cell, columns[i]))).join(','))
   return [header, ...body].join('\n')
 }
 
@@ -135,18 +138,25 @@ export function buildSingleShareHtml(txn) {
 }
 
 export function buildListShareHtml(rows) {
-  const head = TRANSACTION_SHARE_COLUMNS
-    .map(col => `<th style="text-align:${col.align === 'right' ? 'right' : 'left'};padding:3px 10px;border-bottom:1px solid #ccc;color:#666">${escapeHtml(col.label)}</th>`)
+  return tableShareHtml(TRANSACTION_SHARE_COLUMNS, getTransactionListRows(rows))
+}
+
+function tableShareHtml(columns, rows) {
+  const align = col => (col.align === 'right' ? 'right' : 'left')
+  const head = columns
+    .map(col => `<th style="text-align:${align(col)};padding:3px 10px;border-bottom:1px solid #ccc;color:#666">${escapeHtml(col.label)}</th>`)
     .join('')
-  const body = getTransactionListRows(rows).map(cells => (
-    `<tr>${cells.map((cell, i) => `<td style="text-align:${TRANSACTION_SHARE_COLUMNS[i].align === 'right' ? 'right' : 'left'};padding:3px 10px;border-bottom:1px solid #eee">${escapeHtml(cell)}</td>`).join('')}</tr>`
+  const body = rows.map(cells => (
+    `<tr>${cells.map((cell, i) => `<td style="text-align:${align(columns[i])};padding:3px 10px;border-bottom:1px solid #eee">${escapeHtml(cell)}</td>`).join('')}</tr>`
   )).join('')
   return `<table style="border-collapse:collapse;font-size:13px"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
 }
 
-// Write both a rich-HTML and a plain-text flavor to the clipboard so a rich target (email, doc) gets the
-// table/record and a plain editor gets readable text. Falls back to plain-only where the async
-// ClipboardItem API isn't available. Returns true on success.
+// A table other than a transaction list, in both forms `copyShare` writes, made the way a list's are.
+export function buildTableShare(columns, rows) {
+  return { text: tableShareText(columns, rows), html: tableShareHtml(columns, rows) }
+}
+
 // Last-resort clipboard copy for insecure contexts (plain HTTP on a non-localhost host — the common
 // WSL2/LAN case), where `navigator.clipboard` isn't exposed at all. A temporary off-screen textarea +
 // the legacy `execCommand('copy')` still works there. Plain-text only (execCommand can't reliably carry
@@ -171,6 +181,9 @@ function legacyCopyText(text) {
   }
 }
 
+// Write both a rich-HTML and a plain-text flavor to the clipboard so a rich target (email, doc) gets the
+// table/record and a plain editor gets readable text. Falls back to plain-only where the async
+// ClipboardItem API isn't available. Returns true on success.
 export async function copyShare({ text, html }) {
   try {
     if (navigator.clipboard && typeof window.ClipboardItem === 'function' && html) {
