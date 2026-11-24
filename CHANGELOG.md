@@ -24,6 +24,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - A merged group's primary can be changed, from the account's menu or by dragging it onto the primary;
   the group keeps its settings. A Task suggests it when the primary has gone quiet while another account
   in the group has not.
+- An owner's transactions can be left out of the Uncategorized transactions task, from the owner's
+  **Track uncategorized transactions** switch on the Accounts page's Owners tab.
 
 ### Fixed
 
@@ -32,6 +34,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Owner filters on the imported rule suggestions page now agree with the set of matching rules.
 - A linked group's account report shows which member account each transaction came from, in place of
   the group name and the separate per-account filters.
+- The preview of pasted HTML now removes links inside embedded SVG images, which it had missed while
+  removing every other link.
 
 ## [0.3.0] - 2026-11-19
 
