@@ -91,9 +91,11 @@ owned and replaced differently.
   fixes or inconsistent behavior.
 - **Merge duplicated code at the third copy, and weigh divergence risk.** Two copies may still need to
   diverge, and a forced abstraction that leaks is worse than the duplication it replaced.
-- **Build efficiency in where it is also the simpler design**, because the version that avoids
-  redundant work usually has fewer moving parts. When efficiency would add complexity for a payoff that
-  cannot yet be measured, defer it and note it. Measure before restructuring for performance.
+- **Do not do the same work twice.** Recomputing an answer whose inputs have not changed, or refetching
+  what nothing could have changed, is a defect to fix rather than a cost to record, because the app
+  already keeps derived values and drops them when their inputs move (the column-scoped epochs in
+  `db/database.py`, `services/cache_fill.py`). Measure before restructuring for performance, so the
+  change goes where the time is.
 
 ## Testing
 
