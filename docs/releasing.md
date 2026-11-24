@@ -410,13 +410,22 @@ guessability estimate.
    ```bash
    gh run download <run-id> -D dl          # unpacks each artifact into dl/luma-<slug>/
    git show vX.Y.Z:docker-compose.yml > docker-compose.yml
-   gh release create vX.Y.Z --verify-tag --draft --title "Luma X.Y.Z" --notes "…" \
+   git show vX.Y.Z:CHANGELOG.md | awk -v v="X.Y.Z" '
+     index($0, "## [" v "]") == 1 {f=1; next}
+     /^## \[/ || /^\[[^]]+\]: / {f=0}
+     !f {next}
+     /^$/ {if (n) b++; next}
+     {while (b) {print ""; b--} print; n=1}' > notes.md
+   gh release create vX.Y.Z --verify-tag --draft --title "Luma X.Y.Z" --notes-file notes.md \
      dl/luma-linux-x64/* dl/luma-linux-arm64/* dl/luma-windows-x64/* dl/luma-macos-arm64/* \
      docker-compose.yml
    ```
 
-   `--draft` leaves it unpublished for a look on the Releases page; **Publish release** there finishes
-   it. From the browser instead, the run page's **Artifacts** list downloads each as a wrapper zip:
+   The notes are the release's section of `CHANGELOG.md`, read from the tagged tree like the compose
+   file, so these run from any directory inside the checkout. The changelog's lines are wrapped, and the
+   Releases page may show each wrap as a line break: check the draft and join a bullet's lines there if
+   it does. `--draft` leaves it unpublished for a look on the Releases page; **Publish release** there
+   finishes it. From the browser instead, the run page's **Artifacts** list downloads each as a wrapper zip:
    attach the archive and `.sha256` from inside it, not the wrapper.
 7. Publishing the release starts the *Container image* workflow. Check that it finished, since the
    compose file just attached pulls what it pushes.

@@ -4,6 +4,9 @@
 # (scripts/refresh-personal-data-terms.py keeps its term list in data/).
 data/
 
+# Workspace for staging a release
+release/
+
 # ── Environment & secrets ────────────────────────────────────────────────────
 .env
 .env-*
