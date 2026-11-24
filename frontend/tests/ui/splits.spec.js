@@ -15,8 +15,15 @@ test('a split transaction is marked in the ledger and opens on its parts', async
   await page.getByLabel('Search transactions', { exact: true }).fill('Warehouse Club')
 
   // The category cell carries the part count rather than a category, because no single category is the
-  // truth about this row.
-  const splitChip = page.getByText('Split (2)')
+  // truth about this row. The chip is looked for inside the Warehouse Club row because the search
+  // applies a moment after typing: until it does, the unfiltered ledger can show another split row's
+  // chip, and clicking that opens the wrong split. Rows have no role, so the innermost div holding both
+  // the name and the chip stands in for the row.
+  const splitChip = page.locator('div')
+    .filter({ hasText: 'Warehouse Club' })
+    .filter({ has: page.getByText('Split (2)') })
+    .last()
+    .getByText('Split (2)')
   await expect(splitChip).toBeVisible()
   await splitChip.click()
 
