@@ -39,7 +39,7 @@ _APP_NAME_TAG = re.compile(r"<[^<>]*>")
 # code runs, so neither can derive it — and `backend/tests/test_app_version.py` fails if the three ever
 # disagree. That check is the whole mechanism: a version bump touches three files on purpose, and
 # missing one is a failing test rather than a release named differently from what it reports.
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 
 # Built-in defaults, stated once. The database modules resolve their own location at import time (before
 # anything else runs, so they cannot wait for the resolver), and `app_config`'s registry reads the same
