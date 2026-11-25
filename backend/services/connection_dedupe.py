@@ -145,6 +145,20 @@ def _rescan_candidates(conn: sqlite3.Connection, card_ids: list[str]) -> list:
     ).fetchall()
 
 
+def _live_survivor(conn: sqlite3.Connection, matched_ids: list[str]) -> Optional[str]:
+    """The first of the ladder's matches still in the ledger, or None."""
+    if not matched_ids:
+        return None
+    live = {
+        r["id"] for r in conn.execute(
+            f"SELECT id FROM txn WHERE id IN ({','.join('?' * len(matched_ids))})"
+            " AND trashed_at IS NULL AND rejection_reason IS NULL",
+            matched_ids,
+        ).fetchall()
+    }
+    return next((txn_id for txn_id in matched_ids if txn_id in live), None)
+
+
 def _confirm_duplicate(conn: sqlite3.Connection, txn_id: str, matched_id: Optional[str], reason_key) -> None:
     """Remove a re-scanned row as a confirmed duplicate.
 
@@ -224,7 +238,10 @@ def rescan_connection_duplicates(conn: sqlite3.Connection, connection) -> dict:
             # nobody has seen yet — but retroactively it would delete a row already in the ledger,
             # possibly categorized, with nothing to point at and nothing for the duplicate report to
             # show. Those are left in place and counted; the sweeps below still get their chance.
-            matched_id = next(iter(matched_existing_txn_ids(verdict.matched)), None)
+            # The copy named must also still be in the ledger. The ladder's pool keeps trashed rows, which
+            # is right for a row arriving from outside, but a match against one here would remove the only
+            # live copy: an earlier sweep may already have trashed that copy in favor of this very row.
+            matched_id = _live_survivor(conn, matched_existing_txn_ids(verdict.matched))
             if not matched_id:
                 unmatched += 1
                 continue

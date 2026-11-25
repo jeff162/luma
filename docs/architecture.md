@@ -1229,7 +1229,8 @@ import card. The full rule is in `data-model.md`.
   builder shared by the sync path and the re-scan. The re-scan runs only from applying a mapping and
   re-judges rows synced before the mapping existed. Two tested properties: the pass excludes the whole
   connection's own batches from its candidate pool, so two rows from one connection cannot reject each
-  other; and it removes a row only when it can name the surviving counterpart. Removals are trashed with
+  other; and it removes a row only when it can name the surviving counterpart, which must itself still
+  be in the ledger (an earlier sweep may have trashed it in favor of the row being judged). Removals are trashed with
   `rejection_reason='duplicate_confirmed'`, `dedupe_resolved_by='connection_rescan'` and the
   `suspect_duplicate_of` pointer, so the card's duplicate report shows them and Restore returns them.
 

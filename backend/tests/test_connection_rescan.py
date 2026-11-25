@@ -235,6 +235,25 @@ class ConnectionRescanTests(unittest.TestCase):
         self.assertEqual(row["suspect_duplicate_of"], "csv-0", "must point at the copy that survived")
         self.assertEqual(row["category_id"], "cat-1", "the user's categorization must survive the removal")
 
+    def test_a_copy_already_trashed_in_favor_of_this_row_does_not_remove_it(self):
+        # An earlier sweep confirmed the file's copy as the duplicate of the synced row. Naming that
+        # trashed copy as the survivor would leave the charge with no live row at all.
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
+        self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
+        synced_id = self._synced_row_ids()[0]
+        with self._db() as conn:
+            conn.execute(
+                "UPDATE txn SET trashed_at = '2026-08-01T00:00:00Z', rejection_reason = 'duplicate_confirmed',"
+                " dedupe_resolved_by = 'auto_cross_source', suspect_duplicate_of = ? WHERE id = 'csv-0'",
+                (synced_id,),
+            )
+
+        self._map("existing", target=self.PLAID_ACCOUNT, account_id=self.PLAID_ACCOUNT)
+        result = self._rescan()
+
+        self.assertEqual(result["hard_rejected"], 0)
+        self.assertEqual([r["id"] for r in self._live_synced_rows()], [synced_id])
+
     def test_the_removal_shows_up_in_its_own_cards_duplicate_report(self):
         # The report is the recovery surface, so a re-scan removal has to be visible there — labelled
         # by the occasion (re-scan), not left as an unexplained "other".
