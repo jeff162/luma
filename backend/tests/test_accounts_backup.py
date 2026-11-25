@@ -526,6 +526,53 @@ class AccountsBackupTests(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT credential_enc FROM connection WHERE id = 'conn-2'")
                                  .fetchone()[0], "kept-token")
 
+    @staticmethod
+    def _log(row_id, connection_id="conn-1"):
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection_sync_log (id, connection_id, provider, event, started_at)"
+                " VALUES (?, ?, 'plaid', 'sync', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                (row_id, connection_id),
+            )
+
+    @staticmethod
+    def _log_rows():
+        with get_db() as conn:
+            return {(row["id"] if row["event"] != "disconnect" else ("disconnect", row["connection_id"]))
+                    for row in conn.execute("SELECT id, event, connection_id FROM connection_sync_log")}
+
+    def test_replacing_the_connections_brings_back_the_backups_sync_log(self):
+        # The log describes the connections, so when the backup's replace this system's, so does its log.
+        # The restore's own record of a connection it removed is kept.
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            self._log("in-backup")
+            content = self._export(client)
+            with get_db() as conn:
+                conn.execute("DELETE FROM connection_sync_log")
+            self._log("after-backup")
+            with get_db() as conn:
+                conn.execute("INSERT INTO connection (id, provider, external_id, credential_enc)"
+                             " VALUES ('conn-2', 'plaid', 'ext-2', 'later-token')")
+            self._log("linked-later", connection_id="conn-2")
+
+            r = self._restore(client, content, include_accounts=True)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._log_rows(), {"in-backup", ("disconnect", "conn-2")})
+
+    def test_reconciling_the_connections_keeps_this_systems_sync_log(self):
+        with api_client(base_url=SITE) as (client, _):
+            self._seed_vault(client)
+            self._log("in-backup")
+            content = self._export(client)
+            with get_db() as conn:
+                conn.execute("DELETE FROM connection_sync_log")
+            self._log("here")
+
+            r = self._restore(client, content, include_accounts=True, include_credentials=False)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._log_rows(), {"here"})
+
     def test_a_credential_linked_after_the_backup_is_cleared_for_reconnection(self):
         with api_client(base_url=SITE) as (client, _):
             user_id = self._seed_vault(client)

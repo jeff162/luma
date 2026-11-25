@@ -611,8 +611,8 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
     # partial list is a report that quietly lies about its own extent, and the card it falls back to is the
     # better answer at that size anyway (see `_SCOPED_SYNC_ROW_CAP`).
     #
-    # Deliberately NOT copied to `connection_sync_log`. That table is a 500-row ring buffer, so the ids
-    # would be retained 500 times over for a report only the newest pull can serve; and a user-facing
+    # Deliberately NOT copied to `connection_sync_log`. That table keeps every pull within its retention,
+    # so the ids would be retained once per pull for a report only the newest pull can serve; and a user-facing
     # report may not rest on something `DELETE /sync/diagnostics` erases — the same reason the outcome
     # word lives here rather than being derived from the log.
     #

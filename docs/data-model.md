@@ -1900,7 +1900,8 @@ Which store a fact belongs in is decided by who may lose it.
 - **Connection status**: `connection` and `connection_account`. Durable, and shaped by the provider.
 - **Diagnostic history**: `connection_sync_log`. Pruned by age on every write
   (`connections.log_retention_days`, a shared preference) and clearable from the UI, so nothing
-  user-facing may derive from it. It is left out of the data backup.
+  user-facing may derive from it. It rides the data backup and is restored only when the connections
+  are replaced (see *A connection is split across the two parts*).
 - **The transactions received**: `import_batch`, `import_batch_account`, `import_batch_duplicate` and
   `config_snapshot.import_summary`. These behave like a CSV import card.
 
@@ -2717,7 +2718,9 @@ the data because it is a claim about data held, written with the rows it describ
 with `replace`). Both halves of every row are then the backup's, so the table is emptied and the backup's
 connections go in for the credentials to be written onto. A connection the backup does not name is removed
 as a disconnect without revoking removes it (`remove_connection`, logged with reason `restored`), and
-the restore result names it (`removed_connections`).
+the restore result names it (`removed_connections`). The sync log goes with the connections: this
+system's is emptied and the backup's put back, keeping only the disconnect rows the restore itself wrote.
+A restore that reconciles leaves this system's log as it was, since its connections are still its own.
 
 **Otherwise `connection` is not wiped**, because the half the restore leaves alone sits on the same
 row. A data restore without the credentials reconciles:

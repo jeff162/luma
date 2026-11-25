@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The backup history keeps a number of backups (50 by default) rather than a number of days, and scrolls
+  in its own box on Backup / Restore.
+- A backup carries the sync log. Restoring the data together with the credentials brings it back with the
+  connections; a restore that keeps this system's connections keeps its log.
+
+### Fixed
+
+- Duplicate cleanup could trash both copies of a charge: re-checking a connection's rows after mapping an
+  account, or confirming a flagged duplicate whose other copy had since been trashed.
+- A SimpleFIN pending charge too old to be reported again no longer widens every sync, and a routine sync
+  stays within the Bridge's recommended range.
+
 ## [0.3.1] - 2026-11-23
 
 ### Added

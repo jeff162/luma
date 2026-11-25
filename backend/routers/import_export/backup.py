@@ -88,7 +88,7 @@ from backend.db.control_database import auth_required
 from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
-from backend.services import accounts_backup, backup_history, crypto_service, database_health
+from backend.services import accounts_backup, backup_history, connection_log, crypto_service, database_health
 from backend.services.preferences import SHARED_SCOPE_ID, forget_startup_routes, keep_preferences_of
 from backend.services.documents import (
     copy_document_file_from,
@@ -692,6 +692,9 @@ BACKUP_SECTIONS = (
     # The backups this system made. Not restored like the rest: a restore of this system's own backup keeps
     # the live history, which already holds everything this copy does (see `_restore_backup_history`).
     ("backup_history", "backup_history", "SELECT * FROM backup_history ORDER BY rowid"),
+    # The sync log, so a system moved elsewhere keeps what it showed. It describes the connections, so it
+    # is restored only when they are replaced, with the credentials (`_restore_sections`).
+    ("sync_log", "connection_sync_log", "SELECT * FROM connection_sync_log ORDER BY rowid"),
     # Attached receipts and invoices — the rows only. Each row's *file* rides as its own
     # `documents/<id>` member (see `_write_document_members`), which is the whole reason documents are
     # files rather than blobs: the bytes never enter this JSON.
@@ -1486,7 +1489,7 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
     replaced_budgets: dict = {}
     if replace:
         named_ids = {row["id"] for row in rows}
-        named_handles = {(row["provider"], row["external_id"]): row["id"] for row in rows if row.get("external_id")}
+        named_handles = {(row["provider"], row["external_id"]) for row in rows if row.get("external_id")}
         for local in conn.execute(
                 "SELECT id, provider, external_id, institution, nickname, provider_request_budget, "
                 "provider_request_budget_at FROM connection").fetchall():
@@ -1495,10 +1498,6 @@ def _restore_connections(conn, rows, header: dict, *, replace: bool = False) -> 
                 budget = (local["provider_request_budget"], local["provider_request_budget_at"])
                 replaced_budgets[local["id"]] = replaced_budgets[handle] = budget
                 conn.execute("DELETE FROM connection WHERE id = ?", (local["id"],))
-                if local["id"] not in named_ids:
-                    # The same connection under the backup's id: its log follows it.
-                    conn.execute("UPDATE connection_sync_log SET connection_id = ? WHERE connection_id = ?",
-                                 (named_handles[handle], local["id"]))
             else:
                 remove_connection(conn, local, revoked=False, reason="restored")
                 removed.append(local["nickname"] or local["institution"] or local["provider"])
@@ -2021,6 +2020,12 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
 
     _insert_section(conn, "owner", section_rows("owners"))
 
+    # The sync log describes the connections. Replaced with them, the log they had here describes nothing
+    # that remains, so it goes before the removals below write their own disconnect rows, which stay; the
+    # backup's log goes in further down. Reconciled connections are still this system's, and keep theirs.
+    if replaces_connections:
+        conn.execute("DELETE FROM connection_sync_log")
+
     # Before anything that references a connection: accounts, their mappings and the sync cards all name
     # one, and each is kept only if that connection exists here once this has run.
     connection_ids, removed_connections = _restore_connections(
@@ -2047,7 +2052,8 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
     _insert_section(conn, "connection_account", connection_accounts)
     del accounts, connection_accounts
 
-    reconciled = {"owners", "connections", "accounts", "connection_accounts", "backup_history", "ui_preferences"}
+    reconciled = {"owners", "connections", "accounts", "connection_accounts", "backup_history", "ui_preferences",
+                  "sync_log"}
     transforms = {
         "transactions": _transaction_transform(backup_version),
         "import_batches": _local_connection,
@@ -2058,6 +2064,10 @@ def _restore_sections(conn, header: dict, section_rows, backup_version, source: 
             continue
         _insert_section(conn, table, section_rows(section), transforms.get(section))
     _restore_preferences(conn, section_rows("ui_preferences"), preference_owners, previous_preferences)
+    if replaces_connections:
+        _insert_section(conn, "connection_sync_log", section_rows("sync_log"), _local_connection)
+        # After the preferences, which hold the log's retention.
+        connection_log.prune(conn)
 
     _apply_referential_rules(conn)
     # After the preferences, which hold the history's retention.

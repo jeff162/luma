@@ -71,8 +71,6 @@ from backend.services.categorizer import seed_default_rules
 # `plaid_item` (the legacy predecessor of `connection`) and `provider_config` (app-level provider
 # credentials) hold vault-encrypted secrets, which ride the separate credentials backup
 # (export/restore_credentials). `connection` itself is split between the two — see `EXCLUDED_COLUMNS`.
-# `connection_sync_log` is the provider-sync diagnostic log: capped, prunable and user-clearable, so
-# nothing about the system's state may depend on it, which is also why a backup has nothing to preserve.
 # `export_backup` called directly, as most tests here do, with no identity behind the request. The file
 # still carries the accounts part, without credentials, which none of these tests read.
 NO_USER_REQUEST = SimpleNamespace(state=SimpleNamespace(user=None))
@@ -80,7 +78,7 @@ NO_USER_REQUEST = SimpleNamespace(state=SimpleNamespace(user=None))
 UPLOAD_REQUEST = Request({"type": "http", "scheme": "http", "server": ("localhost", 80), "path": "/",
                           "headers": [], "client": ("127.0.0.1", 50000)})
 
-EXCLUDED_TABLES = {"plaid_item", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
+EXCLUDED_TABLES = {"plaid_item", "provider_config", "backup_recipient", "db_meta"}
 # The document text index and the shadow tables FTS5 keeps beside it. Derived state, not data: every
 # term in it comes from `document.text`, which the backup *does* carry, and the triggers rebuild the
 # index as those rows stream back in. Backing it up would ship a second copy of the same text and a
@@ -126,6 +124,7 @@ TABLE_TO_SECTION = {
     "category_rule": "category_rules",
     "csv_import_profile": "csv_profiles",
     "connection_account": "connection_accounts",
+    "connection_sync_log": "sync_log",
     "import_batch": "import_batches",
     "import_batch_account": "import_batch_accounts",
     "import_batch_duplicate": "import_batch_duplicates",
@@ -242,6 +241,13 @@ class BackupFixtureTestCase(unittest.TestCase):
                             'depository', 'checking', '1111', '2025-01-01', '2026-04-15', 7)
                     """,
                     (a2, a2),
+                )
+                # Dated now so the log's retention cannot prune it from under the round trip.
+                conn.execute(
+                    "INSERT INTO connection_sync_log (id, connection_id, provider, institution, event, started_at,"
+                    " finished_at, mode, added) VALUES ('fixture-log', 'fixture-conn', 'plaid', 'Fixture Bank',"
+                    " 'sync', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),"
+                    " 'routine', 2)"
                 )
 
                 tag = str(uuid.uuid4())
