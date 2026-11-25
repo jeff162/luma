@@ -417,8 +417,10 @@ only live record, so that copy is restored from the trash first and takes over i
   reported a bank problem for is not listed, since its rows may be stale or short. A problem that names no
   connection or account withholds every listing in that response.
 - **Only a window that ends today is listed.** SimpleFIN lists its recent window, and reaches it back to
-  the oldest held pending row (`pending_since`, within `RECOMMENDED_RANGE_DAYS`) so a hold pending longer than the
-  routine overlap is still judged.
+  the oldest held pending row (`pending_since`) so a hold pending longer than the routine overlap is still
+  judged. It reaches only within its provider's recommended range (`PENDING_REACH_DAYS`): a row older than
+  that could not be listed anyway, and reaching for it would widen every sync. A new adapter with no
+  change feed has to make the same choice against its own provider's limits.
 - **A listing also says which provider accounts are still reported.** Sync stamps each listed account's
   `connection_account.last_listed_at`, and that is what settles two provider accounts mapped onto one
   local account, the shape a provider leaves when it reissues account ids after a re-link on its side

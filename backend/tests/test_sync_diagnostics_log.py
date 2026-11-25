@@ -323,6 +323,23 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self.assertEqual(json.loads(self._log_rows()[0]["requested_windows"]),
                          [{"start": "2026-08-05", "end": "2026-08-12"}])
 
+    def test_a_routine_pull_that_names_its_windows_records_no_depth(self):
+        # SimpleFIN's top-up starts from its last one, not from the depth it is handed, so a depth beside
+        # windows that disagree with it would misstate how far the pull went.
+        class _Windowed(_FakeAdapter):
+            has_cursor = False
+
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE connection SET initial_sync_complete = 1 WHERE id = ?", (self.CONNECTION_ID,))
+        with self._driven_sync(adapter=_Windowed(pages=[{
+            "added": [], "has_more": False, "update_status": _DONE,
+            "requested_windows": [{"start": "2026-08-05", "end": "2026-08-12"}],
+        }])):
+            pass
+        row = self._log_rows()[0]
+        self.assertEqual(row["mode"], "routine")
+        self.assertIsNone(row["days_requested"])
+
     def test_an_adapter_that_names_no_window_records_none_rather_than_failing(self):
         # A cursor provider asks for "everything since this token" and has no window to report; the key is
         # simply absent from its page, exactly as `advisories` is for an adapter predating that field.

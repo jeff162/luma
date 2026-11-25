@@ -1915,7 +1915,8 @@ provider's answer, not the app's own pre-flight refusals.
   The log's `request_allowance` column, which older rows filled, is vestigial.
 - `days_requested` is the depth a pull fetched to, so it is null on a cursor provider's routine top-up:
   that pull asks for what changed since the cursor, and the depth it sends sets the window the provider
-  maintains.
+  maintains. It is also null on a routine pull that reports its `requested_windows`, which say what was
+  fetched; SimpleFIN's top-up starts from its last one, not from the depth it is given.
 - `update_status` distinguishes `BUDGET_PAUSED` (this client declined to ask) from `RATE_LIMITED` (the
   server refused).
 - `warnings` are problems the user can act on and mirror the connection card; `advisories`

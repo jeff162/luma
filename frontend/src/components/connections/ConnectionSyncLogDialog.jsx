@@ -321,7 +321,8 @@ function syncLogAsText(entries, scopeLabel) {
     lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped}`
       + (skips ? ` (${skips})` : '')
       + ` · ${requests ? `${requests} request${requests === 1 ? '' : 's'} used` : `pages ${e.pages}`}`
-      // Absent on a cursor provider's routine top-up, which asks for what changed rather than for a depth.
+      // Absent on a routine top-up: a cursor provider asks for what changed, and one that reports its
+      // windows is described by them.
       + (e.days_requested != null ? ` · asked for ${e.days_requested} days` : ''))
     const cards = cardSummary(e.card_counts, e.institution)
     if (cards) lines.push(`  rows filed on ${cards}`)

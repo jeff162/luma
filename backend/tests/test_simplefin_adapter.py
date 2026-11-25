@@ -40,7 +40,9 @@ from backend.services.providers.simplefin import (
     _merge_advisories,
     FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
+    PENDING_REACH_DAYS,
     RANGE_LIMIT_DAYS,
+    RECOMMENDED_RANGE_DAYS,
     REQUEST_BUDGET_CAPACITY,
     REQUEST_BUDGET_REFILL_PER_HOUR,
     WINDOW_DAYS,
@@ -1262,11 +1264,12 @@ class SimpleFinRoutineSyncTests(unittest.TestCase):
     def setUp(self):
         self.adapter = SimpleFinAdapter()
 
-    def _sync(self, server, cursor=None):
+    def _sync(self, server, cursor=None, pending_since=None):
         with mock.patch("backend.services.providers.simplefin._http", server), \
                 mock.patch("backend.services.providers.simplefin._utc_today",
                            lambda: date.fromisoformat(self.TODAY)):
-            return self.adapter.fetch_transactions_sync({}, ACCESS_URL, cursor=cursor)
+            return self.adapter.fetch_transactions_sync({}, ACCESS_URL, cursor=cursor,
+                                                        pending_since=pending_since)
 
     def _state(self, through="2026-08-05"):
         return json.dumps({"through": through})
@@ -1284,6 +1287,21 @@ class SimpleFinRoutineSyncTests(unittest.TestCase):
         start, end = server.requested_windows[0]
         self.assertEqual(start.isoformat(), "2026-07-31")
         self.assertEqual(end.isoformat(), self.TODAY)
+
+    def test_it_reaches_back_to_a_held_pending_row_within_the_recommended_range(self):
+        server = _Server(windows={})
+        oldest = date.fromisoformat(self.TODAY) - timedelta(days=PENDING_REACH_DAYS)
+        self._sync(server, self._state(), pending_since=oldest.isoformat())
+        self.assertEqual(server.requested_windows[0][0], oldest)
+        # The window runs to the close of today, so it is a day wider on the wire than its dates.
+        self.assertLessEqual(server.requested_spans[0], RECOMMENDED_RANGE_DAYS * 86400)
+
+    def test_a_pending_row_older_than_the_range_does_not_widen_the_window(self):
+        # No window within the recommendation could list it, so reaching for it would only widen every sync.
+        server = _Server(windows={})
+        too_old = date.fromisoformat(self.TODAY) - timedelta(days=PENDING_REACH_DAYS + 1)
+        self._sync(server, self._state(through="2026-08-05"), pending_since=too_old.isoformat())
+        self.assertEqual(server.requested_windows[0][0].isoformat(), "2026-07-31")
 
     def test_it_claims_no_coverage(self):
         # A top-up fetches a recent window; it says nothing about how far back an account's history goes,

@@ -1462,7 +1462,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "started_at":     started_at,
                     "finished_at":    _utcnow_iso(),
                     "mode":           "initial" if initial else "routine",
-                    "days_requested": logged_depth,
+                    # A routine pull that reports its windows is described by them. SimpleFIN picks its own
+                    # from its last top-up, so the depth handed to it would state a reach nothing went to.
+                    "days_requested": None if requested_windows and not is_range_pull else logged_depth,
                     "cursor_before":  _cursor_fingerprint(cursor_before),
                     "cursor_after":   _cursor_fingerprint(cursor),
                     "pages":          pages,

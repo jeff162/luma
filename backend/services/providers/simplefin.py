@@ -83,10 +83,11 @@ from backend.services.source_capabilities import CURRENCY_PER_ACCOUNT, REJECT_ZE
 # The Bridge also recommends a narrower range (`RECOMMENDED_RANGE_DAYS`) and answers every wider request
 # with a notice that it may be capped in future. A walk window draws that notice on every request; it is
 # recorded as an advisory on the sync log and is expected there. The routine top-up, which runs on every
-# sync, keeps within the recommendation (`_fetch_recent`).
+# sync, keeps within the recommendation (`_fetch_recent`), one day under it for the same close-of-day reason.
 RANGE_LIMIT_DAYS = 90
 RECOMMENDED_RANGE_DAYS = 45
 WINDOW_DAYS = RANGE_LIMIT_DAYS - 1
+PENDING_REACH_DAYS = RECOMMENDED_RANGE_DAYS - 1
 
 # A routine top-up re-asks for a few days it already has. The Bridge's own developer guidance recommends
 # the overlap: a transaction can post with a date earlier than the moment it becomes visible, so a window
@@ -1036,9 +1037,11 @@ class SimpleFinAdapter(ProviderAdapter):
         ended would step over it. `through` advances only here and only after each fetch, because it is a
         claim about data actually in hand.
 
-        The window also reaches back to the oldest held pending row (`pending_since`), within
-        `RECOMMENDED_RANGE_DAYS`, because it is the only window listed completely: a pending row outside it
-        can never be seen to have gone, and a hold can stay pending longer than the overlap.
+        The window also reaches back to the oldest held pending row (`pending_since`), because it is the only
+        window listed completely: a pending row outside it can never be seen to have gone, and a hold can
+        stay pending longer than the overlap. Only a row within `PENDING_REACH_DAYS` is reached for; an
+        older one would not be listed even by a window cut off at the limit, so widening every sync for it
+        would buy nothing.
 
         **Normally one request, and never one wider than the server's limit.** The window starts from the
         last top-up, so a connection left unsynced for months would otherwise ask for months in one request,
@@ -1050,9 +1053,8 @@ class SimpleFinAdapter(ProviderAdapter):
         """
         through = date.fromisoformat(state["through"]) if state.get("through") else today
         window_start = min(through - timedelta(days=INCREMENTAL_OVERLAP_DAYS), today)
-        if pending_since:
-            window_start = min(window_start, max(date.fromisoformat(pending_since),
-                                                 today - timedelta(days=RECOMMENDED_RANGE_DAYS)))
+        if pending_since and date.fromisoformat(pending_since) >= today - timedelta(days=PENDING_REACH_DAYS):
+            window_start = min(window_start, date.fromisoformat(pending_since))
         while True:
             window_end = min(window_start + timedelta(days=WINDOW_DAYS), today)
             newest = window_end == today
