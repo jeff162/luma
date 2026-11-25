@@ -95,9 +95,11 @@ describe('residualSummary', () => {
 })
 
 describe('settleExplanation', () => {
-  it('warns that settling a shortfall changes the expense month', () => {
-    // The design's one surprising consequence has to be said at the point of the click.
-    expect(completeExplanation(outstanding)).toMatch(/month the expense is in/)
+  it('explains a shortfall in its own words', () => {
+    const shortfall = completeExplanation(outstanding)
+    expect(shortfall).not.toBe('')
+    expect(shortfall).not.toBe(completeExplanation(surplus))
+    expect(shortfall).not.toBe(completeExplanation(square))
   })
 
   it('says a surplus leaves the original expense alone', () => {

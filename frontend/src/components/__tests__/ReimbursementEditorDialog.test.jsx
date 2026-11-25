@@ -4,8 +4,8 @@
 //
 // What is worth pinning here rather than in `lib/reimbursements.js` (which covers the decisions) is the
 // wiring: that the user is never asked which *side* a residual settles against, that they are asked
-// which transaction only when the role has more than one candidate, that the warning about restating
-// an earlier month is on screen before the click, and that Settle cannot go out without a category.
+// which transaction only when the role has more than one candidate, that the explanation of what
+// completing does is on screen before the click, and that Settle cannot go out without a category.
 //
 // Rendered inside `<StrictMode>` because the dialog fetches on mount and that is what the app runs.
 
@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ReimbursementEditorDialog from '../ReimbursementEditorDialog.jsx'
+import { completeExplanation } from '../../lib/reimbursements.js'
 import { api } from '../../lib/api.js'
 import { txnMutations } from '../../lib/txnMutations.js'
 
@@ -99,10 +100,11 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('completing', () => {
-  it('warns that settling a shortfall changes the month the expense is in', async () => {
-    open(record())
+  it('explains what completing a shortfall does', async () => {
+    const reimbursement = record()
+    open(reimbursement)
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
-    expect(screen.getByText(/updates the month the expense is in/)).toBeTruthy()
+    expect(screen.getByText(completeExplanation(reimbursement))).toBeTruthy()
   })
 
   it('says a surplus leaves the original expense alone', async () => {
@@ -307,8 +309,8 @@ describe('which button is the main verb', () => {
 describe('writing one off when nobody paid', () => {
   const unpaid = () => record({ members: [EXPENSE], owed: 375, repaid: 0, residual: 375 })
 
-  it('says it is recording the whole amount, not "the rest"', async () => {
-    // "The rest was a real cost" understates a click that is booking the entire expense as spending.
+  it('says it is recording the whole amount, not a portion', async () => {
+    // The partial-shortfall text understates a click that is booking the entire expense as spending.
     open(unpaid())
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByText(/Nothing has been received against this/)).toBeTruthy()

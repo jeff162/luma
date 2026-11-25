@@ -155,8 +155,7 @@ export function completeExplanation(reimbursement) {
         + `${formatTransactionAmount(round2(reimbursement.residual))} as spending, in the month of the `
         + 'expense, under the category chosen below.'
     }
-    return 'The rest was a real cost. Completing moves it onto the expense, which updates the month the '
-      + 'expense is in — that is what makes it read correctly.'
+    return 'Allocate the non-reimbursed portion to a category.'
   }
   if (status === 'surplus') {
     return 'More was received than went out. Settling books the difference against the repayment, in the '
@@ -566,7 +565,7 @@ export function portionSelectionProblem(selectedAmounts, unclaimed, receivable =
     const asked = `That is ${formatMoneyMagnitude(Math.abs(total))}.`
     return claimed
       ? `${asked} ${formatMoneyMagnitude(Math.abs(claimed))} of this transaction is already claimed, `
-        + `so ${available} is available.`
+      + `so ${available} is available.`
       : `${asked} Only ${available} of this transaction is unclaimed.`
   }
   return ''
