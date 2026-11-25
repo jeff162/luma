@@ -6,7 +6,8 @@
  * the ones moved there.
  *
  * One entry per backup, newest first, on two lines so it fits the card at any width: when, who and how
- * big, then the file and what it holds. The documents share is the figure that says whether documents are
+ * big, then the file and what it holds. The live list scrolls in a box of its own, since the history can
+ * hold hundreds of backups and the restore and encryption-key sections sit below it. The documents share is the figure that says whether documents are
  * becoming the bulk of a backup. A filename too long for the card is cut short with the whole of it on
  * hover; the details after it wrap rather than push it out.
  *
@@ -77,6 +78,11 @@ export function BackupHistoryEntry({ row, first = false, filename, actions }) {
   )
 }
 
+const SCROLL_BOX = {
+  display: 'grid', maxHeight: 320, overflowY: 'auto', overscrollBehavior: 'contain',
+  padding: '0 12px', border: '1px solid var(--border)', borderRadius: 8,
+}
+
 // The live history. `onRename(id, filename)` and `onTrash(id)` report to the host, which saves and
 // reloads; a rejected rename keeps the editor open with what was typed.
 export function BackupHistoryList({ rows, onRename, onTrash }) {
@@ -99,7 +105,7 @@ export function BackupHistoryList({ rows, onRename, onTrash }) {
   }
 
   return (
-    <div style={{ display: 'grid' }}>
+    <div style={SCROLL_BOX}>
       {rows.map((row, index) => (
         <BackupHistoryEntry
           key={row.id}

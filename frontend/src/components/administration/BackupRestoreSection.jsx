@@ -243,7 +243,7 @@ export default function BackupRestoreSection() {
     try {
       const res = await api.getBackupHistory()
       setHistory(res.backups || [])
-      setHistoryRetention(res.retention_days ?? null)
+      setHistoryRetention(res.retention_count ?? null)
     } catch (e) {
       setHistoryError(e.message || 'Could not load the backup history.')
     }
@@ -270,13 +270,13 @@ export default function BackupRestoreSection() {
     }
   }
 
-  async function saveHistoryRetention(days) {
+  async function saveHistoryRetention(count) {
     setSavingRetention(true)
     setHistoryError('')
     try {
-      const res = await api.setBackupHistoryRetention(days)
+      const res = await api.setBackupHistoryRetention(count)
       setHistory(res.backups || [])
-      setHistoryRetention(res.retention_days ?? null)
+      setHistoryRetention(res.retention_count ?? null)
     } catch (e) {
       setHistoryError(e.message || 'That setting could not be saved.')
     } finally {
@@ -690,16 +690,16 @@ export default function BackupRestoreSection() {
             <BackupHistoryList rows={history} onRename={renameHistoryEntry} onTrash={trashHistoryEntry} />
           ) : null}
           {/* The history's one setting, in the shape the sync log gives its own: a sentence around a single
-              number, saved on blur because shortening the window deletes the older rows at once. */}
+              number, saved on blur because lowering it deletes the older rows at once. */}
           {historyRetention != null ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--muted)' }}>
-              <label htmlFor="backup-history-retention-days">Keep prior backups in the history for</label>
+              <label htmlFor="backup-history-retention-count">Keep the last</label>
               <input
                 key={historyRetention}
-                id="backup-history-retention-days"
+                id="backup-history-retention-count"
                 type="number"
                 min="1"
-                max="3650"
+                max="1000"
                 defaultValue={historyRetention}
                 disabled={savingRetention}
                 onBlur={e => {
@@ -711,7 +711,7 @@ export default function BackupRestoreSection() {
                   border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
                 }}
               />
-              <span>days</span>
+              <span>backups in the history</span>
             </div>
           ) : null}
         </Card>

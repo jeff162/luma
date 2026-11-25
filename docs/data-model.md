@@ -2686,8 +2686,10 @@ the signal that documents are becoming the bulk of a backup
   made since; the table is outside the wipe for that reason. Any other restore takes the file's history and
   adds a row for the file itself (`restored_at` set), since a backup never holds its own row; its sizes are
   read from the archive and its maker from `meta.json`'s `made_by`.
-- **Retention is by age**, a ledger setting in the shared preference scope, and the newest row outside the
-  trash is never purged.
+- **Retention is a count**, a ledger setting in the shared preference scope: the newest rows outside the
+  trash are kept however old, since backups are made by hand and an age would keep a handful of rows for
+  one system and hundreds for another. A trashed row takes no place in the count and goes once it is older
+  than the oldest row kept.
 - **`database_check` is how the check of both databases came out as the backup was made**: `passed`,
   `failed`, or NULL where it was not run (a row older than the check, and the row a restore adds for its
   file). A failed check never stops a backup, since a copy of a failing database is worth more than none,

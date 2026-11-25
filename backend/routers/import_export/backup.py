@@ -1124,22 +1124,22 @@ def backup_status(request: Request):
 def get_backup_history():
     """The backups this system made, newest first, with the history's retention."""
     with get_db() as conn:
-        return {"backups": backup_history.list_rows(conn), "retention_days": backup_history.retention_days(conn)}
+        return {"backups": backup_history.list_rows(conn), "retention_count": backup_history.retention_count(conn)}
 
 
 class BackupHistoryRetentionRequest(BaseModel):
-    days: int
+    count: int
 
 
 @router.put("/backup/history/retention", dependencies=[Depends(require_admin_or_local)])
 def set_backup_history_retention(body: BackupHistoryRetentionRequest):
-    """How many days the history keeps. Applied on the spot; the newest row is kept whatever its age."""
+    """How many backups the history keeps. Applied on the spot."""
     with get_db() as conn:
         try:
-            days = backup_history.set_retention_days(conn, body.days)
+            count = backup_history.set_retention_count(conn, body.count)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"retention_days": days, "backups": backup_history.list_rows(conn)}
+        return {"retention_count": count, "backups": backup_history.list_rows(conn)}
 
 
 class BackupHistoryFilenameRequest(BaseModel):

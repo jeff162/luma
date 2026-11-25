@@ -49,7 +49,7 @@ vi.mock('../../../lib/api.js', () => ({
     getAuthStatus: async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
     getBackupStatus: async () => backupStatus,
     checkDatabases: async () => { checksRun += 1; return databaseCheck },
-    getBackupHistory: async () => ({ backups: [], retention_days: 365 }),
+    getBackupHistory: async () => ({ backups: [], retention_count: 50 }),
     exportBackup: (encrypted, ids, savedAs) => (
       encrypted
         ? `/api/import-export/backup?encrypted=true${ids?.length ? `&recipients=${ids.join(',')}` : ''}`

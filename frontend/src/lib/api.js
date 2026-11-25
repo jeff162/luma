@@ -1387,9 +1387,9 @@ export const api = {
   // What a backup taken now would leave out, unencrypted and encrypted, and why.
   getBackupStatus: () => request('/import-export/backup/status'),
   getBackupHistory: () => request('/import-export/backup/history'),
-  setBackupHistoryRetention: (days) =>
+  setBackupHistoryRetention: (count) =>
     request('/import-export/backup/history/retention', {
-      method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
+      method: 'PUT', body: JSON.stringify({ count }), suppressMutationSignal: true,
     }),
   renameBackupHistoryEntry: (id, filename) =>
     request(`/import-export/backup/history/${encodeURIComponent(id)}`, {

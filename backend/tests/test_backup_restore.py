@@ -20,7 +20,6 @@ import unittest
 import uuid
 import zipfile
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -436,7 +435,6 @@ class BackupFixtureTestCase(unittest.TestCase):
                     (self.stored_document, len(self.stored_document_bytes),
                      hashlib.sha256(self.stored_document_bytes).hexdigest()),
                 )
-                # Dated now so the history's retention cannot age it out from under a later run.
                 conn.execute(
                     "INSERT INTO backup_history (id, made_at, made_by, filename, encrypted, key_labels, "
                     "credentials_included, credentials_left_out, total_bytes, ledger_bytes, accounts_bytes, "
@@ -933,29 +931,33 @@ class BackupRestoreTests(BackupFixtureTestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(len(self._history()), 1)
 
-    def test_history_retention_never_purges_the_newest_row(self):
+    def test_history_retention_keeps_the_newest_rows_however_old(self):
         with self._use_db_path():
             with get_db() as conn:
-                backup_history.record(conn, made_at="2001-01-01T00:00:00", filename="older.zip")
-                backup_history.record(conn, made_at="2002-01-01T00:00:00", filename="newest.zip")
-                backup_history.set_retention_days(conn, 1)
+                for year in (2001, 2002, 2003):
+                    backup_history.record(conn, made_at=f"{year}-01-01T00:00:00", filename=f"{year}.zip")
+                backup_history.set_retention_count(conn, 2)
                 names = [r["filename"] for r in backup_history.list_rows(conn)]
-        self.assertEqual(names, ["newest.zip"])
+        self.assertEqual(names, ["2003.zip", "2002.zip"])
 
-    def test_retention_keeps_the_newest_row_outside_the_trash(self):
-        """A trashed row is not one the history shows, so protecting it would let every shown row age
-        out and leave a history that reads as "no backup was ever made"."""
-        # Inside the default window, so both survive until the window is shortened.
-        days_ago = lambda n: (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=n)).isoformat()
+    def test_retention_counts_only_rows_outside_the_trash(self):
+        """A trashed row is not one the history shows, so it takes no place from a row that is; it goes once
+        it is older than every row kept."""
         with self._use_db_path():
             with get_db() as conn:
-                backup_history.record(conn, made_at=days_ago(3), filename="older.zip")
-                backup_history.record(conn, backup_id="never-saved", made_at=days_ago(2), filename="never-saved.zip")
+                backup_history.record(conn, backup_id="oldest", made_at="2001-01-01T00:00:00", filename="oldest.zip")
+                backup_history.record(conn, made_at="2002-01-01T00:00:00", filename="older.zip")
+                backup_history.record(conn, backup_id="never-saved", made_at="2003-01-01T00:00:00",
+                                      filename="never-saved.zip")
+                backup_history.record(conn, made_at="2004-01-01T00:00:00", filename="newest.zip")
+            trash_backup_history_entry("oldest")
             trash_backup_history_entry("never-saved")
             with get_db() as conn:
-                backup_history.set_retention_days(conn, 1)
+                backup_history.set_retention_count(conn, 2)
                 names = [r["filename"] for r in backup_history.list_rows(conn)]
-        self.assertEqual(names, ["older.zip"])
+                trashed = [r["filename"] for r in backup_history.list_rows(conn, trashed=True)]
+        self.assertEqual(names, ["newest.zip", "older.zip"])
+        self.assertEqual(trashed, ["never-saved.zip"])
 
     def test_trashing_a_history_row_withdraws_its_credentials_record(self):
         """The vault's recovery and passphrase-change lists read the credentials record, written at the

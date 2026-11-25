@@ -18,9 +18,11 @@ backup made since. Restoring anything else takes the file's history, as a restor
 does, and adds a row for the file itself, since a backup never holds its own row
 (`routers/import_export/backup.py` → `_restore_backup_history`).
 
-**Retention is by age**, a ledger setting, and the newest row is never purged however old it is: a history
-whose only backup had aged out would read as "no backup was ever made". "Newest" means newest outside the
-trash, since a trashed row is not one the history is showing.
+**Retention is a count**, a ledger setting: the history keeps the newest rows outside the trash, however
+old. Backups are made by hand, so an age would keep a handful of rows for one person and hundreds for
+another, and could leave a history whose only backup had aged out reading as "no backup was ever made". A
+trashed row does not count, since it is not one the history is showing; it goes once it is older than the
+oldest row kept.
 
 **A row can be wrong, and the person who made the backup is the only one who can tell.** The server cannot
 see whether the browser's save went through or what name it was saved under (the page trashes the row
@@ -35,15 +37,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from backend.services.preferences import get_shared_preference, set_shared_preference
 from backend.time_utils import utcnow_iso
 
-DEFAULT_RETENTION_DAYS = 365
-RETENTION_PREF_KEY = "backups.history_retention_days"
-MIN_RETENTION_DAYS = 1
-MAX_RETENTION_DAYS = 3650
+DEFAULT_RETENTION_COUNT = 50
+RETENTION_PREF_KEY = "backups.history_retention_count"
+MIN_RETENTION_COUNT = 1
+MAX_RETENTION_COUNT = 1000
 MAX_FILENAME_LENGTH = 255
 
 _COLUMNS = (
@@ -53,43 +54,48 @@ _COLUMNS = (
 )
 
 
-def retention_days(conn: sqlite3.Connection) -> int:
+def retention_count(conn: sqlite3.Connection) -> int:
     """The ledger's retention, clamped. An unreadable stored value falls back to the default."""
     raw = get_shared_preference(conn, RETENTION_PREF_KEY)
     if raw is None:
-        return DEFAULT_RETENTION_DAYS
+        return DEFAULT_RETENTION_COUNT
     try:
-        days = int(str(raw).strip().strip('"'))
+        count = int(str(raw).strip().strip('"'))
     except (TypeError, ValueError):
-        return DEFAULT_RETENTION_DAYS
-    return max(MIN_RETENTION_DAYS, min(days, MAX_RETENTION_DAYS))
+        return DEFAULT_RETENTION_COUNT
+    return max(MIN_RETENTION_COUNT, min(count, MAX_RETENTION_COUNT))
 
 
-def set_retention_days(conn: sqlite3.Connection, days) -> int:
+def set_retention_count(conn: sqlite3.Connection, count) -> int:
     """Store a new retention and apply it at once."""
     try:
-        value = int(days)
+        value = int(count)
     except (TypeError, ValueError):
-        raise ValueError("That is not a number of days.")
-    if value < MIN_RETENTION_DAYS or value > MAX_RETENTION_DAYS:
-        raise ValueError(f"Choose between {MIN_RETENTION_DAYS} and {MAX_RETENTION_DAYS} days.")
+        raise ValueError("That is not a number of backups.")
+    if value < MIN_RETENTION_COUNT or value > MAX_RETENTION_COUNT:
+        raise ValueError(f"Choose between {MIN_RETENTION_COUNT} and {MAX_RETENTION_COUNT} backups.")
     set_shared_preference(conn, RETENTION_PREF_KEY, str(value))
     prune(conn)
     return value
 
 
 def prune(conn: sqlite3.Connection) -> None:
-    """Drop rows older than the retention window, except the newest. `made_at` is naive-UTC ISO from
-    `utcnow_iso` (or a backup header's `exported_at`, the same shape), so comparing as strings orders it."""
-    cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days(conn))).isoformat()
+    """Keep the newest `retention_count` rows outside the trash, and the trashed rows no older than the
+    oldest of them. `made_at` is naive-UTC ISO from `utcnow_iso` (or a backup header's `exported_at`, the
+    same shape), so comparing as strings orders it."""
+    count = retention_count(conn)
+    kept = """SELECT id FROM backup_history WHERE deleted_at IS NULL
+              ORDER BY made_at DESC, rowid DESC LIMIT ?"""
+    conn.execute(f"DELETE FROM backup_history WHERE deleted_at IS NULL AND id NOT IN ({kept})", (count,))
+    # Only once the history is full: until then nothing shown is old enough to outlast a trashed row.
     conn.execute(
         """
         DELETE FROM backup_history
-        WHERE  made_at < ?
-          AND  id <> (SELECT id FROM backup_history WHERE deleted_at IS NULL
-                      ORDER BY made_at DESC, rowid DESC LIMIT 1)
+        WHERE  deleted_at IS NOT NULL
+          AND  (SELECT COUNT(*) FROM backup_history WHERE deleted_at IS NULL) >= ?
+          AND  made_at < (SELECT MIN(made_at) FROM backup_history WHERE deleted_at IS NULL)
         """,
-        (cutoff,),
+        (count,),
     )
 
 
