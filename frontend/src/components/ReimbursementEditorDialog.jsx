@@ -61,10 +61,6 @@ import FloatingDialog from './FloatingDialog.jsx'
  * *which* one, asked only when that role has more than one candidate — nothing in the ledger can say
  * which expense fell short.
  *
- * **Settling a shortfall changes an earlier month, and the dialog says so before the click.** That is
- * the design's one surprising consequence and the difference between a deliberate correction and a
- * number that moved for no visible reason next time February is opened.
- *
  * **A reimbursement covers a *portion* of a transaction, not the transaction.** The member list therefore
  * shows this link's claim against each row rather than the row's whole receivable, and says so where
  * the two differ — a $250 claim on a $750 charge whose other portions belong to other people.
