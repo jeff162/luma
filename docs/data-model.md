@@ -1765,7 +1765,9 @@ amount and related text lies in the group within the window, only a same-day pai
 its date is confirmed, because the date is then the only evidence. A posted suspect of a
 pending row is confirmed the other way round: the pending copy is trashed pointing at the posted one,
 which takes over the pending row's manual category, name, notes and tags (`carry_user_edits`). A pending
-row holding a split or a link stays the survivor, since neither moves.
+row holding a split or a link stays the survivor, since neither moves. A flag whose target has since
+left the ledger is never confirmed, since that would trash the charge's only live copy; it stays for
+review.
 
 An account merge also runs `scan_scope_for_cross_account_duplicates` over the group first, because
 import-time detection compares only incoming rows against existing ones. A single account is a valid

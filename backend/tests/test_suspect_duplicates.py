@@ -1536,6 +1536,27 @@ class SuspectDuplicateTests(unittest.TestCase):
         self.assertIsNone(self._suspect_link(days_apart)["suspect_resolved_at"])
         self.assertIsNotNone(self._suspect_link(same_day)["trashed_at"])
 
+    def test_a_flag_whose_target_is_in_the_trash_is_not_confirmed(self):
+        # The target left the ledger after the flag was raised. Confirming the flag would trash the
+        # charge's only live copy in favour of one that is already gone.
+        parent = self._insert_account("Card")
+        child = self._insert_account("Card (second source)")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (parent, child))
+        target = self._insert_txn(account_id=parent, date="2025-10-02", amount=-12.0, merchant_name="Lakeside Inn",
+                                  trashed_at="2025-11-01T00:00:00Z")
+        suspect = self._insert_txn(account_id=child, date="2025-10-02", amount=-12.0, merchant_name="Lakeside Inn",
+                                   batch_id=self._insert_batch())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (target, suspect),
+                )
+                promote_in_group_suspects_to_confirmed(conn, [parent, child])
+        self.assertIsNone(self._suspect_link(suspect)["trashed_at"])
+
     def test_accounts_already_grouped_are_not_asked_about(self):
         # Merged accounts have answered "same account?"; their remaining flags are row-level review only.
         account_a = self._insert_account("Account A")

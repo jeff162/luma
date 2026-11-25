@@ -4662,6 +4662,10 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     pending one standing in for the charge, out of every total, with nothing ever to settle it. Such a pair
     is promoted the other way round (`promote_posted_over_pending`): the pending row is trashed pointing
     at the posted one, which takes over the user's edits.
+
+    **A flag whose target has left the ledger is not promoted.** The target can be trashed after the flag
+    was raised, and confirming against it would trash the charge's only live copy. The flag stays for
+    review.
     """
     account_id_list = [aid for aid in (account_ids or []) if aid]
     if not account_id_list:
@@ -4686,6 +4690,8 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
           AND  t1.suspect_resolved_at IS NULL
           AND  t1.rejection_reason IS NULL
           AND  t1.trashed_at IS NULL
+          AND  t2.trashed_at IS NULL
+          AND  t2.rejection_reason IS NULL
           AND  COALESCE(t1.suspect_duplicate_reason, '') NOT IN ({review_only_ph})
           AND  COALESCE(a1.parent_account_id, a1.id) = COALESCE(a2.parent_account_id, a2.id)
           AND  (t1.account_id IN ({ph}) OR t2.account_id IN ({ph}))
