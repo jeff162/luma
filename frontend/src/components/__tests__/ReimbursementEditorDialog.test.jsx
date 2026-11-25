@@ -100,17 +100,14 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('completing', () => {
-  it('explains what completing a shortfall does', async () => {
-    const reimbursement = record()
+  it.each([
+    ['a shortfall', {}],
+    ['a surplus', { residual: -25, repaid: -400 }],
+  ])('explains what completing %s does', async (_label, overrides) => {
+    const reimbursement = record(overrides)
     open(reimbursement)
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByText(completeExplanation(reimbursement))).toBeTruthy()
-  })
-
-  it('says a surplus leaves the original expense alone', async () => {
-    open(record({ residual: -25, repaid: -400 }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
-    expect(screen.getByText(/the original expense is left alone/)).toBeTruthy()
   })
 
   it('never asks which side the residual settles against', async () => {
@@ -309,12 +306,12 @@ describe('which button is the main verb', () => {
 describe('writing one off when nobody paid', () => {
   const unpaid = () => record({ members: [EXPENSE], owed: 375, repaid: 0, residual: 375 })
 
-  it('says it is recording the whole amount, not a portion', async () => {
-    // The partial-shortfall text understates a click that is booking the entire expense as spending.
-    open(unpaid())
+  it('explains writing off the whole amount, not the partial-shortfall case', async () => {
+    const reimbursement = unpaid()
+    open(reimbursement)
     await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
-    expect(screen.getByText(/Nothing has been received against this/)).toBeTruthy()
-    expect(screen.getByText(/whole -\$375\.00 as spending/)).toBeTruthy()
+    expect(screen.getByText(completeExplanation(reimbursement))).toBeTruthy()
+    expect(completeExplanation(reimbursement)).not.toBe(completeExplanation(record()))
   })
 
   it('will not write it off without a category to put it in', async () => {

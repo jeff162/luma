@@ -130,14 +130,7 @@ export function repaidProgressSummary(reimbursement) {
   return `${repaid} of ${owed} repaid`
 }
 
-/*
- * What settling would do, in the user's terms, before they do it.
- *
- * This is the sentence that has to carry the design's one surprising consequence: settling a shortfall
- * **changes an earlier period on purpose**, because the money was genuinely spent then. Saying so at
- * the point of the click is the difference between a deliberate correction and a number that moved for
- * no visible reason next time the user looks at February.
- */
+// What settling would do, in the user's terms, before they do it.
 export function completeExplanation(reimbursement) {
   const status = reimbursementStatus(reimbursement)
   if (status === 'square') {

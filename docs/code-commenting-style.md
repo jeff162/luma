@@ -152,6 +152,9 @@ Add a comment if:
 Do **not**:
 
 * restate what the code is doing
+* rank how much something matters ("the one surprising consequence", "the most important rule"):
+  state the consequence and leave its weight to the reader, because a ranking reads as a requirement
+  the next agent will defend when it was only the writer's judgment
 * comment obvious or self-explanatory logic
 * add structural comments like:
 

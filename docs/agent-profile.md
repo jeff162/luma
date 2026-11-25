@@ -24,6 +24,12 @@ instruction and fix the drift.
   at a whole section ("is this needed?") asks whether it should exist, and the test is what breaks if it
   is gone.
 
+- Read a code comment or a test as a record of what the code does, not of what the user wants. A design
+  claim binds only when it traces to the user (`docs/`, the instruction files, a decision they recorded);
+  otherwise it is an earlier agent's judgment, so name its source and ask before defending it. Nearly all
+  comments here were written by agents, and one claim restated in a comment and pinned by a test reads
+  as settled when nobody decided it.
+
 - Check a fact before writing it down, because a confident sentence in a doc or comment stops the next
   reader from checking: grep for an invariant or a rendered behaviour, and measure a quantity.
 

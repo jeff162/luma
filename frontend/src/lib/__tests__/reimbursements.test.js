@@ -95,20 +95,11 @@ describe('residualSummary', () => {
 })
 
 describe('settleExplanation', () => {
-  it('explains a shortfall in its own words', () => {
-    const shortfall = completeExplanation(outstanding)
-    expect(shortfall).not.toBe('')
-    expect(shortfall).not.toBe(completeExplanation(surplus))
-    expect(shortfall).not.toBe(completeExplanation(square))
-  })
-
-  it('says a surplus leaves the original expense alone', () => {
-    expect(completeExplanation(surplus)).toMatch(/left alone/)
-  })
-
-  it('says explicitly that a repaid-in-full one moves nothing', () => {
-    // Without this the Complete button reads as though it were about to move money.
-    expect(completeExplanation(square)).toMatch(/nothing needs to move/)
+  it('explains each open state in its own words', () => {
+    const unpaid = { ...outstanding, repaid: 0, residual: 375, members: [expense] }
+    const explanations = [outstanding, unpaid, surplus, square].map(completeExplanation)
+    expect(explanations.every(Boolean)).toBe(true)
+    expect(new Set(explanations).size).toBe(explanations.length)
   })
 
   it('offers no explanation once it is finished', () => {
