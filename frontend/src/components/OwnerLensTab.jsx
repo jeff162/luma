@@ -59,8 +59,8 @@ function LensPopover({ anchorRef, onClose }) {
     <FloatingPanel ref={ref} radius={10} style={{ ...popupStyle, zIndex: 300 }}>
       <div ref={contentRef} style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 4px' }}>Owner view shows</div>
-          <div role="group" aria-label="Owners the owner view shows" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 4px' }}>Owner view includes</div>
+          <div role="group" aria-label="Owners the owner view includes" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {rows.map(row => {
               const checked = ownerIds.includes(row.id)
               return (
@@ -111,8 +111,8 @@ export default function OwnerLensTab() {
   ...(ownerIds.includes(UNASSIGNED_OWNER_ID) ? [UNASSIGNED_LABEL] : [])].join(', ')
   const chosen = ownerIds.some(id => id !== UNASSIGNED_OWNER_ID)
   const hint = lens ? `Owner view: ${names}`
-    : chosen ? `Owner view is off, so all owners are shown. On shows ${names}.`
-      : 'Owner view is off, so all owners are shown. Choose the owners to show from the menu.'
+    : chosen ? `Owner view is off: all owners displayed. On includes: ${names}`
+      : 'Owner view is off. No owners have been selected for Owner View.'
 
   // Switching on with no owner chosen opens the menu, since the view has no one to show yet.
   function switchTo(next) {
@@ -146,7 +146,7 @@ export default function OwnerLensTab() {
           onClick={() => setOpen(v => !v)}
           aria-haspopup="dialog"
           aria-expanded={open}
-          aria-label="Choose the owners the owner view shows"
+          aria-label="Choose the owners the owner view includes"
           style={glyphButtonStyle}
         >
           {collapsed ? null : 'Owner view'}
